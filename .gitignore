@@ -12,3 +12,6 @@ dist/
 design/node_modules
 .vigil/mock/
 design/shots/_smoke.png
+
+.vigil/swift
+.build-*/

@@ -1,0 +1,4 @@
+# Placeholder.
+# SwiftPM treats a .copy()/.process() resource pointing at a missing directory as a
+# hard build error, so this directory must exist from the scaffolding commit onward.
+# See docs/BUILD-VERIFICATION.md, defect 2.

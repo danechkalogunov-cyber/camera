@@ -1681,10 +1681,10 @@ private var cache: [CredentialRef: Credential] = [:]
 
 - Populated on read and write; consulted before every Keychain call. A 16-camera grid reconnecting
   after wake performs **1** Keychain read per camera, not one per RTSP round trip.
-- Cleared by `purgeCache()` on: `NSApplication.willResignActiveNotification` **no** — that would be
-  hostile to reconnects. Actually cleared on: screen lock
-  (`com.apple.screenIsLocked` distributed notification), `NSWorkspace.sessionDidResignActive`,
-  keychain lock, and app termination.
+- Cleared by `purgeCache()` on: screen lock (the `com.apple.screenIsLocked` distributed
+  notification), `NSWorkspace.sessionDidResignActiveNotification`, keychain lock, and app
+  termination. Deliberately **not** cleared on `NSApplication.willResignActiveNotification` —
+  merely switching apps must not force 16 Keychain reads on the next reconnect.
 - The cache is inside an `actor`, so there is no lock and no data race. `Credential` values are
   immutable.
 - **The cache is never written to disk, never included in a diagnostics bundle, and never appears in
@@ -4026,9 +4026,10 @@ Rules for every intent:
   using the ISAPI paths — which is what makes them useful in automations.
 - Errors are thrown as `IntentError` with a `localizedStringResource` message drawn from the same
   strings table as the UI, so Shortcuts shows the same wording the app does.
-- Write actions (`StartRecording`, `MovePTZ`, `SetRecordOnMotion`, `GoToPTZPreset`) are gated by
-  `AppSettings.allowURLSchemeWriteActions`? **No** — Shortcuts is an explicit user action with its own
-  permission model, so intents are always allowed. That gate applies only to URL scheme (§14.3).
+- Write actions (`StartRecording`, `MovePTZ`, `SetRecordOnMotion`, `GoToPTZPreset`) are **not**
+  gated by `AppSettings.allowURLSchemeWriteActions`. Running a shortcut is an explicit user action
+  with its own permission model; that gate exists only for the URL scheme (§14.3), which any web
+  page can invoke.
 - `IntentDescription` includes `resultValueName` and a `searchKeywords` list for Spotlight.
 - Intent donation: `ViewCameraIntent` is donated on each camera focus so Spotlight learns the user's
   habits.
@@ -4188,3 +4189,542 @@ failure part-way leaves nothing changed. Credentials are written to the Keychain
 mutation commits, and any Keychain failure is reported per camera in
 `ImportReport.credentialsNeeded` rather than rolling back the cameras — a camera without a password is
 recoverable; a lost import is annoying.
+
+---
+
+## 15. Logging and observability inside VigilCore
+
+VigilCore is macOS-only, so it may `import OSLog` — but it still logs through
+`LoggerProtocol` so that every type is testable with a capturing fake and so the pure modules and
+VigilCore produce a single, uniform log stream.
+
+```swift
+public struct OSLogLogger: LoggerProtocol, Sendable {
+    public init(subsystem: String = "com.vigil.app", category: LogCategory)
+    // Applies LogRedaction before emitting; interpolates values as .private where applicable.
+}
+
+public enum LogCategory: String, Sendable, CaseIterable {
+    case config        // ConfigStore, migrations, normalization
+    case credentials   // CredentialStore (never values)
+    case controller    // StreamController state machine
+    case coordinator   // plans, admission, priority
+    case recording     // ClipRecorder
+    case snapshot
+    case events        // EventCenter, notifications
+    case health
+    case doctor
+    case automation    // intents, deep links, AppleScript
+    case persistence   // atomic writes, IO errors
+}
+```
+
+| Level | Used for | Examples |
+|---|---|---|
+| `.debug` | per-event churn; off in release by default | every state transition, every plan diff |
+| `.info` | notable, expected | "camera connected in 640 ms", "plan: 12 decode, 4 jpeg" |
+| `.notice` | user-visible outcome | "migrated library 2→3", "recovered 41 cameras from backup" |
+| `.warning` | degraded but working | "UDP fell back to TCP", "audio codec unsupported" |
+| `.error` | operation failed | "config save failed: ENOSPC", "recording write failed" |
+| `.fault` | invariant violated — a bug | "normalize() not idempotent", "missing migration 3→4" |
+
+Signposts (`OSSignposter`) around the intervals that matter, so Instruments shows them without
+custom tooling: `connect` (start → first frame), `describe`, `setup`, `firstKeyframe`,
+`planRecompute`, `configCommit`, `snapshotEncode`, `recordingFinish`. Each carries the `CameraID` as
+its signpost ID so concurrent streams are distinguishable.
+
+**Every state transition is logged once**, at `.debug`, in the exact form
+`controller 4F2A… Front Door: describing → settingUp (sdpReceived, 118 ms in state)`. This single
+convention makes a diagnostics bundle readable end-to-end without any other instrumentation.
+
+---
+
+## 16. Module file layout
+
+```
+Sources/VigilCore/
+├── Model/
+│   ├── Identifiers.swift             CameraID, GroupID, LayoutID, EventID, ClipID, BookmarkID
+│   ├── Primitives.swift              Resolution, VideoCodec, AudioCodec, transports, presets
+│   ├── DeviceQuirk.swift
+│   ├── Camera.swift
+│   ├── StreamProfile.swift           + mergeProfiles
+│   ├── DeviceCapabilities.swift      + PTZCapabilities, ChannelDescriptor, RTSPPathTemplate
+│   ├── CameraGroup.swift
+│   ├── Layout.swift                  + LayoutMode Codable, MosaicFrame, CycleSettings
+│   ├── Bookmark.swift
+│   ├── EventRecord.swift             + EventKind mapping
+│   ├── RecordingClip.swift
+│   ├── AppSettings.swift
+│   ├── Library.swift                 + normalize(), renumberOrder(), lookups
+│   └── OrderIndex.swift
+├── Persistence/
+│   ├── AtomicJSONFile.swift          shared durable-write engine
+│   ├── ConfigStore.swift
+│   ├── LibraryCoding.swift
+│   ├── SchemaMigrator.swift
+│   ├── Migration1to2.swift           Foundation-only, free functions over [String: Any]
+│   ├── Migration2to3.swift
+│   ├── EventLog.swift
+│   └── RecoveryLadder.swift
+├── Credentials/
+│   ├── Credential.swift              Credential, CredentialRef, CredentialDescriptor
+│   ├── CredentialStore.swift
+│   ├── CredentialError.swift
+│   └── LockoutGovernor.swift
+├── Streaming/
+│   ├── StreamController.swift        actor + public API
+│   ├── StreamController+Machine.swift    the transition table of §7.5
+│   ├── StreamController+Timers.swift
+│   ├── StreamState.swift
+│   ├── StreamEvent.swift
+│   ├── StreamError.swift
+│   ├── ReconnectPolicy.swift
+│   ├── StreamCoordinator.swift
+│   ├── LivePlan.swift               + makePlan (pure)
+│   ├── QualityPolicy.swift          the §8.5 table, pure
+│   ├── ConcurrencyLimiter.swift
+│   ├── LiveViewState.swift          @MainActor @Observable
+│   └── Broadcaster.swift
+├── Recording/
+│   ├── ClipRecorder.swift
+│   ├── PreRollBuffer.swift
+│   ├── RecordingNaming.swift
+│   ├── RecordingRecovery.swift
+│   └── RetentionSweeper.swift
+├── Snapshots/
+│   ├── SnapshotService.swift
+│   ├── SnapshotEncoder.swift        ImageIO + EXIF/TIFF/IPTC
+│   ├── BurnInOverlay.swift
+│   └── SnapshotNaming.swift
+├── Events/
+│   ├── EventCenter.swift
+│   ├── AlertSubscription.swift
+│   ├── Coalescer.swift              pure
+│   ├── NotificationScheduler.swift  UNUserNotificationCenter adapter
+│   └── AutoRecordArbiter.swift      pure policy
+├── Health/
+│   ├── HealthMonitor.swift
+│   ├── HealthSample.swift
+│   └── HealthRing.swift
+├── Diagnostics/
+│   ├── StreamDoctor.swift
+│   ├── DoctorCause.swift            + the §13.2 mapping table
+│   ├── DiagnosticsBundleBuilder.swift
+│   ├── DiagnosticsRedactor.swift    pure
+│   ├── TarWriter.swift
+│   └── LogExporter.swift            OSLogStore
+├── Automation/
+│   ├── Entities/…                   CameraEntity, LayoutEntity, PTZPresetEntity, …
+│   ├── Intents/…                    one file per intent
+│   ├── DeepLink.swift               + parse (pure, total)
+│   └── ImportExport.swift           CSV, JSON, encrypted
+├── Platform/
+│   ├── CoreDependencies.swift
+│   ├── FileSystem+Real.swift        writeDurably with F_FULLFSYNC
+│   ├── Occlusion+AppKit.swift       the only AppKit files in the module
+│   ├── Pasteboard+AppKit.swift
+│   ├── QuickLook+AppKit.swift
+│   ├── PowerObserver.swift
+│   └── Paths.swift                  every URL in §5.1, in one place
+└── Logging/
+    ├── OSLogLogger.swift
+    └── Signposts.swift
+```
+
+**`Paths.swift` is the only place a filesystem URL is constructed.** Every other file asks it. This
+is what makes the sandbox decision, the security-scoped bookmark handling and the test fixtures
+tractable.
+
+---
+
+## 17. Unit tests
+
+Framework: **swift-testing** (`import Testing`, `@Test`, `#expect`, `#require`), which ships with the
+Swift 6 toolchain and is therefore not an external dependency. XCTest is used only where a
+`XCTMetric`-style performance measurement is needed. VigilCore's test target is **macOS-only**
+(`VigilCoreTests`); the migration free functions may additionally be compiled into a Linux CI target at
+`ARCHITECTURE.md`'s discretion.
+
+### 17.1 Fakes and fixtures
+
+All in `Tests/VigilCoreTests/Support/`.
+
+| Fake | Conforms to | Capabilities |
+|---|---|---|
+| `TestClock` | `MonotonicClock` | manual `advance(by:)`; deterministic timer firing in scheduled order; asserts on leaked timers at teardown |
+| `InMemoryFileSystem` | `FileSystemProtocol` | full tree in memory; **fault injection**: `failWrite(at:with:)`, `failRename`, `truncateWrite(bytes:)`, `ENOSPC` after N bytes, `EIO` on read, plus a `crashAfterWrite` hook that simulates power loss between write and rename |
+| `FakeKeychain` | `KeychainProtocol` | real primary-key semantics (duplicate detection on the §6.3 tuple), scriptable `OSStatus` per operation, `itemCount` for leak assertions |
+| `FakeISAPI` | `ISAPIClient` | canned XML fixture files per endpoint; per-endpoint latency, failure and 503 scripting; a scriptable **alert stream** that yields parts on command; records every request for assertions |
+| `FakeRTSPServer` | drives `RTSPTransport` | the fixture specified by `ARCHITECTURE.md`; scripted responses for OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN, Digest challenges (with `stale`), configurable SDP, interleaved RTP injection, mid-stream socket close, and reboot simulation |
+| `FrameGenerator` | — | synthetic `EncodedFrame` streams: configurable codec, resolution, fps, GOP, bitrate, B-frames, mid-stream SPS change, packet-loss gaps, PTS discontinuities and wraparound |
+| `FakeDecodeSink` | `DecodeSink` | counts frames, reports scripted decode errors, records the exact frame order it received |
+| `FakeDecodeAdmitting` | `DecodeAdmitting` | fixed or scripted budget; records every `acquire` with cost and priority |
+| `FakePathMonitor` | `NetworkPathMonitoring` | push arbitrary `NetworkPathState`, including interface-fingerprint changes |
+| `FakeOcclusion`, `FakePower` | observers | push arbitrary events |
+| `FakeNotificationCenter` | `NotificationScheduling` | records posted notifications, asserts on throttling, simulates denied authorization |
+| `CapturingLogger` | `LoggerProtocol` | records every line; used by the "no secrets in logs" tests |
+| `FakeFrameTap` | `FrameTap` | returns a synthesized `CVPixelBuffer` of a given size, format and colour |
+
+Golden files in `Tests/VigilCoreTests/Fixtures/`: `library-v1.json`, `library-v2.json`,
+`library-v3.json`, `library-truncated.json`, `library-garbage.json`, `library-v99-future.json`,
+`library-500-cameras.json`, `events-5000.json`, `cameras-import.csv`,
+`cameras-import-malformed.csv`, plus SDP and ISAPI XML fixtures shared with the protocol modules.
+
+### 17.2 Domain model
+
+1. Every model type round-trips through encode → decode → `==`.
+2. **Coding-key stability:** each type's encoded JSON is compared against a checked-in golden file. A
+   renamed property breaks this test, which is the point.
+3. Decoding a document with *extra unknown keys* succeeds and preserves everything known.
+4. Decoding a document with *missing optional keys* applies documented defaults.
+5. Unknown enum raw values decode to the `.unknown`/fallback case and set `hadUnknownContent`; nothing
+   throws. Parameterized over every enum in the model.
+6. `LayoutMode` Codable round-trips all six cases; the emitted JSON matches the §4.5 shape exactly;
+   an unknown `type` becomes `.grid(2,2)`.
+7. `LayoutMode.frames()` returns `cellCount` rects, all inside the unit square, non-overlapping, and
+   covering ≥ 0.999 of the area, for every mode.
+8. `Camera.streamingChannelID` / `rtspPath` for channels 1, 2, 16, 64 × main/sub/third, with and
+   without an override and each `RTSPPathTemplate.Family`.
+9. `Camera.validate()`: 20 hostile inputs (empty name, 500-char name, `host` containing a scheme, a
+   path, credentials, spaces, IPv6 with brackets, port 0, port 70000, channel 0, channel 999).
+10. `Camera.slug`: Cyrillic, emoji, `/`, `..`, 200 chars, empty, whitespace-only, duplicate names.
+11. `mergeProfiles`: all 16 combinations of source precedence in §4.2.1, including the two documented
+    exceptions and the `reportsWrongFPSInISAPI` quirk path.
+12. `OrderIndex.between` for the empty list, prepend, append, midpoint, and gap-exhaustion → renumber.
+13. `Library.normalize()` is idempotent (property test over 200 randomly generated libraries) and
+    repairs each of the 13 invariants of §5.7 — one test per invariant.
+14. Deleting a camera preserves its clips and bookmarks (invariant 10).
+15. `EventKind(isapiEventType:)` maps all documented Hikvision strings plus casing variants, and
+    unknown strings → `.unknown` with `rawEventType` preserved.
+16. `NormalizedRect.fromHikvision` for both Y orientations, and clamping of out-of-range 0…1000 input.
+
+### 17.3 `ConfigStore`
+
+1. First run with no file → `.created`, a seeded library with built-in layouts, and **no file written
+   until the first mutation**.
+2. `mutate` marks dirty; no write occurs before 500 ms of `TestClock` time; exactly one write occurs
+   after it, for 10 rapid mutations.
+3. The 2 s `maxCoalesceLatency` forces a write during continuous mutation.
+4. Determinism: encoding the same library twice yields byte-identical data; a no-op `mutate`
+   (assigning an equal value) performs **zero** writes.
+5. Atomic write ordering: with `InMemoryFileSystem.crashAfterWrite`, `library.json` is either fully old
+   or fully new — never partial. Parameterized over a crash injected at each of the 10 steps of §5.5.
+6. `.bak` and `.bak2` rotate correctly over 5 successive saves; `.bak2` holds generation N−2.
+7. Write failure (`ENOSPC`) keeps the dirty flag, retries on the documented schedule, and emits the
+   error exactly once per attempt.
+8. `flush()` awaits durability; `F_FULLFSYNC` is recorded by the fake.
+9. Migration 1→2 and 2→3 on the golden fixtures produces the expected `Library`, including UNIX→ISO
+   date conversion and the `cells` object → `assignments` array conversion.
+10. The migration chain runs 1→3 in one load; `applied == ["1→2", "2→3"]`; a pre-migration copy exists.
+11. A migration whose output fails to decode leaves the original file untouched and enters recovery.
+12. `schemaVersion: 99` → `.readOnly`; subsequent `mutate` + timer advance performs **zero** writes;
+    the file's bytes are unchanged.
+13. `SchemaMigrator.all` has no gaps or duplicates and covers `1 ..< currentSchemaVersion`.
+14. Corruption ladder: truncated file → `.bak`; both corrupt → `.bak2`; all corrupt → `.freshStart`.
+    Each asserts the quarantine file exists with the right name and that **nothing was deleted**.
+15. Corrupt-file pruning keeps the newest 5 and deletes only those older than 30 days.
+16. A 32 MB+ file is rejected without being parsed.
+17. Concurrency: 100 concurrent `mutate` calls from 10 tasks produce a consistent final state and no
+    lost updates.
+18. `changes()`: two independent consumers each receive every snapshot (the §6.9 broadcaster
+    contract), and a slow consumer does not stall a fast one.
+19. Performance (XCTest): 500 cameras + 20 000 clips encodes in < 25 ms and commits in < 60 ms p99.
+20. `EventLog` capacity: appending 6 000 events keeps exactly 5 000, newest-first; eviction queues the
+    right thumbnail deletions; corruption yields an empty log with **no** modal alert.
+
+### 17.4 `CredentialStore`
+
+1. `save` → `credential(for:)` round-trips account and secret.
+2. `save` twice with the same ref updates rather than duplicating; `FakeKeychain.itemCount == 1`.
+3. The add dictionary contains exactly the §6.3 attributes, `kSecAttrSynchronizable == false`, and
+   `kSecAttrAccessible == kSecAttrAccessibleWhenUnlocked` — asserted key by key.
+4. The update dictionary passed to `SecItemUpdate` contains **no** `kSecClass` and no return keys.
+5. Lookup is by `kSecAttrPath` only, so it succeeds after the host, port and account all change.
+6. Two cameras on the same host with the same username get independent items.
+7. Every `OSStatus` in §6.6 maps to the documented `Kind`, message and fix. Parameterized.
+8. `errSecItemNotFound` from `credential(for:)` returns `nil` and does **not** throw.
+9. `delete` tolerates a missing item; the cache entry is removed.
+10. The cache serves the second read with zero Keychain calls; `purgeCache()` forces a re-read.
+11. `updateAttributes` with a changed account invalidates the cache.
+12. `rekey` migrates a legacy-attribute item to a UUID path, preserving the secret.
+13. **`Credential` is not `Encodable`** — a compile-time test file with `#if canImport` guards plus a
+    reflection assertion that no model type has a stored property of type `Credential`.
+14. **No secrets in logs:** run a full connect against `FakeRTSPServer` with a Digest challenge and a
+    `CapturingLogger`, then assert no captured line contains the password, the Digest `response=`
+    value, a full session id, or the device serial. Repeated for every level including `.debug`.
+15. **No secrets on disk:** after a full app-lifecycle test, the encoded `library.json` bytes contain
+    neither the password nor the username.
+16. Lockout governor: 3 validations pass, the 4th is refused locally without touching the fake, and a
+    password edit resets the counter.
+17. `validate` maps each `CredentialCheckResult` from the corresponding scripted `FakeISAPI` response.
+
+### 17.5 `StreamController`
+
+Driven entirely by `TestClock` + `FakeRTSPServer` + `FrameGenerator`; **no real sockets, no sleeps**.
+
+1. Happy path: `start()` → `.playing`, with the event sequence
+   `stateChanged×5, authenticated, formatResolved, firstPacketReceived, firstFrameDecoded` in order.
+2. **Every one of the 58 transitions in §7.5** is exercised by at least one test; the suite is
+   organized as one `@Test` per row with the row number in the name, and a coverage test asserts that
+   the set of exercised (state, event) pairs equals the table.
+3. Every timeout in §7.4 fires at exactly its documented deadline and produces the documented
+   transition. Parameterized over the table.
+4. The overall 20 s watchdog fires when a state stalls without its own timer.
+5. Digest: one challenge succeeds; two fresh-nonce challenges → `.failed(.authenticationFailed)` with
+   **zero** further connect attempts even after advancing the clock by an hour.
+6. `stale=true` re-auth does not consume the challenge budget.
+7. Backoff sequence: 7 failures produce delays within the §7.6 ranges; attempt 8+ stays in 24–36 s;
+   jitter is verified by seeding the RNG and asserting exact values.
+8. Backoff resets only after 60 s of continuous `.playing`; a stream that dies at 59 s does **not**
+   reset (this is the regression test for the infinite fast-reconnect bug).
+9. `networkLost` freezes the attempt counter; a 10-minute outage followed by `networkAvailable`
+   reconnects at the stagger delay with `attempt == 0`.
+10. `credentialsUpdated` on a `.failed(auth)` controller reconnects immediately.
+11. `.portClosed`, `.unsupportedMedia`, `.rtspPathNotFound`, `.credentialsMissing` never enter the
+    ladder; they cold-retry at 5 min (except auth, which never does).
+12. Degradation: each of the 8 `DegradationReason` thresholds in §7.7 enters `.degraded` at the
+    boundary and recovers after the documented clean period. Parameterized.
+13. `bitrateCollapse` does **not** trigger when fps is nominal (the night-scene false-positive test).
+14. `degradedGiveUp` reconnects once, then stops cycling on a second degradation within 5 minutes.
+15. Quality switch main→sub keeps the same event stream, the same recorder identity, and completes
+    within 400 ms of simulated time; hysteresis rejects a 10 % size change and a 700 ms dwell.
+16. Transport fallback: UDP with no RTP falls back to TCP **without** consuming a reconnect attempt;
+    `tcpTLS` handshake failure does **not** downgrade to plain TCP.
+17. Path probe tries the documented 4 candidates in order, persists the winner into
+    `capabilities.rtspPathTemplate`, and does not probe again on the next connect.
+18. Mid-stream SPS change with a new resolution: the sink is reconfigured, no frames are lost, the
+    recording splits, and no black frame is emitted.
+19. Bounded frame queue: with a sink that never drains, the queue holds exactly 3 frames, drops
+    oldest non-keyframes, keeps keyframes, increments `droppedFrames`, and the RTSP keepalive still
+    goes out on schedule (the "stalled decoder must not stall control" test).
+20. `stop()` is idempotent, awaits recorder finalization, sends TEARDOWN within 1.5 s, and leaves no
+    live timers (`TestClock` asserts zero outstanding).
+21. `stop()` from a cancelled task still finalizes the recording.
+22. A camera reboot mid-stream (`FakeRTSPServer.simulateReboot()`) finalizes the recording *before*
+    reconnecting, and the resulting file is playable.
+23. `setPaused(true)` releases the decode lease, keeps the keepalive, and keeps recording;
+    `setPaused(false)` requests a keyframe.
+24. `setCamera` diff behaviour: one test per row of the §7.8 table.
+25. `requestKeyframe` returns each `KeyframeRequestOutcome` from the matching `FakeISAPI` script.
+26. 1 000 connect/disconnect cycles leak no tasks, no timers and no memory (weak-reference assertion
+    on the controller after `stop()`).
+
+### 17.6 `StreamCoordinator`
+
+`makePlan` is pure, so most of this is table-driven and fast.
+
+1. Tile-size policy: one test per class A–F boundary in §8.5, at the threshold, at threshold ± 1, and
+   at threshold ± 16 %, asserting the exact `DeliveryMode`.
+2. Backing-scale correctness: a 480×270-point tile at scale 2 is class C, at scale 1 is class D.
+3. Hysteresis: a size oscillating ±10 % around a boundary produces **zero** mode changes over 60 s;
+   a 20 % change held 800 ms produces exactly one.
+4. Priority ordering: one test per row of §8.3, plus the tie-break chain, plus the assertion that a
+   recording camera is never below `.visibleLarge`.
+5. Admission: a 16-up grid of 640×360 sub-streams fits every budget in §8.4 with `pressure == .none`
+   and zero demotions — the headline test.
+6. A 16-up grid forced to main stream on an M1 budget demotes exactly the documented tiles, lowest
+   priority first, and `pressure == .severe`.
+7. Recording streams are admitted before the budget walk and never demoted.
+8. Occlusion: each row of the §8.6 table, including the recording and audio-solo exceptions.
+9. Screens asleep pauses everything but keeps recordings and motion-armed pre-rolls alive.
+10. Wake: all controllers reconnect without consuming attempts, in priority order, at 250 ms stagger,
+    and capabilities are re-probed only for stale devices.
+11. Network loss produces **one** global banner and suppresses all per-camera error UI.
+12. An interface-fingerprint change while satisfied restarts every controller.
+13. `isConstrained` caps tiles at class C and stops JPEG polling without stopping streams.
+14. Thermal `.critical` reduces the budget, caps at class C and stops JPEG polling — via the normal
+    admission walk, with no separate code path (asserted by checking that only the budget changed).
+15. Plan diffing: a layout change that keeps 3 of 4 cameras touches only the 4th (asserted by
+    counting calls on fake controllers) — the "layout change must not restart everything" test.
+16. Anti-thrash: a mode changes at most once per 750 ms; a budget demotion sticks ≥ 3 s.
+17. JPEG poll intervals match §8.5 for 1, 8, 9, 24, 25, 48, 49 and 100 visible thumbnails, and for an
+   inactive window.
+18. JPEG fallback after 3 failures degrades to `keyframeOnly` and then to a placeholder.
+19. `ConcurrencyLimiter`: honours the limit, acquires in priority order, releases on cancellation, and
+    never deadlocks under 1 000 concurrent contenders.
+20. `isapiPerDeviceLimiter` drops to 1 for `rejectsConcurrentISAPI` devices.
+21. `plan()` is deterministic: the same inputs produce byte-identical `LivePlan` across 1 000 runs
+    with shuffled input ordering.
+22. `LiveViewState` cadence: `stats` updates at most once per second under a 60 Hz statistics firehose;
+    `state` changes propagate within 100 ms.
+23. `shutdown()` finalizes every recording within the 4 s budget and abandons cleanly past it.
+
+### 17.7 `ClipRecorder`
+
+macOS-only, using real `AVAssetWriter` against a temporary directory (this is integration-flavoured by
+necessity — the muxer is the thing under test).
+
+1. Passthrough of 300 synthetic 1080p H.264 frames produces a file whose track has the expected
+   duration, frame count, resolution and **no** re-encode (verified by comparing sample sizes to the
+   input and asserting the format description matches).
+2. The same for H.265, including a 10-bit Main10 stream.
+3. The first written sample is a keyframe in every case; a stream whose first frames are P-frames
+   discards them and starts at the IDR.
+4. `AVAssetReader` reads back the file and the sync-sample table (`stss`) marks exactly the keyframes.
+5. Timestamp rebasing: the first sample's PTS is exactly zero; PTS deltas match the input.
+6. A PTS discontinuity of 15 s shifts the epoch instead of producing a 15 s frozen frame; a 90 s
+   discontinuity splits the file.
+7. 32-bit RTP wraparound (fed as already-unwrapped `MediaTimestamp`s) produces a monotonic file.
+8. `PreRollBuffer`: evicts whole GOPs only; `drain(seconds:)` always begins with a keyframe;
+   respects `maxBytes` and `maxGOPs`; `bufferedSeconds` is accurate within one frame duration.
+9. A recording started with a 5 s pre-roll produces a file 5 s longer than the live portion, and
+   `RecordingHandle.preRollSecondsIncluded` reports the truth when the buffer held less.
+10. Audio: AAC passes through into MP4; G.711 with `neverReencodeAudio == false` becomes AAC in MP4;
+    with `true` becomes `alaw` in MOV; an unknown codec drops audio with a warning and keeps video.
+11. Audio and video start within 100 ms of each other in the finished file.
+12. Fragmentation: killing the writer after 6 s (never calling `finishWriting`) leaves a `.partial`
+    file that `AVURLAsset` reports as playable with duration ≥ 4 s.
+13. `RecordingRecovery.scan()`: each of the 5 documented cases in §9.9, including an orphaned
+    `.partial` and a sub-second garbage file that is trashed.
+14. Pre-flight checks: each of the 6 rows of §9.6 fails **before** any file is created (asserted by
+    listing the directory).
+15. Disk-space monitoring stops the recording cleanly at `minimumFreeBytes` and produces a playable
+    file; below 512 MiB recording is disabled globally.
+16. Splitting: duration limit, format change, quality switch, discontinuity and the 4 GiB guard each
+    produce N playable parts with a shared `session:` id and `{seq}` numbering.
+17. `RecordingNaming.render`: every token; hostile camera names (`../../`, `:`, 300 chars, emoji,
+    Cyrillic, `CON`, leading `.`); collision suffixes to `(3)`; 200-byte component truncation.
+18. `finish()` is idempotent and safe to call concurrently from two tasks.
+19. The retention sweeper deletes oldest-first, skips bookmarked and unread-event clips, uses
+    `trashItem`, and never touches unknown files.
+20. CPU budget (XCTest measure): muxing 60 s of 1080p 25 fps costs < 1 % of one core.
+
+### 17.8 `SnapshotService`, `EventCenter`, `HealthMonitor`
+
+**Snapshots**
+1. `.automatic` picks `renderedFrame` when a `FrameTap` is available, `deviceJPEG` when not, and
+   `cachedThumbnail` when both fail — with the documented warnings.
+2. PNG, JPEG and HEIC all encode and re-decode to the expected pixel dimensions.
+3. EXIF: `DateTimeOriginal` uses the `yyyy:MM:dd HH:mm:ss` form; `OffsetTimeOriginal` matches the
+   camera time zone; TIFF `Model`/`Software` are present; **no GPS dictionary and no serial number**
+   appear anywhere in the metadata (asserted by scanning all properties recursively).
+4. A `.jpeg` request with no overlay and no resize writes the device bytes **verbatim** (byte-equal).
+5. SAR ≠ 1 and the 1088→1080 crop produce a correctly proportioned image.
+6. `maxLongEdge` downscales on the long edge and preserves aspect.
+7. Burn-in overlay: font size clamps at 9 and 48 for 240p and 8K images; each corner positions
+   correctly; the plate does not overflow the image.
+8. Destinations: `.file` writes and collision-suffixes; `.clipboard` sets both `.png` and `.fileURL`;
+   `.dataOnly` writes nothing.
+9. `captureAll` isolates failures, respects the limiter (max 3 in flight, asserted), and reports
+   per-camera results.
+
+**Events**
+10. Coalescing: 200 alerts 1 s apart yield **one** record with `count == 200` and the correct span.
+11. A 4 s gap starts a second record; a 2.9 s gap does not.
+12. `eventState == inactive` closes the window; the next alert always starts a new record.
+13. Exact duplicates (same `activePostCount`) are dropped.
+14. Rate limits: 10 records per camera per minute and 60 app-wide; the "Event storm" synthetic record
+    is written once per hour with the right suppressed count.
+15. Clock skew > 60 s uses local receipt time and warns once.
+16. Coalescing state rebuilt from `EventLog` at launch does not duplicate an in-progress event.
+17. Alert-stream reconnect follows `1,2,5,10,20,30` with jitter; auth failure is terminal; the 120 s
+    heartbeat triggers a reconnect on a silent stream.
+18. Polling fallback engages after 5 failures and synthesizes events from trigger transitions.
+19. Notifications: throttled to 1 per camera per kind per 60 s and 6 app-wide per minute, with the
+    suppressed count folded into the next body; quiet hours suppress all but `.alarm`; the attachment
+    file is **copied** before being handed to `UNNotificationAttachment` (asserted the cache file
+    still exists afterwards); a stream-loss notification is removed on recovery.
+20. Auto-record: each of the 7 trigger conditions and each `SuppressionReason`; a coalesced extension
+    extends the running clip rather than starting a second; cross-linking of `clipID` ⟷ `eventID`
+    happens in one commit.
+
+**Health**
+21. `HealthSample` is exactly 24 bytes (`MemoryLayout<HealthSample>.size`) and round-trips Codable.
+22. `HealthRing` of capacity 600: appending 10 000 samples keeps the newest 600 in order, allocates
+    nothing after construction (asserted with an allocation-counting harness), and `ordered()` is
+    correct across the wrap point.
+23. Sampling continues through `.reconnecting`/`.failed`, recording the correct `state` byte, so gaps
+    are visible.
+24. `summary(for:window:)` computes each statistic correctly against a hand-built ring, including
+    `uptimeFraction` and `reconnectCount`.
+25. `HealthGrade` boundaries per §12.1.
+26. `exportCSV` emits the §13.6 header and POSIX-formatted numbers under a Turkish/German locale
+    (the decimal-comma regression test).
+
+### 17.9 Diagnostics
+
+1. **Taxonomy lockstep:** every `StreamError.Code` has a non-empty `message` and `fix`, and appears in
+   the §13.2 mapping table; every `DoctorCause` is reachable from at least one `DoctorStep`. This test
+   fails when someone adds a code without user-facing help.
+2. Stream Doctor: one test per row of §13.2, scripting `FakeRTSPServer` + `FakeISAPI` into that exact
+   failure and asserting the `DoctorCause`, the verdict and the offered `DoctorAction`s.
+3. Doctor stops at a non-continuable failure and continues past `httpPortOpen`/`credentialCheck`.
+4. The whole sequence completes within 25 s of simulated time and never disturbs a live controller
+   (asserted: the live controller's state is unchanged and its transport received no extra bytes).
+5. `DiagnosticsRedactor`: a corpus of 40 realistic strings — Authorization headers, session ids,
+   serials, MACs, private and public IPs, home paths, `password=` forms — each redacted per §13.5, and
+   private IPs explicitly **not** redacted.
+6. Redaction is idempotent and never lengthens a string past 2×.
+7. Bundle build produces every documented file, refuses any file over 5 MB, stays under 25 MB for a
+   16-camera fixture, and contains **no** password, serial or thumbnail (asserted by scanning every
+   byte of every file).
+8. `TarWriter` output is readable by `/usr/bin/tar -tvf` and round-trips names > 100 chars via the
+   documented ustar prefix handling.
+9. `LogExporter` truncation at 50 000 entries / 20 MB is recorded in `log-export.txt`.
+
+### 17.10 Automation
+
+1. `DeepLink.parse` table test: every URL form in §14.3 parses to the expected case.
+2. Hostile inputs (≥ 30 cases): path traversal in a camera ref, 4 KB components, invalid percent
+   escapes, non-UTF-8 bytes, `duration=-1`, `duration=NaN`, `ms=999999`, `preset=0`, `preset=256`,
+   nested encoding, empty action, unknown action, `vigil:` with no host. All return `.failure` or a
+   clamped value; none trap.
+3. Camera-ref resolution order: UUID, exact name, slug, unique prefix, host; ambiguity returns the
+   documented ambiguity error rather than picking one.
+4. `isWriteAction` is correct for every case; with `allowURLSchemeWriteActions == false` no write
+   action executes and exactly one consent prompt is requested.
+5. Rate limit: the 11th URL in 10 s is dropped.
+6. Intent tests: each intent resolves its entity, performs the operation against fake collaborators,
+   and returns the documented result; `CameraEntityQuery` ranking puts name-prefix matches first;
+   `suggestedEntities` returns ≤ 12 enabled cameras in `orderIndex` order.
+7. Background-capable intents (`TakeSnapshot`, `GetCameraStatus`) succeed with **no** coordinator
+   running, using the ISAPI path.
+8. Import/export: JSON round-trips; CSV round-trips; a malformed CSV reports every bad row by number
+   and imports the good ones; a `password` column lands in the fake Keychain and appears nowhere in
+   the resulting library bytes; `.replace` requires the confirmation flag; a Keychain failure during
+   import populates `credentialsNeeded` without rolling back cameras.
+9. Encrypted export round-trips with the right passphrase and fails cleanly with the wrong one; the
+   PBKDF2 implementation matches RFC 6070 vectors; the header layout is byte-exact.
+10. Import is transactional: a failure mid-way leaves the library untouched.
+
+### 17.11 Cross-cutting suites
+
+1. **Sendable/concurrency:** the whole module compiles under `-strict-concurrency=complete` with zero
+   warnings (enforced in `Package.swift` via `.enableUpcomingFeature("StrictConcurrency")` and a CI
+   `-warnings-as-errors` build).
+2. **No forbidden imports:** a test greps `Sources/VigilCore/**` and fails on `import SwiftUI`, on
+   `import AppKit` outside the three whitelisted files, and on `import VigilUI`.
+3. **No force-unwraps** outside `Tests/` (regex scan, allowing `!` in `try!` only inside test support).
+4. **Every `public` declaration has a doc comment** (a scan test; keeps the API navigable).
+5. **Memory/leak sweep:** a 30-minute simulated soak with 16 cameras, 5 layout changes per minute,
+   continuous motion events, and 4 recordings, asserting bounded memory (< 600 MB RSS), zero leaked
+   tasks and timers, and a `library.json` that still decodes.
+6. **End-to-end pure-pipeline test:** `FakeRTSPServer` + `FrameGenerator` → `StreamController` →
+   `FakeDecodeSink` + real `ClipRecorder`, asserting that 60 s of 1080p produces a playable MP4 and
+   the expected `HealthSummary` — the whole stack with no camera and no hardware.
+
+---
+
+## 18. Cross-module contract summary
+
+Reproduced compactly for the contract author; each line is normative and appears in full above.
+
+| # | Contract | Owner | Consumers |
+|---|---|---|---|
+| 1 | `EncodedFrame` (length-prefixed NALs) is the only media type crossing into VigilCore; `MediaTimestamp` is the only time type. No `CMTime`/`CVPixelBuffer` in the pure layer. | VigilRTP / VigilProtocols | VigilCore, VigilVideo |
+| 2 | Recording consumes `EncodedFrame`, **not** decoded pictures, so a paused/occluded camera can record at full quality with no decode session. | VigilCore | VigilVideo, VigilUI |
+| 3 | Credentials live only in the Keychain and process memory. `Credential` is **not** `Codable`. Nothing may write a password, `Authorization` value, session id or serial to disk or a log. | VigilCore | all |
+| 4 | `library.json` is the single JSON document; `events.json` is a separate ring. One root `schemaVersion` (currently **3**); migrations operate on untyped JSON; `schemaVersion > current` ⇒ **read-only, never write**. | VigilCore | Vigil, VigilUI |
+| 5 | `DeviceQuirk` is the only sanctioned firmware-workaround channel: protocol modules detect, VigilCore persists in `DeviceCapabilities.quirks`, VigilCore injects on the next connect. | VigilCore | VigilRTSP, VigilRTP, VigilISAPI, VigilRender |
+| 6 | Every `AsyncStream` accessor is a **factory** returning a fresh stream fanned out by a shared broadcaster with a **bounded** buffering policy. Never `.unbounded`. | VigilCore | VigilUI, Vigil |
+| 7 | Auth failure is **terminal**: two fresh-nonce 401s ⇒ `.failed`, no retry, ever; ≤ 3 credential probes per (host, account) per 10 min. Hikvision locks accounts. | VigilCore | VigilRTSP, VigilISAPI, VigilUI |
+| 8 | Reconnect ladder `0.5, 1, 2, 4, 8, 15, 30 s` ±20 % jitter; reset only after **60 s** of healthy playback; `networkLost` freezes attempts; network return reconnects immediately with a stagger. | VigilCore | VigilTransport |
+| 9 | Tile quality is decided from **backing pixels** by the class A–F table (§8.5), with 15 % + 750 ms hysteresis. VigilUI must report `PixelSize` in backing pixels and use `LayoutMode.frames()` for cell rects. | VigilCore | VigilUI, VigilRender |
+| 10 | `VigilVideo` owns decode capacity (`DecodeAdmitting`, cost = Mpx × fps × codecWeight); VigilCore owns policy and requests leases. Thermal/low-power throttling happens **only** by budget reduction. | VigilVideo | VigilCore |
+| 11 | The UI reads `@MainActor @Observable LiveViewState` and calls `StreamCoordinator`; it never holds a `StreamController`. Video frames **never** pass through the observable graph; `stats` refresh at 1 Hz. | VigilCore | VigilUI |
+| 12 | Recording is passthrough-only (`outputSettings: nil` + `sourceFormatHint`), fragmented every 2 s, written to `.partial` and renamed on success. Burn-in timestamps are snapshots-only. | VigilCore | VigilVideo, VigilUI |
+| 13 | `StreamError.Code` ⟷ `DoctorCause` ⟷ user-facing cause/fix are kept in lockstep by a test; new error codes require a Doctor row and localized strings. | VigilCore | VigilUI |
+| 14 | Every clock, filesystem, Keychain, network-path, occlusion, power and notification touch goes through an injected protocol (`CoreDependencies`). No singletons but `CoreDependencies.live`. | VigilCore | all, tests |
+| 15 | `vigil://` write actions are gated by `allowURLSchemeWriteActions` (default off) with a consent prompt; App Intents are always allowed; `DeepLink.parse` is total and never traps. | VigilCore | Vigil, VigilUI |
+| 16 | Tests use **swift-testing** (toolchain-bundled, not a dependency). VigilCore's test target is macOS-only; migration functions are Foundation-only and may be Linux-compiled. | VigilCore | ARCHITECTURE.md |
