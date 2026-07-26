@@ -243,3 +243,47 @@ chip; the connecting indicator takes DESIGN's spinning ring with UX's amber; shi
 over UX's looser numbers; and the hover shadow multiplier from §9.1 is **not** implemented, because
 `Elevation.Shadow` exposes a pre-composited colour and multiplying a colour's alpha above 1 is not a
 documented operation.
+
+## VigilCore (`impl:core`)
+
+Like the video agent, this one recovered real verification rather than only reporting its absence:
+all eighteen files were copied to a scratch package with the `#if os(macOS)` stripped and only
+`Security` and `VigilTransport` stubbed, then compiled against the **real** pure modules in Swift 6
+language mode — 0 errors, 0 warnings. Actor isolation, `Sendable`, typed-throws propagation and
+every pure-layer call site are therefore type-checked. The Security-framework calls are not.
+
+**The lockout safety property, traced end to end.** A wrong password sends exactly **two**
+credentialed 401s: probe rung one, the machine spends its two attempts, `.authRejected`,
+`LockoutGovernor.block()`, and the run loop returns. A later `start()` is refused *before a socket
+exists*. Only a credential change clears it. The R1.2 ladder's first rung runs alone for the same
+reason — three in flight would be six failed logins against a device that locks at about five.
+
+**Needs a decision, not a note**
+
+1. `kSecAttrAccessibleWhenUnlocked` is honoured on macOS **only** in the data-protection keychain
+   (`kSecUseDataProtectionKeychain: true`), which the implementation deliberately does not set —
+   because setting it makes the items invisible in Keychain Access.app, contradicting the
+   specification's own legibility rationale. The two requirements are mutually exclusive; pick one.
+2. The probe cannot be `DESCRIBE`-only, because `RTSPConnection` issues `.start` itself. The probe
+   listens for `.ready` instead, so the **winning** candidate runs a full session through to `PLAY`
+   and is then torn down and immediately reconnected. Losers stop at `DESCRIBE`. One extra session
+   on the happy path; the agent flags this as the thing most worth a second opinion.
+3. `RTSPConnection.connect()` awaits a bare continuation, so cancelling it does not resume it — only
+   its own watchdog does. The controller passes a 4 s timeout and keeps a 5 s backstop. Lowering the
+   factory timeout without raising the backstop would make a connect deadline silently do nothing.
+
+**Ownership that must be moved rather than duplicated**
+
+4. `RTSPPathCandidate` and the ladder table live in `VigilCore` because `VigilISAPI` is still a
+   placeholder, but ruling R-23 puts them in `VigilISAPI.HikvisionURL`. Move them when that module
+   lands; do not leave two copies.
+5. `spec-core.md` §7.9's composition diagram is now wrong: it shows `RTSPConnection` as a byte pipe
+   with the session machine in `VigilCore`, but the landed connection owns the machine and emits
+   events. The controller was rewritten against reality.
+
+**Deferred, and visible as gaps**
+
+6. Everything that needs `HealthMonitor` — the `.degraded` state is never entered in this slice, so
+   a stalled stream surfaces only through the session's own data-idle timer.
+7. Keyframe requests use only the RTSP `SET_PARAMETER` fallback; the ISAPI primary does not exist
+   yet, and whether Hikvision honours the fallback is unconfirmed.

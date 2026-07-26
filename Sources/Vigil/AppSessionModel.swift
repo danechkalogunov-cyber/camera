@@ -529,8 +529,9 @@ final class AppSessionModel {
             // password the camera rejects — retrying it at every launch is precisely how a
             // Hikvision account gets locked out (R-25, R1.5 "Account locked").
             let rejected = error.code == .authenticationFailed ? activeRef : nil
-            disconnect(forget: !named.allowsAutomaticRetry)
-            form.fail(named)
+            stopSession()
+            if !named.allowsAutomaticRetry { LastConnection.clear(in: defaults) }
+            present(named)
             if let rejected { deleteRejectedCredential(rejected) }
         default:
             break
@@ -627,9 +628,7 @@ final class AppSessionModel {
     /// Reports a remedy the slice cannot perform, in place of doing nothing.
     private func unavailable(_ sentence: String) {
         let host = camera?.host ?? form.request.host
-        let named = ConnectDiagnosis.undiagnosed(host: host, detail: sentence)
-        diagnosis = named
-        form.fail(named)
+        present(.undiagnosed(host: host, detail: sentence))
         dependencies.logger.notice(.ui, sentence)
     }
 
