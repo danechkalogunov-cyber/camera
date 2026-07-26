@@ -95,9 +95,10 @@ public enum H264Parser {
     public static func parseSpropParameterSets(_ value: String) throws(BitstreamError) -> [Data] {
         var out = [Data]()
         for component in value.split(separator: ",", omittingEmptySubsequences: false) {
-            let trimmed = component.filter { !$0.isWhitespace }
-            if trimmed.isEmpty { continue }
-            guard let bytes = Base64.decodeOrNil(trimmed), !bytes.isEmpty else {
+            let text = String(component)
+            if text.allSatisfy({ $0.isWhitespace }) { continue }
+            // `Base64.decodeOrNil` is itself lenient about embedded whitespace and missing padding.
+            guard let bytes = Base64.decodeOrNil(text), !bytes.isEmpty else {
                 throw BitstreamError.invalidBase64
             }
             out.append(Data(bytes))

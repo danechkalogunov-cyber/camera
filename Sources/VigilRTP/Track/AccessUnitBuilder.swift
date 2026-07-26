@@ -50,6 +50,37 @@ struct RTPTimestampExtender: Sendable, Equatable {
     }
 }
 
+// MARK: - SequenceExtender
+
+/// Widens the 16-bit RTP sequence number into a monotonic `UInt32` for `EncodedFrame.sequenceRange`.
+///
+/// Same signed-delta trick as `RTPTimestampExtender`: a wrap from 65535 to 0 is a delta of +1, and a
+/// reordered packet arriving late is a small negative delta, not a 65535-packet jump.
+struct SequenceExtender: Sendable, Equatable {
+
+    private var last: UInt16?
+    private var extended: UInt32 = 0
+
+    /// Widens `sequence` and returns the monotonic value.
+    mutating func extend(_ sequence: UInt16) -> UInt32 {
+        guard let last else {
+            self.last = sequence
+            extended = UInt32(sequence)
+            return extended
+        }
+        let delta = Int32(Int16(bitPattern: sequence &- last))
+        extended = extended &+ UInt32(bitPattern: delta)
+        self.last = sequence
+        return extended
+    }
+
+    /// Forgets all history.
+    mutating func reset() {
+        last = nil
+        extended = 0
+    }
+}
+
 // MARK: - PacketContext
 
 /// The per-packet facts access-unit assembly needs, extracted once so the assembler never touches
@@ -379,6 +410,12 @@ struct AccessUnitAssembler: Sendable {
     /// Re-arms the keyframe gate, so nothing is emitted until the next IRAP.
     mutating func armKeyframeGate() {
         awaitingKeyframe = true
+    }
+
+    /// Marks the open access unit as damaged without discarding it. Used when a fragment arrived
+    /// that cannot be placed — the picture is incomplete even though we never announced its NAL.
+    mutating func markAccessUnitCorrupt() {
+        pending?.isCorrupt = true
     }
 
     /// Full reset. Parameter sets from the SDP survive; everything learned in band does not.
