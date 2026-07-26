@@ -1,0 +1,330 @@
+//
+//  VideoTileView.swift
+//  VigilRender
+//
+//  The AppKit view that puts one camera's video on screen: an `NSView` whose backing layer is an
+//  `AVSampleBufferDisplayLayer`. Slice scope — one camera, one layer, no Metal, no digital zoom,
+//  no overlays, no atlas.
+//  Implements docs/spec-render.md §5.1, §5.2, §13.2 and docs/DESIGN.md §3.6 (the true-black rule).
+//
+//  NONE OF THE APPKIT / AVFOUNDATION CODE IN THIS FILE HAS BEEN COMPILED. The container is Linux;
+//  `#if os(macOS)` compiles it to nothing. Framework signatures are quoted above each call so a
+//  reviewer without a compiler can check them (docs/.vigil/STEP3.md, rule 1).
+//
+
+#if os(macOS)
+
+import AppKit
+import AVFoundation
+import CoreMedia
+import QuartzCore
+import VigilProtocols
+
+// MARK: - Options
+
+/// How the picture is fitted into the video well.
+///
+/// The well itself is always `#000000` and opaque, so `fit` letterboxes onto black and never onto
+/// the canvas colour (docs/DESIGN.md §3.6 clause 2).
+public enum VideoGravity: String, Sendable, Codable, CaseIterable {
+    /// Whole picture, aspect preserved, black bars where the aspect ratios differ.
+    case fit
+    /// Fills the well, aspect preserved, picture cropped.
+    case fill
+    /// Fills the well, aspect **not** preserved. Only ever a deliberate user choice.
+    case stretch
+
+    // AVFoundation: `struct AVLayerVideoGravity: RawRepresentable` with the three static members
+    // `.resizeAspect`, `.resizeAspectFill`, `.resize`.
+    var avGravity: AVLayerVideoGravity {
+        switch self {
+        case .fit: .resizeAspect
+        case .fill: .resizeAspectFill
+        case .stretch: .resize
+        }
+    }
+}
+
+/// The subset of `TileRenderOptions` the slice honours.
+///
+/// The full type in docs/API_CONTRACT.md §4.10 also carries `adjustments`, `backendPreference`,
+/// `maxZoom`, `bicubicZoomThreshold`, `cornerRadii`, `cornerColor`, the PTZ speeds, the debug HUD
+/// flag and the latency preset. Every one of those only has meaning on the Metal path, which the
+/// slice does not build; they are deliberately absent rather than present and ignored.
+public struct TileRenderOptions: Sendable, Equatable {
+
+    /// Fit policy. Changing it retargets `AVSampleBufferDisplayLayer.videoGravity` in place.
+    public var gravity: VideoGravity
+
+    /// Corner radius in points. **Zero by default in the slice**, which is what keeps the well
+    /// strictly opaque: on the sample-buffer backend a non-zero radius forces
+    /// `masksToBounds = true` and therefore `isOpaque = false`, i.e. a compositor blend over the
+    /// whole tile (docs/spec-render.md §5.5, §13.2). A single-camera stage has square corners, so
+    /// the slice never pays that cost.
+    public var cornerRadiusPt: CGFloat
+
+    /// Keeps the display awake while video is playing. Surveillance video is watched, not glanced
+    /// at, so this defaults to `true`.
+    public var preventsDisplaySleep: Bool
+
+    /// Builds an options value. All parameters default to the slice defaults.
+    public init(gravity: VideoGravity = .fit,
+                cornerRadiusPt: CGFloat = 0,
+                preventsDisplaySleep: Bool = true) {
+        self.gravity = gravity
+        self.cornerRadiusPt = cornerRadiusPt
+        self.preventsDisplaySleep = preventsDisplaySleep
+    }
+}
+
+// MARK: - VideoTileView
+
+/// One camera's video, on screen.
+///
+/// The view is layer-backed by an `AVSampleBufferDisplayLayer` and does not draw: `draw(_:)` is
+/// never called because `wantsUpdateLayer` is `true` and `updateLayer()` is empty. Sample buffers
+/// are handed to it from `VigilVideo`'s presenter through the `nonisolated` `enqueue` entry point,
+/// which never touches AppKit state and never allocates.
+///
+/// **The video well is `#000000`, opaque, and stays that way.** The layer is created black and
+/// opaque *before* the first frame arrives, which is what prevents the white flash the window
+/// background would otherwise show through for one frame. Nothing in this module tints, fades or
+/// applies `.opacity()` to the layer, and letterbox bars are the layer's own black background
+/// rather than a canvas-coloured fill (docs/DESIGN.md §3.6).
+@MainActor
+public final class VideoTileView: NSView {
+
+    // MARK: - Stored properties
+
+    /// The camera whose video this view shows. Diagnostic identity only; the view never resolves it.
+    public let cameraID: CameraID
+
+    /// Geometry and liveness the SwiftUI layer reads. Written here, never written from outside.
+    public let state: TileRenderState
+
+    /// Render options. Assigning re-applies only what actually changed, inside a
+    /// disabled-actions `CATransaction` so nothing animates.
+    public var options: TileRenderOptions {
+        didSet { applyOptions(from: oldValue) }
+    }
+
+    /// Called on the main actor when the display layer reports it needs a flush before it can
+    /// resume decoding. The owner must ask the camera for a fresh keyframe; without one the layer
+    /// stays on the last displayed picture indefinitely.
+    public var onKeyframeNeeded: (() -> Void)?
+
+    /// Called on the main actor when the layer posts `failedToDecodeNotification`. `VigilRender`
+    /// deliberately does not decide what to do: the reconnect state machine in `VigilCore` does.
+    ///
+    /// The error is passed through untyped because `VigilProtocols.RenderError` has no case for a
+    /// sample-buffer decode failure — see the uncertainty list in this agent's report.
+    public var onDecodeFailure: ((any Error) -> Void)?
+
+    /// Diagnostics. Never used on the per-sample path except behind `isEnabled`.
+    let logger: any LoggerProtocol
+
+    /// The lock-protected bridge between the decode thread and the display layer.
+    ///
+    /// `nonisolated(unsafe)` rather than a new `@unchecked Sendable` type: docs/API_CONTRACT.md
+    /// §2 R-52 fixes the repo-wide census of `@unchecked Sendable` types at exactly three and this
+    /// is not one of them. The property is a `let`, the referenced object guards every one of its
+    /// fields with a single `NSLock`, and no other code path reaches it.
+    nonisolated(unsafe) let sampleBuffers = SampleBufferBackend()
+
+    /// `true` between `viewWillStartLiveResize()` and `viewDidEndLiveResize()`.
+    var isLiveResizing = false
+
+    // MARK: - Lifecycle
+
+    /// Builds a tile view for one camera.
+    ///
+    /// The backing layer is created during this initialiser — `wantsLayer` is set only after every
+    /// stored property exists, because AppKit calls `makeBackingLayer()` synchronously from that
+    /// assignment and the layer configuration reads `options`.
+    ///
+    /// - Parameters:
+    ///   - cameraID: identity for logs; the view never dereferences it.
+    ///   - options: fit policy and corner radius. Defaults are the slice defaults.
+    ///   - logger: injected; defaults to `NullLogger`, so nothing is written unless the app wires
+    ///     a real logger in.
+    public init(cameraID: CameraID,
+                options: TileRenderOptions = TileRenderOptions(),
+                logger: any LoggerProtocol = NullLogger()) {
+        self.cameraID = cameraID
+        self.options = options
+        self.logger = logger
+        self.state = TileRenderState()
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
+        configureBeforeLayer()
+
+        // TRAP (docs/.vigil/STEP3.md §3.3): `wantsLayer` must be set before `layer` is touched.
+        // Reading `layer` first gives AppKit an ordinary CALayer and `makeBackingLayer()` is then
+        // never consulted, so the view silently loses its video layer.
+        wantsLayer = true
+        adoptBackingLayer()
+    }
+
+    /// Not supported. Vigil builds every view in code; there are no nibs.
+    public required init?(coder: NSCoder) {
+        return nil
+    }
+
+    deinit {
+        // Safe from a nonisolated deinit: `NotificationCenter` is thread-safe and this touches no
+        // main-actor state. Selector-based observers have been zeroing-weak since 10.11, so this is
+        // belt and braces rather than a correctness requirement.
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    // MARK: - AppKit overrides
+
+    /// Top-left origin, so AppKit point coordinates match SwiftUI's exactly and no overlay ever
+    /// needs a Y flip (docs/spec-render.md §2, note on space V).
+    override public var isFlipped: Bool { true }
+
+    /// The well is fully covered by opaque black plus video, so AppKit can skip everything behind
+    /// it. This is half of the no-white-flash rule; the other half is the layer's own `isOpaque`.
+    override public var isOpaque: Bool { true }
+
+    /// `updateLayer()` instead of `draw(_:)`. `draw(_:)` would allocate a CPU backing store for a
+    /// view that never draws a pixel itself.
+    override public var wantsUpdateLayer: Bool { true }
+
+    /// Focusable, so a later step can attach key handling without changing the view's shape.
+    override public var acceptsFirstResponder: Bool { true }
+
+    /// A drag inside the video well is a video interaction, never a window move.
+    override public var mouseDownCanMoveWindow: Bool { false }
+
+    /// Intentionally empty: `AVSampleBufferDisplayLayer` owns its own contents and AppKit must not
+    /// put anything into them. This override exists so that the `wantsUpdateLayer` path is a no-op
+    /// rather than inherited behaviour.
+    override public func updateLayer() {}
+
+    // MARK: - Frame ingest (nonisolated)
+
+    /// Hands one decoded-but-not-yet-displayed sample to the display layer.
+    ///
+    /// Called from `VigilVideo`'s presenter task, **not** the main actor, and it must return in
+    /// well under a millisecond. It takes one `NSLock`, may call `flush()`, calls
+    /// `AVSampleBufferVideoRenderer.enqueue(_:)`, and returns. It allocates nothing and touches no
+    /// AppKit state.
+    ///
+    /// `sampleBuffer` is neither boxed nor stored: both sides of this call are `nonisolated` and
+    /// the call is synchronous, so no isolation boundary is crossed and `Sendable` is not required
+    /// (docs/API_CONTRACT.md §2 R-51).
+    ///
+    /// - Parameters:
+    ///   - sampleBuffer: a ready sample carrying its own format description, built by `VigilVideo`.
+    ///   - format: the neutral description of that format. Used for diagnostics only here.
+    ///   - generation: bumps on every format change. A change flushes the pending queue —
+    ///     `flush()` alone, which discards queued samples and **keeps the displayed picture**.
+    public nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer,
+                                    format: VideoFormatInfo,
+                                    generation: UInt32) {
+        let outcome = sampleBuffers.enqueue(sampleBuffer, generation: generation)
+        publishIfNoteworthy(outcome)
+    }
+
+    /// The decoder was recreated or the stream restarted: drop everything queued.
+    ///
+    /// This is `flush()`, never `flush(removingDisplayedImage:)`. Holding the last picture across a
+    /// reconnect is the specified behaviour — the offline state is a held frame, dimmed by a
+    /// sibling overlay in `VigilUI`, not a black rectangle (docs/API_CONTRACT.md §4.9, the
+    /// no-black-flash rule; docs/spec-render.md §13.2).
+    public nonisolated func streamDidReset() {
+        sampleBuffers.flushKeepingLastImage(reason: .streamReset)
+        publishIdle()
+    }
+
+    // MARK: - Private helpers
+
+    /// Everything that must be true before the backing layer exists.
+    private func configureBeforeLayer() {
+        // `.duringViewResize` makes AppKit re-lay-out rather than stretch stale layer contents at
+        // the trailing edge during a live resize (docs/spec-render.md §5.4, row 1).
+        layerContentsRedrawPolicy = .duringViewResize
+        layerContentsPlacement = .scaleAxesIndependently
+
+        // NSView.clipsToBounds is macOS 14.0+, which is the deployment floor.
+        clipsToBounds = true
+
+        // NSView declares this settable, so it is assigned rather than overridden. Rendering never
+        // happens on a background thread here.
+        canDrawConcurrently = false
+    }
+
+    /// Wires the freshly created backing layer to the ingest path and the notifications.
+    private func adoptBackingLayer() {
+        guard let displayLayer else {
+            logger.error(.render, "backing layer is not an AVSampleBufferDisplayLayer",
+                         ["camera": cameraID.short])
+            return
+        }
+        // AVFoundation, macOS 14.0+:
+        //   extension AVSampleBufferDisplayLayer {
+        //       var sampleBufferRenderer: AVSampleBufferVideoRenderer { get }
+        //   }
+        // The layer's own `enqueue(_:)` is deprecated from macOS 14; the renderer is the supported
+        // surface (docs/spec-render.md §13.2).
+        sampleBuffers.adopt(displayLayer.sampleBufferRenderer)
+        observeLayerNotifications(displayLayer)
+        state.setBackend(.sampleBufferLayer)
+        updateScaleAndBackingSize()
+    }
+
+    /// Applies whatever actually changed, with implicit CA animations off.
+    private func applyOptions(from old: TileRenderOptions) {
+        guard let displayLayer else { return }
+        withoutCAActions {
+            if options.gravity != old.gravity {
+                displayLayer.videoGravity = options.gravity.avGravity
+            }
+            if options.cornerRadiusPt != old.cornerRadiusPt {
+                applyCornerRadius(to: displayLayer)
+            }
+            if options.preventsDisplaySleep != old.preventsDisplaySleep {
+                displayLayer.preventsDisplaySleepDuringVideoPlayback = options.preventsDisplaySleep
+            }
+        }
+    }
+
+    /// Publishes an ingest outcome to `state`, but only when something changed that a status line
+    /// would want to show. The per-sample path must not schedule a main-actor hop per frame.
+    private nonisolated func publishIfNoteworthy(_ outcome: SampleBufferBackend.Outcome) {
+        guard outcome.isFirstSinceFlush || !outcome.accepted else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            state.absorb(outcome)
+        }
+    }
+
+    /// Marks the tile as no longer receiving after a flush.
+    private nonisolated func publishIdle() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            state.markIdle()
+        }
+    }
+}
+
+// MARK: - VideoSink
+
+// `VideoTileView` is the one implementer of `VigilVideo.VideoSink` (docs/API_CONTRACT.md §2 R-51).
+// The conformance is NOT declared in the slice, because `VigilVideo` does not yet declare the
+// protocol, `VideoFrame`, `StreamEndReason` or `FrameDropReason`, and a conformance to a type that
+// does not exist would break the macOS build for every other agent.
+//
+// The two members above are already the exact `VideoSink` spellings, and need nothing from
+// `VigilVideo`:
+//
+//   nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
+//                            generation: UInt32)
+//   nonisolated func streamDidReset()
+//
+// Landing the conformance is then a one-line extension plus the members that need `VigilVideo`
+// types: `enqueue(_ frame: VideoFrame)` (the pixel-buffer path, which requires the Metal backend
+// and therefore cannot be honoured by this file), `streamDidEnd(reason:)`, and the six
+// observability members, which have no-op defaults.
+
+#endif
