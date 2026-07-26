@@ -77,14 +77,16 @@ package struct ConnectDiagnosisCard: View {
     // MARK: - Private Helpers
 
     private var remedyRow: some View {
+        // Indexed by position rather than by `enumerated()`, because a key path cannot address a
+        // tuple element and `id: \.element` on an `EnumeratedSequence` does not compile.
         HStack(spacing: VTheme.Space.sm) {
-            ForEach(Array(diagnosis.remedies.enumerated()), id: \.element) { index, remedy in
+            ForEach(diagnosis.remedies.indices, id: \.self) { index in
                 // The form's Connect button is the one primary on screen, so the first remedy is
                 // `secondary` rather than `primary` (§9.1: one primary per container).
-                VButton(remedy.title,
+                VButton(diagnosis.remedies[index],
                         style: index == 0 ? .secondary : .ghost,
                         size: .sm) {
-                    onRemedy(remedy)
+                    onRemedy(diagnosis.remedies[index])
                 }
             }
         }

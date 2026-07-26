@@ -3,32 +3,34 @@
 //  Vigil
 //
 //  The app-level object: owns the one `StreamController` the slice runs, turns its event stream
-//  into observable state, and implements the launch → live-video flow of R1.
+//  into the state the two screens render, and implements the launch → live-video flow of R1.
 //  macOS-only. See docs/API_CONTRACT.md §4.12, docs/spec-core.md §7 and REQUIREMENTS-CUSTOMER §R1.
 //
 
 #if os(macOS)
 
+import AppKit
 import Foundation
 import Observation
 
 import VigilCore
 import VigilProtocols
+import VigilUI
 
 // MARK: - AppSessionModel
 
 /// Everything the two screens of the slice need, and nothing else.
 ///
-/// One camera, one controller, one window. The model is the only place in the app target that
-/// touches `VigilCore`; the views receive plain values and closures, which is also why they can
-/// live in `VigilUI` (a module that cannot see this type).
+/// One camera, one controller, one window. This is the only type in the app that touches
+/// `VigilCore`'s streaming API, and the only one that both screens read — `VigilUI` cannot see the
+/// app target, so its views take values and closures and this is what supplies them.
 ///
 /// **Isolation.** `@MainActor` throughout, because every property here is read during SwiftUI body
-/// evaluation. The `StreamController` it owns is an actor, so every call into it is `await`ed from
-/// a `Task` that inherits this isolation; nothing blocks the main thread.
+/// evaluation. `StreamController` is an actor, so every call into it is `await`ed from a task that
+/// inherits this isolation; nothing blocks the main thread.
 ///
-/// **What it deliberately does not do:** no discovery, no channel enumeration, no Stream Doctor, no
-/// library persistence. Those are named in R1 and in the manifest and land in W2–W6; the slice's
+/// **What it deliberately does not do:** no discovery, no channel enumeration, no Stream Doctor,
+/// no library persistence. Those are named in R1 and in the manifest and land in W2–W6; the slice's
 /// job is to prove the column from socket to pixel (`.vigil/SLICE.md`).
 @MainActor
 @Observable
@@ -38,10 +40,10 @@ final class AppSessionModel {
 
     /// Which of the two screens the window is showing.
     ///
-    /// The transition to `.live` happens the instant the user presses Return — not when the first
-    /// frame arrives. The connecting narration belongs on the video surface (`StateDetail.narration`,
-    /// docs/spec-core.md §7.3), so that the ten seconds R1 allows are spent watching the stream come
-    /// up rather than watching a modal spinner over a form.
+    /// The move to `.live` happens the instant the user presses Return — not when the first frame
+    /// arrives. The connecting narration belongs on the video surface (`LiveConnectionState`), so
+    /// that the ten seconds R1 allows are spent watching the stream come up rather than watching a
+    /// spinner over a form.
     enum Phase: Equatable {
         /// The connect form: address, account, password.
         case connect
@@ -51,171 +53,175 @@ final class AppSessionModel {
 
     // MARK: - Stored Properties
 
-    /// Camera address as typed. IPv4, IPv6 without brackets, or a DNS name (docs/spec-core.md §4.1).
-    var host: String = ""
-
-    /// Hikvision account name. Pre-filled with the factory default, per R1.1 step 3.
-    var account: String = "admin"
-
-    /// The password. Held only until the Keychain has it, then cleared (see `apply(_:)`).
-    var password: String = ""
+    /// The connect form's fields, validation and last diagnosis.
+    ///
+    /// Owned here rather than in the view because `ConnectFormView` takes a `Binding` and says so:
+    /// "state lives in the caller so the app can prefill an address … and drive the in-flight and
+    /// failure states from `VigilCore`".
+    var form = ConnectFormState()
 
     /// Which screen is showing.
     private(set) var phase: Phase = .connect
 
-    /// One short sentence describing what the stream is doing, shown under the video.
-    ///
-    /// Empty once a picture is on screen: nothing is drawn over live video at rest
-    /// (docs/DESIGN.md §11.4 and R-36).
-    private(set) var statusLine: String = ""
-
-    /// The controller's last reported state, or `nil` before the first connect attempt.
-    private(set) var streamState: StreamState?
-
-    /// `true` once the first complete access unit has been assembled from RTP.
-    ///
-    /// This is the earliest honest "the camera is sending video" signal available at this layer:
-    /// `StreamEvent.firstFrameAssembled` is named for what the controller can observe, and the
-    /// decoder reports the picture separately (see the case's own documentation in
-    /// `VigilCore/Streaming/StreamEvent.swift`). A view that needs the exact moment pixels appear
-    /// should read `TileRenderState.isReceivingFrames` from its own tile instead of this.
-    private(set) var isReceivingMedia: Bool = false
-
-    /// Time from `start()` to the first assembled access unit, as reported by the controller. Kept
-    /// for the R1.7 measurement and written to the log; the UI may show it and may ignore it.
-    private(set) var firstFrameLatency: Duration?
-
-    /// One sentence naming what went wrong, or `nil` when nothing is wrong.
-    ///
-    /// Always `StreamError.message` or `VigilFailure.userMessage` — never a status code, never
-    /// `localizedDescription` of an `NWError`. The slice has no Stream Doctor, so this is a cause
-    /// and not yet a diagnosis: R1.5's nine named diagnoses are a W4 obligation and are **not** met
-    /// here.
-    private(set) var failure: String?
-
-    /// One imperative sentence saying what to do about `failure`, when there is something to do.
-    private(set) var failureRemedy: String?
-
-    /// The live controller, handed to the video view so it can attach its display layer.
+    /// The live controller, handed to the video screen so it can attach its display layer.
     private(set) var controller: StreamController?
 
-    /// `true` between pressing Return and the first frame (or the first failure).
-    private(set) var isConnecting: Bool = false
+    /// The camera currently being connected or streamed.
+    private(set) var camera: Camera?
 
-    private let dependencies: CoreDependencies
+    /// Time from `start()` to the first assembled access unit. The R1.7 measurement.
+    private(set) var firstFrameLatency: Duration?
+
+    /// The controller's last reported state.
+    private(set) var streamState: StreamState = .idle
+
+    /// Whether any RTP has arrived, which is what separates "no video is arriving" from "waiting
+    /// for a keyframe" in the connecting narration.
+    private(set) var hasFirstPacket: Bool = false
+
+    /// Whether a complete access unit has been assembled. See `StreamEvent.firstFrameAssembled`:
+    /// the decoder reports the *picture* separately, and the tile's own `TileRenderState` is the
+    /// authority on when pixels appear.
+    private(set) var isReceivingMedia: Bool = false
+
+    /// The latest 1 Hz telemetry, used for the degraded banner's measured cause.
+    private(set) var statistics = StreamStatistics()
+
+    /// The named cause of the current failure, in `VigilUI`'s vocabulary.
+    private(set) var diagnosis: ConnectDiagnosis?
+
+    /// Which reconnect attempt we are on. `1` until the controller says otherwise.
+    private(set) var attempt: Int = 1
+
+    /// Seconds until the next reconnect, when one is scheduled.
+    private(set) var retryInSeconds: Int?
+
+    /// When media was last flowing, for the offline card's "Last seen" line.
+    private(set) var lastSeen: Date?
+
+    private let services: AppServices
     private let credentials: CredentialStore
     private let defaults: UserDefaults
     private var sessionTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
 
-    /// Keychain handle of the camera currently being connected. Held so that the first decoded
-    /// frame can be remembered against the right item without re-reading `UserDefaults`.
+    /// Keychain handle of the camera currently being connected, so the first frame can be
+    /// remembered against the right item.
     private var activeRef: CredentialRef?
+
+    /// The RTSP path the ladder settled on, persisted only once a frame has arrived.
+    private var resolvedPath: String?
+
+    /// Set by the "Try Port 8554" remedy, and only by it.
+    private var rtspPort: Int = 554
 
     /// Whether the launch-time resume has already been attempted.
     private var hasResumed = false
 
-    /// The RTSP path the probe ladder settled on for the current camera, once it has reported one.
-    /// Persisted only after a frame arrives, so a path that resolved but never produced video is
-    /// not the one we start from next time.
-    private var resolvedPath: String?
-
     // MARK: - Computed Properties
 
-    /// Whether the connect form's primary button should fire.
-    var canConnect: Bool {
-        !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !account.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !password.isEmpty
-            && !isConnecting
+    /// What the video screen shows, in its own vocabulary.
+    ///
+    /// The eleven `StreamState` cases collapse into four here, exactly as `LiveConnectionState`
+    /// documents: five transient states become one `connecting` phase ladder, and `failed`,
+    /// `reconnecting` and `stopped` become `offline` carrying the diagnosis that tells them apart.
+    var liveState: LiveConnectionState {
+        switch streamState {
+        case .idle, .resolving:
+            return .connecting(.resolving)
+        case .connecting:
+            return .connecting(.connecting)
+        case .authenticating:
+            return .connecting(.authenticating)
+        case .describing:
+            return .connecting(.negotiating)
+        case .settingUp:
+            return .connecting(.opening)
+        case .playing:
+            if isReceivingMedia { return .live }
+            return .connecting(hasFirstPacket ? .waitingForKeyframe : .waitingForVideo)
+        case .degraded:
+            return .degraded(degradedCause)
+        case .reconnecting, .failed, .stopped:
+            return .offline(OfflineDetail(attempt: attempt,
+                                          retryInSeconds: retryInSeconds,
+                                          lastSeen: lastSeen,
+                                          isPersistent: attempt >= 5,
+                                          diagnosis: diagnosis))
+        }
     }
 
-    /// Cause and remedy as the one string a view can show without knowing which it has.
+    /// The measured reason the stream is degraded.
     ///
-    /// Two properties, one sentence pair: R1.5's rule is that a failure never appears without a
-    /// next action, and joining them here means a view cannot show the first and forget the second.
-    var failureBanner: String? {
-        switch (failure, failureRemedy) {
-        case (nil, _): return nil
-        case (let message?, nil): return message
-        case (let message?, let remedy?): return "\(message) \(remedy)"
+    /// Every case carries a number the user can act on, so this reports whichever measurement is
+    /// actually non-zero rather than guessing (UX.md §14.1 rule 4).
+    private var degradedCause: DegradedCause {
+        if statistics.lossFraction > 0 {
+            return .packetLoss(fraction: statistics.lossFraction)
         }
+        if statistics.jitterMilliseconds > 0 {
+            return .jitter(milliseconds: statistics.jitterMilliseconds)
+        }
+        return .decodeQueue(frames: statistics.decodeQueueDepth)
     }
 
     // MARK: - Initialisation
 
-    /// Creates the model over an already-bootstrapped dependency set.
+    /// Creates the model over an already-bootstrapped service set.
     ///
     /// - Parameters:
-    ///   - dependencies: the process-wide `CoreDependencies` from `AppEnvironment.bootstrap()`.
+    ///   - services: the process-wide clock, logger, keychain and transport factory from
+    ///     `AppEnvironment.bootstrap()`.
     ///   - defaults: where the remembered connection lives. Injected so a test can pass a scratch
     ///     suite instead of the real one.
-    init(dependencies: CoreDependencies, defaults: UserDefaults = .standard) {
-        self.dependencies = dependencies
+    init(services: AppServices, defaults: UserDefaults = .standard) {
+        self.services = services
         self.defaults = defaults
-        // Verified against the landed source (Sources/VigilCore/Security/CredentialStore.swift):
-        //     public init(keychain: any KeychainProtocol, logger: any LoggerProtocol = NullLogger(),
-        //                 accessGroup: String? = nil)
-        self.credentials = CredentialStore(keychain: dependencies.keychain,
-                                           logger: dependencies.logger)
+        self.credentials = CredentialStore(keychain: services.keychain, logger: services.logger)
     }
 
     // MARK: - Public API
 
     /// Called once, when the window appears.
     ///
-    /// If a previous run reached a picture, its host, account and Keychain handle were remembered,
-    /// and this reconnects without asking for anything. That is what makes the *second* and every
-    /// later launch a zero-input path to video (R1.4). When nothing is remembered, or the Keychain
-    /// no longer holds that password, the form is shown with whatever we do know pre-filled.
+    /// If a previous run reached a picture, its host, account, Keychain handle and working RTSP
+    /// path were remembered, and this reconnects without asking for anything. That is what makes
+    /// the *second* and every later launch a zero-input path to video (R1.4). When nothing is
+    /// remembered, the form is shown as it stands.
     func resumeOrPrompt() {
         // `.task` fires again if the window is closed and reopened; resuming twice would build a
         // second controller for the same camera and leak the first.
         guard !hasResumed else { return }
         hasResumed = true
         guard let remembered = LastConnection.load(from: defaults) else { return }
-        host = remembered.host
-        account = remembered.account
+        form.host = remembered.host
+        form.username = remembered.account
         sessionTask = Task { [weak self] in
             await self?.resume(remembered)
         }
     }
 
-    /// Starts a connection from the form's contents. Safe to call twice; the second call is ignored
-    /// while the first is still in flight.
-    func connect() {
-        guard !isConnecting else { return }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAccount = account.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else {
-            report(failure: "Vigil needs the camera's address.",
-                   remedy: "Type its IP address, for example 192.168.1.64.")
-            return
-        }
-        guard !trimmedAccount.isEmpty, !password.isEmpty else {
-            report(failure: "Vigil needs the camera's password.",
-                   remedy: "Type the password you set on the camera.")
-            return
-        }
-        host = trimmedHost
-        account = trimmedAccount
-        let secret = password
+    /// Connects to what the form submitted.
+    ///
+    /// `ConnectFormView` has already validated the fields and set `form.isConnecting`; this is the
+    /// app half — Keychain, camera record, controller.
+    func connect(_ request: ConnectRequest) {
+        form.isConnecting = true
+        diagnosis = nil
+        beginConnecting()
         // Reuse the Keychain handle when this is the same camera and account as last time: `save`
         // updates an existing item in place, whereas a fresh `CredentialRef` would leave the old
         // item behind as an orphan on every retry.
-        let ref = rememberedRef(host: trimmedHost, account: trimmedAccount) ?? CredentialRef()
-        beginConnecting()
+        let ref = rememberedRef(host: request.host, account: request.username) ?? CredentialRef()
         sessionTask = Task { [weak self] in
-            await self?.connect(host: trimmedHost, account: trimmedAccount, secret: secret,
-                                ref: ref)
+            await self?.connect(request, ref: ref)
         }
     }
 
     /// Tears the session down and returns to the form. Idempotent.
     ///
     /// - Parameter forget: when `true`, the remembered connection is cleared so the next launch
-    ///   shows the form. Used when the camera rejected the credential — repeating a wrong password
-    ///   at every launch is how Hikvision accounts get locked out (R-25).
+    ///   shows the form rather than reconnecting.
     func disconnect(forget: Bool = false) {
         eventTask?.cancel()
         eventTask = nil
@@ -225,67 +231,96 @@ final class AppSessionModel {
         controller = nil
         activeRef = nil
         phase = .connect
-        isConnecting = false
+        form.isConnecting = false
         isReceivingMedia = false
-        streamState = nil
-        statusLine = ""
+        hasFirstPacket = false
+        streamState = .idle
+        retryInSeconds = nil
         firstFrameLatency = nil
         if forget {
             LastConnection.clear(in: defaults)
         }
         guard let outgoing else { return }
-        // Graceful TEARDOWN on its own task: `stop` is documented to be safe to await from a task
-        // that is being cancelled, and the UI must not wait 1.5 s to go back to the form.
+        // Graceful TEARDOWN on its own task: `stop` is safe to await from a cancelled task, and the
+        // UI must not wait 1.5 s to go back to the form.
         Task { await outgoing.stop(reason: .userRequested) }
+    }
+
+    /// Performs one of the remedies the diagnosis card offered.
+    ///
+    /// `ConnectDiagnosis` promises that every failure has at least one action; this is where the
+    /// promise is kept. Three of the nine remedies need machinery the slice does not have —
+    /// activation, ONVIF and Stream Doctor are W2–W4 — and each says so here rather than silently
+    /// doing nothing, because a button that does nothing is worse than one that is not offered.
+    func perform(_ remedy: ConnectRemedy) {
+        switch remedy {
+        case .checkAddress, .updatePassword:
+            // `ConnectFormView` has already moved the cursor; it forwards these so the app can log.
+            services.logger.debug(.ui, "remedy \(remedy) handled by the form")
+        case .retry:
+            connect(form.request)
+        case .switchToTCP:
+            // The slice is TCP-interleaved and nothing else (`.vigil/SLICE.md`), so this is a
+            // retry — the transport it asks for is already the one in use.
+            services.logger.notice(.core, "already TCP-interleaved; retrying")
+            connect(form.request)
+        case .tryAlternateRTSPPort:
+            rtspPort = Self.alternateRTSPPort
+            connect(form.request)
+        case .activateCamera, .openCameraWebPage:
+            // Activation happens on the device's own web page, which is also where every setting
+            // the other diagnoses point at lives. The in-app activation flow is W2.
+            openCameraWebPage()
+        case .useONVIF:
+            unavailable("ONVIF is not in this build yet.")
+        case .runStreamDoctor:
+            unavailable("Stream Doctor is not in this build yet.")
+        }
     }
 
     // MARK: - Private Helpers
 
     private func beginConnecting() {
-        failure = nil
-        failureRemedy = nil
-        isConnecting = true
-        isReceivingMedia = false
-        firstFrameLatency = nil
-        statusLine = Self.openingNarration
         phase = .live
+        streamState = .resolving
+        isReceivingMedia = false
+        hasFirstPacket = false
+        firstFrameLatency = nil
+        retryInSeconds = nil
+        attempt = 1
     }
 
     /// The first-connect path: write the password to the Keychain, then stream.
-    private func connect(host: String, account: String, secret: String, ref: CredentialRef) async {
+    private func connect(_ request: ConnectRequest, ref: CredentialRef) async {
         do {
-            let camera = try makeCamera(host: host, ref: ref)
-            let credential = Credential(ref: ref, account: account, secret: secret)
-            // Verified against the landed source: `CredentialDescriptor(camera:account:)` derives
-            // server, port, protocol and the Keychain Access label from the record, and `save`
-            // preconditions that the credential's ref matches the descriptor's — which it does,
-            // because both come from `ref`.
-            let descriptor = CredentialDescriptor(camera: camera, account: account)
+            let camera = try makeCamera(host: request.host, ref: ref)
+            let credential = Credential(ref: ref, account: request.username, secret: request.password)
+            // `CredentialDescriptor(camera:account:)` derives server, port, protocol and the
+            // Keychain Access label from the record; `save` preconditions that the credential's ref
+            // matches the descriptor's, which it does because both come from `ref`.
+            let descriptor = CredentialDescriptor(camera: camera, account: request.username)
             try await credentials.save(credential, descriptor: descriptor)
             await stream(camera: camera, ref: ref)
         } catch {
-            fail(with: error)
+            fail(with: error, host: request.host)
         }
     }
 
     /// The remembered-camera path: no form, no Keychain write, straight to streaming.
     private func resume(_ remembered: LastConnection) async {
-        // Straight to the video screen, before the Keychain is even asked. A remembered connection
-        // means we already believe there is a camera, and showing the form for the few milliseconds
-        // the Keychain takes would put a flash of "type your password" in front of a user who is
-        // about to be shown video.
+        // Straight to the video screen, before the Keychain is even asked: a remembered connection
+        // means we already believe there is a camera, and a flash of the form in front of a user
+        // who is about to be shown video is exactly the "wizard" R1 forbids.
+        form.isConnecting = true
         beginConnecting()
         do {
-            // A missing item is a normal outcome, not an error (`errSecItemNotFound`,
-            // docs/spec-core.md §6.4) — it means the user removed it in Keychain Access, so we ask.
-            // `hasCredential` answers from `kSecReturnAttributes` alone, so this launch-time check
-            // does not decrypt the secret; the controller's provider does that when it connects.
+            // A missing item is a normal outcome, not an error (`errSecItemNotFound`) — it means
+            // the user removed it in Keychain Access, so we ask again. `hasCredential` answers from
+            // `kSecReturnAttributes` alone and never decrypts the secret.
             guard try await credentials.hasCredential(for: remembered.credentialRef) else {
                 LastConnection.clear(in: defaults)
                 phase = .connect
-                isConnecting = false
-                report(failure: "Vigil no longer has this camera's password.",
-                       remedy: "Enter it again.")
+                form.isConnecting = false
                 return
             }
             let camera = try makeCamera(host: remembered.host,
@@ -294,57 +329,48 @@ final class AppSessionModel {
             resolvedPath = remembered.rtspPath
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
-            // Nothing is on screen yet, so the honest result is the form plus an explanation.
-            fail(with: error)
+            fail(with: error, host: remembered.host)
         }
     }
 
     /// Builds the one camera record the slice uses, with every field but the address defaulted.
     ///
-    /// Verified against the landed source (`Sources/VigilCore/Model/Camera.swift`):
-    ///     public init(id:name:host:httpPort:rtspPort:useTLS:channel:preferredQuality:transport:
-    ///                 credentialRef:capabilities:createdAt:lastSeenAt:isEnabled:rtspPathOverride:
-    ///                 latencyPreset:)   // everything but `host` defaulted
-    ///     func validated() throws(CameraValidationError) -> Camera
+    /// From the landed source (`Sources/VigilCore/Model/Camera.swift`): every argument but `host`
+    /// has a default, and `validated()` supplies the name, strips IPv6 brackets and throws
+    /// `.invalidHost` when the user pasted a URL rather than an address.
     ///
-    /// `validated()` supplies the name (`"Camera <host>"`), strips IPv6 brackets, and throws
-    /// `.invalidHost` when the user pasted a URL rather than an address — which is exactly the
-    /// mistake the form invites, so the message must reach them.
+    /// `rtspPathOverride` carries the ladder's winner from the last successful run, so R1.2's "the
+    /// probe happens exactly once per device, ever" holds across launches — `StreamController`
+    /// reads it as a resolved candidate and skips the ladder. In W4 this is
+    /// `capabilities.resolvedRTSPPath` read back from `library.json`.
     private func makeCamera(host: String, ref: CredentialRef, rtspPath: String? = nil) throws
         -> Camera {
-        // `rtspPathOverride` carries the ladder's winner from the last successful run, so R1.2's
-        // "the probe happens exactly once per device, ever" holds across launches. In W4 this is
-        // `capabilities.resolvedRTSPPath` read back from `library.json`; the slice has no library,
-        // and skipping four `DESCRIBE` round-trips is worth this much borrowing of the field.
-        try Camera(host: host, credentialRef: ref, rtspPathOverride: rtspPath).validated()
+        try Camera(host: host,
+                   rtspPort: rtspPort,
+                   credentialRef: ref,
+                   rtspPathOverride: rtspPath).validated()
     }
 
     /// Builds the controller, subscribes to its events, and starts it. The only place a
     /// `StreamController` is created in the app.
     private func stream(camera: Camera, ref: CredentialRef) async {
+        self.camera = camera
         activeRef = ref
         let store = credentials
-        // The provider is called by the controller on every connect attempt, so the password is
-        // read from the Keychain each time and never captured in the closure (docs/spec-core.md §2).
+        // Called by the controller on every connect attempt, so the password is read from the
+        // Keychain each time and never captured in the closure (docs/spec-core.md §2).
         let provider: @Sendable () async throws -> Credential? = {
             try await store.credential(for: ref)
         }
-        // ASSUMED SIGNATURE (VigilCore/Streaming/StreamController.swift, docs/API_CONTRACT.md §4.8):
-        //     public init(camera: Camera,
-        //                 credentialProvider: @Sendable @escaping () async throws -> Credential?,
-        //                 initialQuality: StreamQuality,
-        //                 initialPriority: StreamPriority,
-        //                 dependencies: CoreDependencies,
-        //                 recorderFactory: ...)
-        // The contract's `recorderFactory` is omitted: `ClipRecorder` is W4 and recording is out of
-        // scope for the slice, so the slice's initialiser cannot require it.
         let controller = StreamController(camera: camera,
                                           credentialProvider: provider,
-                                          initialQuality: .main,
-                                          initialPriority: .focused,
-                                          dependencies: dependencies)
+                                          quality: .main,
+                                          makeTransport: services.makeTransport,
+                                          frameSink: services.frameSink,
+                                          clock: services.clock,
+                                          logger: services.logger)
         self.controller = controller
-        // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so this
+        // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so the
         // subscription is established before `start()` and cannot miss the first transition.
         eventTask = Task { [weak self] in
             for await event in controller.events() {
@@ -357,75 +383,97 @@ final class AppSessionModel {
 
     /// Folds one controller event into observable state.
     ///
-    /// The `default` arm is deliberate: the slice reacts to four of `StreamEvent`'s cases and must
-    /// keep consuming the rest — statistics, keyframes, warnings, path resolution — rather than
-    /// leave them to fill the stream's bounded buffer. It also means a case added in W4 cannot stop
-    /// this file compiling.
+    /// The `default` arm is deliberate: the slice reacts to seven of `StreamEvent`'s cases and must
+    /// keep consuming the rest rather than leave them to fill the stream's bounded buffer. It also
+    /// means a case added in W4 cannot stop this file compiling.
     private func apply(_ event: StreamEvent) {
         switch event {
         case .stateChanged(_, let to, let detail):
             streamState = to
-            // `StateDetail` is not optional in the landed enum, and its narration already falls
-            // back to `StreamState.narration` for a plain transition (`StateDetail.plain`).
-            statusLine = isReceivingMedia && to.isActive ? "" : detail.narration
-            if let underlying = detail.underlying {
-                report(streamError: underlying)
+            attempt = max(1, detail.attempt)
+            retryInSeconds = Self.seconds(until: detail.nextRetryAt)
+            if let underlying = detail.underlying, let camera {
+                diagnosis = ConnectDiagnosis.from(underlying, camera: camera)
             }
+        case .firstPacketReceived:
+            hasFirstPacket = true
         case .firstFrameAssembled(let afterStart):
             isReceivingMedia = true
-            isConnecting = false
+            form.isConnecting = false
             firstFrameLatency = afterStart
-            statusLine = ""
-            failure = nil
-            failureRemedy = nil
+            lastSeen = Date()
+            diagnosis = nil
+            form.clearDiagnosis()
             // The Keychain has the password now, so the copy in memory — and in the form's secure
             // field — has no reason to exist.
-            password = ""
-            if let activeRef {
-                LastConnection(host: host, account: account, credentialRef: activeRef,
-                               rtspPath: resolvedPath).save(to: defaults)
-            }
+            form.password = ""
+            rememberThisCamera()
             // The R1.7 number, in the log where the acceptance checklist can read it.
-            dependencies.logger.info(.app, "first frame assembled after \(afterStart)")
+            services.logger.info(.app, "first frame assembled after \(afterStart)")
         case .pathResolved(let candidate, _):
             // Remembered at the first frame, not here: a path that answers `DESCRIBE` but never
             // delivers video is not the one to start from next time.
             resolvedPath = candidate.path
+        case .statistics(let latest):
+            statistics = latest
+            if streamState.isActive { lastSeen = Date() }
+        case .reconnectScheduled(let attempt, let delay, let cause):
+            self.attempt = attempt
+            retryInSeconds = Int(delay.components.seconds)
+            if let camera { diagnosis = ConnectDiagnosis.from(cause, camera: camera) }
         case .error(let error, let isFatal):
-            report(streamError: error)
-            // A rejected password is worth deleting; a locked or unauthorised account is not, since
-            // the password itself may well be right and the user would have to type it again for
-            // nothing.
+            guard let camera else { return }
+            let named = ConnectDiagnosis.from(error, camera: camera)
+            diagnosis = named
+            guard !named.allowsAutomaticRetry || isFatal else { return }
+            // Terminal. Back to the form with the cause and its remedies, and stop remembering a
+            // password the camera rejects — retrying it at every launch is precisely how a
+            // Hikvision account gets locked out (R-25, R1.5 "Account locked").
             let rejected = error.code == .authenticationFailed ? activeRef : nil
-            if error.code.forbidsColdRetry {
-                // Terminal, and only the user can fix it. Back to the form, and stop remembering a
-                // password the camera rejects: retrying it on every launch is precisely how a
-                // Hikvision account gets locked out (R-25, R1.5 "Account locked").
-                disconnect(forget: true)
-                if let rejected {
-                    deleteRejectedCredential(rejected)
-                }
-            } else if isFatal {
-                isConnecting = false
-                statusLine = error.message
-            }
-        case .ended(let reason):
-            isConnecting = false
-            statusLine = "The stream ended (\(reason))."
+            disconnect(forget: !named.allowsAutomaticRetry)
+            form.fail(named)
+            if let rejected { deleteRejectedCredential(rejected) }
         default:
             break
         }
     }
 
-    private func fail(with error: any Error) {
-        isConnecting = false
-        phase = .connect
-        applyDescription(of: error)
-        dependencies.logger.error(.app, "connect failed: \(error)")
+    private func rememberThisCamera() {
+        guard let activeRef, let camera else { return }
+        LastConnection(host: camera.host,
+                       account: form.username,
+                       credentialRef: activeRef,
+                       rtspPath: resolvedPath).save(to: defaults)
     }
 
-    private func report(streamError: StreamError) {
-        report(failure: streamError.message, remedy: streamError.fix)
+    /// A failure before the controller existed: a bad address, or a Keychain that would not answer.
+    private func fail(with error: any Error, host: String) {
+        let named = Self.diagnosis(for: error, host: host)
+        diagnosis = named
+        phase = .connect
+        form.fail(named)
+        services.logger.error(.app, "connect failed: \(error)")
+    }
+
+    /// Turns an error raised on the app's own half of the connect path into a named cause.
+    ///
+    /// `StreamError` never reaches here — the controller reports those through its event stream —
+    /// so this covers exactly two sources: the address the user typed, and the Keychain.
+    private static func diagnosis(for error: any Error, host: String) -> ConnectDiagnosis {
+        switch error {
+        case is CameraValidationError:
+            // `CameraValidationError.description` is a redacted log line, not a sentence for a
+            // person, so the user-facing copy is written here.
+            return .undiagnosed(host: host,
+                                detail: "That is not an address Vigil can use. Type just the "
+                                    + "address — no rtsp://, no user name and no path.")
+        case let failure as any VigilFailure:
+            return .undiagnosed(host: host,
+                                detail: [failure.userMessage, failure.userRemedy]
+                                    .compactMap { $0 }.joined(separator: " "))
+        default:
+            return .undiagnosed(host: host, detail: "Vigil could not start the connection.")
+        }
     }
 
     /// The Keychain handle for this host and account, when it is the one we already have.
@@ -441,11 +489,11 @@ final class AppSessionModel {
 
     /// Removes a password the camera has rejected.
     ///
-    /// Fire-and-forget, on purpose: the user is already looking at the form, and a Keychain that
+    /// Fire-and-forget on purpose: the user is already looking at the form, and a Keychain that
     /// refuses the delete changes nothing they can act on. The failure is logged, not shown.
     private func deleteRejectedCredential(_ ref: CredentialRef) {
         let store = credentials
-        let logger = dependencies.logger
+        let logger = services.logger
         Task {
             do {
                 try await store.delete(ref)
@@ -455,39 +503,33 @@ final class AppSessionModel {
         }
     }
 
-    private func report(failure message: String, remedy: String?) {
-        failure = message
-        failureRemedy = remedy
+    /// Opens the camera's own web page, where every device-side setting the diagnoses point at
+    /// lives — including activation for a factory-fresh camera.
+    private func openCameraWebPage() {
+        let host = camera?.host ?? form.request.host
+        let port = camera?.httpPort ?? 80
+        let authority = host.contains(":") ? "[\(host)]" : host   // bare IPv6 needs brackets
+        guard !host.isEmpty, let url = URL(string: "http://\(authority):\(port)/") else { return }
+        NSWorkspace.shared.open(url)
     }
 
-    /// Turns any error on the connect path into the cause/remedy pair the UI shows.
-    ///
-    /// Three sources, in the order they can occur: the address the user typed, the Keychain, and
-    /// everything else. `localizedDescription` is the last resort and never the first, because for
-    /// a `POSIXError` or an `NWError` it produces exactly the raw text R1.5 forbids.
-    private func applyDescription(of error: any Error) {
-        switch error {
-        case let streamError as StreamError:
-            report(streamError: streamError)
-        case is CameraValidationError:
-            // `CameraValidationError.description` is a redacted log line, not a sentence for a
-            // person, so the user-facing copy is written here.
-            report(failure: "That does not look like a camera address.",
-                   remedy: "Type just the address — no rtsp://, no user name and no path.")
-        case let failure as any VigilFailure:
-            report(failure: failure.userMessage, remedy: failure.userRemedy)
-        default:
-            report(failure: "Vigil could not reach the camera.",
-                   remedy: "Check that the address is right and the camera is powered on.")
-        }
+    /// Reports a remedy the slice cannot perform, in place of doing nothing.
+    private func unavailable(_ sentence: String) {
+        let host = camera?.host ?? form.request.host
+        let named = ConnectDiagnosis.undiagnosed(host: host, detail: sentence)
+        diagnosis = named
+        form.fail(named)
+        services.logger.notice(.ui, sentence)
     }
 
-    /// What the status line says between pressing Return and the controller's first transition.
-    ///
-    /// Every later sentence comes from `StateDetail.narration`, which is the authority
-    /// (docs/spec-core.md §7.3) and is localized. This one exists only so the line is never blank
-    /// while something is happening.
-    private static let openingNarration = StreamState.connecting.narration
+    /// Whole seconds from now until `date`, or `nil` when there is no countdown.
+    private static func seconds(until date: Date?) -> Int? {
+        guard let date else { return nil }
+        return max(0, Int(date.timeIntervalSinceNow.rounded()))
+    }
+
+    /// The port Hikvision devices use when 554 is taken or disabled (R1.5 "RTSP port closed").
+    private static let alternateRTSPPort = 8554
 }
 
 #endif  // os(macOS)
