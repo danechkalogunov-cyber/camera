@@ -214,7 +214,7 @@ public struct ImageSettings: Sendable, Hashable, Codable {
         case .ircut:
             irCut = IRCutSetting(document: document)
         case .noiseReduce:
-            noiseReduction = document["GeneralMode/generalLevel|generalLevel"].int ?? noiseReduction
+            noiseReduction = document["GeneralMode/generalLevel||generalLevel"].int ?? noiseReduction
         case .whiteBalance:
             whiteBalanceStyle = document["whiteBalanceStyle"].string ?? whiteBalanceStyle
         case .flip:

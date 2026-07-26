@@ -283,3 +283,25 @@ func settle(until condition: () async -> Bool, hops: Int = 20_000) async {
         await Task.yield()
     }
 }
+
+// MARK: - UploadDouble
+
+/// An `HTTPUploadHandle` that records what was written, and can be made to fail on demand.
+actor UploadDouble: HTTPUploadHandle {
+    private(set) var chunks: [Data] = []
+    private(set) var finished = false
+    private var failing: ISAPIError?
+
+    init(failing: ISAPIError? = nil) {
+        self.failing = failing
+    }
+
+    func send(_ chunk: Data) async throws(ISAPIError) {
+        if let failing { throw failing }
+        chunks.append(chunk)
+    }
+
+    func finish() async { finished = true }
+
+    var isOpen: Bool { !finished }
+}

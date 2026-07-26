@@ -205,3 +205,41 @@ one of those parameters has a default that compiles and says nothing — `NullLo
 a decode failure or a drop storm reached neither the screen nor the log. The code was *correct* at
 every individual site and the composition was silent. Defaults that make a diagnostic disappear are
 worse than no defaults, and the fix was to name all three explicitly at the call site.
+
+---
+
+## Prototype gate — the first green run over a still tree
+
+Run once, over a tree no agent was writing to, after eight agents finished (five reviewers, four
+implementers, one review follow-up each for render and UI).
+
+```
+== lint ==
+lint: clean — 255 source files, 98 test files
+
+== purity gate: the pure targets must build without any platform framework ==
+Build of product 'VigilPure' complete! (20.74s)
+
+== full package on Linux (macOS targets compile to empty modules) ==
+Build complete! (5.95s)
+
+== pure tests ==
+✔ Test run with 1907 tests passed after 10.192 seconds.
+
+check: PASS
+```
+
+Separately, and this is the result that had been missing all session: `swift build` with no `--product`
+compiled **all 316 units, zero errors, zero warnings** — the first time the whole non-test graph has
+gone green, including `VigilISAPI` and `VigilDiscovery`, whose in-flight state had kept the full build
+red (`VigilCore` links both, so the app could not build without them).
+
+Test count went 1229 → 1907 in this wave: +293 discovery, +148 ISAPI client/auth/XML, and the rest
+from the endpoint half and the review fixes.
+
+**What this does and does not prove.** It proves the pure layer — RTSP, RTP, the H.264/H.265
+bitstream readers, ISAPI, SADP, WS-Discovery, the sweep planner and the merge engine — compiles and
+passes its tests on a real toolchain. It proves the module graph and the `#if os(macOS)` guards for
+everything else. It proves nothing about the roughly one third of the code inside those guards, which
+preprocesses to nothing here and meets a compiler for the first time on the customer's Mac. That
+distinction is stated in `ЗАПУСК.md` in plain words rather than left for the customer to discover.

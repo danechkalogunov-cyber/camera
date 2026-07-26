@@ -633,6 +633,21 @@ enum PTZFixtures {
         #expect(patrols.first?.stops.count == 2)
     }
 
+    @Test func ptzControllerStopDetachedStillSendsTheTripleStop() async throws {
+        // The quit path: the caller cannot await, so the stop runs detached. It must survive the
+        // caller going away, which is why it is detached rather than a child task.
+        let double = RequestDouble()
+        let gate = SleepGate()
+        await gate.release(2)
+        let controller = makeController(double, gate: gate, capabilities: try fullCapabilities())
+        await controller.stopDetached().value
+        let requests = await double.requests(to: "/continuous")
+        #expect(requests.count == 3)
+        let zero = PTZFixtures.declaration
+            + "<PTZData><pan>0</pan><tilt>0</tilt><zoom>0</zoom></PTZData>"
+        for request in requests { #expect(request.bodyText == zero) }
+    }
+
     @Test func ptzControllerSendsFocusAndIrisToTheVideoInputPath() async throws {
         // Focus and iris live under `/System/Video/inputs/channels/{ch}`, not under `/PTZCtrl` —
         // the wrong path is a silent 404.

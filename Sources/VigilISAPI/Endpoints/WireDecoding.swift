@@ -124,17 +124,20 @@ public enum ISAPIUnits {
 /// Case- and punctuation-insensitive matching for the enumerated strings ISAPI sends.
 ///
 /// Firmware writes `G.711ulaw`, `G.711uLaw` and `g711ulaw` for the same codec, and `H.264-BP`,
-/// `H264` and `h.264` for the same video codec. Normalising to lowercase with `.`, `-`, `_` and
-/// spaces removed collapses all of those without a per-firmware table.
+/// `H264` and `h.264` for the same video codec. Normalising to lowercase with the separators
+/// removed collapses all of those without a per-firmware table.
 public enum ISAPIVocabulary {
 
-    /// Lowercases and drops `.`, `-`, `_` and spaces.
+    /// Lowercases and drops `.`, `-`, `_`, `/` and spaces.
+    ///
+    /// `/` is in the set because of `rtpTransportType`, whose two values are `RTP/TCP` and
+    /// `RTP/UDP`; without it those normalise to `rtp/tcp` and match nothing.
     public static func normalize(_ raw: String) -> String {
         var out = String()
         out.reserveCapacity(raw.count)
         for scalar in raw.unicodeScalars {
             switch scalar {
-            case ".", "-", "_", " ": continue
+            case ".", "-", "_", "/", " ": continue
             default: out.unicodeScalars.append(scalar)
             }
         }

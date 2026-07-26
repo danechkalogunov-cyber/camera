@@ -118,23 +118,19 @@ public actor PTZController {
     /// Fires a stop without waiting for it, for the paths that cannot `await`: task cancellation,
     /// app deactivation, window close and termination.
     ///
-    /// The work runs in a detached task with a one-second budget — long enough for three writes on
-    /// a LAN, short enough not to hold up a quit.
-    public nonisolated func stopDetached() {
+    /// Detached rather than a child task, so cancelling the caller does not cancel the stop — the
+    /// whole point is that the camera stops even as the app goes away. There is deliberately **no**
+    /// artificial deadline racing it: cutting a stop short is the failure this file exists to
+    /// prevent, and the writes are already bounded, at two seconds each, by the client's PTZ
+    /// timeout.
+    ///
+    /// - Returns: the task, so a caller that *can* wait — a test, or an orderly shutdown — may.
+    @discardableResult
+    public nonisolated func stopDetached() -> Task<Void, Never> {
         Task.detached(priority: .userInitiated) { [self] in
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { await self.stop() }
-                group.addTask { [self] in
-                    try? await self.budgetClock().sleep(for: .seconds(1))
-                }
-                await group.next()
-                group.cancelAll()
-            }
+            await stop()
         }
     }
-
-    /// The clock used by `stopDetached`'s budget. Exists so the timeout is injectable too.
-    private nonisolated func budgetClock() -> any MonotonicClock { clock }
 
     // MARK: Discrete motion
 

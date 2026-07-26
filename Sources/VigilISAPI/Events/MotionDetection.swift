@@ -159,7 +159,8 @@ public struct MotionDetectionConfig: Sendable, Hashable {
     public var originalNode: XMLNode?
 
     public init(enabled: Bool, sensitivity: Int, samplingInterval: Int, startTriggerMS: Int,
-                endTriggerMS: Int, grid: MotionGrid, originalNode: XMLNode? = nil) {
+                endTriggerMS: Int, grid: MotionGrid, originalNode: XMLNode? = nil,
+                sensitivityPath: String? = nil, gridMapPath: String? = nil) {
         self.enabled = enabled
         self.sensitivity = sensitivity
         self.samplingInterval = samplingInterval
@@ -167,17 +168,33 @@ public struct MotionDetectionConfig: Sendable, Hashable {
         self.endTriggerMS = endTriggerMS
         self.grid = grid
         self.originalNode = originalNode
+        self.sensitivityPath = sensitivityPath
+        self.gridMapPath = gridMapPath
     }
 
-    /// The path alternations below absorb the two casings firmware uses for the layout wrapper and
-    /// the grid map; the reads are case-insensitive anyway, so what they really absorb is the
-    /// *nesting* difference between 5.4.x and 6.x.
-    static let sensitivityPath = "MotionDetectionLayout/sensitivityLevel"
-        + "|MotionDetectionLayout/layout/sensitivityLevel"
-        + "|sensitivityLevel"
-    static let gridMapPath = "MotionDetectionLayout/layout/gridMap"
-        + "|MotionDetectionLayout/gridMap"
-        + "|gridMap"
+    /// Where this device keeps `sensitivityLevel`, resolved on read. `nil` when it has none.
+    public var sensitivityPath: String?
+    /// Where this device keeps `gridMap`, resolved on read.
+    public var gridMapPath: String?
+
+    /// The nestings firmware uses for the sensitivity element, in order.
+    ///
+    /// These are separate *whole paths* rather than one `|` alternation because `|` alternates
+    /// within a segment: `a/b|c/d` means `a` then `b|c` then `d`, which matches nothing here. Reads
+    /// could use the `||` whole-path form, but `XMLNode.setting` accepts only a single
+    /// alternative — so the concrete path is resolved once, on read, and reused for the write.
+    static let sensitivityCandidates = ["MotionDetectionLayout/sensitivityLevel",
+                                        "MotionDetectionLayout/layout/sensitivityLevel",
+                                        "sensitivityLevel"]
+    /// The same, for the grid map.
+    static let gridMapCandidates = ["MotionDetectionLayout/layout/gridMap",
+                                    "MotionDetectionLayout/gridMap",
+                                    "gridMap"]
+
+    /// The first candidate path that resolves against `node`.
+    static func resolve(_ candidates: [String], in node: XMLNode) -> String? {
+        candidates.first { node.has($0) }
+    }
 
     /// Decodes a `<MotionDetection>` document.
     ///
@@ -188,16 +205,20 @@ public struct MotionDetectionConfig: Sendable, Hashable {
     public init(document: ISAPIDocument) {
         let rows = document["Grid/rowGranularity"].int ?? 18
         let columns = document["Grid/columnGranularity"].int ?? 22
-        let hex = document[Self.gridMapPath].string ?? ""
+        let sensitivityPath = Self.resolve(Self.sensitivityCandidates, in: document.root)
+        let gridMapPath = Self.resolve(Self.gridMapCandidates, in: document.root)
+        let hex = gridMapPath.flatMap { document[$0].string } ?? ""
         let grid = MotionGrid(hex: hex, rows: rows, columns: columns)
             ?? MotionGrid(rows: rows, columns: columns)
         self.init(enabled: document["enabled"].bool ?? false,
-                  sensitivity: document[Self.sensitivityPath].int ?? 0,
+                  sensitivity: sensitivityPath.flatMap { document[$0].int } ?? 0,
                   samplingInterval: document["samplingInterval"].int ?? 2,
                   startTriggerMS: document["startTriggerTime"].int ?? 500,
                   endTriggerMS: document["endTriggerTime"].int ?? 500,
                   grid: grid,
-                  originalNode: document.root)
+                  originalNode: document.root,
+                  sensitivityPath: sensitivityPath,
+                  gridMapPath: gridMapPath)
     }
 
     /// Applies the requested changes onto the device's own element.
@@ -208,11 +229,12 @@ public struct MotionDetectionConfig: Sendable, Hashable {
     public func patchedNode(enabled: Bool?, sensitivity: Int?, grid: MotionGrid?) -> XMLNode? {
         guard var node = originalNode else { return nil }
         if let enabled { node = node.setting("enabled", to: enabled ? "true" : "false") }
-        if let sensitivity {
-            let clamped = min(100, max(0, sensitivity))
-            node = node.setting(Self.sensitivityPath, to: String(clamped))
+        if let sensitivity, let path = sensitivityPath {
+            node = node.setting(path, to: String(min(100, max(0, sensitivity))))
         }
-        if let grid { node = node.setting(Self.gridMapPath, to: grid.hexString) }
+        if let grid, let path = gridMapPath {
+            node = node.setting(path, to: grid.hexString)
+        }
         return node
     }
 }

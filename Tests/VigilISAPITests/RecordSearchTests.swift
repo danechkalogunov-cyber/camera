@@ -19,6 +19,17 @@ enum SearchFixtures {
 
     static let searchID = "{6F9619FF-8B86-D011-B42D-00CF4FC964FF}"
 
+    /// The `playbackURI` values docs/spec-isapi.md §15.2 prints, assembled by concatenation so the
+    /// emitted text is byte-faithful: a `\`-continuation inside a multiline literal would fold the
+    /// fixture's indentation into the URI.
+    static let uriOne = "rtsp://192.168.1.64/Streaming/tracks/101"
+        + "?starttime=20240501T080000Z&amp;endtime=20240501T081459Z"
+        + "&amp;name=ch01_00000000019000000&amp;size=536870912"
+    static let uriTwo = "rtsp://192.168.1.64/Streaming/tracks/101"
+        + "?starttime=20240501T081500Z&amp;endtime=20240501T083000Z"
+    static let uriThree = "rtsp://192.168.1.64/Streaming/tracks/101"
+        + "?starttime=20240501T090000Z&amp;endtime=20240501T090500Z"
+
     /// docs/spec-isapi.md §15.2's response, page 1 of 2 (`MORE`).
     static let pageOne = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -38,7 +49,7 @@ enum SearchFixtures {
               <mediaSegmentDescriptor>
                 <contentType>video</contentType>
                 <codecType>H.264-BP</codecType>
-                <playbackURI>rtsp://192.168.1.64/Streaming/tracks/101?starttime=20240501T080000Z&amp;endtime=20240501T081459Z&amp;name=ch01_00000000019000000&amp;size=536870912</playbackURI>
+                <playbackURI>\(uriOne)</playbackURI>
               </mediaSegmentDescriptor>
               <metadataMatches>
                 <metadataDescriptor>recordType.meta.std-cgi.com/timing</metadataDescriptor>
@@ -53,7 +64,7 @@ enum SearchFixtures {
               <mediaSegmentDescriptor>
                 <contentType>video</contentType>
                 <codecType>H.264-BP</codecType>
-                <playbackURI>rtsp://192.168.1.64/Streaming/tracks/101?starttime=20240501T081500Z&amp;endtime=20240501T083000Z</playbackURI>
+                <playbackURI>\(uriTwo)</playbackURI>
               </mediaSegmentDescriptor>
               <metadataMatches>
                 <metadataDescriptor>recordType.meta.std-cgi.com/motion</metadataDescriptor>
@@ -81,7 +92,7 @@ enum SearchFixtures {
               <mediaSegmentDescriptor>
                 <contentType>video</contentType>
                 <codecType>H.265</codecType>
-                <playbackURI>rtsp://192.168.1.64/Streaming/tracks/101?starttime=20240501T090000Z&amp;endtime=20240501T090500Z</playbackURI>
+                <playbackURI>\(uriThree)</playbackURI>
               </mediaSegmentDescriptor>
               <metadataMatches>
                 <metadataDescriptor>recordType.meta.std-cgi.com/alarm</metadataDescriptor>
@@ -267,6 +278,11 @@ enum SearchFixtures {
 
         let first = page.segments[0]
         #expect(first.track == TrackID(101))
+        // The query survives the XML unescaping byte for byte: `&amp;` becomes `&` and nothing
+        // else changes.
+        #expect(first.locator.rawQuery == "starttime=20240501T080000Z"
+                + "&endtime=20240501T081459Z&name=ch01_00000000019000000&size=536870912")
+        #expect(first.locator.fileName == "ch01_00000000019000000")
         #expect(first.recordType == .timing)
         #expect(first.codec.codec == .h264)
         #expect(first.codec.profile == "Baseline")

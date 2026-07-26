@@ -58,9 +58,17 @@ public actor AlertStreamMonitor {
         public var jitterFraction: Double = 0.20
         /// A connection that has lasted this long and delivered a part resets the ladder.
         public var healthyResetSeconds: Double = 120
-        /// Silence for this long forces a reconnect regardless of any probe.
+        /// A gap this long *between two chunks* forces a reconnect.
+        ///
+        /// Evaluated when a chunk arrives, not on a timer: a device that stops sending entirely is
+        /// caught by the transport's own idle timeout on the `.stream` lane
+        /// (`Configuration.streamIdleTimeout`), which ends the byte stream and lands the loop in
+        /// `backOff`. A second, time-driven watchdog inside this actor would need a task racing the
+        /// pump; it is not implemented and `livenessProbeAfterIdleSeconds` is therefore not yet
+        /// consulted.
         public var idleWatchdogSeconds: Double = 90
-        /// Silence for this long triggers a cheap `userCheck` probe first — a quiet device is legal.
+        /// Reserved. docs/spec-isapi.md §14.6 specifies a `userCheck` probe after this much
+        /// silence; see the note on `idleWatchdogSeconds` for why it is not wired up yet.
         public var livenessProbeAfterIdleSeconds: Double = 60
         /// How long a decoded event waits for a JPEG part that may never come.
         public var snapshotPairingWindowSeconds: Double = 1.5
@@ -227,7 +235,14 @@ public actor AlertStreamMonitor {
         do {
             for try await chunk in opened.bytes {
                 if Task.isCancelled { return }
-                lastByteInstant = clock.now()
+                // The gap is measured against the *previous* arrival: updating first and then
+                // comparing would compare an instant with itself and never fire.
+                let arrival = clock.now()
+                let idleGap = arrival.seconds(since: lastByteInstant)
+                lastByteInstant = arrival
+                if idleGap > policy.idleWatchdogSeconds {
+                    throw ISAPIError.streamEnded(afterBytes: 0)
+                }
                 if parser == nil {
                     // No boundary in the header: buffer a little and sniff the first delimiter line
                     // out of the body. Seen on one 5.1.x build.
@@ -258,9 +273,6 @@ public actor AlertStreamMonitor {
                 if deliveredAPart,
                    clock.now().seconds(since: connectedInstant) >= policy.healthyResetSeconds {
                     attempt = 0
-                }
-                if clock.now().seconds(since: lastByteInstant) > policy.idleWatchdogSeconds {
-                    throw ISAPIError.streamEnded(afterBytes: 0)
                 }
             }
         } catch let error as ISAPIError {
