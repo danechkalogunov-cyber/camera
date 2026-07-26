@@ -246,15 +246,19 @@ final class AppSessionModel {
         }
     }
 
+    /// Builds the one camera record the slice uses, with every field but the address defaulted.
+    ///
+    /// Verified against the landed source (`Sources/VigilCore/Model/Camera.swift`):
+    ///     public init(id:name:host:httpPort:rtspPort:useTLS:channel:preferredQuality:transport:
+    ///                 credentialRef:capabilities:createdAt:lastSeenAt:isEnabled:rtspPathOverride:
+    ///                 latencyPreset:)   // everything but `host` defaulted
+    ///     func validated() throws(CameraValidationError) -> Camera
+    ///
+    /// `validated()` supplies the name (`"Camera <host>"`), strips IPv6 brackets, and throws
+    /// `.invalidHost` when the user pasted a URL rather than an address — which is exactly the
+    /// mistake the form invites, so the message must reach them.
     private func makeCamera(host: String, ref: CredentialRef) throws -> Camera {
-        // ASSUMED SIGNATURE (VigilCore/Model/Camera.swift): a convenience initialiser that takes
-        // the three fields the slice knows and defaults the other twenty-nine of §4.1 —
-        //     public init(name: String, host: String, credentialRef: CredentialRef)
-        // with httpPort 80, rtspPort 554, channel 1, transport .tcpInterleaved, isEnabled true.
-        // `validate()` is spec'd: `public func validate() throws -> Camera`, returning a normalized
-        // copy and throwing `.invalidHost` on a scheme, a path or an `@` in the host.
-        let camera = Camera(name: host, host: host, credentialRef: ref)
-        return try camera.validate()
+        try Camera(host: host, credentialRef: ref).validated()
     }
 
     /// Builds the controller, subscribes to its events, and starts it. The only place a
