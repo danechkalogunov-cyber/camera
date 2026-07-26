@@ -101,7 +101,9 @@ public struct RTSPSessionMachine: Sendable {
         self.authenticator = RTSPAuthenticator(credential: credential, random: random,
                                                allowBasicOverPlaintext:
                                                    config.allowBasicOverPlaintext,
-                                               isTLS: config.isTLS)
+                                               isTLS: config.isTLS,
+                                               credentialedAttemptAllowance:
+                                                   config.credentialedAttemptAllowance)
         self.decoder = RTSPWireDecoder(limits: config.decoderLimits)
         self.aggregateURI = config.url.requestLineForm
         self.sessionTimeout = config.defaultSessionTimeout
@@ -411,6 +413,14 @@ public struct RTSPSessionMachine: Sendable {
         let code = response.status.rawValue
         if code == 401 {
             return actions + handleUnauthorized(response, request: request, now: now)
+        }
+        // Anything other than a `401` answering a request that carried credentials is proof the
+        // device accepted them, whatever the status says about the *resource*. That is what returns
+        // the per-connection credentialed-send budget, and it is why a healthy session — DESCRIBE,
+        // two SETUPs and a PLAY, each carrying `Authorization` — is not stopped by the cap
+        // (docs/RULING-LOCKOUT.md §2.5, "clear on success").
+        if request.carriedAuthorization {
+            authenticator.noteCredentialsAccepted()
         }
         if code == 403 {
             return actions + terminate(.accessForbidden)
@@ -799,7 +809,12 @@ public struct RTSPSessionMachine: Sendable {
         case nil:
             return actions + terminate(.authRejected)
         }
-        guard authenticator.failureCount < config.maxAuthAttemptsPerRequest else {
+        // Two guards, not one. `failureCount` is the Digest-protocol counter and a rotated nonce
+        // never moves it, which is why the comparison it used to be alone in was against a number
+        // that could stay at zero forever. `hasCredentialedSendBudget` is the one that actually
+        // bounds what reaches the device (docs/RULING-LOCKOUT.md §2.5).
+        guard authenticator.failureCount < config.maxAuthAttemptsPerRequest,
+              authenticator.hasCredentialedSendBudget else {
             return actions + terminate(.authRejected)
         }
 

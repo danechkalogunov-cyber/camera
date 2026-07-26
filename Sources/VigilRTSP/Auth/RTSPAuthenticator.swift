@@ -94,8 +94,25 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
     // MARK: - Configuration
 
     /// Credentialed `401`s that end the session. **Two** (API_CONTRACT §2 R-25), not RFC-flavoured
-    /// optimism.
+    /// optimism. Also the default `credentialedAttemptAllowance`.
     public static let maxCredentialedFailures = 2
+
+    /// Hard ceiling on `Authorization` headers this connection may write **since the last one the
+    /// device accepted**, whatever the allowance and whatever the challenges say.
+    ///
+    /// This is the second, independent brake, and it is the one that closes the nonce-rotation loop.
+    /// `failureCount` is deliberately not incremented by a `401` carrying a fresh nonce — that is a
+    /// correct statement about *our* Digest state machine and RFC 2617, and
+    /// `Tests/VigilRTSPTests/RTSPDigestTests.swift` pins it — but it says nothing about the
+    /// *device's* tally, and a device that rotates its nonce on every rejection would otherwise get
+    /// an unbounded stream of credentialed requests out of us, bounded only by a watchdog. So the
+    /// count of credentialed sends is capped here regardless of how each one was classified
+    /// (docs/RULING-LOCKOUT.md §2.5, §2.7).
+    ///
+    /// **Three, not two**, so one genuine `stale=true` re-authentication — which RFC 2617 §3.2.1
+    /// defines as the server asking us to sign again with credentials it has *not* rejected — still
+    /// works before the ceiling bites.
+    public static let maxCredentialedSendsPerConnection = 3
 
     /// `cnonce` length in hex characters, from 8 random bytes.
     private static let cnonceHexLength = 16
@@ -106,6 +123,7 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
     private var random: any RandomSource
     private let allowBasicOverPlaintext: Bool
     private let isTLS: Bool
+    private let credentialedAttemptAllowance: Int
 
     private var challenge: RTSPChallenge?
     private var cnonce = ""
@@ -117,7 +135,31 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
 
     /// Consecutive `401`s answering a request that already carried an `Authorization` header.
     /// **Two is terminal.** A `401` with a new nonce or `stale=true` never increments it.
+    ///
+    /// This is a statement about the Digest protocol, not about the device's failed-login tally. The
+    /// tally is bounded by `credentialedSends` against `maxCredentialedSendsPerConnection` and by the
+    /// shared `LockoutGovernor` budget the allowance came from.
     public private(set) var failureCount = 0
+
+    /// `Authorization` headers written since the device last accepted one.
+    ///
+    /// Reset only by ``noteCredentialsAccepted()`` — a response other than `401` to a request that
+    /// carried credentials — and **not** by ``reset()``: nonce state is per-connection, but a
+    /// rejected password is a property of the credential.
+    public private(set) var credentialedSends = 0
+
+    /// `401`s answering a request that carried credentials, since the device last accepted one.
+    ///
+    /// Unlike `failureCount`, this counts **every** such rejection: a rotated nonce, a `stale`
+    /// re-authentication and a flat repeat all land here, because the device tallied all three. This
+    /// is the counter the two brakes are enforced against.
+    public private(set) var credentialedRejections = 0
+
+    /// `stale=true` re-authentications observed since the last acceptance.
+    ///
+    /// Each one credits back one attempt against the *allowance* (RFC 2617 says the server has not
+    /// rejected the credential), but never against `maxCredentialedSendsPerConnection`.
+    public private(set) var staleReauthorizations = 0
 
     /// Challenges absorbed on this connection, for logs and tests.
     public private(set) var challengeCount = 0
@@ -141,12 +183,19 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
     ///   - allowBasicOverPlaintext: opt-in to Basic on a non-TLS connection. Off by default: Basic
     ///     puts the password on the wire in clear, where the device also logs it.
     ///   - isTLS: whether the connection is `rtsps`, which makes Basic acceptable.
+    ///   - credentialedAttemptAllowance: how many credentialed requests this connection may write
+    ///     before authentication is declared terminal, from `RTSPSessionConfig`. **Zero is
+    ///     meaningful**: it makes the first challenge terminal without an `Authorization` ever being
+    ///     written, which is what a path-ladder rung that has been granted no strikes needs
+    ///     (docs/RULING-LOCKOUT.md §2.5, §2.6).
     public init(credential: Credential?, random: any RandomSource,
-                allowBasicOverPlaintext: Bool = false, isTLS: Bool = false) {
+                allowBasicOverPlaintext: Bool = false, isTLS: Bool = false,
+                credentialedAttemptAllowance: Int = RTSPAuthenticator.maxCredentialedFailures) {
         self.credential = credential
         self.random = random
         self.allowBasicOverPlaintext = allowBasicOverPlaintext
         self.isTLS = isTLS
+        self.credentialedAttemptAllowance = max(0, credentialedAttemptAllowance)
     }
 
     // MARK: - Introspection
@@ -154,6 +203,21 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
     /// Whether an `Authorization` can be produced right now.
     public var hasUsableState: Bool {
         terminalError == nil && credential != nil && challenge != nil
+    }
+
+    /// Whether one more credentialed request is within both brakes.
+    ///
+    /// Read by `RTSPSessionMachine` before it re-sends after a `401`, so the machine cannot write a
+    /// request the authenticator would have refused to sign.
+    ///
+    /// Counted on **rejections**, not on sends, and that distinction is load-bearing: every
+    /// credentialed request the device rejects produces exactly one rejection, so a ceiling of *n*
+    /// rejections permits at most *n* credentialed sends between two acceptances — while a ceiling
+    /// counted on sends alone would also stop a perfectly healthy session, whose `DESCRIBE`, two
+    /// `SETUP`s and `PLAY` all carry `Authorization` and none of which the device rejected.
+    public var hasCredentialedSendBudget: Bool {
+        credentialedRejections - staleReauthorizations < credentialedAttemptAllowance
+            && credentialedRejections < Self.maxCredentialedSendsPerConnection
     }
 
     /// The realm of the challenge in force, for the credential prompt.
@@ -215,13 +279,37 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
         }
         let isSameNonce = selected.isDigest && selected.nonce != nil
             && selected.nonce == challenge?.nonce && challenge?.isDigest == true
+        // RFC 2617 §3.2.1: `stale=true` with a *different* nonce is the server explicitly asking us
+        // to sign again with credentials it has not rejected, so it buys back one attempt against the
+        // allowance. It buys back nothing against the hard per-connection ceiling — a device that
+        // sets `stale` on every rejection must still be stopped (docs/RULING-LOCKOUT.md §2.7, §6.1).
+        if selected.stale, !isSameNonce {
+            staleReauthorizations += 1
+        }
+        // Every `401` answering a request that carried credentials, however we go on to classify it.
+        // This is the counter that matches what the *device* tallied.
+        if issuedAuthorization {
+            credentialedRejections += 1
+        }
         guard issuedAuthorization, isSameNonce, !selected.stale else {
+            // A fresh nonce, a `stale` re-authentication, or the very first challenge. None of these
+            // is a failed login for Digest's purposes, so `failureCount` stays where it is — but the
+            // resend still costs the device a credentialed request, so the brakes apply. An allowance
+            // of zero lands here on the first challenge and terminates without writing anything.
+            guard hasCredentialedSendBudget else {
+                setTerminal(.authRejected)
+                return
+            }
             adopt(selected)
             lastOutcome = .retry
             return
         }
         failureCount += 1
         if failureCount >= RTSPAuthenticator.maxCredentialedFailures {
+            setTerminal(.authRejected)
+            return
+        }
+        guard hasCredentialedSendBudget else {
             setTerminal(.authRejected)
             return
         }
@@ -265,6 +353,7 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
         guard terminalError == nil, let credential, let challenge else { return nil }
         if challenge.isBasic {
             issuedAuthorization = true
+            credentialedSends += 1
             let raw = Array("\(credential.account):\(credential.secret)".utf8)
             return "Basic " + Base64.encode(raw)
         }
@@ -300,7 +389,23 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
             parameters.append("opaque=" + RTSPHeaderScanner.quote(opaque))   // echoed verbatim, last
         }
         issuedAuthorization = true
+        credentialedSends += 1
         return "Digest " + parameters.joined(separator: ", ")
+    }
+
+    /// The device answered a credentialed request with something other than `401`: the password is
+    /// right, so both send counters go back to zero.
+    ///
+    /// Called by `RTSPSessionMachine` for every non-`401` response to a request whose
+    /// `carriedAuthorization` was true. Without this, `maxCredentialedSendsPerConnection` would count
+    /// the `Authorization` headers of a perfectly healthy session — `DESCRIBE`, two `SETUP`s and a
+    /// `PLAY` — and terminate it on the fourth. The cap is a budget of credentialed sends **since the
+    /// last proof**, which is the only version of it that is both safe and usable.
+    public mutating func noteCredentialsAccepted() {
+        credentialedSends = 0
+        credentialedRejections = 0
+        staleReauthorizations = 0
+        failureCount = 0
     }
 
     /// Echoes `algorithm` only when the server sent one — a bare `Digest` challenge gets a bare
@@ -341,10 +446,11 @@ public struct RTSPAuthenticator: Sendable, CustomStringConvertible {
 
     /// Clears per-connection nonce state: nonce, `nc`, `cnonce`, cached HA1 and the URI rung.
     ///
-    /// **Deliberately keeps `failureCount` and the terminal failure.** Nonce state is
-    /// per-connection, but a rejected password is a property of the credential, and clearing the
-    /// counter on reconnect would turn a reconnect loop into an account lockout — exactly the
-    /// failure R-25 exists to prevent. A new password means a new `RTSPAuthenticator`.
+    /// **Deliberately keeps `failureCount`, `credentialedSends`, `staleReauthorizations` and the
+    /// terminal failure.** Nonce state is per-connection, but a rejected password is a property of
+    /// the credential, and clearing the counters on reconnect would turn a reconnect loop into an
+    /// account lockout — exactly the failure R-25 exists to prevent. A new password means a new
+    /// `RTSPAuthenticator`.
     public mutating func reset() {
         challenge = nil
         cnonce = ""

@@ -57,6 +57,16 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
 
+    <!-- Every language the app actually ships. Without this key macOS offers no per-app language
+         picker in System Settings, so a user on an English system cannot choose Russian for Vigil
+         alone — the app would only speak Russian if the whole Mac did. The translations live in
+         Vigil_VigilUI.bundle rather than here, which is why the list has to be declared by hand. -->
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ru</string>
+    </array>
+
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Vigil. All rights reserved.</string>
 

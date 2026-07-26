@@ -132,6 +132,14 @@ public struct StreamError: Error, Sendable, Hashable {
         case networkUnavailable
         /// The stream stayed degraded long enough to be worth one reconnect.
         case persistentDegradation
+        /// Vigil declined to attempt another sign-in for now, to keep the device's own lockout from
+        /// being reached. **Nothing has failed** — `context["retryAfterSeconds"]` says how long the
+        /// wait is (docs/RULING-LOCKOUT.md §3).
+        ///
+        /// Deliberately in neither `isUserFixable` nor `forbidsColdRetry`: a rate limit is a wait,
+        /// not a verdict, and reusing `authenticationFailed` here would tell the user the camera
+        /// rejected a password it has not seen.
+        case signInPaused
         /// A socket-level failure that is none of the above.
         case transportError
         /// The peer violated the protocol in a way the session cannot continue through.
@@ -194,6 +202,7 @@ public struct StreamError: Error, Sendable, Hashable {
             case .sessionLost: "The camera forgot the session."
             case .networkUnavailable: "This Mac has no network connection."
             case .persistentDegradation: "The stream has been unreliable for a while."
+            case .signInPaused: "Vigil paused sign-in attempts to protect this camera's account."
             case .transportError: "The network connection to the camera failed."
             case .protocolViolation: "The camera sent something Vigil could not follow."
             }

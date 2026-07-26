@@ -66,7 +66,11 @@ public actor ISAPIDeviceSession {
     private let gate: (any QuirkApplying)?
 
     /// Freshness and rate limiting. The only monotonic time source; no `Task.sleep` here.
-    private let clock: any MonotonicClock
+    ///
+    /// `internal` rather than `private` because the feature families hand it to the `PTZController`
+    /// and the `AlertStreamMonitor` they build, and both must share this session's clock — a monitor
+    /// on a different clock would back off against time the rest of the session cannot see.
+    let clock: any MonotonicClock
 
     /// Supplies the `Date` values models carry (`probedAt`, alert-stream state) and nothing else.
     let wallClock: any WallClock

@@ -6,42 +6,150 @@
   missing key falls back to the key itself, so English renders correctly whether or not this
   file is present. It exists for two reasons.
 
-  1. It is the file a translator starts from. ru.lproj is a copy of this with the values
-     replaced.
+  1. It is the file a translator starts from. ru.lproj is this file with the values replaced,
+     key for key and section for section, so that the two can be read side by side.
   2. Without at least one real (non-dotfile) resource, SwiftPM emits an EMPTY resource bundle
      with no Info.plist, and codesign then refuses it outright:
        Vigil_VigilUI.bundle: bundle format unrecognized, invalid, or unsuitable
      That failure stopped the very first Mac build at the signing step. A directory holding
      only .placeholder is invisible to SwiftPM, because it skips dotfiles.
 
-  27 keys. Strings built with interpolation are not listed: their key form carries
-  format specifiers, and they fall back to the literal exactly as they do today.
+  75 keys, covering every LocalizedStringKey in Sources/VigilUI.
+
+  Format specifiers are the ones SwiftUI's LocalizedStringKey interpolation emits, and they
+  are part of the key: a String interpolates as %@ and an Int as %lld. Getting one wrong
+  does not mistranslate a sentence, it feeds String(format:) the wrong argument size.
+
+  Count-bearing keys are NOT here. They live in Localizable.stringsdict, because English
+  cannot say "1 frames" and Russian needs one/few/many plus other where English needs
+  one/other. A key must appear in exactly one of the two tables, never both.
 */
 
-"Camera isn't activated." = "Camera isn't activated.";
-"Can't reach this camera." = "Can't reach this camera.";
+/* The connect form — the first screen (UX.md §8.3) */
 "Connect to a camera" = "Connect to a camera";
-"Connecting…" = "Connecting…";
-"Connection lost." = "Connection lost.";
-"Details" = "Details";
-"Device is locked." = "Device is locked.";
-"Hide password" = "Hide password";
-"Live" = "Live";
-"Loading" = "Loading";
-"Negotiating stream…" = "Negotiating stream…";
-"No video is arriving." = "No video is arriving.";
-"Not a Hikvision device." = "Not a Hikvision device.";
-"Opening video channel…" = "Opening video channel…";
-"Show password" = "Show password";
-"Signing in…" = "Signing in…";
-"Still can't reach this camera." = "Still can't reach this camera.";
-"Switched to TCP for stability." = "Switched to TCP for stability.";
-"The picture has stalled." = "The picture has stalled.";
-"This is taking longer than usual." = "This is taking longer than usual.";
-"Unsupported video format." = "Unsupported video format.";
-"Video port is closed." = "Video port is closed.";
-"Vigil couldn't finish signing in." = "Vigil couldn't finish signing in.";
-"Waiting for a keyframe…" = "Waiting for a keyframe…";
-"Waiting for the network." = "Waiting for the network.";
-"Waiting for video…" = "Waiting for video…";
+"Vigil needs the camera's address and the password it was set up with. Nothing leaves your network." = "Vigil needs the camera's address and the password it was set up with. Nothing leaves your network.";
+"Address" = "Address";
+"User name" = "User name";
+"Password" = "Password";
+"The camera's password" = "The camera's password";
+"Connect" = "Connect";
+"192.168.1.64" = "192.168.1.64";
+"admin" = "admin";
+
+/* Field validation. The row is lineLimit(1) at Caption1 in ~380 pt: keep it short */
+"Enter the camera's address." = "Enter the camera's address.";
+"Use an IP address like 192.168.1.64, or a host name." = "Use an IP address like 192.168.1.64, or a host name.";
+
+/* Longest message row in the form. The English is already ~74 characters against a
+   lineLimit(1) row about 380 pt wide, so the Russian is deliberately shorter rather
+   than a literal rendering. VTextField.swift:328-331 sets lineLimit(1) on this row. */
+"Enter the account name. Hikvision cameras use admin unless it was changed." = "Enter the account name. Hikvision cameras use admin unless it was changed.";
+"Enter the camera's password." = "Enter the camera's password.";
+
+/* Diagnosis titles: the fact, at most six words, ending in a full stop */
+"Can't reach this camera." = "Can't reach this camera.";
+"Camera isn't activated." = "Camera isn't activated.";
 "Wrong password." = "Wrong password.";
+"Device is locked." = "Device is locked.";
+"Video port is closed." = "Video port is closed.";
+"Not a Hikvision device." = "Not a Hikvision device.";
+"Unsupported video format." = "Unsupported video format.";
+"No video is arriving." = "No video is arriving.";
+"The picture has stalled." = "The picture has stalled.";
+"Vigil couldn't finish signing in." = "Vigil couldn't finish signing in.";
+
+/* Diagnosis messages: the cause and the next step. R1.5 — never a code, never a dead end */
+"No response from %@. Check that it's powered on and on the same network as this Mac." = "No response from %@. Check that it's powered on and on the same network as this Mac.";
+"%@ is brand new and has no password yet. Set one now to start using it." = "%@ is brand new and has no password yet. Set one now to start using it.";
+"%@ rejected this password. Check it and try again — too many attempts will lock the device." = "%@ rejected this password. Check it and try again — too many attempts will lock the device.";
+"%@ locked this account after too many failed sign-ins. It unlocks on its own, or immediately if you reboot the camera." = "%@ locked this account after too many failed sign-ins. It unlocks on its own, or immediately if you reboot the camera.";
+"Vigil reached %@ on port %lld, but RTSP port %lld refused the connection." = "Vigil reached %@ on port %lld, but RTSP port %lld refused the connection.";
+"%@ answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, with fewer features." = "%@ answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, with fewer features.";
+"This camera streams %@. Vigil plays H.265, H.264 and MJPEG." = "This camera streams %@. Vigil plays H.265, H.264 and MJPEG.";
+"%@ started the stream but sent no video. Something on the network is blocking UDP." = "%@ started the stream but sent no video. Something on the network is blocking UDP.";
+"%@ is sending data but no complete picture yet. Vigil has asked it for a new keyframe." = "%@ is sending data but no complete picture yet. Vigil has asked it for a new keyframe.";
+"%@ answered, but not in a way Vigil recognises. The device's own reply is in the details below." = "%@ answered, but not in a way Vigil recognises. The device's own reply is in the details below.";
+
+/* Remedies. Every failure offers at least one (R1.5) */
+"Try Again" = "Try Again";
+"Check the Address" = "Check the Address";
+"Update Password" = "Update Password";
+"Set Password" = "Set Password";
+"Try Port 8554" = "Try Port 8554";
+"Switch to TCP" = "Switch to TCP";
+"Use ONVIF" = "Use ONVIF";
+"Open Camera Web Page" = "Open Camera Web Page";
+"Diagnose" = "Diagnose";
+"Details" = "Details";
+
+/* The status word beside the dot. Colour never carries state alone (DESIGN.md §10.5) */
+"Connecting" = "Connecting";
+"Live" = "Live";
+"Degraded" = "Degraded";
+"Offline" = "Offline";
+
+/* The connecting narration ladder (UX.md §12.4) */
+"Looking up %@…" = "Looking up %@…";
+"Connecting…" = "Connecting…";
+"Signing in…" = "Signing in…";
+"Negotiating stream…" = "Negotiating stream…";
+"Opening video channel…" = "Opening video channel…";
+"Waiting for video…" = "Waiting for video…";
+"Waiting for a keyframe…" = "Waiting for a keyframe…";
+
+/* Measured degradation. The number is formatted by FormatStyle, so it is already localised */
+/* The number arrives already localised from FormatStyle: `3.1%` in English and
+   `3,1 %` with a space in Russian (UX.md §14.1 rule 9). Never add a percent sign
+   here, and never hard-code the separator. */
+"%@ packet loss — video may stutter." = "%@ packet loss — video may stutter.";
+"%@ of jitter — video may stutter." = "%@ of jitter — video may stutter.";
+
+/* Both counts arrive as pre-formatted strings (%@), so no plural rule can ever apply
+   to them. The Russian is therefore phrased around the invariable unit `кадр/с`
+   instead of a noun that would have to agree with the number. */
+"Showing %@ of %@ frames per second." = "Showing %@ of %@ frames per second.";
+"Switched to TCP for stability." = "Switched to TCP for stability.";
+
+/* Offline and reconnecting (UX.md §12.6) */
+"Still can't reach this camera." = "Still can't reach this camera.";
+"Connection lost." = "Connection lost.";
+"Waiting for the network." = "Waiting for the network.";
+
+/* Count-bearing, and still correct in a flat table: `с` is an abbreviation and
+   `попытка 3` is a label, so neither inflects with the number. Moving this to the
+   stringsdict would invite `попытки 3`, which is wrong. */
+"Reconnecting in %lld s (attempt %lld)." = "Reconnecting in %lld s (attempt %lld).";
+"Retry Now" = "Retry Now";
+
+/* The stamp is relative under an hour (`4 min ago`) and absolute after (`10:14`), so
+   the sentence has to read correctly with both. Russian uses a colon for exactly
+   that reason: `Последний кадр: 4 мин. назад` and `Последний кадр: 10:14`. */
+"Last seen %@" = "Last seen %@";
+
+/* The connecting overlay */
+/* A camera name, not an address. UX.md §14.2 asks for locale-correct quotes around
+   an inserted name, and the quotes belong in the translation rather than in Swift —
+   which is also what keeps the name in a nominative-safe position. */
+"Connecting to %@" = "Connecting to %@";
+
+/* The unit is inside the key because Measurement's abbreviated width spells seconds
+   `sec` and its narrow width drops the space. Russian uses `с` (GOST 8.417). */
+"%@ s" = "%@ s";
+"This is taking longer than usual." = "This is taking longer than usual.";
+
+/* Components */
+"Hide password" = "Hide password";
+"Show password" = "Show password";
+"Loading" = "Loading";
+
+/* Only in #if DEBUG previews today. docs/UX.md §14.3–§14.4 names the first three as
+   shipping copy, so they are translated in advance; an unused key costs nothing. */
+"Add Manually" = "Add Manually";
+"Delete Camera" = "Delete Camera";
+"Snapshot" = "Snapshot";
+"Required" = "Required";
+
+/* Ruled in docs/RULING-LOCKOUT.md §3 but not yet in ConnectDiagnosis.swift: the
+   signInPaused diagnosis, where Vigil itself is the one holding back. Wording quoted from
+   the ruling. Inert until the case lands — if the literal differs the key simply misses. */
+"Waiting before trying again" = "Waiting before trying again";

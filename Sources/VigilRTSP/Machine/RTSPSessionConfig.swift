@@ -108,6 +108,21 @@ public struct RTSPSessionConfig: Sendable {
     /// generous retry budget is how an app locks its user out of their own camera.
     public var maxAuthAttemptsPerRequest = 2
 
+    /// Credentialed requests this connection may write **since the last one the device accepted**.
+    ///
+    /// This is how the shared per-device budget reaches the wire: a caller debits strikes from
+    /// `LockoutGovernor.reserve` and hands the number it was granted to this field, so the pure
+    /// machine stays synchronous and the allowance is just a number it was constructed with
+    /// (docs/RULING-LOCKOUT.md §2.5).
+    ///
+    /// **Zero is a legitimate and important value.** A rung of the path ladder that has been granted
+    /// nothing still answers "does this path exist" against a device that does not challenge it; a
+    /// rung that meets a `401` with an allowance of zero returns terminal `.authRejected` **without
+    /// writing an `Authorization` header at all**, which is the honest answer and stops the ladder.
+    ///
+    /// Two by default, matching `maxAuthAttemptsPerRequest` and `LockoutGovernor`'s own budget.
+    public var credentialedAttemptAllowance = 2
+
     /// Redirects followed before giving up.
     public var maxRedirects = 3
 

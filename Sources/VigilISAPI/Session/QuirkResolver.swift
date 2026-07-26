@@ -264,18 +264,27 @@ public struct QuirkResolver: Sendable {
         !quirks.recordTypeFilterUnsupported
     }
 
-    /// The sharpness read-modify-write body for `level`.
+    /// The sharpness read-modify-write **element** for `level`.
     ///
     /// `ImageWrite.sharpness` writes whichever casing the device's own document used. This adds the
     /// only case it cannot cover: a `<Sharpness>` element that carries no level element at all, for
     /// which the casing has to come from somewhere, and the quirk record is that somewhere.
+    ///
+    /// Returns the node rather than the bytes so the caller can put it through the same
+    /// read-modify-write helper as every other setting — one place that checks the root name
+    /// survived the patch, and one place that serialises.
+    public func sharpnessNode(_ node: XMLNode, level: Int) -> XMLNode {
+        guard !node.has("SharpnessLevel|sharpnessLevel") else {
+            return ImageWrite.sharpness(node, level: level)
+        }
+        return node.setting(quirks.sharpnessElementIsCapitalized ? "SharpnessLevel"
+                                                                 : "sharpnessLevel",
+                            to: String(min(100, max(0, level))), createIfMissing: true)
+    }
+
+    /// The sharpness read-modify-write body for `level`. Serialises ``sharpnessNode(_:level:)``.
     public func sharpnessBody(_ node: XMLNode, level: Int) -> Data {
-        let hasLevel = node.has("SharpnessLevel|sharpnessLevel")
-        let patched = hasLevel
-            ? ImageWrite.sharpness(node, level: level)
-            : node.setting(quirks.sharpnessElementIsCapitalized ? "SharpnessLevel" : "sharpnessLevel",
-                           to: String(min(100, max(0, level))), createIfMissing: true)
-        return bodyBytes(patched)
+        bodyBytes(sharpnessNode(node, level: level))
     }
 
     // MARK: - Consultation point 3: response interpretation

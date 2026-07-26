@@ -15,6 +15,14 @@ echo "== lint =="
 python3 Scripts/lint.py || fail=1
 
 echo
+# Localisations get their own pass because their failure mode is silence: a malformed .stringsdict
+# does not break the build, it just stops resolving, and the app shows raw `%#@frames@` at runtime.
+# This checks specifier arity and types across every key/value pair, that en and ru cover the same
+# key set, and that every key still resolves to a real literal in the source.
+echo "== localisations =="
+python3 Scripts/check-localizations.py || fail=1
+
+echo
 echo "== purity gate: the pure targets must build without any platform framework =="
 $SWIFT build --product VigilPure --scratch-path .build-check 2>&1 \
   | grep -vE "unhandled resource|Invalid Resource" | tail -2 || fail=1

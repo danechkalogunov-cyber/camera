@@ -74,6 +74,10 @@ public actor DiscoveryCoordinator {
     /// True once `.finished` has been emitted. Every emitter checks it, so nothing can be reported
     /// after the run ended.
     private var isFinished = false
+    /// True from the first line of ``terminate(_:)``. Separate from ``isFinished`` because the
+    /// wrap-up — the last phase summaries, the permission diagnostic, the frozen progress snapshot —
+    /// must still reach the stream, and `isFinished` silences every emitter.
+    private var isTerminating = false
     /// True as soon as a stop is requested, before the final event is built. This is what stops a new
     /// probe from starting, and it is set synchronously inside the actor so there is no window in
     /// which a cancelled run still opens a socket.
@@ -132,11 +136,23 @@ public actor DiscoveryCoordinator {
     // MARK: - Life cycle
 
     /// Creates a coordinator. Nothing happens until ``start()``.
+    ///
+    /// The run's message identifiers are drawn here, from `environment.uuidGenerator`, and never from
+    /// `UUID()`: the SADP probe carries one `Uuid` and each WS-Discovery probe a distinct
+    /// `MessageID`, and correlating an answer means comparing against exactly those values. Injecting
+    /// them is what lets a test assert byte-exact probes and script a ProbeMatch that correlates
+    /// (§4.2, §5.3). The SADP UUID is drawn first, so a scripted generator's first value is the one
+    /// the SADP fixtures use.
     public init(environment: DiscoveryEnvironment,
                 configuration: DiscoveryConfiguration = .default) {
         self.environment = environment
         self.configuration = configuration
         self.entitlements = environment.entitlements
+        self.sadpProbeUUID = environment.uuidGenerator()
+        // One identifier per scheduled probe, and at least one: a schedule may be empty in a
+        // multicast-free configuration, and `messageID(at:)` must still have a value to fall back on.
+        let probeCount = max(1, configuration.onvifProbeSchedule.count)
+        self.wsdMessageIDs = (0..<probeCount).map { _ in environment.uuidGenerator() }
     }
 
     /// Starts the run and returns its event stream.
@@ -229,7 +245,6 @@ public actor DiscoveryCoordinator {
         } catch {
             environment.logger.notice(.discovery, "ARP snapshot unavailable: \(error)")
         }
-        endPhase(.arpSnapshot)
 
         let planned: DiscoveryPlan
         switch SweepPlanner.plan(interfaces: interfaces, arp: arpEntries,
@@ -238,18 +253,20 @@ public actor DiscoveryCoordinator {
             planned = value
         case let .failure(error):
             environment.logger.error(.discovery, "discovery cannot start: \(error)")
-            endPhase(.planning)
             await terminate(.failed)
             return
         }
         plan = planned
-        endPhase(.planning)
 
+        // `.started` is deliberately the run's first event: the sheet draws what will be scanned —
+        // and what the guard refused — before any result can arrive, so a run that ends up finding
+        // nothing has already explained its scope.
         yield(.started(planned))
         for diagnostic in planned.diagnostics { record(diagnostic) }
+        endPhase(.planning)
 
         resolveMulticastAvailability()
-        if isDegraded, configuration.multicastUnavailablePolicy == .fail {
+        if isDegraded, !isSingleAddressRun, configuration.multicastUnavailablePolicy == .fail {
             // The caller would rather show an error than a partial list. The diagnostic already
             // explains why, and `DiscoverySummary` carries no error field, so the reason travels as
             // `.multicastUnavailable` in `summary.diagnostics` (§10.3).
@@ -257,6 +274,7 @@ public actor DiscoveryCoordinator {
             return
         }
 
+        multicastWindowValue = plannedMulticastWindow()
         estimator = DiscoveryProgressEstimator(hostsPlanned: sweepHosts(planned).count,
                                                portsPerHost: max(1, planned.tierAPorts.count),
                                                multicastWindow: multicastWindow)
@@ -266,7 +284,8 @@ public actor DiscoveryCoordinator {
 
         // Free identity: an ARP row costs no packet and yields a MAC, the strongest rung of the
         // ladder. Restricted to planned subnets so the router's neighbour on another network cannot
-        // attach its MAC to one of our records (§6.3).
+        // attach its MAC to one of our records (§6.3). Folded while `.arpSnapshot` is still open, so
+        // the phase summary credits the records it actually produced.
         for entry in arpEntries {
             guard let observation = ObservationBuilder.observation(
                 from: entry, observedAt: environment.clock.wallNow,
@@ -274,6 +293,7 @@ public actor DiscoveryCoordinator {
             enqueueUnicastTarget(entry.address)
             ingest(observation, phase: .arpSnapshot)
         }
+        endPhase(.arpSnapshot)
 
         await withTaskGroup(of: RunTaskKind.self) { group in
             group.addTask { await self.runCoreWork(planned); return .core }
@@ -313,10 +333,18 @@ public actor DiscoveryCoordinator {
 
     // MARK: - Multicast phases
 
-    /// The listening window: from the run start to the last probe plus the listen tail (§2.2).
-    private var multicastWindow: Duration {
-        guard !isDegraded, configuration.mode != .single(address: .init(0, 0, 0, 0), ports: []),
-              !multicastSchedule.isEmpty else { return .zero }
+    /// The listening window, as fixed at the start of the run: run start to the last probe plus the
+    /// listen tail — 10 ms + 1 000 ms + 2 500 ms = 3 510 ms with the shipping schedule (§2.2).
+    private var multicastWindow: Duration { multicastWindowValue }
+
+    /// Computes that window, once, before any channel opens.
+    ///
+    /// It must not be recomputed later, and that is not a style preference: one interface failing to
+    /// join flips ``isDegraded``, and a recomputed window would then collapse to zero for the
+    /// interfaces that *are* listening — cutting their tail short and, worse, jumping the progress
+    /// bar's multicast quarter to complete while SADP is still running.
+    private func plannedMulticastWindow() -> Duration {
+        guard !isDegraded, !isSingleAddressRun, !multicastSchedule.isEmpty else { return .zero }
         let last = multicastSchedule.max() ?? .zero
         return Self.multicastStartOffset + last + configuration.multicastListenTail
     }
@@ -580,7 +608,8 @@ public actor DiscoveryCoordinator {
         }
         sweepFinished = true
         endPhase(.sweepA)
-        if accumulators[.fingerprint] != nil { endPhase(.fingerprint) }
+        endPhase(.sweepB)
+        endPhase(.fingerprint)
     }
 
     /// One host: tier A, then tier B if anything answered, then the fingerprints.
@@ -591,13 +620,14 @@ public actor DiscoveryCoordinator {
                                           tierA: [UInt16], tierB: [UInt16]) async {
         let first = await worker.connect(host: host, ports: tierA)
         var result = HostProbeResult(address: host, portOutcomes: first.outcomes)
-        var connects = first.connectsAttempted
+        let connects = first.connectsAttempted
+        var tierBConnects = 0
         var requests = 0
 
         if result.isAlive, await shouldProbeTierB(portCount: tierB.count) {
             let second = await worker.connect(host: host, ports: tierB)
             for (port, outcome) in second.outcomes { result.portOutcomes[port] = outcome }
-            connects += second.connectsAttempted
+            tierBConnects = second.connectsAttempted
         }
         if !result.openPorts.isEmpty, await shouldFingerprint() {
             let batch = await worker.fingerprint(host: host, openPorts: result.openPorts)
@@ -605,7 +635,8 @@ public actor DiscoveryCoordinator {
             result.http = batch.http
             requests = batch.requestsAttempted
         }
-        await completeHost(result, connects: connects, requests: requests)
+        await completeHost(result, connects: connects, tierBConnects: tierBConnects,
+                           requests: requests)
     }
 
     /// Whether tier B may run, and the denominator growth it causes.
@@ -615,21 +646,27 @@ public actor DiscoveryCoordinator {
     private func shouldProbeTierB(portCount: Int) -> Bool {
         guard !stopping, portCount > 0 else { return false }
         estimator.schedulePortProbes(portCount)
-        activePhases.insert(.sweepB)
+        beginPhase(.sweepB)
         return true
     }
 
     private func shouldFingerprint() -> Bool {
         guard !stopping else { return false }
-        if accumulators[.fingerprint] == nil { beginPhase(.fingerprint) }
+        beginPhase(.fingerprint)
         return true
     }
 
     /// Folds one host's results in and updates every counter the progress bar reads.
-    private func completeHost(_ result: HostProbeResult, connects: Int, requests: Int) {
-        tcpConnects += connects
+    ///
+    /// Tier A and tier B connects are counted apart so each phase summary reports the SYNs it was
+    /// actually responsible for; a support log that blamed tier A for tier B's traffic would send the
+    /// reader looking in the wrong place.
+    private func completeHost(_ result: HostProbeResult, connects: Int, tierBConnects: Int,
+                              requests: Int) {
+        tcpConnects += connects + tierBConnects
         httpRequests += requests
         accumulators[.sweepA]?.connectsAttempted += connects
+        accumulators[.sweepB]?.connectsAttempted += tierBConnects
         estimator.completeHost(alive: result.isAlive)
         estimator.completePortProbes(result.portOutcomes.count)
         for outcome in result.portOutcomes.values {
@@ -652,6 +689,10 @@ public actor DiscoveryCoordinator {
     /// while everything else is silent too means macOS is blocking us rather than the network being
     /// empty (§9.4).
     private func probeGatewayCanary(_ plan: DiscoveryPlan) async {
+        // A caller who named one address gets exactly that address probed. Two extra SYNs to a host
+        // they did not ask about would be a surprise, and the heuristic the canary feeds needs 20
+        // probed hosts before it can say anything anyway.
+        guard !isSingleAddressRun else { return }
         guard let gateway = plan.interfaces.compactMap(\.likelyGateway).first else { return }
         guard claimConnects(2, hosts: plan.hostsPlanned) else { return }
         gatewayProbed = gateway
@@ -853,13 +894,24 @@ public actor DiscoveryCoordinator {
     // MARK: - Termination
 
     private func terminate(_ reason: DiscoverySummary.TerminationReason) async {
-        guard !isFinished else { return }
-        isFinished = true
+        // `isTerminating` is the re-entrancy guard and it is set before the first `await`, so the
+        // watchdog, `cancel()` and the end of `run()` racing each other still produce one ending.
+        guard !isTerminating, !isFinished else { return }
+        isTerminating = true
         stopping = true
         activePhases = [.finished]
 
-        for phase in accumulators.keys { endPhase(phase) }
+        // The wrap-up runs *before* `isFinished`, which silences every emitter. All three of these
+        // are things the UI needs: the summaries of phases that were still open, the permission
+        // diagnostic, and one last progress snapshot — which for a cancelled run is what leaves the
+        // bar frozen where it stopped and the ETA gone, rather than mid-animation towards a number
+        // that will never arrive (§8.4).
+        for phase in accumulators.keys.sorted(by: { $0.specificity < $1.specificity }) {
+            endPhase(phase)
+        }
         evaluatePermissionHeuristic()
+        emitProgress(force: true)
+        isFinished = true
 
         let devices = merge.devices
         let summary = DiscoverySummary(terminationReason: reason, devices: devices,
@@ -908,7 +960,9 @@ public actor DiscoveryCoordinator {
     private func resolveMulticastAvailability() {
         if case .single = configuration.mode {
             // A named address needs no group probe, and asking for one would trigger the local
-            // network prompt for nothing.
+            // network prompt for nothing. This is not a degradation the user should be told about —
+            // nothing was lost — so no diagnostic is recorded and the `.fail` policy does not apply.
+            isSingleAddressRun = true
             isDegraded = true
             return
         }

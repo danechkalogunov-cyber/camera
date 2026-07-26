@@ -225,6 +225,11 @@ def check_plists() -> list[Violation]:
     The failure this catches in practice: XML forbids a double hyphen *anywhere* inside a comment,
     so documenting a command-line flag as `--version` in a plist comment produces a file that
     plutil, codesign and Xcode all reject. It looks completely fine to a human reader.
+
+    `.stringsdict` is in the glob because it is the file class where an XML error is *least* visible:
+    a malformed one does not fail the build at all, it simply stops resolving, and the app renders
+    raw `%#@frames@` text at runtime. It was originally missed — the rule covered the two extensions
+    whose breakage is loud and not the one whose breakage is silent.
     """
     import plistlib
 
@@ -233,7 +238,9 @@ def check_plists() -> list[Violation]:
         base = ROOT / directory
         if not base.exists():
             continue
-        for path in sorted(list(base.rglob("*.plist")) + list(base.rglob("*.entitlements"))):
+        for path in sorted(list(base.rglob("*.plist"))
+                           + list(base.rglob("*.entitlements"))
+                           + list(base.rglob("*.stringsdict"))):
             rel = str(path.relative_to(ROOT))
             raw = path.read_bytes()
             try:

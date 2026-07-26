@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Localizable.stringsdict (ru)
+  VigilUI — все строки, текст которых зависит от числа.
+
+  В русском четыре категории: one (1, 21, 31…), few (2–4, 22–24…), many (0, 5–20, 25–30…)
+  и other (дробные значения). В плоском .strings это не выразить, поэтому такие ключи есть
+  только здесь и отсутствуют в Localizable.strings.
+
+  NSStringFormatValueTypeKey — "lld": SwiftUI подставляет Int как %lld.
+
+  Если у ключа больше одного аргумента, формат целиком позиционный (%1$@, %2$#@minutes@,
+  и %2$lld внутри форм), иначе после подстановки смешаются позиционные и непозиционные
+  спецификаторы.
+
+  В XML внутри комментария запрещён двойной дефис. Файл сгенерирован и проверен plistlib.
+-->
+<plist version="1.0">
+<dict>
+	<key>%@ locked this account after too many failed sign-ins. It usually unlocks in about %lld minutes.</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Устройство %1$@ заблокировало эту учётную запись после нескольких неудачных попыток входа. Обычно блокировка снимается примерно через %2$#@minutes@.</string>
+		<key>minutes</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>few</key>
+			<string>%2$lld минуты</string>
+			<key>many</key>
+			<string>%2$lld минут</string>
+			<key>one</key>
+			<string>%2$lld минуту</string>
+			<key>other</key>
+			<string>%2$lld минуты</string>
+		</dict>
+	</dict>
+	<key>%lld frames waiting to decode — video may lag.</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@frames@</string>
+		<key>frames</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>few</key>
+			<string>%lld кадра ожидают декодирования — видео может запаздывать.</string>
+			<key>many</key>
+			<string>%lld кадров ожидают декодирования — видео может запаздывать.</string>
+			<key>one</key>
+			<string>%lld кадр ожидает декодирования — видео может запаздывать.</string>
+			<key>other</key>
+			<string>%lld кадра ожидают декодирования — видео может запаздывать.</string>
+		</dict>
+	</dict>
+	<key>Vigil stopped signing in to %@ so the camera's account cannot be locked out. It will try again in about %lld minutes. Nothing is wrong with the camera.</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Vigil приостановил попытки входа на %1$@, чтобы не заблокировать учётную запись камеры. Следующая попытка примерно через %2$#@minutes@. С камерой всё в порядке.</string>
+		<key>minutes</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>few</key>
+			<string>%2$lld минуты</string>
+			<key>many</key>
+			<string>%2$lld минут</string>
+			<key>one</key>
+			<string>%2$lld минуту</string>
+			<key>other</key>
+			<string>%2$lld минуты</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
