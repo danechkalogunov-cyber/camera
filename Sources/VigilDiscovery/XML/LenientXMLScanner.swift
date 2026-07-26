@@ -383,6 +383,25 @@ public enum LenientXMLScanner {
         return Array(String(scalar).utf8)
     }
 
+    // MARK: - Text helpers
+
+    /// Trims ASCII spaces, tabs, carriage returns and newlines from both ends of `text`.
+    ///
+    /// Deliberately not `trimmingCharacters(in: .whitespacesAndNewlines)`: datagram text may be a
+    /// byte-for-scalar reinterpretation of non-UTF-8 firmware output (§4.5.2), and a Unicode-aware
+    /// trim would then strip scalars that are part of the value.
+    static func trimmingASCIIWhitespace(_ text: String) -> String {
+        var view = Substring(text)
+        while let first = view.first, first == " " || first == "\t" || first == "\r"
+                || first == "\n" {
+            view = view.dropFirst()
+        }
+        while let last = view.last, last == " " || last == "\t" || last == "\r" || last == "\n" {
+            view = view.dropLast()
+        }
+        return String(view)
+    }
+
     // MARK: - Byte helpers
 
     private enum Byte {

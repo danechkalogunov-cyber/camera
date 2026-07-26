@@ -210,11 +210,11 @@ extension VideoTileView {
     ///    to ask whether decoding stopped. Observing it risked a picture frozen on a held frame
     ///    with no recovery — indistinguishable from a network stall.
     /// 2. The layer's spellings this file used previously do not exist in Swift at all.
-    ///    `AVSampleBufferDisplayLayerFailedToDecodeNotification` is declared `NSString *const`, not
-    ///    `NSNotificationName`, so it imports as `NSNotification.Name.AVSampleBufferDisplayLayer‌-`
-    ///    `FailedToDecode` rather than as a member of the layer; the same is true of the
-    ///    requires-flush notification. `AVSampleBufferDisplayLayer.failedToDecodeNotification` and
-    ///    `.failedToDecodeNotificationErrorKey` are not members of that class.
+    ///    Both layer constants import as static members of `NSNotification.Name` carrying their
+    ///    full C names (`NSNotification.Name.AVSampleBufferDisplayLayerFailedToDecode`), not as
+    ///    members of the layer, and the error key stays a global `String`. So
+    ///    `AVSampleBufferDisplayLayer.failedToDecodeNotification` and
+    ///    `.failedToDecodeNotificationErrorKey` name nothing at all.
     ///
     /// AVFoundation, on `AVSampleBufferVideoRenderer` (macOS 14.0+, none deprecated):
     ///   `class let requiresFlushToResumeDecodingDidChangeNotification: NSNotification.Name`
@@ -240,25 +240,28 @@ extension VideoTileView {
         updateScaleAndBackingSize()
     }
 
-    /// The layer stopped decoding — app suspension, a GPU reset, a stream interruption.
+    /// The renderer stopped decoding — app suspension, a GPU reset, a stream interruption.
     ///
     /// Recovery is a `flush()` plus a fresh keyframe. It is **not** `flush(removingDisplayedImage:)`:
     /// the picture on screen is the last good frame and it stays there until a new one replaces it.
+    ///
+    /// The flag is read from the renderer, not the layer: the layer's copy is deprecated at
+    /// macOS 15 in favour of this one, and mixing the two surfaces is what the header forbids.
     @objc
     private func requiresFlushToResumeDecodingDidChange(_ note: Notification) {
-        guard let videoLayer = displayLayer else { return }
-        guard videoLayer.requiresFlushToResumeDecoding else { return }
-        logger.notice(.render, "display layer requires a flush to resume decoding",
+        guard let renderer = displayLayer?.sampleBufferRenderer else { return }
+        guard renderer.requiresFlushToResumeDecoding else { return }
+        logger.notice(.render, "video renderer requires a flush to resume decoding",
                       ["camera": cameraID.short])
         sampleBuffers.flushKeepingLastImage(reason: .resumeDecoding)
         onKeyframeNeeded?()
     }
 
-    /// The layer failed to decode a sample. Reported, never swallowed; the decision about
+    /// The renderer failed to decode a sample. Reported, never swallowed; the decision about
     /// reconnecting belongs to `VigilCore`.
     @objc
-    private func layerFailedToDecode(_ note: Notification) {
-        let key = AVSampleBufferDisplayLayer.failedToDecodeNotificationErrorKey
+    private func rendererFailedToDecode(_ note: Notification) {
+        let key = AVSampleBufferVideoRenderer.didFailToDecodeNotificationErrorKey
         let failure = note.userInfo?[key] as? any Error
         logger.error(.render, "display layer failed to decode",
                      ["camera": cameraID.short,

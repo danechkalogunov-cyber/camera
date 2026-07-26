@@ -91,17 +91,15 @@ public struct StartLineHeaderScanner: Sendable {
                 // Blank line: headers are done, the rest is body.
                 let bodyEnd = min(bytes.count, index + bodyPrefixLimit)
                 result.bodyPrefix = Data(bytes[index..<bodyEnd])
-                result.isTruncated = truncated
                 return result
             }
             appendHeaderLine(text, into: &result, lastName: &lastHeaderName)
             lineIndex += 1
         }
 
-        // We ran out of buffer (or budget) inside the header section.
+        // The buffer (or the budget) ran out inside the header section: no blank line was seen, so
+        // there may be headers we never read. Say so rather than pretending the response was whole.
         result.isTruncated = true
-        if scanLimit < bytes.count { result.isTruncated = true }
-        _ = truncated
         return result
     }
 
