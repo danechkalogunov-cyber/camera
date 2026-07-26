@@ -172,16 +172,14 @@ public actor AlertStreamMonitor {
                 // A clean end is still an end: the device closed the response, so reconnect.
                 guard !Task.isCancelled else { return }
                 await backOff(reason: "stream ended")
-            } catch let error as ISAPIError {
+            } catch {
+                // `readOneConnection` throws `ISAPIError` and nothing else, so this is exhaustive.
                 guard !Task.isCancelled else { return }
                 if let terminal = Self.terminalState(for: error) {
                     logger.notice(.isapi, "alert stream terminal: \(error)")
                     transition(to: terminal)
                     return
                 }
-                await backOff(reason: "\(error)")
-            } catch {
-                guard !Task.isCancelled else { return }
                 await backOff(reason: "\(error)")
             }
         }

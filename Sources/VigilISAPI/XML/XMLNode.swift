@@ -205,19 +205,37 @@ struct XMLPath: Sendable {
     }
 
     /// Compiles one whole-path alternative into segments.
+    ///
+    /// A segment may carry a trailing `@attr` (`hddList@size`), which compiles to two segments: the
+    /// element, then the attribute. That spelling and `hddList/@size` are the same path.
     private static func compile(_ text: String) -> [Segment] {
-        text.split(separator: "/", omittingEmptySubsequences: true).compactMap { raw in
+        var out: [Segment] = []
+        for raw in text.split(separator: "/", omittingEmptySubsequences: true) {
             let piece = raw.trimmingCharacters(in: .whitespaces)
-            switch piece {
-            case "": return nil
-            case ".": return .selfNode
-            case "*": return .anyChild
-            case "**": return .descendantOrSelf
-            default: break
-            }
             if piece.hasPrefix("@") {
-                return .attribute(String(piece.dropFirst()).lowercased())
+                out.append(.attribute(String(piece.dropFirst()).lowercased()))
+                continue
             }
+            if let at = piece.lastIndex(of: "@") {
+                let element = String(piece[piece.startIndex..<at])
+                let attribute = String(piece[piece.index(after: at)...])
+                out.append(contentsOf: compile(element))
+                out.append(.attribute(attribute.lowercased()))
+                continue
+            }
+            if let segment = compileElement(piece) { out.append(segment) }
+        }
+        return out
+    }
+
+    /// Compiles one element segment: `.`, `*`, `**`, or a name list with an optional selector.
+    private static func compileElement(_ piece: String) -> Segment? {
+        switch piece {
+        case "": return nil
+        case ".": return .selfNode
+        case "*": return .anyChild
+        case "**": return .descendantOrSelf
+        default:
             var body = piece
             var selector = Segment.Selector.any
             if body.hasSuffix("]"), let open = body.lastIndex(of: "[") {

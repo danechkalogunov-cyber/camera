@@ -277,7 +277,7 @@ public enum PTZChannelList {
     /// Decodes `<PTZChannelList><PTZChannel><id>`.
     public static func channels(document: ISAPIDocument) -> [ChannelID] {
         document.nodes("PTZChannel[]").compactMap { node in
-            node["id"].int.map(ChannelID.init)
+            node["id"].int.map { ChannelID($0) }
         }
     }
 }

@@ -100,13 +100,16 @@ public enum SnapshotPayload {
     }
 
     /// True when `body` begins with the JPEG SOI marker.
+    ///
+    /// Indexed through the collection's own start index, because a `Data` slice does not start at
+    /// zero and a snapshot body is frequently one.
     public static func hasJPEGMarker(_ body: Data) -> Bool {
         guard body.count >= soiMarker.count else { return false }
-        return body.withUnsafeBytes { raw -> Bool in
-            for (offset, expected) in soiMarker.enumerated() where raw[offset] != expected {
-                return false
-            }
-            return true
+        var index = body.startIndex
+        for expected in soiMarker {
+            if body[index] != expected { return false }
+            index = body.index(after: index)
         }
+        return true
     }
 }

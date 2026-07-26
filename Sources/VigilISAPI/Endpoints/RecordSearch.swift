@@ -245,7 +245,7 @@ public struct CMSearchResult: Sendable, Hashable {
             guard let locator = PlaybackLocator(playbackURI: uri,
                                                 fallbackStart: start,
                                                 fallbackEnd: end) else { return nil }
-            let itemTrack = item["trackID"].int.map(TrackID.init) ?? track
+            let itemTrack = item["trackID"].int.map { TrackID($0) } ?? track
             let recordType = item["metadataMatches/metadataDescriptor"].string
                 .map { RecordType(descriptor: $0) } ?? .other
             return RecordSegment(track: itemTrack,
