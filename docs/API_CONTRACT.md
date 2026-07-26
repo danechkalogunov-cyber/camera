@@ -5368,5 +5368,748 @@ the directory and its `.placeholder`** — never delete them (R-70).
 | `Tests/VigilCoreTests/` | 173 numbered cases: model, `ConfigStore`, credentials, the **58 transition rows**, coordinator, recorder, snapshots, events, health, diagnostics, automation | 2 400 | W4 |
 | `Tests/VigilUITests/` | Palette ranking + throughput, layout geometry, shortcut conflicts, localisation parity | 600 | W5 |
 
+## 6. `Package.swift` — final
+
+This is the file that is **on disk at the repository root right now**, and it is green under
+`swift build --product VigilPure` and `swift build` on Swift 6.1.2 / Linux. It already contains both
+verified build fixes. Reproduced here so the contract is self-contained; the repository copy is
+authoritative if they ever differ, and `ARCHITECTURE.md` §3 is stale where it differs from either.
+
+**Do not modify it** without amending this section in the same commit. In particular: do not add a
+dependency (the package has zero by design, and `Package.resolved`'s empty pin list is the
+machine-checkable proof), do not remove `type: .static`, and do not add
+`.defaultIsolation(MainActor.self)` — it does not exist in Swift 6.1.2 (R-40).
+
+```swift
+// swift-tools-version:6.0
+//
+// Vigil — native macOS viewer for Hikvision IP cameras and NVRs.
+//
+// ZERO EXTERNAL DEPENDENCIES BY DESIGN. `dependencies:` is empty and must stay empty.
+// Adding an SPM package breaks constraint C1 in docs/ARCHITECTURE.md §1.1 and CI will fail.
+//
+// Two build worlds:
+//   macOS  — everything builds. `swift build` / Xcode / Scripts/build-app.sh.
+//   Linux  — only the Foundation-only targets are meaningful. `swift build --product VigilPure`
+//            builds them; a full `swift build` also succeeds because every file in a macOS-only
+//            target is wrapped in `#if os(macOS)` (see docs/ARCHITECTURE.md §4).
+
+import PackageDescription
+
+// MARK: - Build settings
+
+/// Applied to every target in the package.
+///
+/// * `ExistentialAny` forces the `any P` spelling so existential boxing stays visible at call sites,
+///   which matters on the frame path.
+/// * `swiftLanguageModes: [.v6]` is set package-wide below and turns on *complete* concurrency
+///   checking; we never downgrade a target to `.v5` to silence a data-race diagnostic.
+let common: [SwiftSetting] = [
+    .enableUpcomingFeature("ExistentialAny"),
+]
+
+/// Pure targets additionally get a compile-time marker so shared helpers can assert purity.
+let pure: [SwiftSetting] = common + [
+    .define("VIGIL_PURE"),
+]
+
+/// macOS-only targets. `VIGIL_APPLE` is defined only when actually compiling for an Apple platform,
+/// so the `#if os(macOS)` guards and the define always agree.
+let apple: [SwiftSetting] = common + [
+    .define("VIGIL_APPLE", .when(platforms: [.macOS])),
+]
+
+// MARK: - Package
+
+let package = Package(
+    name: "Vigil",
+    platforms: [
+        // Ignored on Linux; constrains the Apple deployment target only.
+        .macOS(.v14),
+    ],
+    products: [
+        // The shipping app binary. Assembled into Vigil.app by Scripts/build-app.sh.
+        .executable(name: "Vigil", targets: ["Vigil"]),
+
+        // The Linux/CI surface: exactly the Foundation-only targets. `swift build --product VigilPure`
+        // is the single command Linux CI runs, and it is the mechanism that keeps the pure layer pure —
+        // if someone adds `import CoreMedia` to VigilRTP, this product stops building.
+        .library(
+            name: "VigilPure",
+            // `type:` is REQUIRED here, not cosmetic. A library product with no explicit type is an
+            // "automatic" product, and SwiftPM refuses `swift build --product <automatic library>`:
+            //   warning: '--product' cannot be used with the automatic product 'VigilPure';
+            //            building the default target instead
+            // That silently turns the Linux purity gate into a full-package build, which defeats it.
+            // Verified on Swift 6.1.2 / Linux — see docs/BUILD-VERIFICATION.md.
+            type: .static,
+            targets: [
+                "VigilProtocols",
+                "VigilBitstream",
+                "VigilRTSP",
+                "VigilRTP",
+                "VigilISAPI",
+                "VigilDiscovery",
+            ]
+        ),
+
+        // Test-only fixtures. Exposed as a product so `swift build --product VigilTestKit` can be
+        // sanity-checked on Linux independently of the test runner.
+        .library(name: "VigilTestKit", targets: ["VigilTestKit"]),
+
+        // Convenience for embedding the app layer in an Xcode host project (see project.yml).
+        .library(name: "VigilApp", targets: ["VigilUI", "VigilCore", "VigilRender"]),
+    ],
+    dependencies: [
+        // INTENTIONALLY EMPTY. See the header comment.
+    ],
+    targets: [
+
+        // MARK: Pure — Foundation only, Linux-testable
+
+        .target(
+            name: "VigilProtocols",
+            path: "Sources/VigilProtocols",
+            swiftSettings: pure
+        ),
+        .target(
+            name: "VigilBitstream",
+            dependencies: ["VigilProtocols"],
+            path: "Sources/VigilBitstream",
+            swiftSettings: pure
+        ),
+        .target(
+            name: "VigilRTSP",
+            dependencies: ["VigilProtocols"],
+            path: "Sources/VigilRTSP",
+            swiftSettings: pure
+        ),
+        .target(
+            name: "VigilRTP",
+            dependencies: ["VigilProtocols", "VigilBitstream"],
+            path: "Sources/VigilRTP",
+            swiftSettings: pure
+        ),
+        .target(
+            name: "VigilISAPI",
+            dependencies: ["VigilProtocols"],
+            path: "Sources/VigilISAPI",
+            swiftSettings: pure
+        ),
+        .target(
+            name: "VigilDiscovery",
+            dependencies: ["VigilProtocols"],
+            path: "Sources/VigilDiscovery",
+            swiftSettings: pure
+        ),
+
+        // MARK: Test fixtures — pure, shipped to no product the app links
+
+        .target(
+            name: "VigilTestKit",
+            dependencies: ["VigilProtocols", "VigilRTSP", "VigilRTP", "VigilBitstream"],
+            path: "Sources/VigilTestKit",
+            swiftSettings: pure
+        ),
+
+        // MARK: macOS-only
+
+        .target(
+            name: "VigilTransport",
+            dependencies: ["VigilProtocols", "VigilRTSP", "VigilDiscovery"],
+            path: "Sources/VigilTransport",
+            swiftSettings: apple
+        ),
+        .target(
+            name: "VigilVideo",
+            dependencies: ["VigilProtocols", "VigilBitstream"],
+            path: "Sources/VigilVideo",
+            swiftSettings: apple
+        ),
+        .target(
+            name: "VigilRender",
+            dependencies: ["VigilProtocols", "VigilVideo"],
+            path: "Sources/VigilRender",
+            resources: [
+                // Metal shaders are compiled by SwiftPM into default.metallib inside the bundle.
+                .process("Shaders"),
+            ],
+            swiftSettings: apple
+        ),
+        .target(
+            name: "VigilCore",
+            dependencies: [
+                "VigilProtocols",
+                "VigilRTSP",
+                "VigilRTP",
+                "VigilBitstream",
+                "VigilISAPI",
+                "VigilDiscovery",
+                "VigilTransport",
+                "VigilVideo",
+            ],
+            path: "Sources/VigilCore",
+            swiftSettings: apple
+        ),
+        .target(
+            name: "VigilUI",
+            dependencies: ["VigilProtocols", "VigilCore", "VigilRender"],
+            path: "Sources/VigilUI",
+            resources: [
+                .process("Resources"),        // Assets.xcassets, custom SF Symbols
+                .process("Localizations"),    // en.lproj / ru.lproj .strings + .stringsdict
+            ],
+            swiftSettings: apple
+        ),
+        .executableTarget(
+            name: "Vigil",
+            dependencies: ["VigilUI", "VigilCore"],
+            path: "Sources/Vigil",
+            swiftSettings: apple
+        ),
+
+        // MARK: Tests — pure (run on Linux AND macOS)
+
+        .testTarget(
+            name: "VigilProtocolsTests",
+            dependencies: ["VigilProtocols", "VigilTestKit"],
+            path: "Tests/VigilProtocolsTests"
+        ),
+        .testTarget(
+            name: "VigilBitstreamTests",
+            dependencies: ["VigilBitstream", "VigilTestKit"],
+            path: "Tests/VigilBitstreamTests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilRTSPTests",
+            dependencies: ["VigilRTSP", "VigilTestKit"],
+            path: "Tests/VigilRTSPTests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilRTPTests",
+            dependencies: ["VigilRTP", "VigilTestKit"],
+            path: "Tests/VigilRTPTests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilISAPITests",
+            dependencies: ["VigilISAPI", "VigilTestKit"],
+            path: "Tests/VigilISAPITests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilDiscoveryTests",
+            dependencies: ["VigilDiscovery", "VigilTestKit"],
+            path: "Tests/VigilDiscoveryTests",
+            resources: [.copy("Fixtures")]
+        ),
+        // End-to-end pure pipeline: synthetic camera -> RTSP -> RTP -> EncodedFrame. No sockets,
+        // no VideoToolbox, no Mac required. This is the highest-value test target in the repo.
+        .testTarget(
+            name: "VigilPipelineTests",
+            dependencies: ["VigilTestKit", "VigilRTSP", "VigilRTP", "VigilBitstream", "VigilProtocols"],
+            path: "Tests/VigilPipelineTests",
+            resources: [.copy("Fixtures")]
+        ),
+
+        // MARK: Tests — macOS only (bodies wrapped in #if os(macOS); empty modules on Linux)
+
+        .testTarget(
+            name: "VigilTransportTests",
+            dependencies: ["VigilTransport", "VigilTestKit"],
+            path: "Tests/VigilTransportTests"
+        ),
+        .testTarget(
+            name: "VigilVideoTests",
+            dependencies: ["VigilVideo", "VigilTestKit"],
+            path: "Tests/VigilVideoTests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilRenderTests",
+            dependencies: ["VigilRender", "VigilTestKit"],
+            path: "Tests/VigilRenderTests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilCoreTests",
+            dependencies: ["VigilCore", "VigilTestKit"],
+            path: "Tests/VigilCoreTests",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "VigilUITests",
+            dependencies: ["VigilUI", "VigilTestKit"],
+            path: "Tests/VigilUITests"
+        ),
+    ],
+    swiftLanguageModes: [.v6]
+)
+```
+
+**One comment in the manifest is wrong and stays wrong for now.** The `.process("Shaders")` comment
+says "Metal shaders are compiled by SwiftPM into default.metallib inside the bundle." SwiftPM does
+**not** invoke `metal`/`metallib` — see R-38. The `.metal` files are copied as resources for review
+and for an optional offline compile; the shipping path is runtime `makeLibrary(source:)` from
+`ShaderSource.swift`. Fixing the comment is a W3 task and must not change the `resources:` clause,
+because the directory declaration is what keeps `Sources/VigilRender/Shaders/` from being deleted
+and re-triggering build defect #2.
+
 ---
-<!-- APPEND-HERE -->
+
+## 7. Cross-cutting implementation rules
+
+`.vigil/IMPL_RULES.md` is binding and this section **extends** it. Where you think they conflict,
+`IMPL_RULES.md` wins and this section is the defect — say so in your result.
+
+### 7.1 File header — exactly this shape, no more, no less
+
+```swift
+//
+//  RTSPSessionMachine.swift
+//  VigilRTSP
+//
+//  Transport-agnostic RTSP 1.0 client state machine. Pure: no sockets, no clock reads, no Task.
+//  See docs/spec-rtsp.md §14 and docs/API_CONTRACT.md §4.3.
+//
+```
+
+Line 4 onward is a one-to-three-line purpose statement plus a pointer to the spec section **and** the
+`API_CONTRACT.md` section it implements. No author names, no dates, no copyright block (the licence
+lives in `LICENSE`), no Xcode template junk.
+
+macOS-only files add the guard note and wrap the **whole file**:
+
+```swift
+//
+//  DecodePipeline.swift
+//  VigilVideo
+//
+//  VTDecompressionSession ownership and the frame queue.
+//  macOS-only. See docs/ARCHITECTURE.md §4.2 Rule 2 and docs/API_CONTRACT.md §4.9.
+//
+
+#if os(macOS)
+
+import CoreMedia
+import Foundation
+import VideoToolbox
+
+// … implementation …
+
+#endif  // os(macOS)
+```
+
+The guard is the **outermost** construct; imports live inside it. Interleaved `#if` inside a type
+body is forbidden — split into `Foo.swift` (pure) and `Foo+Apple.swift` (macOS) instead. The one
+sanctioned exception is `VigilISAPI`'s split Foundation:
+
+```swift
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
+```
+
+### 7.2 Formatting
+
+| Rule | Value |
+|---|---|
+| Indentation | 4 spaces, never tabs |
+| Line length | **110 columns**, hard. Long string literals split with `+` or moved to a constant |
+| Trailing whitespace | forbidden |
+| File length | **≤ 600 lines**. Split at a `// MARK:` boundary into `Type+Feature.swift` |
+| Function length | ≤ 60 lines; bitstream parsers may reach 120 with a `// RATIONALE:` note, because splitting them hurts reviewability against the ITU document |
+| Braces | K&R, opening brace on the same line |
+| Statements | one per line; no `;` |
+| Import order | `Foundation` first, then system frameworks alphabetically, then Vigil modules alphabetically, one blank line between groups |
+| Blank lines | one between members, two before a `// MARK: -` |
+| Trailing commas | required in multi-line literals |
+| Trailing closure | only for the last closure argument, and only when the label adds nothing |
+
+### 7.3 `// MARK:` structure
+
+Types over 40 lines use this order and **only** these headings:
+
+```swift
+// MARK: - Nested Types
+// MARK: - Stored Properties
+// MARK: - Computed Properties
+// MARK: - Initialisation
+// MARK: - Public API           (or `Package API` / `Internal API`)
+// MARK: - Private Helpers
+// MARK: - <ProtocolName>       (one per conformance extension)
+```
+
+Protocol conformances go in extensions, one per protocol, each with its own `MARK`. `Codable` with
+custom keys always spells `CodingKeys` explicitly — never rely on synthesised names for anything
+persisted, because §5's migration fixtures depend on stable keys.
+
+### 7.4 Access control and `Sendable`
+
+| Level | When |
+|---|---|
+| `private` | the default; start here |
+| `fileprivate` | only when two types in one file genuinely share state |
+| `internal` (implicit) | module-internal; never write the keyword |
+| `package` | **use this** for API another Vigil target needs that is not in §3 or §4 |
+| `public` | only for what §3 and §4 list |
+| `open` | forbidden |
+
+`final` on every class. `struct` over `class` unless identity or reference semantics are required.
+`enum` with no cases for pure namespaces (`enum VTheme { enum Color { … } }`), never a `struct` with
+a private `init`.
+
+**Swift 6 strict concurrency, complete checking, zero `@preconcurrency` imports, zero
+`nonisolated(unsafe)` globals.** Everything crossing an isolation boundary is a `Sendable` value
+type. `@unchecked Sendable` is capped at **three** types repo-wide (R-52), each carrying a comment
+of exactly this shape:
+
+```swift
+/// Thread-safe hand-off from VideoToolbox's private queue into the async world.
+///
+/// `@unchecked Sendable` justification: the only mutable state is an
+/// `AsyncStream.Continuation`, which is documented thread-safe for `yield`/`finish`, and an
+/// `OSAllocatedUnfairLock`-protected counter struct. Nothing else is stored.
+/// Reviewed 2026-07. API_CONTRACT.md §2 R-52, entry 1 of 3.
+final class DecodeSinkBox: @unchecked Sendable { … }
+```
+
+Adding a fourth requires amending R-52 in the same commit. `Scripts/lint.sh` counts them.
+
+**`ExistentialAny` is on:** every existential is spelled `any P`. A bare protocol name in type
+position is a compile error, not a warning (R-43).
+
+### 7.5 Naming
+
+* Types `UpperCamelCase`; members `lowerCamelCase`; no `_` prefixes; no Hungarian notation.
+* Abbreviations only from this closed list, in canonical casing: `RTSP RTP RTCP SDP NAL SPS PPS VPS
+  SEI IDR IRAP AU PTS DTS FPS SAR GOP MTU PTZ ISAPI SADP ONVIF URL URI ID UUID JSON XML HTTP HTTPS
+  TCP UDP TLS DNS IP MAC CIDR MD5 SHA CRC AAC PCM YUV RGB HDR EDR UI OSD NVR DVR DU`.
+  Leading acronyms lowercase whole (`rtspPort`, `urlComponents`, `sdpDescription`); elsewhere they
+  stay uppercase (`parseRTSPResponse`, `makeSDPParser`).
+* Booleans read as assertions: `isKeyframe`, `hasParameterSets`, `shouldReconnect`, `canPan`.
+  Never `flag`, never `enabled` (use `isEnabled`), never a negative (`isNotReady` is forbidden).
+* Functions that can fail `throws`; they do not return `Bool`. Value-returning members name the
+  value: `var displaySize`, not `getDisplaySize()`.
+* Factory statics are `make…`: `RTSPRequest.makeDescribe(url:cseq:)`.
+* Units in the name when not obvious: `timeoutSeconds`, `bitrateKbps`, `jitterMilliseconds`,
+  `deadlineNanos`. A bare `timeout: Duration` needs no unit — the type carries it.
+* Test names describe behaviour: `markerBitUnreliable_stillSplitsAccessUnitsCorrectly()`.
+
+### 7.6 Forbidden constructs in `Sources/`
+
+`!` postfix unwrap · `try!` · `as!` · `unsafeBitCast` · `unsafeDowncast` · `fatalError` ·
+`preconditionFailure` · `array[i]` where `i` is not provably in range · `print` / `debugPrint` /
+`dump` / `NSLog` · `TODO:` · `Date()` in the pure layer · `Thread.sleep` / `usleep` /
+`RunLoop.current.run(until:)` · `DispatchSemaphore` / `NSLock` / `pthread_mutex` / `objc_sync_enter`
+(use actors or `OSAllocatedUnfairLock`; `NSLock` is permitted **only** inside `LatestFrameBox` and
+`VigilTestKit`) · `nonisolated(unsafe)` · `@preconcurrency import` · `import CryptoKit` (any target)
+· global mutable state and any `static var` that is not `let` · a bare English string literal in a
+view · `Unmanaged` outside the two documented CF bridges · `.unbounded` `AsyncStream` buffering.
+
+`precondition` is permitted only for programmer error that **cannot** come from network data — an
+out-of-range index into a constant table, `BitReader.u(n)` with `n > 32` — and must carry a message.
+Anything reachable from a packet throws instead. A malformed packet from one camera must never be
+able to crash the app: that is a security property, not merely robustness.
+
+The one `!` exception: a statically exhaustive dictionary built in the same file from a
+`CaseIterable` enum (`OSLogLogger.loggers`), which carries `// swift-format-ignore` and a comment
+naming the invariant.
+
+Allowed in `Tests/` and `Sources/VigilTestKit/`: tests are meant to crash loudly.
+
+### 7.7 Errors
+
+* **Typed throws in the pure layer.** `public mutating func parse(_ data: Data) throws(BitstreamError) -> H264SPS`.
+  At module boundaries and in `VigilCore`, widen to `throws(VigilError)`. Only `VigilUI` and `Vigil`
+  use untyped `throws`.
+* `try?` only where the failure is genuinely uninteresting **and** a comment says so:
+  `try? FileManager.default.removeItem(at: staleTemp)  // best effort cleanup`.
+* Never `catch {}`. Never `catch { print(error) }`. Every `catch` handles, logs at ≥ `warning` with
+  the `diagnosticCode`, or rethrows.
+* `Result` is not a return type. Use `throws`. It appears only inside `AsyncThrowingStream` element
+  types and in `DeepLink.parse`, where a total function is the point.
+* No `NSError` construction, no `NSException`, no `assertionFailure` as error handling.
+* Integer arithmetic **expected** to wrap (RTP sequence numbers, 32-bit timestamps) uses `&+`/`&-`
+  **with a comment naming the wrap width**. Everywhere else plain `+`, so a trap surfaces the bug.
+  Never `Int(exactly:)!`; use `guard let`.
+
+### 7.8 Documentation comments
+
+* Every `public` and `package` declaration has a `///` comment. Lint fails otherwise.
+* Shape: one summary sentence ending in a period, a blank `///` line, then detail; then
+  `- Parameters:` (only for 2+ parameters), `- Returns:`, `- Throws:` naming the concrete error
+  type, and `- Complexity:` for anything worse than O(n).
+* **Cite the specification.** `/// - Note: ITU-T H.264 (08/2021) §7.3.2.1.1.` Every bitstream and
+  protocol parser function names its clause; that is how a reviewer checks correctness without
+  guessing.
+* `- Warning:` on any concurrency or lifetime precondition ("Must be called from the owning actor",
+  "The returned buffer is valid until the next `push`").
+* **Document what happens on malformed input.** Not optional for anything that touches the network.
+* No commented-out code, ever. Git has history.
+
+### 7.9 Concurrency
+
+* **Pure layer:** no `actor`, no `@MainActor`, no `Task`, no `async` calls (R-32). The sole
+  exception is `VigilISAPI`, whose seven actors are enumerated in R-32.
+* **One actor per concurrent resource**, and nothing else is an actor. If you want to add one, you
+  probably want a `struct` owned by an existing actor.
+* **All UI is `@MainActor`**, written explicitly (R-40).
+* **Nine tasks per live camera**: one root plus eight children in a single
+  `withThrowingTaskGroup` — ingest, action pump, keepalive, media, decode, RTCP, stats, watchdogs.
+  Nothing detaches. `stop()` cancels the root and **awaits** it; it does not return until the tree
+  is joined, so there are no orphan sockets and no leaked decode sessions.
+* Every `await` in a loop is cancellation-aware: `try Task.checkCancellation()` at the top of each
+  iteration, `clock.sleep(for:)` never `Thread.sleep`, and `withTaskCancellationHandler` around
+  every `NWConnection` receive so cancelling calls `connection.cancel()`.
+* **Sanctioned GCD, exhaustively:** the VideoToolbox `outputHandler` block; `NWConnection(queue:)`
+  (one serial `.userInitiated` queue per `RTSPConnection`, named `com.vigil.net.<cameraShortID>`);
+  `AVAssetWriterInput.requestMediaDataWhenReady(on:using:)`; `NSView.displayLink`. `DispatchSource`
+  is used nowhere — timers are `Task { try await clock.sleep(...) }`.
+* Every callback bridge guarantees **exactly-once** continuation resumption.
+
+### 7.10 Determinism and time
+
+The pure layer never reads a clock or a random generator. Every pure state machine takes
+`now: MediaInstant` as a **parameter** to `step`/`ingest`/`tick`/`handle`. Every retry delay computes
+its jitter from an injected `RandomSource`. The consequence is non-negotiable for a networking app:
+a failing CI run prints its seed, and re-running with that seed reproduces the failure byte for byte.
+
+### 7.11 Performance on the frame path
+
+* No allocation inside a per-packet or per-frame loop. `DepacketizerOutput.none` is a `static let`
+  for exactly this reason.
+* Prefer `withUnsafeBytes` and slices to `Data` copies; every `withUnsafeBytes` block carries a
+  `// SAFETY:` comment naming the lifetime, and the pointer never escapes the block.
+* Never store a `Data` slice long-term without `Data(slice)` — a slice retains the whole parent, and
+  a 12-byte header slice holding a 1 MB read alive is a real leak.
+* Comment any non-obvious optimisation. An uncommented clever loop is a future bug.
+* **No main-actor operation may exceed 8 ms** (FEATURES §19.3 U6). The debug build has a watchdog
+  that asserts on any main-actor hop over 8 ms, and CI fails on any occurrence in the UI suite.
+
+### 7.12 Logging
+
+* Pure targets log through an injected `any LoggerProtocol`, defaulted to `NullLogger()`. **Never a
+  global.** macOS targets use `VigilCore.OSLogLogger`, subsystem `com.vigil.app`, 13 categories.
+* Redact **at the source**, through `Redact`. `OSLogLogger` interpolates as `privacy: .public`, and
+  that is only correct because of the source-side guarantee. This is the deliberate trade: redact
+  early so diagnostics bundles are useful, instead of relying on `.private` and getting
+  `<private>` in every support log.
+* Per-packet logging is compiled out of release: `#if DEBUG` around `.debug`-level calls on the
+  `rtp` and `rtsp` categories.
+* Every repeated-error path is wrapped in `RateLimitedLogger`.
+* Every `AsyncStream` documents its buffering policy at the creation site.
+
+### 7.13 Localisation and accessibility
+
+* Every user-visible string comes from `Localizable.xcstrings` with a
+  `surface.subject.variant.part` key, through `String(localized:)` / `LocalizedStringResource`.
+  A bare English literal in a view is a review rejection — Russian is a P0 requirement.
+* Budget **+35 %** length for Russian; plural variations are required.
+* Every interactive element is keyboard-reachable with a visible focus ring, and carries a VoiceOver
+  label, value and hint; every hover-only affordance has a custom action.
+* Minimum hit target 24 × 24 pt, expanded with `contentShape` where the visual is smaller.
+* Every changing number is `monospacedDigit()` with a reserved width from
+  `VTheme.Typography.Reserved`.
+
+### 7.14 Tests
+
+* **swift-testing** (`import Testing`, `@Test`, `#expect`, `#require`), never XCTest — except for
+  `XCTMetric`-based performance assertions on macOS.
+* Prefer **published test vectors** and cite them in a comment. Where you must synthesise a fixture,
+  say so — never imply a fabricated value came from real hardware.
+* Cover malformed and hostile input explicitly: truncated buffers, zero length, oversized length
+  fields, integer overflow at boundaries, and values at the exact edge of a range.
+* No test may depend on wall-clock time, network access, or execution order.
+* Every module that parses bytes from the network has a fuzz test: ≥ 1 M inputs, zero crashes, zero
+  hangs, bounded by an iteration-count assertion in debug.
+
+### 7.15 What you must not touch
+
+* `Package.swift`, `docs/**`, and anything outside the rows you were assigned.
+* The `Placeholder.swift` files — the supervisor removes them (R-70).
+* The 12 `.placeholder` files in resource directories — **never** delete them.
+* A sibling agent's file. Do not reformat it, do not "improve" it, do not rename its types.
+
+### 7.16 Progress logging (mandatory)
+
+```
+echo "[$(date -u +%H:%M:%S)] <yourname> | <stage> | <short message>" >> /home/user/camera/.build-progress.log
+```
+
+`START`, then `WRITTEN` when your sources are on disk, then `BUILD` with the **real** build result,
+then `TEST` with the **real** pass/fail counts, then `DONE`. `BLOCKED` with the reason if you are
+stuck. Under 160 characters, no embedded newlines. Report real numbers — the supervisor re-runs the
+build and will see a discrepancy.
+
+---
+
+## 8. Build and verification checklist
+
+### 8.1 The commands
+
+Always pass your own scratch path. Several agents build concurrently and SwiftPM takes an exclusive
+lock on a shared `.build`; without a private scratch path you will block or fail for reasons that
+have nothing to do with your code.
+
+```bash
+# Your inner loop (Linux container)
+.vigil/swift build --product VigilPure --scratch-path .build-<yourname>
+.vigil/swift test  --filter <YourTestTarget> --scratch-path .build-<yourname>
+
+# The two gates, exactly as CI runs them
+swift build --product VigilPure   -Xswiftc -warnings-as-errors   # the purity gate
+swift build --product VigilTestKit -Xswiftc -warnings-as-errors
+swift build                        -Xswiftc -warnings-as-errors   # proves the #if guards compile
+swift test --parallel
+Scripts/test-linux.sh                                             # fails on a zero-test pure target
+Scripts/lint.sh
+
+# macOS only
+swift build -c debug -Xswiftc -warnings-as-errors
+swift test --parallel --enable-code-coverage
+Scripts/coverage.sh                       # 90 % pure floor, 70 % macOS floor
+Scripts/build-app.sh --configuration release --arch universal
+Scripts/bench.sh --smoke
+```
+
+**`swift build --product VigilPure` is the mechanism, not a formality.** If someone adds
+`import CoreMedia` to `VigilRTP`, that command must stop building. If it ever stops being able to
+fail — as it silently did before `type: .static` was added — the gate is worse than useless, because
+it is trusted.
+
+### 8.2 Definition of done, per wave
+
+**W1 — `VigilProtocols` + crypto**
+- [ ] `swift build --product VigilPure -Xswiftc -warnings-as-errors` green.
+- [ ] `swift test --filter VigilProtocolsTests` green, **≥ 120 tests**, on Linux.
+- [ ] MD5 matches all 7 RFC 1321 vectors **and** the RFC 2617 Digest example, at chunk sizes
+      1/3/7/13/25/26 and on a 1 MiB input. SHA-1 and SHA-256 match their published vectors.
+- [ ] `Base64.decode` accepts unpadded, whitespace-laden and URL-safe input and rejects
+      `length % 4 == 1`.
+- [ ] `MediaTimestamp.converted(to:)` is exact at 90 000 → 1 000 000 → 600 round trips and saturates
+      instead of overflowing; a zero timescale clamps and does not trap.
+- [ ] `TilePolicy` reproduces the class A–E table at both `backingScaleFactor` 1 and 2, including
+      the 15 % dead band and the class-B promotion rule.
+- [ ] `Redact` fuzz test green: no seeded secret survives any formatting path; idempotent; ≤ 2×
+      growth.
+- [ ] `HostPolicy` refuses `.publicInternet` for every non-LAN form tested.
+- [ ] Every `VG-<DOMAIN>-NNNN` code is unique and maps to a `userMessage` and a `userRemedy`.
+- [ ] `Scripts/lint.sh` green: no `!`, `try!`, `as!`, `print`, `TODO`, `CryptoKit`, over-length line.
+
+**W2 — the pure protocol layer**
+- [ ] `swift test --parallel` green on Linux, **all six pure suites non-zero**
+      (`Scripts/test-linux.sh` enforces it).
+- [ ] `VigilPipelineTests` green: synthetic camera → RTSP → RTP → `EncodedFrame`, no sockets, no Mac.
+- [ ] Determinism: the same fixture and seed produce a **byte-identical** concatenation of `.send`
+      payloads and an identical action array across 100 different chunkings.
+- [ ] Split invariance: every `.rtsp` fixture decodes identically across 200 pseudorandom chunkings.
+- [ ] Fuzz: ≥ 1 M random inputs per parser (RTSP wire, SDP, RTP, H.264 SPS, H.265 SPS, ISAPI XML,
+      SADP, WS-Discovery, ARP dump). Zero crashes, zero hangs.
+- [ ] `MockExchanger` and `FixtureHTTPTransport` **fail the suite** if any discovery request carries
+      a credential. (Deliberately verify this by temporarily adding one.)
+- [ ] Sweep planner refuses any prefix wider than /16 and narrows /16–/21 to ARP-backed /24s.
+- [ ] Coverage ≥ 90 % on the pure targets; 100 % on `RTSPWireDecoder` and `RTSPAuthenticator`.
+- [ ] `Package.resolved` still has an empty pin list.
+
+**W3 — transport, video, render (macOS)**
+- [ ] `swift build -c debug -Xswiftc -warnings-as-errors` green **on macOS**.
+- [ ] `swift build` still green **on Linux** — the `#if os(macOS)` guards compile to empty modules.
+- [ ] `Scripts/gen-shader-source.swift` regenerates `ShaderSource.swift` byte-identically; the test
+      that asserts it is green.
+- [ ] `@unchecked Sendable` count in `Sources/` excluding `VigilTestKit` is **exactly 3**, each with
+      the R-52 justification comment.
+- [ ] `FormatDescriptionFactory` builds a description from real 1080p H.264 and H.265 parameter sets
+      and reports `displaySize == 1920×1080` from a `1920×1088` coded frame.
+- [ ] `isHardwareAccelerated` is read from
+      `kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder`, not assumed.
+- [ ] Render geometry tests reproduce the `fitRect` table verbatim, including
+      `1920×1080` in `800×600` `.fit` ⇒ `(0, 75, 800, 450)`.
+- [ ] Atlas hysteresis: 6→7→6→7 produces exactly **2** backend changes, not 4.
+- [ ] No `flush(removingDisplayedImage:)` anywhere except a deliberate black-out path.
+
+**W4 — `VigilCore`**
+- [ ] `VigilCoreTests` green on macOS: **173 numbered cases**, including one per row of the 58-row
+      transition table plus a coverage test asserting the exercised `(state, event)` set **equals**
+      the table.
+- [ ] `HealthSample` is **exactly 24 bytes** (`MemoryLayout<HealthSample>.size == 24`).
+- [ ] Migration fixtures `library-v1.json` → `-v2` → `-v3` all migrate and decode; `-v99-future`
+      opens **read-only and writes nothing**; `-truncated` and `-garbage` recover from `.bak` and
+      tell the user.
+- [ ] A test reflects over `Camera.CodingKeys` and asserts **no password-shaped key exists**.
+- [ ] Auth lockout: two credentialed 401s ⇒ terminal, on **one shared counter**; a fresh-nonce 401
+      does not count; `userCheck` probes are capped at 3 per (host, account) per 10 minutes.
+- [ ] `makePlan` is a pure function: identical inputs ⇒ identical plan, asserted over a matrix of
+      tile sizes, visibilities and priorities.
+- [ ] Hysteresis: ±10 % oscillation over 60 s ⇒ **0** quality changes; a 20 % change held 800 ms ⇒
+      exactly **1**.
+- [ ] A recording continues for 60 s while its tile is closed (priority `.recording` is never
+      demoted and never occlusion-paused).
+- [ ] `DeepLink.parse` is total over 100 000 fuzzed URLs: never traps, never hangs.
+
+**W5 — `VigilUI`**
+- [ ] `VigilUITests` green. Palette: 2 000 items scored in **< 2 ms**; ranking matches the normative
+      formula; ordering and the ≥ 30 cutoff asserted.
+- [ ] The token gallery renders every token in dark, light, `increaseContrast` and
+      `reduceTransparency`.
+- [ ] Every `V*` component has a `#Preview` covering **every state in its table**, in dark and light,
+      plus `reduceMotion`, `reduceTransparency`, `increaseContrast`, `differentiateWithoutColor`,
+      `textScale 1.15`, and a Russian string at ~1.4× length.
+- [ ] `Scripts/lint.sh` finds **no** literal colour, font, radius, spacing, shadow or animation
+      outside `VTheme`, and **no** un-annotated top-level type in `Sources/VigilUI/`.
+- [ ] No `.drawingGroup()`, `.opacity(<1)`, `.shadow`, `.blur`, `.mask`, `.clipShape` or
+      `.rotationEffect` on a video tile. No `AVSampleBufferDisplayLayer` bounds mutation outside a
+      `VTileTransitionProxy` transition.
+- [ ] Localisation parity: every key present in EN and RU; no missing plural variation.
+
+**W6 — app, scripts, acceptance**
+- [ ] `Scripts/build-app.sh --configuration release --arch universal` produces a `Vigil.app` that
+      **launches on the build machine** with ad-hoc signing, and running it twice produces a
+      byte-identical bundle apart from signature and timestamp.
+- [ ] `codesign --verify --deep --strict` clean; entitlements dump matches `Vigil.entitlements`.
+- [ ] `Info.plist` contains `NSLocalNetworkUsageDescription`, `NSBonjourServices`,
+      `NSAllowsLocalNetworking`, the `vigil` URL type and **three** `UTExportedTypeDeclarations`.
+- [ ] Zero-egress test green: no network connection with no cameras configured, confirmed by
+      `HostPolicy` unit tests **and** a packet capture.
+- [ ] Secret-absence test green over `library.json`, `events.json`, the diagnostics bundle, the CSV
+      export and the log export.
+- [ ] Leak tests: 500 reconnect cycles, 200 decoder start/stops, 100 discovery cycles all return to
+      baseline file-descriptor, task, VT-session and RSS counts.
+- [ ] Performance gates within 10 %: L2 launch → first frame p50 ≤ 900 ms; L6 TCP glass-to-glass p95
+      ≤ 250 ms; R5 16 × 1080p ≤ 35 % CPU / ≤ 18 % GPU / ≤ 900 MB; U1 p99 ≤ 7 ms at 120 Hz; U6 no
+      main-actor operation > 8 ms; R13 ceiling 1.5 GB.
+- [ ] **R1 acceptance, on real hardware:** one factory-default-IP Hikvision camera on the LAN;
+      launch the app; type only the password; reach a **visible moving picture within 10 seconds**.
+      Written up in `docs/ACCEPTANCE.md` and kept green.
+- [ ] Stream Doctor produces all nine R1.5 diagnoses against the six seeded fault modes.
+
+### 8.3 What cannot be verified in the development container, and must be done on a Mac
+
+Be honest about this list; it is the acceptance work that has not happened yet.
+
+| Area | Why it needs a Mac |
+|---|---|
+| Anything importing AppKit, SwiftUI, AVFoundation, VideoToolbox, CoreMedia, Metal, Security, Network | The frameworks are absent on Linux; the `#if os(macOS)` bodies are **never type-checked** in the container |
+| The Metal shaders | Need `metal`/`metallib` from Xcode, or a runtime `makeLibrary(source:)` on a real GPU |
+| `Vigil.app` assembly, code signing, entitlements, hardened runtime | Need `codesign` |
+| Real hardware decode, latency, CPU and thermal numbers | Need Apple silicon and real cameras |
+| The R1 zero-configuration gate | Needs a real Hikvision camera on a real LAN |
+
+Everything in the pure layer — RTSP parsing, Digest, SDP, RTP depacketization, jitter buffering,
+H.264/H.265 bitstream parsing, `avcC`/`hvcC`, ISAPI XML, SADP and WS-Discovery codecs, CIDR maths,
+`TilePolicy`, `HostPolicy`, `Redact`, and the synthetic-camera harness — **is** verifiable here and
+must be green before the macOS layer is written.
+
+### 8.4 The standing rule
+
+No specification claim about the build system is trusted until it has been executed. When a document
+prescribes a command, run it against the scaffold. `docs/BUILD-VERIFICATION.md` is appended to,
+never rewritten — and it is why three defects in this project were found by a compiler instead of by
+twenty blocked agents.
+
