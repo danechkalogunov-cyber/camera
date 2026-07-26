@@ -87,9 +87,10 @@ public actor RequestGate {
                 waiters.append(Waiter(id: id, continuation: continuation))
             }
         } onCancel: {
-            // The only `Task` in the module: `onCancel` is synchronous and non-isolated, so
-            // reaching actor state to dequeue the waiter needs a hop. Spec-isapi §4.3 requires
-            // exactly this behaviour.
+            // `onCancel` is synchronous and non-isolated, so reaching actor state to dequeue the
+            // waiter needs a hop through a `Task`. Spec-isapi §4.3 requires exactly this
+            // behaviour; it is one of the module's three unstructured tasks, all of them
+            // cancellation or coalescing plumbing that has no structured alternative.
             Task { await self.cancelWaiter(id) }
         }
         if !granted { throw CancellationError() }

@@ -55,6 +55,15 @@ public actor AuthLockoutRegistry {
         return count
     }
 
+    /// Blocks this device account outright, without spending an attempt on the device.
+    ///
+    /// Used when the device itself says the account is locked or one attempt from it
+    /// (`/Security/userCheck`'s `lockStatus` and `retryLoginTime`, spec-isapi §10.2): Vigil must
+    /// never be the reason a customer's camera locks out, so the remaining attempt is not spent.
+    public func block(host: String, port: Int, account: String) {
+        failures[Key(host: host, port: port, account: account)] = Self.maximumFailures
+    }
+
     /// Clears the counter after a successful authentication, or when the user supplies a new
     /// credential. This is the **only** way out of a block.
     public func reset(host: String, port: Int, account: String) {

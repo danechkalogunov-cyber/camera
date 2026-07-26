@@ -131,9 +131,10 @@ public actor ISAPIClient {
     ///     evaluate a chain; the pure-layer conformance refuses, by design.
     ///   - credential: the device account.
     ///   - configuration: tunables.
-    ///   - quirks: the firmware record. Only two fields are read here — the concurrency override
-    ///     and `digestNoQOP` — and both are re-read on every request, so learning a quirk mid-run
-    ///     takes effect immediately.
+    ///   - quirks: the firmware record. Exactly one field is read here — the concurrency override,
+    ///     which drives the control gate's ceiling and can be changed later with `setQuirks(_:)`.
+    ///     `digestNoQOP` is an *observation*, not an input: the challenge the device sends decides
+    ///     which response form goes back, so no flag can make the client compute the wrong one.
     ///   - transport: the byte mover. Tests inject a fixture.
     ///   - trustEvaluator: TLS policy.
     ///   - clock: monotonic source for retry backoff.
@@ -475,6 +476,20 @@ public actor ISAPIClient {
             }
 
             if response.statusCode == 401 {
+                // The device's own lock report wins over everything else: one more attempt would
+                // be the one that locks the account (spec-isapi §10.2's hard rule).
+                if let report = Self.credentialLockReport(response), report.isTerminal {
+                    await lockout.block(host: endpoint.host, port: endpoint.port,
+                                        account: credential.account)
+                    logger.error(.isapi, "device reports the account locked or one attempt from it",
+                                 ["account": credential.account,
+                                  "remaining": report.remainingAttempts.map(String.init) ?? "?"])
+                    if report.isLocked {
+                        throw ISAPIError.accountLocked(retryAfter: report.unlockAfter)
+                    }
+                    throw ISAPIError.authBlockedLocally(
+                        failures: AuthLockoutRegistry.maximumFailures)
+                }
                 let disposition = await digest.absorb(headers: response.headers,
                                                       didSendAuthorization: authorization != nil,
                                                       isTLS: endpoint.useTLS)
@@ -506,6 +521,36 @@ public actor ISAPIClient {
             }
             return CompletedRequest(response: response, document: document)
         }
+    }
+
+    // MARK: Lock reporting
+
+    /// What a 401 body says about how close the account is to being locked.
+    struct CredentialLockReport: Sendable {
+        /// The device says the account is locked right now.
+        var isLocked: Bool
+        /// Attempts the device says remain before it locks. Counts down 4→3→2→1→0.
+        var remainingAttempts: Int?
+        /// Seconds of lock remaining, when the device reports one.
+        var unlockAfter: Double?
+
+        /// True when sending anything else risks the lockout: locked already, or one attempt left.
+        var isTerminal: Bool { isLocked || (remainingAttempts ?? Int.max) <= 1 }
+    }
+
+    /// Reads `<userCheck>`'s lock fields out of a 401 body, or `nil` when it carries none.
+    ///
+    /// `/Security/userCheck` is the only endpoint that reports lockout state, and it answers the
+    /// same body on any 401 on most firmware — which is why this is read on every 401 rather than
+    /// only when the caller happened to ask for `userCheck`.
+    static func credentialLockReport(_ response: HTTPResponse) -> CredentialLockReport? {
+        guard !response.body.isEmpty, ISAPIDocument.looksLikeXML(response.body),
+              let document = try? ISAPIDocument(parsing: response.body) else { return nil }
+        let locked = document["lockStatus"].string?.lowercased() == "lock"
+        let remaining = document["retryLoginTime"].int
+        guard locked || remaining != nil else { return nil }
+        return CredentialLockReport(isLocked: locked, remainingAttempts: remaining,
+                                    unlockAfter: document["unlockTime"].double)
     }
 
     // MARK: Policy helpers

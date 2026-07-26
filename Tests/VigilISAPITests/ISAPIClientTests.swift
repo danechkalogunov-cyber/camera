@@ -175,6 +175,58 @@ import VigilProtocols
         #expect(await registry.failureCount(host: "192.168.1.64", port: 80, account: "admin") == 0)
     }
 
+    /// When the device says the account is **locked**, the client reports the countdown and blocks
+    /// itself: spending the remaining attempt is how a customer loses access to their own camera.
+    @Test func isapiClientBlocksWhenTheDeviceReportsALockedAccount() async throws {
+        var headers = HTTPHeaders()
+        headers["Content-Type"] = "application/xml"
+        headers.append("WWW-Authenticate", "Digest realm=\"IP Camera(1)\", nonce=\"n\"")
+        let device = ScriptedDevice(replies: [
+            .init(status: 401, headers: headers, body: Data(SpecBodies.userCheckLocked.utf8)),
+        ])
+        let client = TestClientFactory.scriptedClient(device: device, host: "192.168.1.71")
+
+        await #expect(throws: ISAPIError.accountLocked(retryAfter: 1737)) {
+            try await client.get("/Security/userCheck")
+        }
+        #expect(await device.recorded.count == 1)
+        #expect(await client.isAuthBlocked)
+        await #expect(throws: ISAPIError.authBlockedLocally(failures: 2)) {
+            try await client.get("/System/deviceInfo")
+        }
+        #expect(await device.recorded.count == 1)                  // nothing more on the wire
+    }
+
+    /// One attempt left is already too close: the client blocks instead of spending it.
+    @Test func isapiClientBlocksWhenOneLoginAttemptRemains() async throws {
+        var headers = HTTPHeaders()
+        headers["Content-Type"] = "application/xml"
+        headers.append("WWW-Authenticate", "Digest realm=\"IP Camera(1)\", nonce=\"n\"")
+        let body = """
+            <userCheck version="2.0"><statusValue>401</statusValue>
+            <isIllegalLogin>true</isIllegalLogin><retryLoginTime>1</retryLoginTime>
+            <lockStatus>unlock</lockStatus><unlockTime>0</unlockTime></userCheck>
+            """
+        let device = ScriptedDevice(replies: [
+            .init(status: 401, headers: headers, body: Data(body.utf8)),
+        ])
+        let client = TestClientFactory.scriptedClient(device: device, host: "192.168.1.72")
+        await #expect(throws: ISAPIError.authBlockedLocally(failures: 2)) {
+            try await client.get("/Security/userCheck")
+        }
+        #expect(await device.recorded.count == 1)
+    }
+
+    /// Three attempts left is not a reason to stop: the client absorbs the challenge and retries,
+    /// which is the ordinary first-request path.
+    @Test func isapiClientDoesNotBlockWhileAttemptsRemain() async throws {
+        let device = DigestStubDevice()
+        let client = TestClientFactory.digestClient(device: device)
+        let response = try await client.get("/Security/userCheck")  // 401 body says retryLoginTime 3
+        #expect(response.statusCode == 200)
+        #expect(await client.isAuthBlocked == false)
+    }
+
     /// A device offering only SHA-256 over plain HTTP is refused with the scheme named, rather than
     /// downgraded to Basic over cleartext.
     @Test func isapiClientRefusesUnsupportedAuthenticationOverPlainHTTP() async throws {

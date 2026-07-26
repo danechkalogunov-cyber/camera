@@ -133,6 +133,16 @@ public actor AlertStreamMonitor {
         states.stream()
     }
 
+    /// How many consumers of `notifications()` have finished registering.
+    ///
+    /// `Broadcaster.stream()` registers asynchronously by contract, so a test that starts the read
+    /// loop before its own registration lands would race the first event and hang. This is the
+    /// seam that makes that wait deterministic; nothing in the app uses it.
+    func eventConsumerCount() async -> Int { await events.consumerCount }
+
+    /// The same, for `stateChanges()`.
+    func stateConsumerCount() async -> Int { await states.consumerCount }
+
     /// Starts the read loop. Idempotent, and a no-op once the state is terminal.
     public func start() {
         guard runner == nil else { return }

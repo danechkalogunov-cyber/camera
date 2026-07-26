@@ -170,7 +170,7 @@ actor URLSessionLanePool {
         let delegate = StreamingDelegate(bytes: byteContinuation, heads: headContinuation)
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: Self.configuration(for: .stream,
+        let session = URLSession(configuration: Self.configuration(for: request.lane,
                                                                    configuration: configuration),
                                  delegate: delegate,
                                  delegateQueue: queue)

@@ -9,6 +9,7 @@
 
 import Foundation
 import Testing
+import VigilProtocols
 
 @testable import VigilDiscovery
 
@@ -112,10 +113,12 @@ import Testing
         }
     }
 
-    /// The probes are the **only** bytes these two mechanisms send. Nothing in either codec's public
-    /// surface accepts a credential, a user name or a realm, so there is no parameter through which
-    /// one could be threaded — the byte check above and this absence are the two halves of §6.10.
+    /// Every payload the module can put on the wire, in one place: the two multicast probes and the
+    /// three fingerprint requests. Nothing in any of these codecs' public surfaces accepts a
+    /// credential, a user name or a realm, so there is no parameter through which one could be
+    /// threaded — the absence of the parameter and this byte check are the two halves of §6.10.
     @Test func credentialGuardCoversEveryOutboundPayloadThisModuleProduces() {
+        let host = IPv4Address(192, 168, 1, 64)
         let outbound: [(String, Data)] = [
             ("SADP inquiry", SADPCodec.encodeProbe(uuid: UUID())),
             ("ONVIF probe 1", WSDiscoveryCodec.encodeProbe(messageID: UUID(),
@@ -123,11 +126,15 @@ import Testing
             ("ONVIF probe 2", WSDiscoveryCodec.encodeProbe(messageID: UUID(),
                                                            types: .networkVideoTransmitterAndDevice)),
             ("ONVIF probe 3", WSDiscoveryCodec.encodeProbe(messageID: UUID(), types: .wildcard)),
+            ("RTSP OPTIONS", FingerprintCodec.rtspOptionsRequest(host: host, port: 554)),
+            ("ISAPI deviceInfo", FingerprintCodec.isapiDeviceInfoRequest(host: host)),
+            ("HTTP root", FingerprintCodec.rootRequest(host: host)),
         ]
         for (label, payload) in outbound {
             DiscoveryCredentialGuard.requireNoCredentials(in: payload, label: label)
+            #expect(DiscoveryCredentialGuard.violations(in: payload).isEmpty, "\(label)")
         }
-        #expect(outbound.count == 4)
+        #expect(outbound.count == 7)
     }
 
     /// Decoding must not echo credentials either: a device that sends us an `Authorization` header in

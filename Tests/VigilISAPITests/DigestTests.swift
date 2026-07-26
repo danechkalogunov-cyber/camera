@@ -346,6 +346,54 @@ import VigilProtocols
     }
 }
 
+// MARK: - Headers
+
+@Suite struct HTTPHeadersReadingTests {
+
+    /// Lookup is case-insensitive, because no two firmwares spell a header name the same way.
+    @Test func httpHeadersLookUpNamesCaseInsensitively() {
+        var headers = HTTPHeaders()
+        headers.append("Content-Type", "application/xml")
+        #expect(headers["content-type"] == "application/xml")
+        #expect(headers["CONTENT-TYPE"] == "application/xml")
+        #expect(headers["Content-Length"] == nil)
+    }
+
+    /// Duplicates are kept and ordered: a 401 may carry two `WWW-Authenticate` headers and the
+    /// second one is not noise.
+    @Test func httpHeadersKeepDuplicatesInOrder() {
+        var headers = HTTPHeaders()
+        headers.append("WWW-Authenticate", "Digest realm=\"a\"")
+        headers.append("www-authenticate", "Basic realm=\"a\"")
+        #expect(headers.all("WWW-Authenticate").count == 2)
+        #expect(headers.all("WWW-Authenticate")[0].hasPrefix("Digest"))
+        #expect(headers["WWW-Authenticate"]?.hasPrefix("Digest") == true)
+        #expect(headers.count == 2)
+    }
+
+    /// Assigning collapses duplicates to one value; assigning `nil` removes every copy.
+    @Test func httpHeadersAssignmentCollapsesDuplicates() {
+        var headers = HTTPHeaders()
+        headers.append("X", "1")
+        headers.append("x", "2")
+        headers["X"] = "3"
+        #expect(headers.all("x") == ["3"])
+        headers["x"] = nil
+        #expect(headers.all("X").isEmpty)
+    }
+
+    /// Headers survive the `Codable` round trip that puts them in a diagnostics bundle.
+    @Test func httpHeadersRoundTripThroughCodable() throws {
+        var headers = HTTPHeaders()
+        headers.append("Content-Type", "application/xml")
+        headers.append("WWW-Authenticate", "Digest realm=\"IP Camera(51253)\"")
+        let decoded = try JSONDecoder().decode(HTTPHeaders.self,
+                                               from: try JSONEncoder().encode(headers))
+        #expect(decoded == headers)
+        #expect(decoded["www-authenticate"] == "Digest realm=\"IP Camera(51253)\"")
+    }
+}
+
 // MARK: - Lockout registry
 
 @Suite struct AuthLockoutRegistryTests {

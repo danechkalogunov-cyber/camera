@@ -445,12 +445,10 @@ public struct MergeEngine: Sendable {
                 }
                 let before = self.value(of: key, in: device)
                 assign(value, key: key, to: &device, source: observation.source)
-                if self.value(of: key, in: device) != before {
-                    changed.insert(key)
-                    device.provenance[key] = stamp
-                } else {
-                    device.provenance[key] = stamp
-                }
+                // The stamp is recorded whether or not the value moved: it says "a source of this
+                // trust has spoken about this field", which is what later precedence decisions need.
+                device.provenance[key] = stamp
+                if self.value(of: key, in: device) != before { changed.insert(key) }
             }
         }
         device.sources.insert(observation.source)

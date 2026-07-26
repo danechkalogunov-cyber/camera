@@ -199,26 +199,51 @@ actor RequestDouble: ISAPIRequesting {
 /// `VirtualClock.sleep` returns immediately, which turns the PTZ keep-alive loop into a spin. This
 /// clock blocks instead, so a test can allow exactly one re-send and then assert.
 actor SleepGate {
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var order: [UUID] = []
     private var credits = 0
 
+    /// Suspends until a credit is available or the calling task is cancelled.
+    ///
+    /// Cancellation matters: a cancelled PTZ keep-alive must not leave a parked waiter behind that
+    /// later steals the credit the stop path needs.
     func wait() async {
         if credits > 0 {
             credits -= 1
             return
         }
-        await withCheckedContinuation { waiters.append($0) }
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume()
+                    return
+                }
+                waiters[id] = continuation
+                order.append(id)
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
     }
 
     /// Lets `count` sleepers through, banking credit when none is waiting yet.
     func release(_ count: Int = 1) {
         for _ in 0..<count {
-            if waiters.isEmpty {
+            guard let id = order.first, let continuation = waiters[id] else {
                 credits += 1
-            } else {
-                waiters.removeFirst().resume()
+                continue
             }
+            order.removeFirst()
+            waiters[id] = nil
+            continuation.resume()
         }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let continuation = waiters.removeValue(forKey: id) else { return }
+        order.removeAll { $0 == id }
+        continuation.resume()
     }
 }
 
@@ -244,4 +269,17 @@ struct FixedWallClock: WallClock {
     }
 
     var now: Date { value }
+}
+
+// MARK: - Settling
+
+/// Yields the cooperative pool until `condition` holds, up to a bounded number of hops.
+///
+/// The bound is what keeps a broken expectation a *failure* rather than a hung suite: nothing here
+/// waits on wall-clock time, so a condition that is never going to hold costs microseconds.
+func settle(until condition: () async -> Bool, hops: Int = 20_000) async {
+    for _ in 0..<hops {
+        if await condition() { return }
+        await Task.yield()
+    }
 }
