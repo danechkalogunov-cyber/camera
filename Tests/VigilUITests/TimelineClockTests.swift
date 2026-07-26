@@ -32,7 +32,8 @@ import VigilProtocols
 
 @Test func timelineClockReportsATwentyThreeHourDayOnTheSpringForwardTransition() throws {
     let zone = try #require(TimelineTZ.newYork, "America/New_York must resolve for this test to mean anything")
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 3, day: 8))
 
     #expect(day.spanSeconds == 82_800, "8 March 2026 in New York is 23 hours, not \(day.spanSeconds / 3600) h")
@@ -49,7 +50,8 @@ import VigilProtocols
 
 @Test func timelineClockReportsATwentyFiveHourDayOnTheFallBackTransition() throws {
     let zone = try #require(TimelineTZ.newYork)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 11, day: 1))
 
     #expect(day.spanSeconds == 90_000, "1 November 2026 in New York is 25 hours")
@@ -62,7 +64,8 @@ import VigilProtocols
 
 @Test func timelineClockHandlesSouthernHemisphereTransitionsInBothDirections() throws {
     let zone = try #require(TimelineTZ.sydney)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     // Sydney ends DST on 5 April 2026 (a 25-hour day) and starts it on 4 October (a 23-hour day) —
     // the opposite order to the northern hemisphere, which catches any code that assumed the sign.
     let april = try #require(clock.day(year: 2026, month: 4, day: 5))
@@ -73,7 +76,8 @@ import VigilProtocols
 
 @Test func timelineClockReportsExactlyTwentyFourHoursInAZoneWithoutDaylightSaving() throws {
     let zone = try #require(TimelineTZ.utc)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     for month in 1...12 {
         let day = try #require(clock.day(year: 2026, month: month, day: 15))
         #expect(day.spanSeconds == 86_400, "UTC month \(month) should be 24 h")
@@ -85,7 +89,8 @@ import VigilProtocols
 
 @Test func timelineWindowClampsTheDayZoomToATwentyThreeHourDay() throws {
     let zone = try #require(TimelineTZ.newYork)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 3, day: 8))
 
     // The `.day` zoom's NOMINAL span is 86 400 s, which is an hour longer than this day.
@@ -104,20 +109,58 @@ import VigilProtocols
     #expect(clock.wallClock(noonish).hour == 12)
 }
 
-@Test func timelineWindowClampsTheDayZoomToATwentyFiveHourDay() throws {
+@Test func timelineWindowFitsTheDayZoomToATwentyFiveHourDay() throws {
     let zone = try #require(TimelineTZ.newYork)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 11, day: 1))
-    let window = TimelineWindow(start: day.start, zoom: .day).clamped(to: day)
-    // The window WIDENS to 25 h here — the nominal 24 h would leave the last hour of the day
-    // unreachable, so the day's final hour of footage could not be scrubbed to at all.
-    #expect(window.spanSeconds == 90_000)
-    #expect(window.end == day.end)
+    #expect(day.spanSeconds == 90_000)
+
+    // `fitting` resolves the `.day` stop's nominal 86 400 s to the day's TRUE 90 000 s. Without it the
+    // day's last hour of footage sits off the right-hand edge of a bar whose control says "24 h" and
+    // whose ⌘0 claims to fit the day. This is the bug the first version of this test caught.
+    let fitted = TimelineWindow.fitting(day, zoom: .day)
+    #expect(fitted.spanSeconds == 90_000)
+    #expect(fitted.start == day.start)
+    #expect(fitted.end == day.end)
+
+    let geometry = TimelineGeometry(window: fitted, width: 1_200)
+    #expect(geometry.x(at: day.end) == 1_200)
+    #expect(geometry.x(at: day.start) == 0)
+
+    // And the distinction `clamped` deliberately keeps: a genuine 24-hour span on a 25-hour day is
+    // NOT widened — it stays 24 hours and becomes scrollable by the spare hour, which is correct for a
+    // span the caller actually asked for.
+    let plain = TimelineWindow(start: day.start, spanSeconds: 86_400).clamped(to: day)
+    #expect(plain.spanSeconds == 86_400)
+    #expect(plain.end < day.end)
+    #expect(plain.scrolled(bySeconds: 7_200, in: day).end == day.end,
+            "the spare hour must be reachable by scrolling")
+}
+
+@Test func timelineWindowFitsTheDayZoomToEveryDayLengthAtBothTransitions() throws {
+    let zone = try #require(TimelineTZ.newYork)
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
+    // The invariant that matters, stated once for all three day lengths: fitting the `.day` stop
+    // always spans exactly the day, so the bar's two ends are always the day's two ends.
+    for (month, dayOfMonth, expected) in [(3, 8, 82_800.0), (7, 26, 86_400.0), (11, 1, 90_000.0)] {
+        let day = try #require(clock.day(year: 2026, month: month, day: dayOfMonth))
+        #expect(day.spanSeconds == expected, "\(month)/\(dayOfMonth) span")
+        let window = TimelineWindow.fitting(day, zoom: .day)
+        #expect(window.start == day.start)
+        #expect(window.end == day.end)
+        #expect(window.spanSeconds == expected)
+        let geometry = TimelineGeometry(window: window, width: 1_000)
+        #expect(geometry.x(at: day.start) == 0)
+        #expect(geometry.x(at: day.end) == 1_000)
+    }
 }
 
 @Test func timelineWindowScrollStaysInsideAShortDay() throws {
     let zone = try #require(TimelineTZ.newYork)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 3, day: 8))
     var window = TimelineWindow(start: day.start, zoom: .hour).clamped(to: day)
 
@@ -140,7 +183,8 @@ import VigilProtocols
 
 @Test func timelineSegmentIndexClipsASegmentSpanningMidnightOntoBothDays() throws {
     let zone = try #require(TimelineTZ.utc)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let first = try #require(clock.day(year: 2026, month: 7, day: 25))
     let second = clock.day(first, offsetByDays: 1)
 
@@ -190,7 +234,8 @@ import VigilProtocols
 
 @Test func timelineSegmentIndexCoversAShortDayCompletelyWhenFullyRecorded() throws {
     let zone = try #require(TimelineTZ.newYork)
-    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0))
+    let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
+                              locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 3, day: 8))
     let whole = TimelineFixture.segment(from: day.start, to: day.end)
     let index = TimelineSegmentIndex(raw: [whole], day: day)
@@ -207,16 +252,108 @@ import VigilProtocols
 // MARK: - Local time rendering
 
 @Test func timelineClockFormatsWallClockTimesZeroPaddedAndTwentyFourHour() throws {
-    let clock = TimelineFixture.utcClock()
+    let clock = TimelineFixture.utcClock()          // en_GB — a 24-hour locale
     let day = clock.today
     #expect(clock.hourMinute(day.instant(atOffset: TimelineFixture.at(9, 5))) == "09:05")
     #expect(clock.hourMinute(day.instant(atOffset: TimelineFixture.at(0, 0))) == "00:00")
     #expect(clock.hourMinute(day.instant(atOffset: TimelineFixture.at(23, 59))) == "23:59")
     #expect(clock.hourMinuteSecond(day.instant(atOffset: TimelineFixture.at(14, 22, 7)))
             == "14:22:07")
+    #expect(clock.minuteSecond(day.instant(atOffset: TimelineFixture.at(14, 22, 7))) == "22:07")
     // The mockup's playhead bubble: centiseconds.
     let instant = day.instant(atOffset: TimelineFixture.at(10, 14, 38) + 0.20)
     #expect(clock.timecode(instant) == "10:14:38.20")
+}
+
+@Test func timelineClockHonoursTheTwelveHourPreferenceInEveryReadout() throws {
+    // The defect this pins: labels were assembled by hand as `HH:mm` and were therefore 24-hour for
+    // everyone, showing `14:00` to a customer whose Mac says `2 PM` everywhere else
+    // (docs/UX.md §14.1 rule 12).
+    //
+    // ⚠️ Asserted piecewise rather than against a whole literal, because `Date.FormatStyle` separates
+    // the time from the meridiem with U+202F NARROW NO-BREAK SPACE, not U+0020. A literal `"2:22 PM"`
+    // typed with an ordinary space does not compare equal to the output — the first draft of this test
+    // failed with two strings that printed identically, which is a genuinely nasty half-hour. Any
+    // production code that compares a formatted time to a literal has the same trap waiting.
+    let clock = TimelineFixture.twelveHourClock()
+    let day = clock.today
+    let afternoon = day.instant(atOffset: TimelineFixture.at(14, 22, 7))
+    let narrowSpace = "\u{202F}"
+
+    #expect(clock.hourMinute(afternoon) == "2:22\(narrowSpace)PM")
+    #expect(clock.hourMinuteSecond(afternoon) == "2:22:07\(narrowSpace)PM")
+    #expect(clock.hour(afternoon) == "2\(narrowSpace)PM")
+    // The timecode too — and note it is now three characters wider than the 92 pt reserved field
+    // DESIGN.md §4.4 sizes for `HH:mm:ss.SS`. Reported, not silently truncated.
+    #expect(clock.timecode(day.instant(atOffset: TimelineFixture.at(10, 14, 38) + 0.20))
+            == "10:14:38.20\(narrowSpace)AM")
+}
+
+@Test func timelineClockForcesTwentyFourHourOnATwelveHourLocaleWhenAsked() throws {
+    // The other direction: an operator on a US Mac who wants 24-hour, which is the common request
+    // from security staff whose written logs are 24-hour.
+    let clock = TimelineFixture.clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26,
+                                      locale: Locale(identifier: "en_US"),
+                                      hourPreference: .twentyFourHour)
+    let afternoon = clock.today.instant(atOffset: TimelineFixture.at(14, 22, 7))
+    #expect(clock.hourMinute(afternoon) == "14:22")
+    #expect(clock.hourPreference == .twentyFourHour)
+
+    // And `.system` on the same locale leaves it 12-hour, so the preference really is doing the work.
+    let system = TimelineFixture.clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26,
+                                       locale: Locale(identifier: "en_US"),
+                                       hourPreference: .system)
+    #expect(system.hourMinute(afternoon) == "2:22\u{202F}PM")
+}
+
+@Test func timelineZoomLabelsLocaliseTheirUnitRatherThanHardCodingIt() throws {
+    // The defect this pins: the ladder returned `"24 h"` / `"30 m"` as plain Strings with a comment
+    // claiming they were "identical in every locale". Russian abbreviates hours as `ч` and minutes as
+    // `мин`, so nine unit letters were unreachable from any .strings file.
+    let english = Locale(identifier: "en_GB")
+    let russian = Locale(identifier: "ru_RU")
+
+    // English still reads as it did.
+    #expect(TimelineZoom.day.label(locale: english).contains("24"))
+    #expect(TimelineZoom.thirtyMinutes.label(locale: english).contains("30"))
+
+    // Russian gets its own units, with no key to translate and no English fallback.
+    let ruDay = TimelineZoom.day.label(locale: russian)
+    let ruHalfHour = TimelineZoom.thirtyMinutes.label(locale: russian)
+    #expect(ruDay.contains("ч"), "expected a Russian hour unit, got \(ruDay)")
+    #expect(ruHalfHour.contains("мин"), "expected a Russian minute unit, got \(ruHalfHour)")
+    #expect(ruDay != TimelineZoom.day.label(locale: english))
+
+    // Every stop below an hour reads in minutes and every stop at or above one reads in hours, in
+    // both locales — so no stop shows "0 h" or "60 m".
+    for zoom in TimelineZoom.allCases {
+        for locale in [english, russian] {
+            let label = zoom.label(locale: locale)
+            #expect(!label.isEmpty)
+            #expect(!label.hasPrefix("0"), "\(zoom) formatted as \(label)")
+        }
+    }
+    #expect(TimelineZoom.hour.label(locale: english) != TimelineZoom.minute.label(locale: english))
+}
+
+@Test func timelineRulerLabelsFollowTheClockLocaleAndHourCycle() throws {
+    // The ruler is the surface UX.md §14.1 rule 12 names explicitly, so pin it end to end rather than
+    // only at the formatter.
+    let index = TimelineFixture.mockupIndex()
+    let geometry = TimelineFixture.hourGeometry(index, hour: 9)
+
+    let british = TimelineFixture.utcClock()
+    let ticks24 = TimelineRuler.majorTicks(in: geometry, day: index.day, zoom: .hour, clock: british)
+    #expect(!ticks24.isEmpty)
+    #expect(ticks24.allSatisfy { ($0.label ?? "").contains(":") })
+    #expect(ticks24.contains { $0.label == "09:10" })
+    #expect(ticks24.allSatisfy { !($0.label ?? "").contains("AM") })
+
+    let american = TimelineFixture.twelveHourClock()
+    let ticks12 = TimelineRuler.majorTicks(in: geometry, day: index.day, zoom: .hour,
+                                          clock: american)
+    #expect(ticks12.count == ticks24.count, "the hour cycle must not change which ticks exist")
+    #expect(ticks12.contains { $0.label == "9:10\u{202F}AM" })
 }
 
 @Test func timelineClockRendersTheSameInstantDifferentlyInTwoZones() throws {

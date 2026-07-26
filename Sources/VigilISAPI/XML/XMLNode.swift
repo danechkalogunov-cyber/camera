@@ -29,7 +29,12 @@ public struct XMLNode: Sendable, Hashable {
     /// `name.lowercased()`, precomputed once. Every path match compares against this.
     public let key: String
 
-    /// Attributes, keyed by lowercased name, values verbatim.
+    /// Attributes, values verbatim.
+    ///
+    /// Keys are lower-cased, **except namespace declarations** — `xmlns` and `xmlns:`-prefixed names
+    /// are stored exactly as the device wrote them. That exception exists because a read-modify-write
+    /// body has to echo the device's own `xmlns` back verbatim (spec-isapi.md §8, §17.2): some 5.4.x
+    /// firmware rejects an element that arrives without it.
     public let attributes: [String: String]
 
     /// Concatenated character data, trimmed at the ends, interior whitespace preserved. CDATA is
@@ -97,27 +102,67 @@ public struct XMLNode: Sendable, Hashable {
     public func setting(_ path: String, to value: String,
                         createIfMissing: Bool = false) -> XMLNode {
         guard let names = XMLPath(path).plainChildChain(), !names.isEmpty else { return self }
-        return setting(chain: names[...], to: value, createIfMissing: createIfMissing)
+        // ⛔ Two chains, and they must not be collapsed into one.
+        //
+        // MATCHING is case-insensitive, so `names` is lower-cased by the path parser. CREATION is
+        // not: Hikvision firmware compares element names case-sensitively in a PUT body, so an
+        // element this method invents has to carry the caller's own spelling.
+        //
+        // Using `names` for both is a defect that fails silently in the worst way. `setting(
+        // "SharpnessLevel", to: …, createIfMissing: true)` created `<sharpnesslevel>`, the device
+        // ignored it, and the write appeared to succeed — which made an entire firmware-quirk row
+        // inert without producing an error anywhere. Found by the agent that needed that row.
+        let verbatim = Self.creationNames(inPlainPath: path)
+        return setting(chain: names[...],
+                       creating: verbatim.count == names.count ? verbatim[...] : nil,
+                       to: value,
+                       createIfMissing: createIfMissing)
+    }
+
+    /// The creation names for a plain path, in the caller's own capitalisation.
+    ///
+    /// Only ever called for a path `XMLPath.plainChildChain()` has already accepted, which excludes
+    /// `*`, `**`, an index selector, an attribute and whole-path alternation — so splitting on `/`
+    /// and taking each segment's first `|` alternative reproduces exactly the chain the parser built,
+    /// minus the lower-casing. `alternatives.first` is what the matcher would have created, so the
+    /// first alternative is the right one to keep.
+    private static func creationNames(inPlainPath path: String) -> [String] {
+        path.split(separator: "/").map { segment in
+            let first = segment.split(separator: "|").first.map(String.init) ?? String(segment)
+            return first.trimmingCharacters(in: .whitespaces)
+        }
     }
 
     /// Recursive worker for `setting(_:to:createIfMissing:)`.
-    private func setting(chain: ArraySlice<[String]>, to value: String,
-                         createIfMissing: Bool) -> XMLNode {
+    ///
+    /// - Parameters:
+    ///   - chain: lower-cased name alternatives, for matching existing children.
+    ///   - creating: the same chain in the caller's capitalisation, for naming children this call
+    ///     invents. `nil` falls back to the lower-cased name — reachable only if the two chains came
+    ///     out different lengths, which would mean the path parser and `creationNames` disagreed
+    ///     about the path's shape. Falling back preserves the old behaviour rather than silently
+    ///     writing nothing.
+    private func setting(chain: ArraySlice<[String]>, creating: ArraySlice<String>?,
+                         to value: String, createIfMissing: Bool) -> XMLNode {
         guard let alternatives = chain.first else {
             return XMLNode(name: name, attributes: attributes, text: value, children: children)
         }
         let rest = chain.dropFirst()
+        let restCreating = creating?.dropFirst()
         let index = children.firstIndex { child in
             alternatives.contains(child.key)
         }
         if let index {
             var updated = children
-            updated[index] = children[index].setting(chain: rest, to: value,
+            updated[index] = children[index].setting(chain: rest, creating: restCreating,
+                                                     to: value,
                                                      createIfMissing: createIfMissing)
             return XMLNode(name: name, attributes: attributes, text: text, children: updated)
         }
-        guard createIfMissing, let newName = alternatives.first else { return self }
-        let fresh = XMLNode(name: newName).setting(chain: rest, to: value, createIfMissing: true)
+        guard createIfMissing else { return self }
+        guard let newName = creating?.first ?? alternatives.first else { return self }
+        let fresh = XMLNode(name: newName).setting(chain: rest, creating: restCreating,
+                                                  to: value, createIfMissing: true)
         return XMLNode(name: name, attributes: attributes, text: text, children: children + [fresh])
     }
 

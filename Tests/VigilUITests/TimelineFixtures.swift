@@ -41,14 +41,22 @@ enum TimelineTZ {
 
 /// A Gregorian calendar in `zone`, or in UTC when the identifier was unavailable.
 ///
-/// `#require` is not used here because these helpers run outside a test body; a nil zone would make
-/// every DST assertion silently pass against UTC, so ``TimelineFixture/requireZone(_:)`` exists for
-/// the tests to assert the zone really resolved before they rely on it.
+/// A nil zone would make every DST assertion silently pass against UTC, so each DST test
+/// `#require`s its zone before relying on it rather than trusting this fallback.
 func timelineCalendar(_ zone: TimeZone?) -> Calendar {
     var calendar = Calendar(identifier: .gregorian)
     if let zone { calendar.timeZone = zone }
     return calendar
 }
+
+/// The locale every fixture formats in unless a test says otherwise.
+///
+/// ⛔ Explicit, never `.current`. `TimelineClock`'s locale defaults to the system's, which is correct
+/// for the app and fatal for a test: this container's locale decides 12- versus 24-hour output, so a
+/// test that let it default would assert `"09:05"` here and `"9:05 AM"` on a US reviewer's machine.
+/// Fixed at `en_GB`, which is 24-hour, with ``TimelineFixture/twelveHourClock(_:)`` for the other
+/// path.
+let timelineTestLocale = Locale(identifier: "en_GB")
 
 // MARK: - TimelineFixture
 
@@ -57,7 +65,9 @@ enum TimelineFixture {
 
     /// A clock in `zone` whose "now" is the given local date and time.
     static func clock(zone: TimeZone?, year: Int, month: Int, day: Int,
-                      hour: Int = 12, minute: Int = 0) -> TimelineClock {
+                      hour: Int = 12, minute: Int = 0,
+                      locale: Locale = timelineTestLocale,
+                      hourPreference: TimelineHourPreference = .system) -> TimelineClock {
         let calendar = timelineCalendar(zone)
         var parts = DateComponents()
         parts.year = year
@@ -66,13 +76,26 @@ enum TimelineFixture {
         parts.hour = hour
         parts.minute = minute
         let now = calendar.date(from: parts) ?? Date(timeIntervalSince1970: 0)
-        return TimelineClock(calendar: calendar, now: now)
+        return TimelineClock(calendar: calendar, now: now,
+                             locale: locale, hourPreference: hourPreference)
     }
 
     /// A UTC clock at 2026-07-26 12:00, the mockup's day. The default for cases that do not care
     /// about the zone.
     static func utcClock() -> TimelineClock {
         clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26)
+    }
+
+    /// The same clock forced onto a 12-hour cycle, for the hour-preference tests.
+    static func twelveHourClock() -> TimelineClock {
+        clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26,
+              locale: Locale(identifier: "en_US"), hourPreference: .twelveHour)
+    }
+
+    /// A Russian clock, for the localisation tests.
+    static func russianClock() -> TimelineClock {
+        clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26,
+              locale: Locale(identifier: "ru_RU"))
     }
 
     /// One synthesised segment, `start` and `end` given as seconds from `day`'s start.

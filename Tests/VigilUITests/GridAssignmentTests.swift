@@ -10,6 +10,7 @@
 
 #if os(macOS)
 
+import Foundation
 import Testing
 
 import VigilProtocols

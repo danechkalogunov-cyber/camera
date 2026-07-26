@@ -80,16 +80,49 @@ package struct TimelineDay: Sendable, Hashable {
     package var hasDaylightSavingTransition: Bool { spanSeconds != 86_400 }
 }
 
+// MARK: - TimelineHourPreference
+
+/// Whether times are shown on a 12- or 24-hour clock.
+///
+/// docs/UX.md §14.1 rule 12 and the settings row at §12 make this a user preference with three
+/// values, applying to "all timestamps, timeline ruler, exports". `system` is the default and is what
+/// a Mac user expects: the same reading as every other app on their machine.
+///
+/// ⛔ Never decided by hand-formatting `HH:mm`. A US customer whose Mac shows `2 PM` everywhere else
+/// must not find `14:00` here.
+package enum TimelineHourPreference: Sendable, Hashable, CaseIterable {
+
+    /// Follow the locale, which is what almost every user wants.
+    case system
+
+    /// Force 24-hour, for the operators who prefer it regardless of locale — the common request from
+    /// security staff, whose written logs are 24-hour.
+    case twentyFourHour
+
+    /// Force 12-hour.
+    case twelveHour
+
+    /// The hour cycle to impose, or `nil` to leave the locale's own.
+    var hourCycle: Locale.HourCycle? {
+        switch self {
+        case .system: nil
+        case .twentyFourHour: .zeroToTwentyThree
+        case .twelveHour: .oneToTwelve
+        }
+    }
+}
+
 // MARK: - TimelineClock
 
-/// The archive timeline's only source of calendar facts and of "now".
+/// The archive timeline's only source of calendar facts, of "now", and of formatted local times.
 ///
 /// Holds an injected `Calendar` — which carries the time zone the *device* records in, not
-/// necessarily the viewer's — and an injected instant standing for the present. Nothing in
-/// `Timeline/` calls `Date()`, `Date.now` or reads `TimeZone.current`; they all ask this type.
+/// necessarily the viewer's — an injected instant standing for the present, and an injected `Locale`.
+/// Nothing in `Timeline/` calls `Date()`, `Date.now`, reads `TimeZone.current`, or formats a time by
+/// hand; they all ask this type.
 ///
 /// A value type rather than a protocol: there is exactly one implementation, every method is a pure
-/// function of the two stored properties, and a test constructs one with the zone and the frozen
+/// function of the stored properties, and a test constructs one with the zone, locale and frozen
 /// instant it wants.
 package struct TimelineClock: Sendable {
 
@@ -99,6 +132,27 @@ package struct TimelineClock: Sendable {
     /// The instant standing for "now". Injected so "is this day today" is deterministic.
     package let now: Date
 
+    /// The locale every label is formatted in, with ``TimelineHourPreference`` already applied.
+    ///
+    /// Resolved once at initialisation rather than per label: applying an hour cycle builds a new
+    /// `Locale` through `Locale.Components`, and doing that for each of the ruler's two dozen major
+    /// ticks every redraw would be the most expensive thing on the frame path for no gain.
+    package let locale: Locale
+
+    /// The user's 12/24-hour preference, kept for the settings UI to read back.
+    package let hourPreference: TimelineHourPreference
+
+    // Format styles are built once and reused. Constructing a `Date.FormatStyle` is the costly half
+    // of formatting — measured on this toolchain, reusing one style formats the ruler's 24 major
+    // labels in 0.06 ms against docs/FEATURES.md §13's 4 ms redraw budget, and is very nearly twice
+    // as fast as hand-assembling them from `Calendar.dateComponents`, which was the previous
+    // implementation. Correct and cheaper.
+    private let hourStyle: Date.FormatStyle
+    private let hourMinuteStyle: Date.FormatStyle
+    private let hourMinuteSecondStyle: Date.FormatStyle
+    private let minuteSecondStyle: Date.FormatStyle
+    private let timecodeStyle: Date.FormatStyle
+
     /// Creates a clock.
     ///
     /// - Parameters:
@@ -106,9 +160,35 @@ package struct TimelineClock: Sendable {
     ///     pass the device's zone; a viewer in Berlin looking at a camera in New York must see the
     ///     camera's midnight, because that is where the device's own recording day breaks.
     ///   - now: the instant standing for the present.
-    package init(calendar: Calendar, now: Date) {
+    ///   - locale: the locale labels are formatted in. Defaults to the system's — this is the
+    ///     injection boundary, so reading the environment *here* is legitimate in a way that reading
+    ///     it inside the arithmetic never is. Every test passes one explicitly.
+    ///   - hourPreference: the 12/24-hour setting.
+    package init(calendar: Calendar, now: Date,
+                 locale: Locale = .autoupdatingCurrent,
+                 hourPreference: TimelineHourPreference = .system) {
         self.calendar = calendar
         self.now = now
+        self.hourPreference = hourPreference
+
+        var resolved = locale
+        if let cycle = hourPreference.hourCycle {
+            var components = Locale.Components(locale: locale)
+            components.hourCycle = cycle
+            resolved = Locale(components: components)
+        }
+        self.locale = resolved
+
+        let base = Date.FormatStyle(locale: resolved, calendar: calendar,
+                                    timeZone: calendar.timeZone)
+        self.hourStyle = base.hour()
+        self.hourMinuteStyle = base.hour().minute()
+        self.hourMinuteSecondStyle = base.hour().minute().second()
+        self.minuteSecondStyle = base
+            .minute(Date.FormatStyle.Symbol.Minute.twoDigits)
+            .second(Date.FormatStyle.Symbol.Second.twoDigits)
+        self.timecodeStyle = base.hour().minute().second()
+            .secondFraction(Date.FormatStyle.Symbol.SecondFraction.fractional(2))
     }
 
     /// A clock for a named time zone, falling back to UTC when the identifier is unknown.
@@ -116,11 +196,13 @@ package struct TimelineClock: Sendable {
     /// The fallback is deliberate and silent: a device that reports a zone name this build of
     /// Foundation does not know must still show a timeline, and UTC is the only defensible guess.
     /// The caller that cares can compare ``timeZone`` with what it asked for.
-    package init(timeZoneIdentifier: String, now: Date) {
+    package init(timeZoneIdentifier: String, now: Date,
+                 locale: Locale = .autoupdatingCurrent,
+                 hourPreference: TimelineHourPreference = .system) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? TimeZone(identifier: "UTC")
             ?? calendar.timeZone
-        self.init(calendar: calendar, now: now)
+        self.init(calendar: calendar, now: now, locale: locale, hourPreference: hourPreference)
     }
 
     /// The time zone days are measured in.
@@ -194,42 +276,56 @@ package struct TimelineClock: Sendable {
         return (parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    /// `"HH:mm"`, zero-padded, 24-hour.
+    // MARK: Formatted local times
+
+    /// The hour alone — `"09"`, or `"9 AM"` on a 12-hour clock. The 24 h zoom's ruler label.
+    package func hour(_ instant: Date) -> String {
+        instant.formatted(hourStyle)
+    }
+
+    /// Hour and minute — `"09:05"`, or `"9:05 AM"` on a 12-hour clock.
     ///
-    /// Hand-formatted rather than run through `DateFormatter` for three reasons: the mockup's ruler
-    /// is 24-hour regardless of locale, surveillance timecode is conventionally 24-hour
-    /// everywhere, and a formatter would make every ruler test depend on the host's locale.
+    /// Formatted through `Date.FormatStyle`, never assembled by hand, so it honours the locale's hour
+    /// cycle and the user's ``TimelineHourPreference``. The previous implementation concatenated
+    /// zero-padded components and always produced 24-hour output, which showed `14:00` to a customer
+    /// whose Mac says `2 PM` everywhere else (UX.md §14.1 rule 12).
     package func hourMinute(_ instant: Date) -> String {
-        let parts = wallClock(instant)
-        return Self.pad(parts.hour) + ":" + Self.pad(parts.minute)
+        instant.formatted(hourMinuteStyle)
     }
 
-    /// `"HH:mm:ss"`, zero-padded, 24-hour.
+    /// Hour, minute and second — `"14:22:07"`, or `"2:22:07 PM"`.
     package func hourMinuteSecond(_ instant: Date) -> String {
-        let parts = wallClock(instant)
-        return Self.pad(parts.hour) + ":" + Self.pad(parts.minute) + ":" + Self.pad(parts.second)
+        instant.formatted(hourMinuteSecondStyle)
     }
 
-    /// `"HH:mm:ss.cc"` — the playhead bubble's timecode, to centiseconds.
+    /// Minute and second, both zero-padded — `"22:07"`. The 1 min zoom's ruler label, where the hour
+    /// is already established by the lane header.
     ///
-    /// Centiseconds because that is what the approved mockup shows (`10:14:38.20`) and because a
-    /// frame at 25 fps is 40 ms: two decimals distinguish adjacent frames, three would imply a
-    /// precision the archive seek does not have.
-    package func timecode(_ instant: Date) -> String {
-        let parts = wallClock(instant)
-        // Derive the fraction from the whole-second boundary rather than from `timeIntervalSince1970`
-        // so a leap-second-adjusted or non-integral epoch offset cannot shift it.
-        let whole = instant.timeIntervalSince1970
-        let fraction = whole - whole.rounded(.down)
-        let centis = min(99, max(0, Int((fraction * 100).rounded(.down))))
-        return Self.pad(parts.hour) + ":" + Self.pad(parts.minute) + ":"
-            + Self.pad(parts.second) + "." + Self.pad(centis)
+    /// Explicitly two-digit in both fields, because this label's whole job is to be comparable with
+    /// the one beside it and a bare `"5:7"` is not.
+    package func minuteSecond(_ instant: Date) -> String {
+        instant.formatted(minuteSecondStyle)
     }
 
-    /// Two-digit zero padding for 0…99, and the plain description outside it.
-    static func pad(_ value: Int) -> String {
-        guard value >= 0 else { return String(value) }
-        return value < 10 ? "0\(value)" : String(value)
+    /// The playhead bubble's timecode, to centiseconds — `"10:14:38.20"`.
+    ///
+    /// Centiseconds because that is what the approved mockup shows and because a frame at 25 fps is
+    /// 40 ms: two decimals distinguish adjacent frames, three would imply a precision the archive
+    /// seek does not have.
+    ///
+    /// ⚠️ On a 12-hour clock this reads `"10:14:38.20 AM"`, which is four characters wider than the
+    /// 92 pt `VTheme.Typography.Reserved.timecode` field DESIGN.md §4.4 sizes for `HH:mm:ss.SS`. The
+    /// reserved width is not ours to change; reported rather than silently truncated.
+    package func timecode(_ instant: Date) -> String {
+        instant.formatted(timecodeStyle)
+    }
+
+    /// The zoom control's readout — `"24h"`, `"30 мин"`.
+    ///
+    /// Delegates to ``TimelineZoom/label(locale:)``, which localises the unit through
+    /// `Duration.UnitsFormatStyle` rather than hard-coding `h` and `m`.
+    package func zoomLabel(_ zoom: TimelineZoom) -> String {
+        zoom.label(locale: locale)
     }
 }
 

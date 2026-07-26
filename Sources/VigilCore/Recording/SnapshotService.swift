@@ -189,12 +189,16 @@ public actor SnapshotService {
 
         switch source {
         case .displayed(let provider):
+            // The capture and the encode are separate `do` blocks on purpose: the capture's failure
+            // has a fallback, the encode's does not, and a single block would have to catch both
+            // `RenderError` and `VigilError` — which widens the thrown type to `any Error` and stops
+            // this typed-throws function compiling at all.
+            let image: SnapshotCapturedImage
             do {
-                let image = try await provider.captureDisplayedImage()
-                return try await finish(image: image, jpegBytes: nil, camera: camera,
-                                        capturedAt: capturedAt, options: options,
-                                        usedFallback: false)
-            } catch let error as RenderError {
+                image = try await provider.captureDisplayedImage()
+            } catch {
+                // `error` is a `RenderError`: `captureDisplayedImage` declares `throws(RenderError)`
+                // and Swift narrows the binding, so no `as` test is needed or wanted here.
                 guard options.source == .automatic, let deviceRoute else {
                     throw VigilError.render(error)
                 }
@@ -206,6 +210,8 @@ public actor SnapshotService {
                                                    capturedAt: capturedAt, options: options,
                                                    usedFallback: true)
             }
+            return try await finish(image: image, camera: camera, capturedAt: capturedAt,
+                                    options: options, usedFallback: false)
 
         case .device(let route):
             return try await captureFromDevice(route, camera: camera, channel: channel,
@@ -268,10 +274,12 @@ public actor SnapshotService {
         // produced are what gets written. A decode/re-encode round trip here would lose quality for
         // nothing and would be the single most pointless CPU cost in the app.
         if options.encoding.format == .jpeg {
-            let size = try jpegPixelSize(jpeg)
+            // Size from the JPEG's own `SOFn` marker, not from a decode: the bytes are not being
+            // decoded on this path at all, and two integers are not worth 25 ms of one.
+            let size = SnapshotJPEGDimensions.size(of: jpeg)
             return try await write(data: jpeg, camera: camera, capturedAt: capturedAt,
-                                   options: options, pixelWidth: size.width,
-                                   pixelHeight: size.height, origin: .deviceJPEG,
+                                   options: options, pixelWidth: size?.width ?? 0,
+                                   pixelHeight: size?.height ?? 0, origin: .deviceJPEG,
                                    usedFallback: usedFallback)
         }
 
@@ -279,14 +287,14 @@ public actor SnapshotService {
         return try await finish(image: SnapshotCapturedImage(image: image,
                                                              capturedAt: clock.now(),
                                                              origin: .deviceJPEG),
-                                jpegBytes: jpeg, camera: camera, capturedAt: capturedAt,
+                                camera: camera, capturedAt: capturedAt,
                                 options: options, usedFallback: usedFallback)
     }
 
     // MARK: - Private: encode and write
 
     /// Encodes an image and writes it.
-    private func finish(image: SnapshotCapturedImage, jpegBytes: Data?,
+    private func finish(image: SnapshotCapturedImage,
                         camera: RecordingCameraInfo, capturedAt: Date,
                         options: SnapshotCaptureOptions,
                         usedFallback: Bool) async throws(VigilError) -> SnapshotResult {
@@ -391,32 +399,6 @@ public actor SnapshotService {
                 + "(\(data.count) byte(s))"))
         }
         return image
-    }
-
-    /// The pixel size of a JPEG, read from its header without decoding the pixels.
-    ///
-    /// Signatures this is written against:
-    /// ```
-    /// func CGImageSourceCopyPropertiesAtIndex(
-    ///     _ isrc: CGImageSource, _ index: Int, _ options: CFDictionary?) -> CFDictionary?
-    /// ```
-    /// with `kCGImagePropertyPixelWidth` / `kCGImagePropertyPixelHeight` as the keys. Reading the
-    /// header rather than decoding matters on the verbatim path: a 4 K JPEG costs ~25 ms to decode
-    /// and the only thing needed from it is two integers for the file name and the result.
-    private func jpegPixelSize(_ data: Data) throws(VigilError) -> Resolution {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-            throw VigilError.render(.captureFailed(
-                "CGImageSourceCreateWithData returned nil for \(data.count) JPEG byte(s)"))
-        }
-        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
-            as NSDictionary? else {
-            // Not fatal: the bytes are still a valid JPEG and are still written. Zero is reported so
-            // the caller's `{res}` token renders as `unknown` rather than as a fabricated size.
-            return Resolution(width: 0, height: 0)
-        }
-        let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
-        let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
-        return Resolution(width: width, height: height)
     }
 }
 

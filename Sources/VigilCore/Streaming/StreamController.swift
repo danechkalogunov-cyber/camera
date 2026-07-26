@@ -395,7 +395,7 @@ public actor StreamController: Identifiable {
     /// the controller is stopped.
     func runLoop(generation: UInt64) async {
         while !isStopping, !Task.isCancelled, generation == runGeneration {
-            let outcome = await runAttempt()
+            let outcome = await runAttempt(generation: generation)
             // A newer `start()` may have taken ownership while this loop was suspended. From here
             // on a stale loop must touch nothing shared: `teardown()` would close the new attempt's
             // session, and `runTask = nil` would hide the new loop from `start()`'s guard.

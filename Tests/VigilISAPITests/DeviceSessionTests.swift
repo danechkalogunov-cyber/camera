@@ -131,7 +131,8 @@ enum SessionFixtures {
         <?xml version="1.0" encoding="UTF-8"?>
         <userCheck version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
         <statusValue>401</statusValue><statusString>lockedIpFailed</statusString>
-        <lockStatus>lock</lockStatus><retryLoginTime>300</retryLoginTime>
+        <lockStatus>lock</lockStatus><retryLoginTime>0</retryLoginTime>
+        <unlockTime>300</unlockTime>
         </userCheck>
         """
 
@@ -409,8 +410,10 @@ enum SessionFixtures {
         let firstCount = await double.requestCount
         #expect(firstCount == 1)
 
-        // A different channel, whose template collapses to the same key: no round trip at all.
-        clock.advance(seconds: 86_401)   // past the 24 h capability TTL, inside the negative TTL…
+        // A different channel, whose template collapses to the same key: no round trip at all,
+        // even though channel 3 has no capability box of its own. Deliberately without advancing the
+        // clock — the negative entry and the capability box share a 24 h TTL, and this test is about
+        // the template collapse. `deviceSessionReAsksOnceTheNegativeEntryExpires` covers expiry.
         #expect(try await session.ptzCapabilities(channel: ChannelID(3)).isAbsent)
         #expect(await double.requestCount == 1)
         #expect(await session.suppressedCapabilityTemplates
@@ -575,11 +578,11 @@ enum SessionFixtures {
             <enabled>true</enabled><enableHighlight>true</enableHighlight>
             <samplingInterval>2</samplingInterval><startTriggerTime>500</startTriggerTime>
             <endTriggerTime>500</endTriggerTime>
-            <MotionDetectionRegionList><MotionDetectionRegion><regionType>grid</regionType>
-            <Grid><rowGranularity>18</rowGranularity><columnGranularity>22</columnGranularity>
-            </Grid><sensitivityLevel>40</sensitivityLevel>
-            <gridMap>\(String(repeating: "000000", count: 18))</gridMap>
-            </MotionDetectionRegion></MotionDetectionRegionList>
+            <regionType>grid</regionType>
+            <Grid><rowGranularity>18</rowGranularity><columnGranularity>22</columnGranularity></Grid>
+            <MotionDetectionLayout version="2.0"><sensitivityLevel>40</sensitivityLevel>
+            <layout><gridMap>\(String(repeating: "000000", count: 18))</gridMap></layout>
+            </MotionDetectionLayout>
             </MotionDetection>
             """)
         let session = SessionFixtures.session(double, clock: SessionTestClock())
@@ -593,6 +596,7 @@ enum SessionFixtures {
         #expect(body.contains("<sensitivityLevel>80</sensitivityLevel>"))
         #expect(body.contains("<enableHighlight>true</enableHighlight>"))
         #expect(body.contains("<startTriggerTime>500</startTriggerTime>"))
+        #expect(body.contains("<rowGranularity>18</rowGranularity>"))
     }
 
     @Test func deviceSessionResetImageDefaultsSendsNoBodyAndDropsTheCache() async throws {
@@ -1171,6 +1175,9 @@ enum SessionFixtures {
 
         let outcome = try await session.connect(startingAlertStream: false)
         #expect(outcome.exceededBudget)
+        // The elapsed reading is the injected clock's, so a clock that moves reports movement while
+        // the frozen one reports zero — see `connectSequenceMeasuresElapsedTimeOnTheInjectedClock`.
+        #expect(outcome.elapsedSeconds > 0)
         #expect(outcome.degradations.contains(.budgetExceeded))
         // Steps 1–4 still landed, which is what the first tile needs.
         #expect(outcome.canStream)
@@ -1197,15 +1204,16 @@ enum SessionFixtures {
         await double.route("/Streaming/channels", xml: SessionFixtures.streamingChannels)
         await double.route("/System/capabilities", xml: """
             <DeviceCap version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
-            <SysCap><isSupportEventStream>false</isSupportEventStream></SysCap></DeviceCap>
+            <EventCap><isSupportAlertStream>false</isSupportAlertStream></EventCap></DeviceCap>
             """)
         let session = SessionFixtures.session(double, clock: SessionTestClock())
 
+        // `startingAlertStream: true` — the documented sequence. The device's own answer is what
+        // suppresses step 10, not the caller.
         let outcome = try await session.connect()
-        if outcome.capabilities.supportsAlertStream == false {
-            #expect(outcome.degradations.contains(.alertStreamUnavailable))
-            #expect(await double.requests(to: "/alertStream").isEmpty)
-        }
+        #expect(outcome.capabilities.supportsAlertStream == false)
+        #expect(outcome.degradations.contains(.alertStreamUnavailable))
+        #expect(await double.requests(to: "/alertStream").isEmpty)
     }
 
     /// The quirk record the sequence hands back is what `VigilCore` persists on the camera row.

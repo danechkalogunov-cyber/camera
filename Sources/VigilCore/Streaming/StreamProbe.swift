@@ -4,9 +4,10 @@
 //
 //  The R1.2 path ladder: probe the known Hikvision RTSP paths and keep the winner. The user is
 //  never asked for a stream URL.
-//  Implements docs/REQUIREMENTS-CUSTOMER.md §R1.2 and docs/API_CONTRACT.md §4.8 (`StreamProbe`).
+//  Implements docs/REQUIREMENTS-CUSTOMER.md §R1.2, docs/API_CONTRACT.md §4.8 (`StreamProbe`) and
+//  docs/RULING-LOCKOUT.md §2.6.
 //
-//  Three rules decide everything in this file:
+//  Four rules decide everything in this file:
 //
 //  * `200` with a parseable SDP carrying a video codec Vigil can decode **wins**.
 //  * `404`/`451`/`455`/`460` **advance** to the next candidate.
@@ -14,6 +15,16 @@
 //    two credentialed 401s per device are terminal (API_CONTRACT §2 R-25), a `401` stops the entire
 //    ladder rather than repeating itself against four more paths. Walking the ladder after a
 //    rejected password is how an app locks its user out of their own camera.
+//  * **The whole five-rung sequence spends at most one credentialed sign-in.** This is the rule the
+//    other three used to be undermined by: nothing between the rungs consulted the lockout counter,
+//    each rung built a fresh session machine with a fresh authenticator, and three separate code
+//    paths turned a credentialed `401` into "wrong path" — a five-second request timeout, the device
+//    closing the control socket, and this file's own eight-second per-candidate deadline. So the
+//    ladder walked all five rungs spending two credentialed rejections each, crossed the device's
+//    own threshold about twenty seconds in, and then ran again on every rung of the reconnect
+//    ladder. Rung 1 is now the only rung that may ever send credentials, and rungs 2…5 are given an
+//    allowance of zero unless rung 1's credentialed request was answered with something other than
+//    a `401`.
 //
 
 #if os(macOS)
@@ -55,7 +66,9 @@ public actor StreamProbe {
     /// Builds a probe.
     ///
     /// - Parameters:
-    ///   - dependencies: clock, logger, randomness and the session factory.
+    ///   - dependencies: clock, logger, randomness, the session factory and the shared
+    ///     `LockoutGovernor`. The governor arrives for free because this type already stores the
+    ///     whole dependency set, which matters: this is where the credentials are actually spent.
     ///   - candidateTimeout: how long one candidate may take, end to end. Eight seconds, because it
     ///     has to cover the session's own four-second connect budget **and** the round trips after
     ///     it; a shorter deadline here would fire while the socket was still legitimately
@@ -70,13 +83,15 @@ public actor StreamProbe {
 
     /// The contract's entry point: the winning candidate, or `nil` when the ladder found nothing.
     ///
-    /// Prefer `probe(camera:credential:quality:)`, which distinguishes "no path answered" from "the
-    /// path is right and the password is wrong" — a distinction the UI must make, because one leads
-    /// to Stream Doctor and the other to a password field.
+    /// Prefer `probe(camera:credential:quality:credentialedAllowance:)`, which distinguishes "no path
+    /// answered" from "the path is right and the password is wrong" — a distinction the UI must make,
+    /// because one leads to Stream Doctor and the other to a password field.
     public func findWorkingPath(camera: Camera,
                                 credential: Credential?,
-                                quality: StreamQuality) async -> RTSPPathCandidate? {
-        switch await probe(camera: camera, credential: credential, quality: quality) {
+                                quality: StreamQuality,
+                                credentialedAllowance: Int) async -> RTSPPathCandidate? {
+        switch await probe(camera: camera, credential: credential, quality: quality,
+                           credentialedAllowance: credentialedAllowance) {
         case let .resolved(candidate, _): candidate
         case let .authenticationRequired(candidate, _): candidate
         case .exhausted: nil
@@ -87,9 +102,17 @@ public actor StreamProbe {
     ///
     /// An explicit `rtspPathOverride` short-circuits the whole thing: a path the user typed is
     /// honoured, not tested against alternatives.
+    ///
+    /// - Parameter credentialedAllowance: credentialed sign-in attempts the **whole sequence** may
+    ///   spend, as granted by `LockoutGovernor.reserve`. Normally one (docs/RULING-LOCKOUT.md §2.6).
+    ///
+    /// This method also settles the sequence with the governor, because it is the only thing that
+    /// knows whether a credential reached the wire: `recordSuccess` on proof, `refund` when no rung
+    /// wrote an `Authorization` header at all, and neither in any other case.
     public func probe(camera: Camera,
                       credential: Credential?,
-                      quality: StreamQuality) async -> StreamProbeOutcome {
+                      quality: StreamQuality,
+                      credentialedAllowance: Int) async -> StreamProbeOutcome {
         if let override = camera.rtspPathOverride, !override.isEmpty {
             let candidate = RTSPPathCandidate.override(override)
             dependencies.logger.info(.core, "path override in force; ladder skipped",
@@ -104,49 +127,113 @@ public actor StreamProbe {
         var lastFailure = StreamError(code: .rtspPathNotFound)
         guard let first = candidates.first else { return .exhausted(lastFailure) }
 
-        // Phase 1 — the first rung runs **alone**, however many run afterwards.
+        // Phase 1 — the first rung runs **alone**, and it is the only rung that may spend a strike.
         //
-        // This is an authentication-safety rule, not a performance one. Hikvision firmware
-        // authenticates before it decides whether a path exists, so telling `404` from `401`
-        // requires sending credentials; three concurrent candidates would therefore be three
-        // concurrent logins, and a wrong password would spend up to six failed sign-ins in one
-        // burst against a device that locks an account at about five (API_CONTRACT §2 R-25). One
-        // at a time until the device has answered something other than a `401` keeps the worst
-        // case at exactly the two attempts the contract budgets. Rung 1 is also the right answer
+        // Hikvision firmware authenticates before it decides whether a path exists, so telling `404`
+        // from `401` requires sending credentials. Three concurrent candidates would therefore be
+        // three concurrent logins, and a wrong password would spend up to six failed sign-ins in one
+        // burst against a device that locks an account at about five. Rung 1 is also the right answer
         // for almost every current camera, so the common case is one round trip either way.
-        // How many candidates may run at once. **One until a rung has proved the credentials.**
-        // A rung that answers `404`, redirects, or offers an SDP we cannot use has authenticated
-        // first — Hikvision firmware authenticates before it decides whether a path exists — so
-        // after one of those the password is known good and R1.2's three-in-flight window is free.
-        // A rung that merely *timed out* or dropped the connection proves nothing, and widening on
-        // one of those would put three concurrent logins on the wire with a password that may still
-        // be wrong: six failed sign-ins in one burst against a device that locks at about five.
         var inFlight = 1
+        var ledger = LadderAccounting(spent: max(0, min(credentialedAllowance, 1)))
+        var outcome: StreamProbeOutcome?
 
-        switch await evaluate([first], camera: camera, credential: credential) {
-        case let .decided(outcome): return outcome
-        case let .keepGoing(failure, proved):
+        let firstWindow = await evaluate([first], camera: camera, credential: credential,
+                                         allowance: ledger.spent)
+        ledger.absorb(firstWindow)
+        switch firstWindow.verdict {
+        case let .decided(decided):
+            outcome = decided
+        case let .keepGoing(failure):
             lastFailure = failure
-            if proved { inFlight = Self.maxInFlight }
+            // Phase 2's width **and** its allowance are licensed by the same single fact: rung 1's
+            // credentialed request was answered with something other than a `401`. Nothing else
+            // counts. Proof used to be inferred from the *shape* of an answer, which is unsound — a
+            // `3xx` and a `404` answering the **uncredentialed** `OPTIONS` both arrive here as
+            // `.rtspPathNotFound` with no credential involved anywhere (§2.6).
+            if firstWindow.provesAuthentication {
+                inFlight = Self.maxInFlight
+                ledger.provenAllowance = RTSPAuthenticator.maxCredentialedFailures
+            }
         }
 
-        // Phase 2 — the rest of the ladder, three in flight per R1.2 once and only once the device
-        // has answered a question about the path rather than about the password, so first-frame
-        // latency is not the sum of the failures.
+        // Phase 2 — the rest of the ladder. Three in flight only once the device has answered a
+        // question about the path rather than about the password, so first-frame latency is not the
+        // sum of the failures. A rung that meets a `401` with an allowance of zero returns
+        // `.authenticationRequired` **without sending anything**, which is the honest answer and
+        // stops the ladder.
         var index = 1
-        while index < candidates.count {
+        while outcome == nil, index < candidates.count {
             let end = min(index + inFlight, candidates.count)
-            switch await evaluate(Array(candidates[index..<end]),
-                                  camera: camera,
-                                  credential: credential) {
-            case let .decided(outcome): return outcome
-            case let .keepGoing(failure, proved):
+            let window = await evaluate(Array(candidates[index..<end]),
+                                        camera: camera,
+                                        credential: credential,
+                                        allowance: ledger.provenAllowance)
+            ledger.absorb(window)
+            switch window.verdict {
+            case let .decided(decided):
+                outcome = decided
+            case let .keepGoing(failure):
                 lastFailure = failure
-                if proved { inFlight = Self.maxInFlight }
+                if window.provesAuthentication {
+                    inFlight = Self.maxInFlight
+                    ledger.provenAllowance = RTSPAuthenticator.maxCredentialedFailures
+                }
             }
             index = end
         }
-        return .exhausted(lastFailure)
+
+        let resolved = outcome ?? .exhausted(lastFailure)
+        await settle(ledger, host: camera.host, account: credential?.account, outcome: resolved)
+        return resolved
+    }
+
+    // MARK: Accounting
+
+    /// What the ladder owes the governor when it finishes.
+    private struct LadderAccounting {
+
+        /// Strikes `resolvePath` debited for this sequence, `0` or `1`.
+        var spent: Int
+
+        /// The allowance rungs 2…5 may use. Zero until a rung proves the password.
+        var provenAllowance = 0
+
+        /// True once any rung has written an `Authorization` header.
+        var sentCredentials = false
+
+        /// True once a rung's credentialed request has been answered with something other than 401.
+        var proved = false
+
+        mutating func absorb(_ window: WindowOutcome) {
+            sentCredentials = sentCredentials || window.sentCredentials
+            proved = proved || window.provesAuthentication
+        }
+    }
+
+    /// Settles the sequence with the governor. Two cases, and no others.
+    ///
+    /// **Proof** — a rung's credentialed request was answered with something other than a `401` —
+    /// clears the whole key, because the device has just given better evidence than any fingerprint
+    /// could. **Nothing sent** — no rung wrote an `Authorization` header — returns the strike, because
+    /// the device's own tally cannot have moved.
+    ///
+    /// Everything else keeps the strike, including a timeout, a dropped socket and a malformed answer.
+    /// That is the point of debiting up front: a device that rejected our credential and then closed
+    /// the connection saw it perfectly well, and refunding because "the answer looked like a timeout"
+    /// is precisely the mistake that made the shipped ladder unbounded.
+    private func settle(_ accounting: LadderAccounting,
+                        host: String,
+                        account: String?,
+                        outcome: StreamProbeOutcome) async {
+        guard let account else { return }
+        if case .authenticationRequired = outcome { return }
+        if accounting.proved {
+            await dependencies.governor.recordSuccess(host: host, account: account)
+            return
+        }
+        guard !accounting.sentCredentials, accounting.spent > 0 else { return }
+        await dependencies.governor.refund(host: host, account: account, count: accounting.spent)
     }
 
     // MARK: Windows
@@ -156,20 +243,34 @@ public actor StreamProbe {
         /// The ladder is over, for better or worse.
         case decided(StreamProbeOutcome)
         /// Nothing in this window answered; carry on with the most diagnostic failure seen.
-        ///
-        /// `provedAuthentication` is true when at least one candidate's answer could only have come
-        /// **after** a successful sign-in. It is what licenses the next window to run wide.
-        case keepGoing(StreamError, provedAuthentication: Bool)
+        case keepGoing(StreamError)
+    }
+
+    /// One window's verdict plus the two facts the governor needs.
+    private struct WindowOutcome {
+
+        var verdict: WindowVerdict
+
+        /// True when at least one candidate's **credentialed** request was answered with something
+        /// other than a `401`. It is what licenses the next window to run wide and to sign requests.
+        var provesAuthentication: Bool
+
+        /// True when at least one candidate wrote an `Authorization` header.
+        var sentCredentials: Bool
     }
 
     /// Runs one window concurrently and folds its results into a verdict.
+    ///
+    /// - Parameter allowance: `RTSPSessionConfig.credentialedAttemptAllowance` for every session in
+    ///   this window. Zero means "answer about the path, never about the password".
     private func evaluate(_ batch: [RTSPPathCandidate],
                           camera: Camera,
-                          credential: Credential?) async -> WindowVerdict {
+                          credential: Credential?,
+                          allowance: Int) async -> WindowOutcome {
         let dependencies = dependencies
         let timeout = candidateTimeout
 
-        let results = await withTaskGroup(of: (RTSPPathCandidate, ProbeResult).self) { group in
+        let results = await withTaskGroup(of: (RTSPPathCandidate, ProbeReport).self) { group in
             for candidate in batch {
                 group.addTask {
                     let url = camera.rtspURL(path: candidate.path)
@@ -177,12 +278,23 @@ public actor StreamProbe {
                     config.transport = .tcpInterleaved
                     config.setupAudio = false
                     config.setupMetadataTrack = false
+                    config.credentialedAttemptAllowance = allowance
                     let session = dependencies.makeRTSPSession(config, credential,
                                                                "\(camera.id.short)-probe")
                     let probeRun = ProbeRun(session: session, logger: dependencies.logger)
                     let result = await withDeadline(timeout, clock: dependencies.clock) {
                         await probeRun.run()
                     }
+                    // Read as statements, not folded into `||` / `&&`: those operators take
+                    // autoclosures, which are neither `async` nor able to touch actor state, so the
+                    // short-circuiting spelling does not compile.
+                    let observedSend = await probeRun.didSendCredentials
+                    let observedProof = await probeRun.didProveAuthentication
+                    // A run the deadline killed is credited as having sent credentials whether or not
+                    // it had got that far: the wire is no longer observable, and over-counting refuses
+                    // a sign-in while under-counting locks an account.
+                    let sent = result == nil ? true : observedSend
+                    let proved = result == nil ? false : observedProof
                     let outcome = result ?? .advance(StreamError(code: .describeTimeout))
                     // The winning rung drove a real session all the way to `PLAY`, and `close()`
                     // only flushes what is already queued — it does not tear the session down. So
@@ -191,28 +303,42 @@ public actor StreamProbe {
                     // `StreamController.teardown()` does exactly this, for exactly this reason.
                     if case .success = outcome { await session.perform(.teardown) }
                     await session.close()
-                    return (candidate, outcome)
+                    return (candidate, ProbeReport(result: outcome,
+                                                   sentCredentials: sent,
+                                                   provesAuthentication: proved))
                 }
             }
-            var out: [(RTSPPathCandidate, ProbeResult)] = []
-            for await result in group { out.append(result) }
+            var out: [(RTSPPathCandidate, ProbeReport)] = []
+            for await result in group {
+                out.append(result)
+                // §2.6, last line. The moment one child reports a credentialed rejection the others
+                // must not be allowed to write theirs. Draining all three before reading any verdict
+                // is how the shipped code put six credentialed `401`s on the wire in one burst.
+                if case .authenticationRequired = result.1.result { group.cancelAll() }
+            }
             return out
         }
 
+        let sentCredentials = results.contains { $0.1.sentCredentials }
+        let proved = results.contains { $0.1.provesAuthentication }
         var lastFailure = StreamError(code: .rtspPathNotFound)
         // Lowest rung first, so a device that answers on two forms is remembered by the one the
         // ladder trusts more — not by whichever socket happened to be quicker.
-        for (candidate, result) in results.sorted(by: { $0.0.order < $1.0.order }) {
-            switch result {
+        for (candidate, report) in results.sorted(by: { $0.0.order < $1.0.order }) {
+            switch report.result {
             case let .success(codec):
                 dependencies.logger.info(.core, "rtsp path resolved",
                                          ["path": Redact.path(candidate.path),
                                           "codec": codec?.rawValue ?? "unknown"])
-                return .decided(.resolved(candidate, videoCodec: codec))
+                return WindowOutcome(verdict: .decided(.resolved(candidate, videoCodec: codec)),
+                                     provesAuthentication: proved,
+                                     sentCredentials: sentCredentials)
             case let .authenticationRequired(error):
                 dependencies.logger.notice(.core, "rtsp path answered 401; ladder stopped",
                                            ["path": Redact.path(candidate.path)])
-                return .decided(.authenticationRequired(candidate, error))
+                return WindowOutcome(verdict: .decided(.authenticationRequired(candidate, error)),
+                                     provesAuthentication: proved,
+                                     sentCredentials: sentCredentials)
             case let .advance(error):
                 lastFailure = error
             case let .abort(error):
@@ -220,11 +346,14 @@ public actor StreamProbe {
                 // spending four more connects on it only delays the real diagnosis.
                 dependencies.logger.notice(.core, "ladder aborted; failure is not path-shaped",
                                            ["code": error.code.rawValue])
-                return .decided(.exhausted(error))
+                return WindowOutcome(verdict: .decided(.exhausted(error)),
+                                     provesAuthentication: proved,
+                                     sentCredentials: sentCredentials)
             }
         }
-        return .keepGoing(lastFailure,
-                          provedAuthentication: results.contains { $0.1.provesAuthentication })
+        return WindowOutcome(verdict: .keepGoing(lastFailure),
+                             provesAuthentication: proved,
+                             sentCredentials: sentCredentials)
     }
 }
 
@@ -243,24 +372,25 @@ enum ProbeResult: Sendable {
     case abort(StreamError)
 }
 
-extension ProbeResult {
+// MARK: - ProbeReport
 
-    /// True when this answer could only have come **after** the device accepted the credential.
-    ///
-    /// Hikvision firmware authenticates before it decides whether a path exists, so `404`, a
-    /// redirect, and an SDP whose tracks Vigil cannot use are all proof that the password is right.
-    /// A timeout, a dropped connection or a protocol error prove nothing — and treating them as
-    /// proof is what would let the ladder widen to three concurrent logins with a wrong password.
-    var provesAuthentication: Bool {
-        switch self {
-        case .success:
-            true
-        case let .advance(error):
-            error.code == .rtspPathNotFound || error.code == .unsupportedMedia
-        case .authenticationRequired, .abort:
-            false
-        }
-    }
+/// One candidate's result together with what its session did with the credential.
+///
+/// The second and third fields are the whole of §2.6's correction to `provesAuthentication`. That
+/// property used to be derived from the *shape* of the answer — `404` and a redirect were read as
+/// proof of a successful sign-in — and it was unsound in both directions: `ProbeRun` manufactures
+/// `.rtspPathNotFound` from a `3xx`, and the session machine produces the same code in answer to the
+/// **uncredentialed** `OPTIONS`. Proof is now a fact one session observed, not an inference.
+struct ProbeReport: Sendable {
+
+    /// The ladder decision.
+    var result: ProbeResult
+
+    /// Whether an `Authorization` header was written on this session.
+    var sentCredentials: Bool
+
+    /// Whether a credentialed request was answered with something other than a `401`.
+    var provesAuthentication: Bool
 }
 
 // MARK: - ProbeRun
@@ -285,6 +415,24 @@ actor ProbeRun {
     private let session: any RTSPSessionDriving
     private let logger: any LoggerProtocol
 
+    /// Whether this session has written an `Authorization` header.
+    ///
+    /// Read from the session's own state stream: `RTSPSessionState.authenticating(retryOf:)` is
+    /// entered by `RTSPSessionMachine` exactly when it re-sends a request carrying credentials, so
+    /// observing it is equivalent to observing the header on the wire — and it is the only signal
+    /// available without a new `RTSPConnectionEvent` case, which lives in a module this change does
+    /// not own (see the report's list of what a supervisor still owes).
+    private(set) var didSendCredentials = false
+
+    /// Whether a credentialed request has been answered with something other than a `401`.
+    ///
+    /// Set by any progress the device could only have made **after** accepting the credential: a
+    /// later state in the connect sequence, a negotiated track, a successful `PLAY`, or a close whose
+    /// reason means the device answered a `DESCRIBE` (`.ladderAdvance` is a `404` family answer,
+    /// `.redirect` a `3xx`, `.normal` a parsed SDP). A timeout, a dropped socket and a `401` all
+    /// leave it false, because none of them is an answer.
+    private(set) var didProveAuthentication = false
+
     init(session: any RTSPSessionDriving, logger: any LoggerProtocol) {
         self.session = session
         self.logger = logger
@@ -304,13 +452,17 @@ actor ProbeRun {
 
         for await event in stream {
             switch event {
+            case let .state(sessionState):
+                note(sessionState)
             case let .track(track):
+                noteAnswer()
                 if track.kind == .video, let codec = track.codec?.video {
                     sawVideoTrack = true
                     videoCodec = codec
                 }
             case let .ready(description):
                 // `PLAY` succeeded: the strongest possible answer to "is this the path?".
+                noteAnswer()
                 let codec = description.tracks
                     .first { $0.kind == .video }?
                     .codec?
@@ -319,32 +471,66 @@ actor ProbeRun {
             case let .closed(reason):
                 switch reason {
                 case .normal:
+                    noteAnswer()
                     return sawVideoTrack
                         ? .success(videoCodec)
                         : .advance(StreamError(code: .unsupportedMedia))
                 case .ladderAdvance:
+                    // A `404`-family answer to `DESCRIBE`. The device answered, so if we had signed
+                    // the request it accepted the credential.
+                    noteAnswer()
                     return .advance(StreamError(code: .rtspPathNotFound, rtspStatus: 404))
                 case .redirect:
                     // Following a redirect would need a second connection for a path we are only
-                    // testing; treat it as "this rung did not answer".
+                    // testing; treat it as "this rung did not answer" — but the `3xx` itself is an
+                    // answer, so it still proves the credential if we sent one.
+                    noteAnswer()
                     return .advance(StreamError(code: .rtspPathNotFound))
                 case .error:
                     continue
                 }
             case let .failed(error):
                 return Self.classify(error)
-            case .state, .timing, .media, .reconnect:
+            case .timing:
+                noteAnswer()
+            case .media, .reconnect:
                 continue
             }
         }
         return .advance(StreamError(code: .connectionClosed))
     }
 
+    /// Folds one session state into the two credential facts.
+    private func note(_ sessionState: RTSPSessionState) {
+        switch sessionState {
+        case .authenticating:
+            didSendCredentials = true
+        case .awaitingDescribe, .settingUp, .awaitingPlay, .playing, .awaitingPause, .paused,
+             .seeking, .tearingDown:
+            // Reached only by a response the device actually sent. `.awaitingDescribe` in particular
+            // is entered on a successful `OPTIONS`, which is the first thing a credentialed retry
+            // gets right.
+            noteAnswer()
+        case .awaitingOptions, .idle, .closed, .failed:
+            // `.awaitingOptions` is entered by `.start` before a byte is written, so it is not an
+            // answer to anything; `.failed` is the one state that is explicitly *not* proof.
+            break
+        }
+    }
+
+    /// Records that the device answered something. Only meaningful once credentials went out.
+    private func noteAnswer() {
+        guard didSendCredentials else { return }
+        didProveAuthentication = true
+    }
+
     /// Maps a terminal failure onto a ladder decision.
     ///
     /// The `401` family is the one that must not advance: `.authRejected` and `.unauthorized` mean
-    /// the device answered our credentials with another challenge, and `.credentialsMissing` means
-    /// it challenged us and we had nothing to answer with. Both say the path is right.
+    /// the device answered our credentials with another challenge — or that this rung had no
+    /// allowance left and refused to sign anything, which is the same verdict for the ladder's
+    /// purposes — and `.credentialsMissing` means it challenged us and we had nothing to answer
+    /// with. All of them say the path is right.
     static func classify(_ error: VigilError) -> ProbeResult {
         guard case let .rtsp(rtsp) = error else {
             return .abort(StreamError.from(vigil: error))

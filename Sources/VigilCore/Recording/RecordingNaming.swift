@@ -261,13 +261,17 @@ public enum RecordingNaming {
     public static func uniqueBaseName(_ baseName: String, extensions: [String],
                                       uniqueSuffix: String,
                                       exists: (String, String) -> Bool) -> String {
-        let free = { (candidate: String) -> Bool in
+        // A nested `func`, not a closure bound to a `let`: assigning a closure to a local makes it
+        // escaping, and an escaping closure may not capture the non-escaping `exists`. Keeping
+        // `exists` non-escaping is deliberate — it means this function cannot squirrel the caller's
+        // file-system probe away and call it later.
+        func isFree(_ candidate: String) -> Bool {
             !extensions.contains { exists(candidate, $0) }
         }
-        if free(baseName) { return baseName }
+        if isFree(baseName) { return baseName }
         for suffix in 2...maximumCollisionSuffix {
             let candidate = "\(baseName) (\(suffix))"
-            if free(candidate) { return candidate }
+            if isFree(candidate) { return candidate }
         }
         return "\(baseName)-\(uniqueSuffix)"
     }

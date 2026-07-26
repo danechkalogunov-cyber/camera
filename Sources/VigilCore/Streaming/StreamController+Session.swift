@@ -27,7 +27,14 @@ import VigilTransport
 extension StreamController {
 
     /// Runs one connect attempt and reports how it ended.
-    func runAttempt() async -> AttemptOutcome {
+    ///
+    /// `generation` is the run loop's stamp. It exists because the event-consumption phase below had
+    /// no generation guard at all: a stale loop that was still suspended in `for await` when a newer
+    /// `start()` took over would keep folding events into the **live** attempt's state — closing its
+    /// session, clearing its resolved path. The reservation model makes that lockout-irrelevant, but
+    /// it remains a state-corruption bug (docs/RULING-LOCKOUT.md §2.9, §6.5, "ruled in as required,
+    /// evidenced as unproven").
+    func runAttempt(generation: UInt64) async -> AttemptOutcome {
         attemptStart = clock.now()
         pendingOutcome = nil
         sawFirstPacket = false
@@ -115,9 +122,14 @@ extension StreamController {
         transition(to: .authenticating, detail: .plain(.authenticating, attempt: attempt))
         armControllerTimer(.connectWatchdog, after: Self.overallWatchdog)
         for await event in stream {
+            // The guard §6.5 says is owed. Buffered events survive `close()`, so a stale loop can
+            // still be handed a drain of them after a newer `start()` has taken ownership; folding
+            // those into the live attempt would close its session and clear its resolved path.
+            guard generation == runGeneration else { return .stopped }
             await handle(event)
             if let outcome = pendingOutcome { return outcome }
         }
+        guard generation == runGeneration else { return .stopped }
         if let outcome = pendingOutcome { return outcome }
         return isStopping ? .stopped : .retry(StreamError(code: .connectionClosed))
     }
@@ -134,8 +146,21 @@ extension StreamController {
     ///
     /// A learned path is used verbatim, so the ladder runs at most once per device in its lifetime.
     /// When the ladder does run and ends on a credentialed `401`, the path is kept — a `401` means
-    /// the path is right — and the attempt fails, because the ladder has already spent this
-    /// account's two attempts (API_CONTRACT §2 R-25) and connecting anyway would spend more.
+    /// the path is right — and the attempt fails, because the ladder has spent the one strike it was
+    /// granted and connecting anyway would spend more.
+    ///
+    /// **This is the point the decisive sequence dies at** (docs/RULING-LOCKOUT.md §2.6, §3). Two
+    /// things happen here and nowhere else, in this order and above the ladder:
+    ///
+    /// * `allowProbe` — the rate limit. Three probe *sequences* per ten minutes, not three rungs. On
+    ///   refusal no socket is opened and **no reservation is debited**: nothing has failed, so the
+    ///   answer is `signInPaused`, never `authenticationFailed`.
+    /// * `reserve(count: 1)` — one strike for the whole five-rung sequence. The ladder used to spend
+    ///   ten credentialed `401`s per pass because nothing between the rungs consulted the counter at
+    ///   all; now the number it was granted *is* the allowance the rungs are given.
+    ///
+    /// Both are below the two short-circuits deliberately: a learned path and a user-typed override
+    /// are not probe sequences and must not consume the budget.
     func resolvePath(credential: Credential) async -> PathResolution {
         if let known = resolvedCandidate { return .ok(known) }
         if let override = camera.rtspPathOverride, !override.isEmpty {
@@ -144,7 +169,29 @@ extension StreamController {
             return .ok(candidate)
         }
 
-        switch await probe.probe(camera: camera, credential: credential, quality: quality) {
+        if case let .refused(retryAfter) = await governor.allowProbe(host: camera.host,
+                                                                    account: credential.account) {
+            let seconds = max(1, Int(retryAfter.seconds.rounded()))
+            logger.notice(.core, "probe refused by the rate limit; nothing sent",
+                          ["camera": id.short, "retryAfterSeconds": String(seconds)])
+            return .give(.retry(StreamError(code: .signInPaused,
+                                            context: ["retryAfterSeconds": String(seconds)])))
+        }
+
+        let granted = await governor.reserve(host: camera.host,
+                                            account: credential.account,
+                                            count: 1,
+                                            secretFingerprint: SecretFingerprint.of(credential))
+        guard granted > 0 else {
+            // The budget went while we were getting here — another lane, or a previous attempt.
+            return .give(.failed(StreamError(
+                code: .authenticationFailed,
+                context: ["blocked": "locally, after "
+                    + "\(LockoutGovernor.maxCredentialedFailures) rejected sign-ins"])))
+        }
+
+        switch await probe.probe(camera: camera, credential: credential, quality: quality,
+                                 credentialedAllowance: granted) {
         case let .resolved(candidate, codec):
             let capabilities = candidate.capabilities(videoCodec: codec, probedAt: Date())
             camera.capabilities = capabilities
@@ -156,8 +203,10 @@ extension StreamController {
             resolvedCandidate = candidate
             if error.code == .credentialsMissing {
                 // The device challenged a request we had nothing to sign, so no login was
-                // attempted and no attempt was spent: connecting with the credential is the
-                // correct next step, not a failure.
+                // attempted: connecting with the credential is the correct next step, not a failure.
+                // The strike is deliberately **not** returned here. `StreamProbe.settle` refunds only
+                // when it can see that no `Authorization` header was written on any rung, and the
+                // connection about to be built will spend one anyway.
                 return .ok(candidate)
             }
             await governor.block(host: camera.host, account: credential.account,

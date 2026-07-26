@@ -43,6 +43,17 @@ package enum ConnectDiagnosis: Sendable, Hashable {
     /// The device reports the account locked. `minutesRemaining` is `nil` when it does not say.
     case accountLocked(host: String, minutesRemaining: Int?)
 
+    /// **Vigil** stopped signing in for a while, so the camera's account cannot be locked out.
+    ///
+    /// Nothing has failed and the camera has rejected nothing: this is a wait Vigil imposed on
+    /// itself. `minutesRemaining` is derived from `LockoutGovernor.probeWindow` — a number Vigil
+    /// controls and can state truthfully — and never from a guess at the firmware's own lock window
+    /// (docs/RULING-LOCKOUT.md §3, §7).
+    ///
+    /// Reusing ``wrongPassword(host:)`` here is forbidden: its copy says the camera rejected the
+    /// password, and on this path the camera has not seen it.
+    case signInPausedByVigil(host: String, minutesRemaining: Int)
+
     /// HTTP answered and RTSP refused: RTSP is switched off in the camera, or a firewall eats 554.
     case rtspPortClosed(host: String, httpPort: Int, rtspPort: Int)
 
@@ -80,6 +91,11 @@ extension ConnectDiagnosis {
         case .notOnThisNetwork, .rtspPortClosed, .notHikvisionDevice, .codecUnsupported,
              .noPictureUDPBlocked, .pictureStalls, .undiagnosed:
             return true
+        case .signInPausedByVigil:
+            // `true`, and this is load-bearing: Vigil *is* retrying, on its own schedule, so
+            // `AppSessionModel.apply(_:)` must not tear the session down and must not forget the
+            // remembered camera (docs/RULING-LOCKOUT.md §3).
+            return true
         }
     }
 
@@ -87,7 +103,9 @@ extension ConnectDiagnosis {
     /// is (UX.md §8.4, "Primary fix offered").
     package var fieldToFocus: ConnectField? {
         switch self {
-        case .wrongPassword, .accountLocked:
+        case .wrongPassword, .accountLocked, .signInPausedByVigil:
+            // Entering a password is the one action that legitimately shortens the wait: a *different*
+            // one clears the counter, so the cursor belongs there even though nothing is wrong.
             return .password
         case .notOnThisNetwork, .rtspPortClosed, .notHikvisionDevice:
             return .host
@@ -111,6 +129,11 @@ extension ConnectDiagnosis {
             return [.updatePassword, .runStreamDoctor]
         case .accountLocked:
             return [.openCameraWebPage, .runStreamDoctor]
+        case .signInPausedByVigil:
+            // Neither retries and neither is a dead end. `updatePassword` moves focus to the field
+            // whose contents can end the wait; `openCameraWebPage` lets the user check the account on
+            // the device without spending any of Vigil's budget.
+            return [.updatePassword, .openCameraWebPage]
         case .rtspPortClosed:
             return [.tryAlternateRTSPPort, .openCameraWebPage]
         case .notHikvisionDevice:
@@ -143,6 +166,7 @@ extension ConnectDiagnosis {
         case .cameraNotActivated: return "error.notActivated"
         case .wrongPassword: return "error.auth.wrongPassword"
         case .accountLocked: return "error.auth.locked"
+        case .signInPausedByVigil: return "error.auth.pausedByVigil"
         case .rtspPortClosed: return "error.rtspBlocked"
         case .notHikvisionDevice: return "error.notHikvision"
         case .codecUnsupported: return "error.codecUnsupported"
@@ -169,6 +193,8 @@ extension ConnectDiagnosis {
             return Text("Wrong password.", bundle: .vigilUI)
         case .accountLocked:
             return Text("Device is locked.", bundle: .vigilUI)
+        case .signInPausedByVigil:
+            return Text("Waiting before trying again", bundle: .vigilUI)
         case .rtspPortClosed:
             return Text("Video port is closed.", bundle: .vigilUI)
         case .notHikvisionDevice:
@@ -219,6 +245,11 @@ extension ConnectDiagnosis {
                 \(host) locked this account after too many failed sign-ins. It unlocks on its \
                 own, or immediately if you reboot the camera.
                 """, bundle: .vigilUI)
+        case .signInPausedByVigil(let host, let minutes):
+            return Text("""
+                Vigil stopped signing in to \(host) so the camera's account cannot be locked out. \
+                It will try again in about \(minutes) minutes. Nothing is wrong with the camera.
+                """, bundle: .vigilUI)
         case .rtspPortClosed(let host, let httpPort, let rtspPort):
             return Text("""
                 Vigil reached \(host) on port \(httpPort), but RTSP port \(rtspPort) refused \
@@ -259,6 +290,7 @@ extension ConnectDiagnosis {
         case .cameraNotActivated: return .warning
         case .wrongPassword: return .authFailure
         case .accountLocked: return .locked
+        case .signInPausedByVigil: return .locked
         case .rtspPortClosed: return .network
         case .notHikvisionDevice: return .info
         case .codecUnsupported: return .warning
@@ -280,7 +312,9 @@ extension ConnectDiagnosis {
         case .wrongPassword, .accountLocked:
             return VTheme.Color.Semantic.danger
         case .cameraNotActivated, .rtspPortClosed, .codecUnsupported, .noPictureUDPBlocked,
-             .pictureStalls:
+             .pictureStalls, .signInPausedByVigil:
+            // `warn`, never `danger`: nothing has failed. The reserved status hues are not decorative,
+            // and using the failure colour for a deliberate wait would be a lie in a colour.
             return VTheme.Color.Semantic.warn
         case .notOnThisNetwork:
             return VTheme.Color.Text.tertiary

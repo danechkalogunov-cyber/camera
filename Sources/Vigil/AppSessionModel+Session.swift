@@ -93,6 +93,29 @@ extension AppSessionModel {
                 // ref matches the descriptor's, which it does because both come from `ref`.
                 let descriptor = CredentialDescriptor(camera: camera, account: request.username)
                 try await credentials.save(credential, descriptor: descriptor)
+                // §4 of docs/RULING-LOCKOUT.md, and the reason it cannot be skipped: after §2.4 the
+                // authentication counter outlives every controller, so a genuinely new password would
+                // otherwise never clear it and the user would stay blocked with the *right* password.
+                // The clear is explicit and it is gated on proof of difference — the fingerprint is
+                // computed here, where the `CredentialRef` is known, and the governor only compares.
+                // Retyping the same characters clears nothing, which matters because that is the most
+                // likely route to a real thirty-minute lockout.
+                //
+                // It happens here rather than only in `StreamController.credentialsUpdated()` because
+                // `AppSessionModel.connect(_:)` calls `stopSession()` before this runs, so there is
+                // normally no controller left to tell. The controller hand-off below is kept for the
+                // case where there is one: telling a live controller is strictly better than
+                // rebuilding it.
+                let cleared = await dependencies.governor.clear(
+                    host: camera.host,
+                    account: request.username,
+                    secretFingerprint: SecretFingerprint.of(credential))
+                dependencies.logger.info(.app, "password saved; auth counters "
+                    + (cleared ? "cleared" : "kept — same password"))
+                if let existing = controller, activeRef == ref, camera.id == self.camera?.id {
+                    await existing.credentialsUpdated()
+                    return
+                }
             }
             await stream(camera: camera, ref: ref)
         } catch {

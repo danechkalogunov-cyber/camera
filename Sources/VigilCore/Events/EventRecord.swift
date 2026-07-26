@@ -126,6 +126,20 @@ public enum DetectionTarget: Sendable, Hashable, Codable {
 /// street, sensitivity high, announcing an active alarm once a second all day.
 public struct EventBounds: Sendable, Hashable {
 
+    /// The de-duplication window, in seconds, in ONE place.
+    ///
+    /// Both initialisers read it. They used to carry the literal twice — the stored-property
+    /// initialiser and the explicit initialiser's default argument — which meant a change to one
+    /// silently left the other behind and the window tests kept passing against the stale value. A
+    /// negative control caught it; this constant is the fix.
+    ///
+    /// Not inside a generic type, so the `static let` is legal on macOS (see
+    /// docs/BUILD-VERIFICATION.md on `static` stored properties in generics).
+    public static let defaultCoalesceWindowSeconds: Double = 30.0
+
+    /// Default clock-skew tolerance, in seconds, in one place, for the same reason.
+    public static let defaultClockSkewToleranceSeconds: Double = 60
+
     /// Records retained per camera, oldest evicted first.
     ///
     /// 512 because the per-camera creation ceiling below is 10 new records a minute, so 512 slots
@@ -160,7 +174,7 @@ public struct EventBounds: Sendable, Hashable {
     public var openWindowsPerKey: Int = 4
 
     /// The de-duplication window, in seconds. See `EventCoalescer` for the derivation.
-    public var coalesceWindowSeconds: Double = 3.0
+    public var coalesceWindowSeconds: Double = Self.defaultCoalesceWindowSeconds
 
     /// New records per camera per rolling minute (spec-core §11.3). Beyond it alerts still extend
     /// existing records; only creation stops.
@@ -171,7 +185,7 @@ public struct EventBounds: Sendable, Hashable {
 
     /// How far a device clock may disagree with ours before we stop believing it and timestamp from
     /// receipt instead (spec-core §11.3).
-    public var clockSkewToleranceSeconds: Double = 60
+    public var clockSkewToleranceSeconds: Double = Self.defaultClockSkewToleranceSeconds
 
     /// How often a camera may raise the synthetic "event storm" record. Once an hour: the record
     /// exists to explain a suppression, and one an hour explains it without becoming the storm.
@@ -188,10 +202,11 @@ public struct EventBounds: Sendable, Hashable {
     /// configuration mistake must not take the app down.
     public init(recordsPerCamera: Int, cameras: Int, regionsPerRecord: Int = 4,
                 polygonPointsPerRegion: Int = 32, openWindowsPerKey: Int = 4,
-                coalesceWindowSeconds: Double = 3.0,
+                coalesceWindowSeconds: Double = EventBounds.defaultCoalesceWindowSeconds,
                 newRecordsPerCameraPerMinute: Int = 10,
                 newRecordsPerApplicationPerMinute: Int = 60,
-                clockSkewToleranceSeconds: Double = 60,
+                clockSkewToleranceSeconds: Double =
+                    EventBounds.defaultClockSkewToleranceSeconds,
                 stormNoticeIntervalSeconds: Double = 3600,
                 maxQueryLimit: Int = 500) {
         self.recordsPerCamera = max(1, recordsPerCamera)

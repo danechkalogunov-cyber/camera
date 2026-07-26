@@ -189,6 +189,7 @@ package struct TimelineBarLayout: Sendable, Hashable {
         runs.reserveCapacity(exact.count)
         for (position, item) in exact.enumerated() {
             let room = availableRoom(from: item.x,
+                                     exactRight: item.x + item.width,
                                      ownEnd: item.segmentEnd,
                                      next: position + 1 < exact.count ? exact[position + 1] : nil,
                                      barWidth: geometry.width,
@@ -228,24 +229,37 @@ package struct TimelineBarLayout: Sendable, Hashable {
     /// Three cases:
     ///
     /// * No next run — grow to the end of the bar.
-    /// * The next segment starts at or before this one ends, i.e. they abut or overlap in *time* —
-    ///   grow right up to its left edge. There is no gap between them to protect, and leaving a
-    ///   1 pt seam would draw a break in a continuous recording, which is the same class of lie as
-    ///   hiding a real gap.
-    /// * A real time gap separates them — stop `minimumGapWidth` short of its left edge, so the gap
-    ///   keeps at least that much room no matter how short either segment is.
+    /// * The next segment abuts or overlaps this one in *time*, **or** the gap between them is too
+    ///   narrow to be drawn at all — grow right up to the next run's left edge. In the abutting case
+    ///   there is no gap to protect and a 1 pt seam would draw a break in a continuous recording,
+    ///   which is the same class of lie as hiding a real gap. In the sub-pixel case there is a real
+    ///   gap but no way to represent it: pass 3 discards gaps narrower than `minimumGapWidth`, so
+    ///   reserving space for one would sacrifice a segment's visibility to protect something that is
+    ///   never painted. The two passes have to agree about which gaps exist, and this is where they
+    ///   agree — a defect found by the invariant tests, which had a 20-second alarm clip left
+    ///   invisible in order to reserve 0.28 pt for an undrawn gap.
+    /// * A drawable gap separates them — stop `minimumGapWidth` short of the next run's left edge, so
+    ///   the gap keeps at least that much *uncovered* width no matter how short either segment is.
     ///
-    /// The result is floored at zero: two segments whose exact boxes are already closer together
-    /// than `minimumGapWidth` yield no room at all, and the caller then leaves the run at its exact
-    /// width and flags it compressed.
-    static func availableRoom(from x: Double, ownEnd: Date, next: TimelineExactRun?,
-                              barWidth: Double, minimumGapWidth: Double) -> Double {
+    /// The result is floored at zero, so a run with no room stays at its exact width and is flagged
+    /// ``TimelineSegmentRun/isCompressed``.
+    ///
+    /// - Parameters:
+    ///   - x: the run's exact left edge.
+    ///   - exactRight: the run's exact right edge, which is where any following gap begins.
+    ///   - ownEnd: the segment's unclipped end, so abutment is judged in time rather than in pixels.
+    ///   - next: the following run, if any.
+    static func availableRoom(from x: Double, exactRight: Double, ownEnd: Date,
+                              next: TimelineExactRun?, barWidth: Double,
+                              minimumGapWidth: Double) -> Double {
         guard let next else { return max(0, barWidth - x) }
-        // Time, not pixels, decides whether a gap exists — two segments 0.4 pt apart at the 24 h
-        // zoom are half a minute apart in the archive, and that gap is real even though it is
-        // sub-pixel. Comparing pixels here would make the rule depend on the zoom.
+        // Abutment is a fact about time, not about pixels: two segments 0.4 pt apart at the 24 h zoom
+        // are half a minute apart in the archive, and that gap is real even though it is sub-pixel.
         let abuts = next.segmentStart <= ownEnd
-        let limit = abuts ? next.x : next.x - minimumGapWidth
+        // Whether it is DRAWABLE, however, is a fact about pixels — and it has to be the same
+        // judgement pass 3 makes, or the two disagree.
+        let gapIsDrawable = !abuts && (next.x - exactRight) >= minimumGapWidth
+        let limit = gapIsDrawable ? next.x - minimumGapWidth : next.x
         return max(0, limit - x)
     }
 
@@ -286,13 +300,24 @@ package struct TimelineBarLayout: Sendable, Hashable {
         for (position, gap) in gapRuns.enumerated() where gap.width < minimumGapWidth - 1e-9 {
             failures.append("gap run \(position) is below the minimum gap width")
         }
-        // Every drawn gap must remain uncovered by every run.
+        // Every drawn gap must RETAIN at least `minimumGapWidth` of uncovered width.
+        //
+        // Note carefully what this does and does not say. It is not "no run may overlap a gap by more
+        // than a point" — that was the first formulation and it was simply the wrong property: a run
+        // widened by 1.17 pt into a 2.5 pt gap leaves 1.33 pt of gap still visible, which satisfies
+        // the requirement completely, yet the old check called it a failure. What the user needs is
+        // that the gap remains *visible*, and visibility is about what is left over, not about what
+        // was taken. Getting this backwards would have driven a correct implementation into a
+        // contortion to satisfy a test that was wrong.
         for gap in gapRuns {
+            var covered = 0.0
             for run in runs where run.x < gap.maxX - 1e-9 && run.maxX > gap.x + 1e-9 {
-                let overlap = min(run.maxX, gap.maxX) - max(run.x, gap.x)
-                if overlap > minimumGapWidth {
-                    failures.append("run \(run.segmentIndex) covers gap \(gap.id) by \(overlap) pt")
-                }
+                covered += min(run.maxX, gap.maxX) - max(run.x, gap.x)
+            }
+            let remaining = gap.width - covered
+            if remaining < minimumGapWidth - 1e-9 {
+                failures.append("gap \(gap.id) has only \(remaining) pt left uncovered of "
+                                + "\(gap.width) pt, below the \(minimumGapWidth) pt minimum")
             }
         }
         return failures

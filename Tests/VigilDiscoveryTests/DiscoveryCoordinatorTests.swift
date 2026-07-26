@@ -14,7 +14,10 @@ import Testing
 import VigilProtocols
 @testable import VigilDiscovery
 
-@Suite struct DiscoveryCoordinatorOrchestration {
+// A run drives dozens of concurrent tasks through one virtual clock, and the clock's scheduler
+// infers quiescence from them. Two of those running at once on a small machine starve each other's
+// tasks and make the inference wrong, so the coordinator suites run one test at a time.
+@Suite(.serialized) struct DiscoveryCoordinatorOrchestration {
 
     // MARK: - Helpers
 
@@ -67,7 +70,9 @@ import VigilProtocols
         #expect(sadpProbes.count == 3)
         #expect(wsdProbes.count == 3)
         // 10 ms + the [0, 500, 1000] schedule.
-        #expect(sadpProbes.map(\.at.nanoseconds) == [10_000_000, 510_000_000, 1_010_000_000])
+        let trace = bed.clock.advanceLog.joined(separator: " ")
+        #expect(sadpProbes.map(\.at.nanoseconds) == [10_000_000, 510_000_000, 1_010_000_000],
+                "virtual time went: \(trace)")
         #expect(wsdProbes.map(\.at.nanoseconds) == [10_000_000, 510_000_000, 1_010_000_000])
         #expect(sadpProbes.allSatisfy { $0.host == .discoveryMulticastGroup })
         #expect(sadpProbes.allSatisfy { $0.port == SADPCodec.port })
@@ -163,17 +168,21 @@ import VigilProtocols
 
         #expect(!result.deviceFoundEvents.isEmpty)
         for (index, event) in result.events.enumerated() where event.forcesProgressEmission {
-            let next = result.events.indices.contains(index + 1) ? result.events[index + 1] : nil
+            // One ingest can also raise a diagnostic — an off-subnet sighting, an identity
+            // conflict — and those are emitted between the device event and the forced snapshot.
+            var next = index + 1
+            while next < result.events.count, case .diagnostic = result.events[next] { next += 1 }
             var isProgress = false
-            if case .progress = next { isProgress = true }
-            // A device event at the very end of a run is followed by the final progress snapshot
-            // that `terminate` emits, so there is always a next event to check.
+            if next < result.events.count, case .progress = result.events[next] { isProgress = true }
             #expect(isProgress, "event \(index) was not followed by progress: \(result.trace)")
         }
-        // And the forced snapshot already knows about the device.
-        let firstFoundIndex = result.firstIndex { $0.isDeviceFound }
-        if let firstFoundIndex, case let .progress(progress) = result.events[firstFoundIndex + 1] {
-            #expect(progress.candidatesFound >= 1)
+        // And the forced snapshot already knows about the device it followed.
+        if let foundIndex = result.firstIndex(where: { $0.isDeviceFound }) {
+            var next = foundIndex + 1
+            while next < result.events.count, case .diagnostic = result.events[next] { next += 1 }
+            if next < result.events.count, case let .progress(progress) = result.events[next] {
+                #expect(progress.candidatesFound >= 1)
+            }
         }
     }
 
@@ -231,8 +240,10 @@ import VigilProtocols
         #expect(result.terminationReason == .completed)
         #expect(bed.prober.peakInFlight <= 6, "peak was \(bed.prober.peakInFlight)")
         #expect(bed.prober.peakInFlight > 1, "the sweep did not actually run concurrently")
-        // Every planned host was probed exactly once per tier A port: no retries within a run (§6.10).
-        #expect(bed.prober.probedHosts.count == 30)
+        // 30 planned hosts plus the gateway canary, which is a deliberate extra host (§9.4).
+        let gateway = result.plan?.interfaces.first?.likelyGateway?.rawValue
+        #expect(bed.prober.probedHosts.subtracting([gateway ?? 0]).count == 30)
+        // Every host was probed exactly once per tier A port: no retries within a run (§6.10).
         let perHostPort = Dictionary(grouping: bed.prober.probes) { "\($0.host):\($0.port)" }
         #expect(perHostPort.values.allSatisfy { $0.count == 1 })
     }
@@ -376,8 +387,11 @@ import VigilProtocols
         }
         #expect(budget == [4], "expected exactly one datagram-budget diagnostic: \(result.trace)")
         #expect(bed.allSent.count == 4, "more datagrams left than the budget allowed")
-        // The camera that answered before the budget ran out is still reported.
-        #expect(result.devices.count == 1)
+        // Everything found before the budget ran out is still reported: the SADP camera and the
+        // swept host. A budget bounds what we *send*, never what we keep.
+        #expect(result.devices.count == 2)
+        #expect(result.devices.contains { $0.address == IPv4Address(192, 168, 1, 64) })
+        #expect(result.devices.contains { $0.address == IPv4Address(192, 168, 1, 12) })
     }
 
     /// The TCP connect budget of `4 × plannedHosts + 512` bounds the sweep the same way.

@@ -48,19 +48,17 @@ package enum TimelineTickLabelStyle: Sendable, Hashable {
     /// `"15:30"` — minutes and seconds, at the 1 min zoom where the hour is obvious from the header.
     case minuteSecond
 
-    /// Renders `instant` in this style using `clock`'s calendar and time zone.
+    /// Renders `instant` in this style using `clock`'s calendar, time zone, locale and hour cycle.
+    ///
+    /// Delegates to ``TimelineClock``'s cached `Date.FormatStyle`s. It does not assemble the string
+    /// itself, which is what the previous implementation did and what made every ruler label
+    /// 24-hour regardless of the user's system preference (UX.md §14.1 rule 12).
     package func label(_ instant: Date, clock: TimelineClock) -> String {
-        let parts = clock.wallClock(instant)
         switch self {
-        case .hour:
-            return TimelineClock.pad(parts.hour)
-        case .hourMinute:
-            return TimelineClock.pad(parts.hour) + ":" + TimelineClock.pad(parts.minute)
-        case .hourMinuteSecond:
-            return TimelineClock.pad(parts.hour) + ":" + TimelineClock.pad(parts.minute)
-                + ":" + TimelineClock.pad(parts.second)
-        case .minuteSecond:
-            return TimelineClock.pad(parts.minute) + ":" + TimelineClock.pad(parts.second)
+        case .hour: clock.hour(instant)
+        case .hourMinute: clock.hourMinute(instant)
+        case .hourMinuteSecond: clock.hourMinuteSecond(instant)
+        case .minuteSecond: clock.minuteSecond(instant)
         }
     }
 }

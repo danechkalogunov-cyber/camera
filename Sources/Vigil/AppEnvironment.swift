@@ -23,6 +23,25 @@ import VigilProtocols
 /// is created once in `VigilApp.init()` and passed down by copy.
 enum AppEnvironment {
 
+    /// **The one authentication counter in the process.**
+    ///
+    /// Every lane that touches a device shares this instance (API_CONTRACT §2 R-25 rule 4,
+    /// docs/RULING-LOCKOUT.md §2.3): it reaches `VigilCore` through `CoreDependencies.governor` and
+    /// `VigilISAPI` through `ISAPIClient.init`. Nothing else in the app may construct one, and after
+    /// §2.4 nothing else *can* — `StreamController` no longer has a `governor:` parameter to default.
+    ///
+    /// A `static let`, so it is built exactly once, on first use, and outlives every controller. That
+    /// is the point: the counter used to be a private field on `StreamController`, and
+    /// `AppSessionModel.stopSession()`'s `controller = nil` destroyed it, so every press of a retry
+    /// button granted two more sign-in attempts against a device that locks an account at about five.
+    ///
+    /// The store is what makes it survive a relaunch (§2.8). Without one, quit-and-relaunch hands a
+    /// wrong password a fresh budget while the device's own thirty-minute lock is still running.
+    static let governor = LockoutGovernor(
+        clock: SystemMonotonicClock(),
+        logger: ConsoleLogger(),
+        store: LockoutDefaultsStore(defaults: .standard, wallClock: SystemWallClock()))
+
     /// Builds the live dependency set: system monotonic clock, real Keychain, system randomness and
     /// real sockets (`VigilTransport.RTSPConnection`).
     ///
@@ -38,7 +57,86 @@ enum AppEnvironment {
     /// When `OSLogLogger` lands, this becomes `.withLogger(OSLogLogger())` and
     /// `Sources/Vigil/ConsoleLogger.swift` is deleted.
     static func bootstrap() -> CoreDependencies {
-        CoreDependencies.live.withLogger(ConsoleLogger())
+        CoreDependencies.live(governor: governor).withLogger(ConsoleLogger())
+    }
+}
+
+// MARK: - LockoutDefaultsStore
+
+/// `UserDefaults` persistence for the authentication tally, beside `LastConnection`.
+///
+/// Placed here rather than in `VigilProtocols` because the TTL needs wall time and the pure layer is
+/// forbidden from reading a clock (docs/RULING-LOCKOUT.md §2.8). The implementation therefore owns
+/// both halves of the freshness rule: it stamps on save and filters on load.
+///
+/// **Thirty minutes**, matching the firmware's documented lock window. A record older than that
+/// describes a lock the device has already released, and holding it against the user would refuse a
+/// sign-in for a reason that no longer exists. A record *younger* than that is kept, which is the
+/// fail-safe direction.
+///
+/// What is stored is a host, an account, a small integer and a list of salted, truncated digests
+/// (`SecretFingerprint`). No password and no secret material: the digests are salted with the
+/// persisted `CredentialRef`, which is a per-device random UUID, so they cannot be matched against a
+/// precomputed table and mean nothing to a reader who does not already know the device (§7).
+///
+/// `@unchecked Sendable` is required and is justified: `LockoutStore` inherits `Sendable` because the
+/// governor is an actor that stores one, but `UserDefaults` is not `Sendable` on any platform Vigil
+/// builds for (`LibraryLegacyImport` records the same fact). It *is* documented as thread-safe — every
+/// accessor is atomic and the class exists to be read from anywhere — and both methods here do
+/// nothing but call it, so the box is safe. Nothing else about this type is mutable.
+struct LockoutDefaultsStore: LockoutStore, @unchecked Sendable {
+
+    /// How long a stored tally is held against the user.
+    static let timeToLive: TimeInterval = 30 * 60
+
+    private static let recordsKey = "vigil.lockout.records"
+    private static let stampKey = "vigil.lockout.savedAt"
+
+    private let defaults: UserDefaults
+    private let wallClock: any WallClock
+
+    /// Builds a store.
+    ///
+    /// - Parameters:
+    ///   - defaults: where to write. `.standard` in the app.
+    ///   - wallClock: the only clock that can measure a TTL across a relaunch. Injected so a test
+    ///     never waits thirty minutes.
+    init(defaults: UserDefaults, wallClock: any WallClock) {
+        self.defaults = defaults
+        self.wallClock = wallClock
+    }
+
+    /// Records still inside the TTL, or none.
+    ///
+    /// A malformed, truncated or half-written store is "nothing remembered" rather than an error: the
+    /// cost is one budget and no correctness, and there is no state here worth recovering.
+    func loadRecords() -> [LockoutRecord] {
+        let savedAt = defaults.double(forKey: Self.stampKey)
+        guard savedAt > 0 else { return [] }
+        let age = wallClock.now.timeIntervalSince1970 - savedAt
+        // A negative age means the system clock moved backwards since the write. Trust the record
+        // rather than discard it: discarding is the fail-open direction, and a wrong clock must not be
+        // a way to reset the counter.
+        guard age < Self.timeToLive else { return [] }
+        guard let data = defaults.data(forKey: Self.recordsKey),
+              let decoded = try? JSONDecoder().decode([LockoutRecord].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    /// Replaces the stored set and stamps it as of now.
+    ///
+    /// A failure to encode is swallowed on purpose: a governor that could not persist is still
+    /// completely correct for this process, and there is nothing the user could do about it.
+    func saveRecords(_ records: [LockoutRecord]) {
+        guard !records.isEmpty else {
+            defaults.removeObject(forKey: Self.recordsKey)
+            defaults.removeObject(forKey: Self.stampKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        defaults.set(data, forKey: Self.recordsKey)
+        defaults.set(wallClock.now.timeIntervalSince1970, forKey: Self.stampKey)
     }
 }
 

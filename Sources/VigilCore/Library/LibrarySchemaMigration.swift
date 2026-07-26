@@ -89,21 +89,38 @@ public struct LibraryMigrationContext: Sendable {
 ///
 /// Steps operate on `[String: Any]` — the parsed JSON root — and never on Swift models, so a step
 /// written today keeps working when `Camera` gains a field tomorrow.
-public protocol LibrarySchemaMigration: Sendable {
+///
+/// A **struct of one closure**, not a protocol with static requirements as docs/spec-core.md §5.8
+/// spells it. The reason is concrete rather than aesthetic: `[any SchemaMigration.Type]` plus
+/// `$0.from` crashes the Swift 6.1.2 compiler in SILGen (signal 11, `alloc_stack
+/// $@opened(...) Self`) as soon as a second file reads the array. The value form has the same shape
+/// at every call site, costs nothing, and cannot take a build down.
+public struct LibrarySchemaMigration: Sendable {
 
     /// The version this step upgrades from.
-    static var from: Int { get }
+    public let from: Int
 
     /// The version this step produces. Always `from + 1`; asserted by a test over the whole chain.
-    static var to: Int { get }
+    public let to: Int
 
     /// Rewrites the document in place.
     ///
-    /// - Throws: `StorageError.corruptDocument` when the document is so far from the expected shape
-    ///   that transforming it would invent data. Never throws for a *missing* field: absent means
-    ///   "take the default", which is what makes additive changes migration-free.
-    static func migrate(_ root: inout [String: Any],
-                        context: inout LibraryMigrationContext) throws(StorageError)
+    /// Throws `StorageError.corruptDocument` when the document is so far from the expected shape
+    /// that transforming it would invent data. Never throws for a *missing* field: absent means
+    /// "take the default", which is what makes additive changes migration-free.
+    public let apply: @Sendable (inout [String: Any],
+                                inout LibraryMigrationContext) throws(StorageError) -> Void
+
+    /// Builds a step. `to` must be `from + 1`; `LibrarySchemaMigrator.isChainComplete` is the check.
+    public init(from: Int,
+                to: Int,
+                apply: @escaping @Sendable (inout [String: Any],
+                                            inout LibraryMigrationContext)
+                    throws(StorageError) -> Void) {
+        self.from = from
+        self.to = to
+        self.apply = apply
+    }
 }
 
 // MARK: - LibraryMigrationResult
@@ -140,20 +157,21 @@ public enum LibrarySchemaMigrator {
 
     /// Every registered step, ascending.
     ///
-    /// A computed property rather than a stored `static let`: the value is three metatypes and
-    /// rebuilding it costs nothing, while a stored global existential would need a concurrency
-    /// annotation to justify itself.
-    public static var steps: [any LibrarySchemaMigration.Type] {
-        [LibraryMigration1to2.self, LibraryMigration2to3.self]
+    /// A computed property rather than a stored `static let`: rebuilding two values costs nothing,
+    /// and a stored global would need a concurrency annotation to justify itself.
+    public static var steps: [LibrarySchemaMigration] {
+        [LibrarySchemaMigration(from: 1, to: 2, apply: LibraryMigration1to2.apply),
+         LibrarySchemaMigration(from: 2, to: 3, apply: LibraryMigration2to3.apply)]
     }
 
     /// True when the chain covers every version from 1 to the current one with no gap and no
     /// duplicate. A test asserts it; nothing checks it at runtime, because a broken chain is a
     /// programmer error that must fail the build, not the user's launch.
     public static var isChainComplete: Bool {
+        let all = steps
         var version = 1
         while version < LibraryDocument.currentSchemaVersion {
-            let matches = steps.filter { $0.from == version }
+            let matches = all.filter { $0.from == version }
             guard matches.count == 1, let step = matches.first, step.to == version + 1 else {
                 return false
             }
@@ -192,15 +210,23 @@ public enum LibrarySchemaMigrator {
         }
         guard version >= 1 else { throw StorageError.corruptDocument("schemaVersion \(version)") }
 
+        let all = steps
         var applied: [String] = []
         while version < LibraryDocument.currentSchemaVersion {
-            guard let step = steps.first(where: { $0.from == version }) else {
+            guard let step = all.first(where: { $0.from == version }) else {
                 throw StorageError.missingMigration(from: version)
             }
-            try step.migrate(&root, context: &context)
+            try step.apply(&root, &context)
             version = step.to
             root["schemaVersion"] = version
             applied.append("\(step.from)→\(step.to)")
+        }
+
+        // Shape normalisation, not a version migration: runs on **every** load, including a document
+        // already at the current schema. See `canonicaliseCredentialRefs`.
+        let rewritten = LibraryMigrationJSON.canonicaliseCredentialRefs(&root)
+        if rewritten > 0 {
+            context.notes.append("credentialRef shape normalised on \(rewritten) cameras")
         }
 
         let migrated: Data
@@ -224,16 +250,13 @@ public enum LibrarySchemaMigrator {
 /// Shipped in the 0.4 beta per docs/spec-core.md §5.8. The date half is belt-and-braces —
 /// `LibraryCoding.makeDecoder()` still accepts a bare number — but a migrated document must be
 /// canonical, or the *next* schema change inherits two date formats to reason about.
-public enum LibraryMigration1to2: LibrarySchemaMigration {
-
-    public static var from: Int { 1 }
-    public static var to: Int { 2 }
+public enum LibraryMigration1to2 {
 
     /// Splits the port and canonicalises every date. A camera that is not a JSON object is dropped:
     /// there is nothing in it to migrate and keeping it would fail the validating decode that
     /// follows.
-    public static func migrate(_ root: inout [String: Any],
-                               context: inout LibraryMigrationContext) throws(StorageError) {
+    public static func apply(_ root: inout [String: Any],
+                             context: inout LibraryMigrationContext) throws(StorageError) {
         LibraryMigrationJSON.canonicaliseDate(&root, "updatedAt")
 
         var migrated: [[String: Any]] = []
@@ -270,14 +293,11 @@ public enum LibraryMigration1to2: LibrarySchemaMigration {
 /// the layout half rewrites the untyped JSON and leaves it in the document's preserved unknown
 /// content — the shape a future `Layout` owner expects, rather than a v2 shape hiding inside a
 /// document that claims to be v3.
-public enum LibraryMigration2to3: LibrarySchemaMigration {
-
-    public static var from: Int { 2 }
-    public static var to: Int { 3 }
+public enum LibraryMigration2to3 {
 
     /// Mints a fresh handle for every composite `credentialRef` and reports it for re-tagging.
-    public static func migrate(_ root: inout [String: Any],
-                               context: inout LibraryMigrationContext) throws(StorageError) {
+    public static func apply(_ root: inout [String: Any],
+                             context: inout LibraryMigrationContext) throws(StorageError) {
         var migrated: [[String: Any]] = []
         var rekeyed = 0
         for element in root["cameras"] as? [Any] ?? [] {
@@ -350,6 +370,87 @@ enum LibraryMigrationJSON {
         let host = parts[0..<(parts.count - 2)].joined(separator: ":")
         guard !host.isEmpty, !account.isEmpty else { return nil }
         return (host, port, account)
+    }
+
+    /// Whether the `CredentialRef` in this build encodes as `{"rawValue": "…"}` rather than as the
+    /// bare JSON string docs/spec-core.md §5.2's sample document shows.
+    ///
+    /// Determined by encoding a probe rather than by asserting one shape, because the answer is not
+    /// this module's to choose: `VigilProtocols.CredentialRef` currently takes Swift's synthesised
+    /// `Codable`, which writes the object form, while its own doc comment and the specification's
+    /// sample library both show the string form. Whichever way that is settled, the byte on disk
+    /// changes — and a `credentialRef` that fails to decode is the customer being asked for their
+    /// camera password again.
+    static let credentialRefEncodesAsJSONObject: Bool = {
+        guard let data = try? JSONEncoder().encode([CredentialRef()]) else { return true }
+        for byte in data {
+            if byte == UInt8(ascii: "[") || byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\n") {
+                continue
+            }
+            return byte == UInt8(ascii: "{")
+        }
+        return true
+    }()
+
+    /// Rewrites every camera's `credentialRef` into the shape this build's decoder expects.
+    ///
+    /// Accepts both forms in both directions, so the handle survives whichever way
+    /// `CredentialRef.Codable` is spelled: a file written by the object form still opens after the
+    /// type is given single-value coding, and the specification's documented string form opens today.
+    /// A value that is neither — the schema-2 composite, say — is left exactly as it is for the step
+    /// that owns it.
+    ///
+    /// - Returns: how many records were rewritten.
+    @discardableResult
+    static func canonicaliseCredentialRefs(_ root: inout [String: Any]) -> Int {
+        guard let cameras = root["cameras"] as? [Any] else { return 0 }
+        var rewritten = 0
+        var normalised: [Any] = []
+        normalised.reserveCapacity(cameras.count)
+        for element in cameras {
+            guard var camera = element as? [String: Any] else {
+                normalised.append(element)
+                continue
+            }
+            let value = camera["credentialRef"]
+            let uuidText: String? = {
+                if let text = value as? String { return UUID(uuidString: text) == nil ? nil : text }
+                if let object = value as? [String: Any], let text = object["rawValue"] as? String {
+                    return UUID(uuidString: text) == nil ? nil : text
+                }
+                return nil
+            }()
+
+            if let uuidText {
+                let wanted: Any = credentialRefEncodesAsJSONObject ? ["rawValue": uuidText]
+                    : uuidText
+                if !Self.isSameCredentialRefShape(value, wanted) {
+                    camera["credentialRef"] = wanted
+                    rewritten += 1
+                }
+            } else if value != nil {
+                // Unusable: a hand-edited value, or a schema-2 composite in a document that claims
+                // to be schema 3. Dropping the key costs this one camera's saved password, because
+                // `Camera` mints a fresh handle for an absent one. Leaving it in place would throw
+                // out of the decode and cost the user their **entire** library.
+                camera.removeValue(forKey: "credentialRef")
+                rewritten += 1
+            }
+            normalised.append(camera)
+        }
+        if rewritten > 0 { root["cameras"] = normalised }
+        return rewritten
+    }
+
+    /// Whether an existing JSON value is already the shape the decoder wants, so an unchanged
+    /// document reports zero rewrites and the log stays quiet on a normal launch.
+    private static func isSameCredentialRefShape(_ value: Any?, _ wanted: Any) -> Bool {
+        if let left = value as? String, let right = wanted as? String { return left == right }
+        if let left = value as? [String: Any], let right = wanted as? [String: Any] {
+            return left.count == right.count
+                && left["rawValue"] as? String == right["rawValue"] as? String
+        }
+        return false
     }
 
     /// Converts a schema-2 `cells` object — `{"0": "UUID", "3": "UUID"}` — into the schema-3

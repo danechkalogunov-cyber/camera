@@ -114,23 +114,36 @@ package enum TimelineZoom: Int, Sendable, Hashable, CaseIterable, Comparable {
         }
     }
 
-    /// The readout beside the zoom control: `24 h`, `1 h`, `30 m`, `1 m`.
+    /// The span as a `Duration`, which is what makes the readout localisable.
+    package var duration: Duration { .seconds(spanSeconds) }
+
+    /// Whether this stop reads more naturally in minutes than in hours.
+    var prefersMinutes: Bool { spanSeconds < 3_600 }
+
+    /// The readout beside the zoom control, localised: `"24h"` in English, `"24 ч"` in Russian,
+    /// `"30 мин"` for the half-hour stop.
     ///
-    /// Not routed through the bundle: these are a number and a unit letter, identical in every
-    /// locale this product ships, and nine `.strings` keys no translator can improve would be worse
-    /// than none.
-    package var label: String {
-        switch self {
-        case .day: "24 h"
-        case .twelveHours: "12 h"
-        case .sixHours: "6 h"
-        case .threeHours: "3 h"
-        case .hour: "1 h"
-        case .thirtyMinutes: "30 m"
-        case .tenMinutes: "10 m"
-        case .fiveMinutes: "5 m"
-        case .minute: "1 m"
-        }
+    /// Localised through `Duration.UnitsFormatStyle` rather than through nine `.strings` keys. Two
+    /// reasons for that choice over returning a `LocalizedStringKey`:
+    ///
+    /// * The unit abbreviation for a duration is precisely what this format style exists to produce,
+    ///   and it is already correct for every locale — including ones this product does not yet ship —
+    ///   whereas nine hand-written keys would need a translator per locale and would silently fall
+    ///   back to English `h` and `m` until they arrived.
+    /// * It keeps this file free of SwiftUI, so ``TimelineZoom`` stays a plain value whose label a
+    ///   test can assert as a `String`. A `LocalizedStringKey` return type would make the label
+    ///   opaque to the tests that check the ladder.
+    ///
+    /// The `.narrow` width is what fits the compact control beside the zoom slider; `.abbreviated`
+    /// yields `"24 hrs"`, which does not.
+    ///
+    /// - Parameter locale: the locale to format in. Injected, never read from the environment here —
+    ///   ``TimelineClock/zoomLabel(_:)`` is the call site that supplies it.
+    package func label(locale: Locale) -> String {
+        var style = Duration.UnitsFormatStyle(allowedUnits: prefersMinutes ? [.minutes] : [.hours],
+                                              width: .narrow)
+        style.locale = locale
+        return duration.formatted(style)
     }
 
     /// The tightest zoom.
@@ -202,9 +215,38 @@ package struct TimelineWindow: Sendable, Hashable {
             : TimelineZoom.hour.spanSeconds
     }
 
-    /// Creates a window at a zoom stop.
+    /// Creates a window at a zoom stop, using the stop's *nominal* span.
+    ///
+    /// For every stop but ``TimelineZoom/day`` the nominal span is the real one. For `.day` prefer
+    /// ``fitting(_:zoom:)``, which resolves the nominal 24 h to the day's true length.
     package init(start: Date, zoom: TimelineZoom) {
         self.init(start: start, spanSeconds: zoom.spanSeconds)
+    }
+
+    /// The window for `zoom` over `day`, anchored at `focus` and clamped inside the day.
+    ///
+    /// This is the constructor the zoom control and `⌘0` ("Fit the day") should use, because it is the
+    /// one that gets a DST day right in **both** directions. ``clamped(to:)`` can only narrow a window;
+    /// it cannot know that a 86 400 s span came from the `.day` stop and therefore means "all of it"
+    /// rather than "exactly 24 hours".
+    ///
+    /// The distinction is not academic. On the 25-hour autumn-back day the `.day` stop's nominal
+    /// 86 400 s is an hour *short*, so a bar built from the nominal span would leave the day's last
+    /// hour of footage off the right-hand edge — reachable only by scrolling, from a control whose
+    /// label says it is showing the whole day. A test caught exactly that.
+    ///
+    /// - Parameters:
+    ///   - day: the day to fit inside.
+    ///   - zoom: the stop. `.day` resolves to ``TimelineDay/spanSeconds``, whatever that is.
+    ///   - focus: the instant to keep visible, centred where the span allows. Defaults to the day's
+    ///     start.
+    package static func fitting(_ day: TimelineDay, zoom: TimelineZoom,
+                                focus: Date? = nil) -> TimelineWindow {
+        let span = zoom == .day ? day.spanSeconds : zoom.spanSeconds
+        guard let focus else {
+            return TimelineWindow(start: day.start, spanSeconds: span).clamped(to: day)
+        }
+        return TimelineWindow(start: day.start, spanSeconds: span).centred(on: focus, in: day)
     }
 
     /// The narrowest window the arithmetic will represent: one second across the whole bar.
@@ -242,6 +284,11 @@ package struct TimelineWindow: Sendable, Hashable {
     ///    the *next* day, and every segment would be drawn 4.3 % too far left.
     /// 2. The window hangs off the right-hand end: slide it left so it ends at the day's end.
     /// 3. The window starts before the day: slide it right to the day's start.
+    ///
+    /// ⚠️ This only ever **narrows**. A 24-hour window on a 25-hour day keeps its 24 hours and becomes
+    /// scrollable by one hour, which is the right answer for a span the caller genuinely asked for.
+    /// It is the wrong answer for the `.day` *stop*, whose meaning is "all of it" — use
+    /// ``fitting(_:zoom:focus:)`` for that.
     package func clamped(to day: TimelineDay) -> TimelineWindow {
         let daySpan = day.spanSeconds
         guard daySpan > 0 else { return TimelineWindow(start: day.start, spanSeconds: spanSeconds) }

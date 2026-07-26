@@ -69,8 +69,19 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
         /// Ids cancelled before their sleeper was registered. Without this the continuation would
         /// never resume and a test would hang instead of failing.
         var cancelledEarly: Set<Int> = []
+        /// Sleepers that have been resumed but whose task has not run again yet.
+        ///
+        /// This is what stops time from running away. A resumed continuation is invisible until its
+        /// task is scheduled — it touches nothing and so bumps no activity counter — and a pump that
+        /// advanced during that window could find only a distant deadline left and jump to it,
+        /// turning a run that should complete in 3 s into one that hit a 12 s budget. Nothing may
+        /// advance while this set is non-empty.
+        var pendingWakes: Set<Int> = []
         var nextID = 0
         var activity = 0
+        /// Every advance the pump made: from, to, and how many sleepers were waiting. Capped, and
+        /// only ever read by a failing test's diagnostics.
+        var advanceLog: [String] = []
     }
 
     private let state = LockedBox(State())
@@ -104,6 +115,9 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
         try Task.checkCancellation()
         guard duration > .zero else { return }
         let id = reserveID()
+        // Runs whether the sleep completed or threw: either way this task is running again, and the
+        // pump is free to consider advancing.
+        defer { clearWake(id) }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 register(id: id, duration: duration, continuation: continuation)
@@ -124,6 +138,13 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     /// How many tasks are asleep right now.
     var sleeperCount: Int { state.withLock { $0.sleepers.count } }
 
+    /// True while a resumed sleeper has not yet run. The pump must not advance time in that window.
+    var hasPendingWakes: Bool { state.withLock { !$0.pendingWakes.isEmpty } }
+
+    /// Every advance made, as `from->to ms(n=sleepers)`. Include it in a failure message when a run
+    /// ended at an unexpected instant: it shows precisely where time went.
+    var advanceLog: [String] { state.withLock { $0.advanceLog } }
+
     // MARK: Scheduling
 
     /// Advances to the earliest deadline and wakes everything due.
@@ -134,9 +155,18 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     func advanceToEarliestDeadline() -> Bool {
         let due: [Sleeper] = state.withLock { state in
             guard let earliest = state.sleepers.values.map(\.deadline).min() else { return [] }
+            if state.advanceLog.count < 400 {
+                let all = state.sleepers.values.map { $0.deadline.nanoseconds / 1_000_000 }
+                    .sorted().map(String.init).joined(separator: ",")
+                state.advanceLog.append("\(state.current.nanoseconds / 1_000_000)"
+                    + "->[\(all)]")
+            }
             if earliest > state.current { state.current = earliest }
             let ready = state.sleepers.filter { $0.value.deadline <= state.current }
-            for id in ready.keys { state.sleepers.removeValue(forKey: id) }
+            for id in ready.keys {
+                state.sleepers.removeValue(forKey: id)
+                state.pendingWakes.insert(id)
+            }
             state.activity += 1
             return Array(ready.values)
         }
@@ -147,21 +177,33 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
 
     /// Starts the scheduler. Cancel the returned task once the run under test has ended.
     ///
+    /// The loop deliberately does **not** busy-wait. An earlier version spun on `Task.yield()` and
+    /// polled the activity counter, which hammered this clock's lock from one thread and starved the
+    /// very tasks it was waiting for: time then ran away — a probe due at 510 ms was stamped 12 s —
+    /// because "nothing touched the clock" was indistinguishable from "nothing got a chance to".
+    /// Sleeping between checks costs a few hundred microseconds of real time per advance and gives
+    /// the runtime room to schedule pending work. No assertion depends on these durations; they only
+    /// decide how patient the scheduler is before it accepts that everything is asleep.
+    ///
     /// - Parameters:
-    ///   - stabilityYields: consecutive yields with no clock activity that count as quiescence. 32 is
-    ///     far more than the deepest start-up path in the coordinator needs and costs microseconds.
+    ///   - quietChecks: consecutive checks with no clock activity and no outstanding wake that count
+    ///     as quiescence.
+    ///   - checkInterval: real time between checks.
     ///   - maximumAdvances: a stuck run must not spin forever; the pump stops after this many steps,
     ///     and the test bed's event cap then ends the run.
-    func startPump(stabilityYields: Int = 32, maximumAdvances: Int = 100_000) -> Task<Void, Never> {
+    func startPump(quietChecks: Int = 8, checkInterval: Duration = .microseconds(250),
+                   maximumAdvances: Int = 100_000) -> Task<Void, Never> {
         Task { [weak self] in
             var advances = 0
             while !Task.isCancelled, advances < maximumAdvances {
                 guard let clock = self else { return }
-                var stable = 0
-                while stable < stabilityYields, !Task.isCancelled {
+                var quiet = 0
+                while quiet < quietChecks, !Task.isCancelled {
                     let before = clock.activityCounter
                     await Task.yield()
-                    stable = clock.activityCounter == before ? stable + 1 : 0
+                    try? await Task.sleep(for: checkInterval)
+                    let stillQuiet = clock.activityCounter == before && !clock.hasPendingWakes
+                    quiet = stillQuiet ? quiet + 1 : 0
                 }
                 if Task.isCancelled { return }
                 if clock.advanceToEarliestDeadline() { advances += 1 }
@@ -188,6 +230,13 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
             return false
         }
         if wasCancelled { continuation.resume(throwing: CancellationError()) }
+    }
+
+    /// Marks a woken sleeper as running again.
+    private func clearWake(_ id: Int) {
+        state.withLock { state in
+            if state.pendingWakes.remove(id) != nil { state.activity += 1 }
+        }
     }
 
     private func cancelSleeper(_ id: Int) {
@@ -255,6 +304,8 @@ final class MockDatagramChannel: DatagramChannel, @unchecked Sendable {
     let interfaceName: String?
     /// The group this channel joined, or `nil` for the unicast channel.
     let spec: MulticastGroupSpec?
+    /// When the coordinator opened this channel, in virtual time.
+    let openedAt: MediaInstant
 
     private let clock: VirtualDiscoveryClock
     private let script: [ScriptedDatagram]
@@ -270,6 +321,7 @@ final class MockDatagramChannel: DatagramChannel, @unchecked Sendable {
         self.clock = clock
         self.script = script
         self.sendFailure = sendFailure
+        openedAt = clock.now()
     }
 
     // MARK: DatagramChannel
@@ -499,13 +551,19 @@ final class MockExchanger: ByteExchanging, @unchecked Sendable {
 struct StaticInterfaceEnumerator: InterfaceEnumerating {
     let list: [NetworkInterfaceInfo]
     let failure: DiscoveryError?
+    /// Read on every call, purely so the virtual clock's scheduler can see that the run is alive
+    /// during planning, which touches no clock of its own.
+    let clock: VirtualDiscoveryClock?
 
-    init(_ list: [NetworkInterfaceInfo], failure: DiscoveryError? = nil) {
+    init(_ list: [NetworkInterfaceInfo], failure: DiscoveryError? = nil,
+         clock: VirtualDiscoveryClock? = nil) {
         self.list = list
         self.failure = failure
+        self.clock = clock
     }
 
     func interfaces() throws(DiscoveryError) -> [NetworkInterfaceInfo] {
+        _ = clock?.now()
         if let failure { throw failure }
         return list
     }
@@ -515,13 +573,18 @@ struct StaticInterfaceEnumerator: InterfaceEnumerating {
 struct StaticARPTable: ARPTableProviding {
     let entries: [ARPEntry]
     let failure: DiscoveryError?
+    /// See `StaticInterfaceEnumerator.clock`.
+    let clock: VirtualDiscoveryClock?
 
-    init(_ entries: [ARPEntry] = [], failure: DiscoveryError? = nil) {
+    init(_ entries: [ARPEntry] = [], failure: DiscoveryError? = nil,
+         clock: VirtualDiscoveryClock? = nil) {
         self.entries = entries
         self.failure = failure
+        self.clock = clock
     }
 
     func snapshot() throws(DiscoveryError) -> [ARPEntry] {
+        _ = clock?.now()
         if let failure { throw failure }
         return entries
     }
@@ -658,8 +721,8 @@ final class DiscoveryTestBed: @unchecked Sendable {
             tcpProbe: prober,
             exchange: exchanger,
             interfaces: StaticInterfaceEnumerator(script.interfaces,
-                                                  failure: script.interfaceFailure),
-            arp: StaticARPTable(script.arp, failure: script.arpFailure),
+                                                  failure: script.interfaceFailure, clock: clock),
+            arp: StaticARPTable(script.arp, failure: script.arpFailure, clock: clock),
             bonjour: ScriptedBonjourBrowser(script.bonjour),
             clock: clock,
             logger: logger,
@@ -746,8 +809,10 @@ final class DiscoveryTestBed: @unchecked Sendable {
         // A torn-down stream cancels the run asynchronously; give that a bounded number of yields to
         // land, so a test can assert on closed channels without waiting on the wall clock.
         var spins = 0
-        while spins < 2_000, channels.contains(where: { !$0.isClosed }) {
-            await Task.yield()
+        while spins < 200, channels.contains(where: { !$0.isClosed }) {
+            // Real sleeps rather than yields, for the same reason the pump uses them: a yield loop
+            // starves the cancellation it is waiting for.
+            try? await Task.sleep(for: .microseconds(250))
             spins += 1
         }
         let snapshot = await coordinator.snapshot

@@ -761,19 +761,32 @@ struct EventCoalescer: Sendable {
                 if live.isEmpty { state.open.removeValue(forKey: key) } else { state.open[key] = live }
             }
         }
+        if enforceWindowCeiling(&state) { changed = true }
+        if changed { cameras[cameraID] = state }
+    }
+
+    /// Forces the globally oldest windows closed until the per-camera ceiling holds.
+    ///
+    /// A forced window would have expired within `coalesceWindowSeconds` anyway; the consequence is
+    /// that the next announcement opens a new record instead of extending one, never a lost event.
+    /// Returns whether anything was closed.
+    private mutating func enforceWindowCeiling(_ state: inout CameraState) -> Bool {
         var total = state.open.values.reduce(0) { $0 + $1.count }
+        var closedAny = false
         while total > maxOpenWindowsPerCamera {
-            // Force the globally oldest window closed. It would have expired within 3 s anyway; the
-            // consequence is a merge into a new record, never a lost event.
-            guard let oldest = state.open
-                .flatMap({ pair in pair.value.map { (key: pair.key, window: $0) } })
-                .min(by: { $0.window.lastSeen < $1.window.lastSeen }) else { break }
-            removeWindow(oldest.window.id, key: oldest.key, from: &state)
+            var oldest: (key: EventCoalesceKey, id: EventID, at: MediaInstant)?
+            for (key, windows) in state.open {
+                for window in windows where oldest == nil || window.lastSeen < (oldest?.at ?? .zero) {
+                    oldest = (key, window.id, window.lastSeen)
+                }
+            }
+            guard let oldest else { break }
+            removeWindow(oldest.id, key: oldest.key, from: &state)
             counters.openWindowsForced += 1
-            changed = true
+            closedAny = true
             total -= 1
         }
-        if changed { cameras[cameraID] = state }
+        return closedAny
     }
 
     /// Registers a window, enforcing `EventBounds.openWindowsPerKey` by dropping the oldest.
@@ -787,6 +800,11 @@ struct EventCoalescer: Sendable {
             counters.openWindowsForced += 1
         }
         state.open[key] = windows
+        // The per-key cap is not the whole bound: a device inventing distinct event types opens one
+        // window per type, so the per-camera ceiling is re-checked here rather than only on the way
+        // in. Checking it before the insert instead would force a live window closed even when no
+        // new one was about to be added.
+        _ = enforceWindowCeiling(&state)
     }
 
     private func removeWindow(_ id: EventID, key: EventCoalesceKey, from state: inout CameraState) {

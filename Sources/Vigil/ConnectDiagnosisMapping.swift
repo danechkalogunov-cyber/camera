@@ -12,6 +12,7 @@
 import Foundation
 
 import VigilCore
+import VigilProtocols
 import VigilUI
 
 // MARK: - StreamError → ConnectDiagnosis
@@ -40,6 +41,12 @@ extension ConnectDiagnosis {
             return .wrongPassword(host: host)
         case .accountLocked:
             return .accountLocked(host: host, minutesRemaining: Self.minutes(in: error))
+        case .signInPaused:
+            // Vigil's own rate limit, not the device's verdict. The countdown comes from
+            // `context["retryAfterSeconds"]`, which `StreamController.resolvePath` computes from
+            // `LockoutGovernor.probeWindow` — a number we control — and never from a guess at the
+            // firmware's lock window (docs/RULING-LOCKOUT.md §3, §7).
+            return .signInPausedByVigil(host: host, minutesRemaining: Self.pauseMinutes(in: error))
         case .deviceNotActivated:
             return .cameraNotActivated(host: host)
         case .portClosed, .transportUnsupported:
@@ -71,6 +78,18 @@ extension ConnectDiagnosis {
     private static func minutes(in error: StreamError) -> Int? {
         guard let raw = error.context["lockoutMinutes"] else { return nil }
         return Int(raw)
+    }
+
+    /// Whole minutes of Vigil's own wait, rounded up and never below one.
+    ///
+    /// Rounded **up** so the copy never promises a retry sooner than it will happen, and clamped to at
+    /// least one because "in about 0 minutes" reads as a bug. A missing or unparseable value falls
+    /// back to the whole probe window, which is the longest the wait can be.
+    private static func pauseMinutes(in error: StreamError) -> Int {
+        guard let raw = error.context["retryAfterSeconds"], let seconds = Int(raw), seconds > 0 else {
+            return Int((LockoutGovernor.probeWindow.seconds / 60).rounded(.up))
+        }
+        return max(1, Int((Double(seconds) / 60).rounded(.up)))
     }
 
     /// The codec the camera offered, for the "Unsupported video format" sentence.

@@ -17,6 +17,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import VigilProtocols
+import VigilVideo
 
 // MARK: - SnapshotFormat
 
@@ -48,7 +49,7 @@ public enum SnapshotFormat: String, Sendable, Hashable, Codable, CaseIterable {
     /// `UTType.jpeg.identifier`: these two UTIs are documented constants that have not changed since
     /// Mac OS X 10.4, and the literal keeps `UniformTypeIdentifiers` out of this module's imports for
     /// two strings.
-    var typeIdentifier: CFString {
+    package var typeIdentifier: CFString {
         switch self {
         case .png: "public.png" as CFString
         case .jpeg: "public.jpeg" as CFString
@@ -56,7 +57,7 @@ public enum SnapshotFormat: String, Sendable, Hashable, Codable, CaseIterable {
     }
 
     /// True when the encoder honours a compression quality.
-    var isLossy: Bool { self == .jpeg }
+    package var isLossy: Bool { self == .jpeg }
 }
 
 // MARK: - SnapshotMetadata
@@ -161,7 +162,8 @@ public enum SnapshotEncoder {
                 + "\(options.format.typeIdentifier); no ImageIO encoder for this type")
         }
 
-        let properties = properties(for: image, options: options, metadata: metadata)
+        let properties = properties(pixelWidth: image.width, pixelHeight: image.height,
+                                    options: options, metadata: metadata)
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
 
         guard CGImageDestinationFinalize(destination) else {
@@ -193,8 +195,12 @@ public enum SnapshotEncoder {
     ///
     /// PNG gets its own dictionary in addition to EXIF, because a great many PNG viewers ignore EXIF
     /// entirely and would show a file with no provenance at all.
-    static func properties(for image: CGImage, options: SnapshotEncodeOptions,
-                          metadata: SnapshotMetadata) -> [CFString: Any] {
+    /// Takes the dimensions rather than the `CGImage` so the whole function is arithmetic over
+    /// values: it is the part of the encoder a test can actually assert, and a test that had to
+    /// manufacture a `CGImage` first would be testing Core Graphics instead.
+    package static func properties(pixelWidth: Int, pixelHeight: Int,
+                                   options: SnapshotEncodeOptions,
+                                   metadata: SnapshotMetadata) -> [CFString: Any] {
         var properties: [CFString: Any] = [:]
         if options.format.isLossy {
             properties[kCGImageDestinationLossyCompressionQuality] = options.quality
@@ -203,14 +209,15 @@ public enum SnapshotEncoder {
 
         let stamp = exifDate(metadata.capturedAt, timeZone: metadata.timeZone)
         let offset = exifOffset(metadata.timeZone, at: metadata.capturedAt)
-        let comment = userComment(image: image, metadata: metadata)
+        let comment = userComment(pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                                  metadata: metadata)
 
         properties[kCGImagePropertyExifDictionary] = [
             kCGImagePropertyExifDateTimeOriginal: stamp,
             kCGImagePropertyExifOffsetTimeOriginal: offset,
             kCGImagePropertyExifUserComment: comment,
-            kCGImagePropertyExifPixelXDimension: image.width,
-            kCGImagePropertyExifPixelYDimension: image.height,
+            kCGImagePropertyExifPixelXDimension: pixelWidth,
+            kCGImagePropertyExifPixelYDimension: pixelHeight,
         ] as [CFString: Any]
 
         properties[kCGImagePropertyTIFFDictionary] = [
@@ -233,11 +240,12 @@ public enum SnapshotEncoder {
     }
 
     /// The one-line human summary that goes into `UserComment` and the PNG `Description`.
-    static func userComment(image: CGImage, metadata: SnapshotMetadata) -> String {
+    package static func userComment(pixelWidth: Int, pixelHeight: Int,
+                                    metadata: SnapshotMetadata) -> String {
         let stamp = exifDate(metadata.capturedAt, timeZone: metadata.timeZone)
         let offset = exifOffset(metadata.timeZone, at: metadata.capturedAt)
         let source = metadata.origin == .deviceJPEG ? "camera JPEG" : "displayed frame"
-        return "\(metadata.cameraName) — \(stamp) \(offset) — \(image.width)×\(image.height)"
+        return "\(metadata.cameraName) — \(stamp) \(offset) — \(pixelWidth)×\(pixelHeight)"
             + " — \(source) — \(metadata.software)"
     }
 
@@ -250,7 +258,7 @@ public enum SnapshotEncoder {
     /// is the difference between a still that is evidence and one that is a picture. Built from
     /// calendar components rather than a `DateFormatter`: no locale can intervene, no format string
     /// can be mis-typed at run time, and the result is testable without a time zone database.
-    static func exifDate(_ date: Date, timeZone: TimeZone) -> String {
+    package static func exifDate(_ date: Date, timeZone: TimeZone) -> String {
         let parts = DateComponentsCache.components(for: date, timeZone: timeZone)
         let year = pad(parts.year ?? 0, width: 4)
         let month = pad(parts.month ?? 0, width: 2)
@@ -265,7 +273,7 @@ public enum SnapshotEncoder {
     ///
     /// Taken at `date`, not "now", because a snapshot of a frame captured before a daylight-saving
     /// transition must carry the offset that was in force then.
-    static func exifOffset(_ timeZone: TimeZone, at date: Date) -> String {
+    package static func exifOffset(_ timeZone: TimeZone, at date: Date) -> String {
         let seconds = timeZone.secondsFromGMT(for: date)
         let sign = seconds < 0 ? "-" : "+"
         let magnitude = abs(seconds)

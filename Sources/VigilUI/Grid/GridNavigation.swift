@@ -112,69 +112,84 @@ package struct VGridNavigator: Sendable {
         guard index >= 0, index < cells.count else { return nil }
         let source = cells[index]
         let origin = source.doubledCentre
-        // Two passes over one gathered list: prefer candidates that the source actually faces, and
-        // fall back to the unrestricted half-plane only when it faces nothing. See `isFacing`.
+        // Two tiers over one pass. Tier 1 is the cells the source actually faces; tier 2 is every
+        // cell strictly beyond it along the axis, used only when it faces nothing at all. See
+        // `isBeyond` and `overlapsPerpendicular`.
         var facing: (index: Int, cost: Int)?
-        var anywhere: (index: Int, cost: Int)?
+        var beyond: (index: Int, cost: Int)?
         for (candidate, rect) in cells.enumerated() where candidate != index {
+            guard Self.isBeyond(rect, source, along: direction) else { continue }
             let centre = rect.doubledCentre
-            // Measured along the direction's own sign, so a candidate behind the origin has a
-            // negative advance and is discarded by the half-plane test.
             let advance: Int
             let perpendicular: Int
             if direction.isHorizontal {
-                advance = (centre.x - origin.x) * direction.sign
+                advance = abs(centre.x - origin.x)
                 perpendicular = abs(centre.y - origin.y)
             } else {
-                advance = (centre.y - origin.y) * direction.sign
+                advance = abs(centre.y - origin.y)
                 perpendicular = abs(centre.x - origin.x)
             }
-            guard advance > 0 else { continue }
             // 100 × primary + 35 × perpendicular is `primary + 0.35 × perpendicular` without a
             // float, so ties break identically on every run — and towards the lower index, which is
-            // the upper or leading tile, because `>=` keeps the incumbent.
+            // the upper or leading tile, because a strict `<` keeps the incumbent.
             let cost = advance * 100 + perpendicular * 35
-            if anywhere.map({ cost < $0.cost }) ?? true {
-                anywhere = (index: candidate, cost: cost)
+            if beyond.map({ cost < $0.cost }) ?? true {
+                beyond = (index: candidate, cost: cost)
             }
-            guard Self.isFacing(source, rect, along: direction) else { continue }
+            guard Self.overlapsPerpendicular(rect, source, along: direction) else { continue }
             if facing.map({ cost < $0.cost }) ?? true {
                 facing = (index: candidate, cost: cost)
             }
         }
-        return (facing ?? anywhere)?.index
+        return (facing ?? beyond)?.index
+    }
+
+    /// Whether `candidate` lies wholly on `direction`'s side of `source`.
+    ///
+    /// ## Why this replaces the centre half-plane the document describes
+    ///
+    /// UX.md §5.7 selects candidates by "cells whose centre lies in the half-plane of the
+    /// direction". On a uniform grid that is exact. On a hero layout it admits cells that are beside
+    /// the source rather than beyond it, and the consequence is not subtle: in `hero1p5` the hero
+    /// occupies the top-left 8 × 8 units, and the tile at (8, 0) has a centre *above* the hero's
+    /// centre — so ⌥↑ on the hero, which should do nothing at all because the hero is against the
+    /// top edge, would instead move focus diagonally to the tile on its right. ⌥← did the same
+    /// thing to the tile below. Both were caught by `GridNavigationTests`.
+    ///
+    /// Comparing **edges** rather than centres says what was meant: a candidate is a candidate in
+    /// direction *d* when it does not overlap the source along *d*'s axis and sits on *d*'s side of
+    /// it. For a layout that tiles the grid — every built-in one does — this is non-empty exactly
+    /// when the source is not already against that edge, which is precisely the condition for
+    /// "no move, play the nudge".
+    ///
+    /// The documented cost function is untouched and still chooses between the candidates.
+    private static func isBeyond(_ candidate: VLayoutRect,
+                                 _ source: VLayoutRect,
+                                 along direction: VGridDirection) -> Bool {
+        switch direction {
+        case .left: return candidate.x + candidate.w <= source.x
+        case .right: return candidate.x >= source.x + source.w
+        case .up: return candidate.y + candidate.h <= source.y
+        case .down: return candidate.y >= source.y + source.h
+        }
     }
 
     /// Whether `candidate` lies within the band `source` sweeps as it moves along `direction`.
     ///
-    /// ## Why this restriction is here, given that UX.md §5.7 does not state it
-    ///
-    /// The documented rule — half-plane, then minimise
-    /// `primaryAxisDistance + 0.35 × perpendicularOffset` — is exact on a uniform grid and produces
-    /// one surprising result on a hero layout, because a *nearer but offset* cell can beat a
-    /// *farther but aligned* one. In `hero1p7`, ⌥↓ from the hero would land on the bottom tile of the
-    /// trailing column: its centre is only 3 units below the hero's, so its primary distance of 6
-    /// (doubled) beats the bottom row's 12 even after the 0.35 penalty on being 6 units off to the
-    /// side. Focus would jump diagonally out of the hero when the user pressed *down*.
-    ///
-    /// DESIGN.md §10.2 #5 states the requirement the formula is meant to satisfy — ⌥-arrows move
-    /// "spatially … so a 1+5 mosaic behaves as it looks" — so the formula is kept exactly as
-    /// written and used as the *tiebreaker*, with candidates first restricted to the ones the source
-    /// tile actually faces. On a uniform grid this changes nothing at all: an aligned neighbour
-    /// always overlaps. On a hero layout it is the difference between down meaning down and down
-    /// meaning down-and-slightly-right.
-    ///
-    /// The fallback matters too: a tile at the trailing edge of a row faces nothing directly below
-    /// it in some custom mosaics, and in that case the unrestricted rule is better than refusing to
-    /// move.
-    private static func isFacing(_ source: VLayoutRect,
-                                 _ candidate: VLayoutRect,
-                                 along direction: VGridDirection) -> Bool {
+    /// This is what makes a mosaic "behave as it looks" (DESIGN.md §10.2 #5). Restricted to
+    /// candidates that are already ``isBeyond(_:_:along:)``, it means "directly ahead". A layout with
+    /// a hole — which a user's custom mosaic may have, since UX.md §5.2 requires only no-overlap and
+    /// a 2 × 2 minimum — can leave this empty while a sensible move still exists, which is why the
+    /// caller falls back rather than refusing to move.
+    private static func overlapsPerpendicular(_ candidate: VLayoutRect,
+                                              _ source: VLayoutRect,
+                                              along direction: VGridDirection) -> Bool {
         if direction.isHorizontal {
             return candidate.y < source.y + source.h && source.y < candidate.y + candidate.h
         }
         return candidate.x < source.x + source.w && source.x < candidate.x + candidate.w
     }
+
 
     /// The first cell, for `Home`.
     package var firstIndex: Int? {
