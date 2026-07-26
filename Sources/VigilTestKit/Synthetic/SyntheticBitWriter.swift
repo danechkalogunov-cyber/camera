@@ -39,6 +39,12 @@ public struct SyntheticBitWriter: Sendable {
     /// Total bits written, including the partial byte.
     public var bitCount: Int { bytes.count * 8 + bitsUsed }
 
+    /// `true` when no partial byte is outstanding.
+    ///
+    /// Callers need this for `cabac_alignment_one_bit`, which pads with `1` bits rather than the
+    /// `1`-then-zeros shape of `byte_alignment()`.
+    public var isByteAligned: Bool { bitsUsed == 0 }
+
     // MARK: Primitives
 
     /// Appends one bit.

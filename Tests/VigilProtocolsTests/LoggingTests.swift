@@ -77,12 +77,16 @@ private final class RecordingLogger: LoggerProtocol, @unchecked Sendable {
         // on the message is for.
         let logger = RecordingLogger(minimum: .warning)
         var evaluations = 0
-        logger.debug(.rtp, { evaluations += 1; return "expensive" }())
-        logger.info(.rtp, { evaluations += 1; return "expensive" }())
+        func expensiveMessage() -> String {
+            evaluations += 1
+            return "expensive"
+        }
+        logger.debug(.rtp, expensiveMessage())
+        logger.info(.rtp, expensiveMessage())
         #expect(evaluations == 0)
         #expect(logger.events.isEmpty)
 
-        logger.warning(.rtp, { evaluations += 1; return "cheap enough" }())
+        logger.warning(.rtp, expensiveMessage())
         #expect(evaluations == 1)
         #expect(logger.events.count == 1)
     }
@@ -90,8 +94,14 @@ private final class RecordingLogger: LoggerProtocol, @unchecked Sendable {
     @Test func aDisabledLevelNeverEvaluatesItsMetadata() {
         let logger = RecordingLogger(minimum: .error)
         var evaluations = 0
-        logger.notice(.core, "m", { evaluations += 1; return ["k": "v"] }())
+        func expensiveMetadata() -> [String: String] {
+            evaluations += 1
+            return ["k": "v"]
+        }
+        logger.notice(.core, "m", expensiveMetadata())
         #expect(evaluations == 0)
+        logger.error(.core, "m", expensiveMetadata())
+        #expect(evaluations == 1)
     }
 
     @Test func failureLogsTheDiagnosticCodeAtTheSeverityImpliedLevel() {
