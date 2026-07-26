@@ -229,15 +229,27 @@ public struct PipelineHarness {
 
     // MARK: Actions
 
+    /// Records one action name, keeping the trace bounded.
+    ///
+    /// `setTimer(dataIdle)` fires on every media arrival, so an uncapped trace would grow linearly
+    /// with packet count and the harness would be the thing with unbounded growth in a test whose
+    /// job is to prove there is none. The most recent entries are the ones a failure needs.
+    private mutating func trace(_ entry: String) {
+        report.actionTrace.append(entry)
+        if report.actionTrace.count > 4_096 {
+            report.actionTrace.removeFirst(report.actionTrace.count - 4_096)
+        }
+    }
+
     private mutating func apply(_ actions: [RTSPAction]) {
         for action in actions {
             switch action {
             case let .send(data):
-                report.actionTrace.append("send(\(data.count))")
+                trace("send(\(data.count))")
                 clientToServer.append(data)
 
             case let .sendInterleaved(channel, payload):
-                report.actionTrace.append("sendInterleaved(\(channel))")
+                trace("sendInterleaved(\(channel))")
                 var framed = Data([0x24, channel])
                 let length = UInt16(clamping: payload.count)
                 framed.append(UInt8(truncatingIfNeeded: length >> 8))
@@ -246,19 +258,19 @@ public struct PipelineHarness {
                 clientToServer.append(framed)
 
             case let .setTimer(id, deadline):
-                report.actionTrace.append("setTimer(\(id))")
+                trace("setTimer(\(id))")
                 timers[id] = deadline
 
             case let .cancelTimer(id):
-                report.actionTrace.append("cancelTimer(\(id))")
+                trace("cancelTimer(\(id))")
                 timers[id] = nil
 
             case .emitTrack:
-                report.actionTrace.append("emitTrack")
+                trace("emitTrack")
                 makeReceiverIfNeeded()
 
             case let .emitTiming(timing):
-                report.actionTrace.append("emitTiming")
+                trace("emitTiming")
                 pendingTiming = RTSPTrackTimingSeed(
                     clockRate: timing.clockRate,
                     initialSequence: timing.initialSequence,
@@ -274,29 +286,29 @@ public struct PipelineHarness {
                 deliverMedia(channel: channel, payload: payload)
 
             case .ready:
-                report.actionTrace.append("ready")
+                trace("ready")
                 makeReceiverIfNeeded()
                 applyPendingTiming()
 
             case let .stateChanged(state):
-                report.actionTrace.append("state(\(state))")
+                trace("state(\(state))")
 
             case let .log(event):
-                report.actionTrace.append("log(\(event))")
+                trace("log(\(event))")
 
             case let .setReadBackpressure(paused):
-                report.actionTrace.append("backpressure(\(paused))")
+                trace("backpressure(\(paused))")
 
             case let .fail(error):
-                report.actionTrace.append("fail(\(error))")
+                trace("fail(\(error))")
                 report.failure = error
 
             case let .closeTransport(reason):
-                report.actionTrace.append("close(\(reason))")
+                trace("close(\(reason))")
                 report.transportClosed = true
 
             case let .reconnect(url, _):
-                report.actionTrace.append("reconnect(\(url.host))")
+                trace("reconnect(\(url.host))")
             }
         }
     }
@@ -311,7 +323,7 @@ public struct PipelineHarness {
         makeReceiverIfNeeded()
         applyPendingTiming()
         guard var active = receiver else {
-            report.actionTrace.append("mediaBeforeTrack(\(channel))")
+            trace("mediaBeforeTrack(\(channel))")
             return
         }
         let result: RTPIngestResult

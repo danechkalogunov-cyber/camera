@@ -54,9 +54,9 @@ import VigilProtocols
         frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
 
         #expect(frames.count == 1)
-        #expect([UInt8](try #require(frames.first).data) == [0x00, 0x00, 0x00, 0x08,
-                                                             0x26, 0x01, 0xAA, 0xBB, 0xCC, 0xDD,
-                                                             0xEE, 0xFF])
+        let frame = try #require(frames.first)
+        #expect([UInt8](frame.data) == [0x00, 0x00, 0x00, 0x08,
+                                        0x26, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])
     }
 
     /// A many-fragment picture, built by the fixture splitter, round-trips byte for byte both with
@@ -75,7 +75,8 @@ import VigilProtocols
                 sequence &+= 1
             }
             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
-            let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+            let frame = try #require(frames.first)
+            let nals = try #require(DepacketizerFixture.splitLengthPrefixed(frame.data))
             #expect(nals == [nal])
         }
     }
@@ -85,8 +86,9 @@ import VigilProtocols
         var depacketizer = H265Depacketizer()
         var events: [DepacketizerEvent] = []
         var frames: [EncodedFrame] = []
-        for (payload, sequence) in [([0x62, 0x01, 0x93, 0xAA, 0xBB], UInt16(10)),
-                                    ([0x62, 0x01, 0x53, 0xEE, 0xFF], UInt16(12))] {
+        let payloads: [([UInt8], UInt16)] = [([0x62, 0x01, 0x93, 0xAA, 0xBB], 10),
+                                             ([0x62, 0x01, 0x53, 0xEE, 0xFF], 12)]
+        for (payload, sequence) in payloads {
             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
                                                                    timestamp: 900),
                                         at: DepacketizerFixture.instant(0))
@@ -207,7 +209,8 @@ import VigilProtocols
 
     /// A payload shorter than the two-byte PayloadHdr, and an empty one, are both dropped.
     @Test func h265ShortPayloadIsReportedAndDropped() {
-        for payload in [[UInt8](), [0x62]] {
+        let payloads: [[UInt8]] = [[], [0x62]]
+        for payload in payloads {
             var depacketizer = H265Depacketizer()
             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: 1,
                                                                    timestamp: 900),
@@ -249,7 +252,8 @@ import VigilProtocols
             _ = depacketizer.push(DepacketizerFixture.packet(nal, sequence: 1, timestamp: 900),
                                   at: DepacketizerFixture.instant(0))
             let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
-            #expect(try #require(frames.first).isKeyframe, "type \(type) must be an IRAP")
+            let frame = try #require(frames.first)
+            #expect(frame.isKeyframe, "type \(type) must be an IRAP")
         }
     }
 
@@ -273,7 +277,8 @@ import VigilProtocols
         frames += depacketizer.flush(at: DepacketizerFixture.instant(200))
 
         #expect(frames.count == 2)                        // the CRA and the trailing picture
-        #expect(try #require(frames.first).isKeyframe)
+        let keyframe = try #require(frames.first)
+        #expect(keyframe.isKeyframe)
         let dropped = events.contains { event in
             if case .accessUnitDropped(let reason) = event { reason == .raslAfterCRA } else { false }
         }

@@ -256,7 +256,8 @@ import VigilProtocols
     /// A zero-length payload and a header section longer than the packet are both dropped.
     @Test func aacHostilePayloadsAreDroppedSafely() throws {
         var depacketizer = try AACDepacketizer(clockRate: 16_000, fmtp: Self.hikvisionFmtp)
-        for payload in [[UInt8](), [0x00], [0xFF, 0xF8], [0x00, 0x10]] {
+        let payloads: [[UInt8]] = [[], [0x00], [0xFF, 0xF8], [0x00, 0x10]]
+        for payload in payloads {
             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: 1,
                                                                    timestamp: 1000,
                                                                    payloadType: 98),

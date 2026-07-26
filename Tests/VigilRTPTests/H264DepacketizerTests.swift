@@ -51,7 +51,8 @@ import VigilProtocols
         #expect(out.frames.isEmpty)
         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
         #expect(frames.count == 1)
-        #expect([UInt8](try #require(frames.first).data) == [0, 0, 0, 3, 0x65, 0xAA, 0xBB])
+        let frame = try #require(frames.first)
+        #expect([UInt8](frame.data) == [0, 0, 0, 3, 0x65, 0xAA, 0xBB])
     }
 
     /// A lost **first** fragment must discard the whole run: emitting the remainder would hand the
@@ -60,7 +61,8 @@ import VigilProtocols
         var depacketizer = H264Depacketizer()
         var events: [DepacketizerEvent] = []
         var frames: [EncodedFrame] = []
-        for (index, payload) in [[0x7C, 0x05, 0xCC, 0xDD], [0x7C, 0x45, 0xEE, 0xFF]].enumerated() {
+        let payloads: [[UInt8]] = [[0x7C, 0x05, 0xCC, 0xDD], [0x7C, 0x45, 0xEE, 0xFF]]
+        for (index, payload) in payloads.enumerated() {
             let out = depacketizer.push(DepacketizerFixture.packet(payload,
                                                                    sequence: UInt16(101 + index),
                                                                    timestamp: 679_056),
@@ -81,8 +83,9 @@ import VigilProtocols
         var events: [DepacketizerEvent] = []
         var frames: [EncodedFrame] = []
         // Sequence 101 never arrives, so the E fragment's sequence number does not follow the S.
-        for (payload, sequence) in [([0x7C, 0x85, 0xAA, 0xBB], UInt16(100)),
-                                    ([0x7C, 0x45, 0xEE, 0xFF], UInt16(102))] {
+        let payloads: [([UInt8], UInt16)] = [([0x7C, 0x85, 0xAA, 0xBB], 100),
+                                             ([0x7C, 0x45, 0xEE, 0xFF], 102)]
+        for (payload, sequence) in payloads {
             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
                                                                    timestamp: 679_056),
                                         at: DepacketizerFixture.instant(0))
@@ -103,7 +106,8 @@ import VigilProtocols
         var depacketizer = H264Depacketizer()
         var events: [DepacketizerEvent] = []
         var frames: [EncodedFrame] = []
-        for (index, payload) in [[0x7C, 0x85, 0xAA, 0xBB], [0x7C, 0x05, 0xCC, 0xDD]].enumerated() {
+        let payloads: [[UInt8]] = [[0x7C, 0x85, 0xAA, 0xBB], [0x7C, 0x05, 0xCC, 0xDD]]
+        for (index, payload) in payloads.enumerated() {
             let out = depacketizer.push(DepacketizerFixture.packet(payload,
                                                                    sequence: UInt16(100 + index),
                                                                    timestamp: 679_056),
@@ -123,17 +127,15 @@ import VigilProtocols
 
     /// An FU header claiming a packet type that cannot itself be fragmented is rejected outright.
     @Test func h264FragmentUnitClaimingAnUnfragmentableTypeIsRejected() {
-        var depacketizer = H264Depacketizer()
         var reasons: [MalformedReason] = []
         for claimed: UInt8 in [24, 28, 29, 0, 31] {
-            var fresh = H264Depacketizer()
-            let out = fresh.push(DepacketizerFixture.packet([0x7C, 0x80 | claimed, 0xAA],
-                                                            sequence: 1, timestamp: 900),
-                                 at: DepacketizerFixture.instant(0))
+            var depacketizer = H264Depacketizer()
+            let out = depacketizer.push(DepacketizerFixture.packet([0x7C, 0x80 | claimed, 0xAA],
+                                                                   sequence: 1, timestamp: 900),
+                                        at: DepacketizerFixture.instant(0))
             reasons += DepacketizerFixture.malformedReasons(out.events)
             #expect(out.frames.isEmpty)
         }
-        _ = depacketizer
         #expect(reasons.allSatisfy { $0 == .nestedPacketization })
         #expect(reasons.count == 5)
     }
@@ -249,7 +251,8 @@ import VigilProtocols
         _ = depacketizer.push(DepacketizerFixture.packet(slice, sequence: 2, timestamp: 900),
                               at: DepacketizerFixture.instant(1))
         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
-        let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+        let frame = try #require(frames.first)
+        let nals = try #require(DepacketizerFixture.splitLengthPrefixed(frame.data))
         #expect(nals == [DepacketizerFixture.h264PPS, slice])
     }
 
@@ -276,15 +279,15 @@ import VigilProtocols
 
     /// A fragment payload with nothing after the FU header carries no bytes and is dropped.
     @Test func h264TruncatedFragmentHeaderIsDropped() {
-        var depacketizer = H264Depacketizer()
-        for payload in [[0x7C], [0x7C, 0x85]] {
-            var fresh = H264Depacketizer()
-            let out = fresh.push(DepacketizerFixture.packet(payload, sequence: 1, timestamp: 900),
-                                 at: DepacketizerFixture.instant(0))
+        let payloads: [[UInt8]] = [[0x7C], [0x7C, 0x85]]
+        for payload in payloads {
+            var depacketizer = H264Depacketizer()
+            let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: 1,
+                                                                   timestamp: 900),
+                                        at: DepacketizerFixture.instant(0))
             #expect(DepacketizerFixture.malformedReasons(out.events) == [.truncatedFragment])
             #expect(out.frames.isEmpty)
         }
-        _ = depacketizer
     }
 
     /// Filler data is discarded rather than forwarded: it costs decode bandwidth and carries
@@ -298,7 +301,8 @@ import VigilProtocols
                                                          timestamp: 900),
                               at: DepacketizerFixture.instant(1))
         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
-        let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+        let frame = try #require(frames.first)
+        let nals = try #require(DepacketizerFixture.splitLengthPrefixed(frame.data))
         #expect(nals == [slice])
     }
 
@@ -358,8 +362,10 @@ import VigilProtocols
         let second = depacketizer.push(DepacketizerFixture.packet(referenced, sequence: 2,
                                                                   timestamp: 4500),
                                        at: DepacketizerFixture.instant(40))
-        #expect(try #require(second.frames.first).dropClass == .droppableNonReference)
+        let disposableFrame = try #require(second.frames.first)
+        #expect(disposableFrame.dropClass == .droppableNonReference)
         let frames = depacketizer.flush(at: DepacketizerFixture.instant(80))
-        #expect(try #require(frames.first).dropClass == .required)
+        let referencedFrame = try #require(frames.first)
+        #expect(referencedFrame.dropClass == .required)
     }
 }

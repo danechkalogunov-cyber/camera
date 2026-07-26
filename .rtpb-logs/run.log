@@ -17,3 +17,390 @@ Another instance of SwiftPM is already running using '/home/user/camera/.build-r
 [24/81] Emitting module VigilPipelineTests
 [26/90] Compiling VigilBitstreamTests H265SyntaxTests.swift
 [27/90] Compiling VigilBitstreamTests Placeholder.swift
+[30/94] Compiling VigilBitstreamTests H264SPSTests.swift
+[31/94] Compiling VigilBitstreamTests AnnexBTests.swift
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:64:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 62 |         var frames: [EncodedFrame] = []
+ 63 |         for (index, payload) in [[0x7C, 0x05, 0xCC, 0xDD], [0x7C, 0x45, 0xEE, 0xFF]].enumerated() {
+ 64 |             let out = depacketizer.push(DepacketizerFixture.packet(payload,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 65 |                                                                    sequence: UInt16(101 + index),
+ 66 |                                                                    timestamp: 679_056),
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:86:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 84 |         for (payload, sequence) in [([0x7C, 0x85, 0xAA, 0xBB], UInt16(100)),
+ 85 |                                     ([0x7C, 0x45, 0xEE, 0xFF], UInt16(102))] {
+ 86 |             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 87 |                                                                    timestamp: 679_056),
+ 88 |                                         at: DepacketizerFixture.instant(0))
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:107:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+105 |         var frames: [EncodedFrame] = []
+106 |         for (index, payload) in [[0x7C, 0x85, 0xAA, 0xBB], [0x7C, 0x05, 0xCC, 0xDD]].enumerated() {
+107 |             let out = depacketizer.push(DepacketizerFixture.packet(payload,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+108 |                                                                    sequence: UInt16(100 + index),
+109 |                                                                    timestamp: 679_056),
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:126:13: warning: variable 'depacketizer' was never mutated; consider changing to 'let' constant
+124 |     /// An FU header claiming a packet type that cannot itself be fragmented is rejected outright.
+125 |     @Test func h264FragmentUnitClaimingAnUnfragmentableTypeIsRejected() {
+126 |         var depacketizer = H264Depacketizer()
+    |             `- warning: variable 'depacketizer' was never mutated; consider changing to 'let' constant
+127 |         var reasons: [MalformedReason] = []
+128 |         for claimed: UInt8 in [24, 28, 29, 0, 31] {
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:252:106: note: expanded code originates here
+250 |                               at: DepacketizerFixture.instant(1))
+251 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+252 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+253 |         #expect(nals == [DepacketizerFixture.h264PPS, slice])
+254 |     }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:252:106: note: expanded code originates here
+250 |                               at: DepacketizerFixture.instant(1))
+251 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+252 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+253 |         #expect(nals == [DepacketizerFixture.h264PPS, slice])
+254 |     }
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:282:61: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+280 |         for payload in [[0x7C], [0x7C, 0x85]] {
+281 |             var fresh = H264Depacketizer()
+282 |             let out = fresh.push(DepacketizerFixture.packet(payload, sequence: 1, timestamp: 900),
+    |                                                             |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                             `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+283 |                                  at: DepacketizerFixture.instant(0))
+284 |             #expect(DepacketizerFixture.malformedReasons(out.events) == [.truncatedFragment])
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:301:106: note: expanded code originates here
+299 |                               at: DepacketizerFixture.instant(1))
+300 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+301 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+302 |         #expect(nals == [slice])
+303 |     }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:301:106: note: expanded code originates here
+299 |                               at: DepacketizerFixture.instant(1))
+300 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+301 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+302 |         #expect(nals == [slice])
+303 |     }
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:78:110: note: expanded code originates here
+ 76 |             }
+ 77 |             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
+ 78 |             let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+ 79 |             #expect(nals == [nal])
+ 80 |         }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:78:110: note: expanded code originates here
+ 76 |             }
+ 77 |             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
+ 78 |             let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+ 79 |             #expect(nals == [nal])
+ 80 |         }
+
+/home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:90:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 88 |         for (payload, sequence) in [([0x62, 0x01, 0x93, 0xAA, 0xBB], UInt16(10)),
+ 89 |                                     ([0x62, 0x01, 0x53, 0xEE, 0xFF], UInt16(12))] {
+ 90 |             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 91 |                                                                    timestamp: 900),
+ 92 |                                         at: DepacketizerFixture.instant(0))
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:64:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 62 |         var frames: [EncodedFrame] = []
+ 63 |         for (index, payload) in [[0x7C, 0x05, 0xCC, 0xDD], [0x7C, 0x45, 0xEE, 0xFF]].enumerated() {
+ 64 |             let out = depacketizer.push(DepacketizerFixture.packet(payload,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 65 |                                                                    sequence: UInt16(101 + index),
+ 66 |                                                                    timestamp: 679_056),
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:86:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 84 |         for (payload, sequence) in [([0x7C, 0x85, 0xAA, 0xBB], UInt16(100)),
+ 85 |                                     ([0x7C, 0x45, 0xEE, 0xFF], UInt16(102))] {
+ 86 |             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 87 |                                                                    timestamp: 679_056),
+ 88 |                                         at: DepacketizerFixture.instant(0))
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:107:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+105 |         var frames: [EncodedFrame] = []
+106 |         for (index, payload) in [[0x7C, 0x85, 0xAA, 0xBB], [0x7C, 0x05, 0xCC, 0xDD]].enumerated() {
+107 |             let out = depacketizer.push(DepacketizerFixture.packet(payload,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+108 |                                                                    sequence: UInt16(100 + index),
+109 |                                                                    timestamp: 679_056),
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:126:13: warning: variable 'depacketizer' was never mutated; consider changing to 'let' constant
+124 |     /// An FU header claiming a packet type that cannot itself be fragmented is rejected outright.
+125 |     @Test func h264FragmentUnitClaimingAnUnfragmentableTypeIsRejected() {
+126 |         var depacketizer = H264Depacketizer()
+    |             `- warning: variable 'depacketizer' was never mutated; consider changing to 'let' constant
+127 |         var reasons: [MalformedReason] = []
+128 |         for claimed: UInt8 in [24, 28, 29, 0, 31] {
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:252:106: note: expanded code originates here
+250 |                               at: DepacketizerFixture.instant(1))
+251 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+252 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+253 |         #expect(nals == [DepacketizerFixture.h264PPS, slice])
+254 |     }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:252:106: note: expanded code originates here
+250 |                               at: DepacketizerFixture.instant(1))
+251 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+252 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+253 |         #expect(nals == [DepacketizerFixture.h264PPS, slice])
+254 |     }
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:282:61: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+280 |         for payload in [[0x7C], [0x7C, 0x85]] {
+281 |             var fresh = H264Depacketizer()
+282 |             let out = fresh.push(DepacketizerFixture.packet(payload, sequence: 1, timestamp: 900),
+    |                                                             |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                             `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+283 |                                  at: DepacketizerFixture.instant(0))
+284 |             #expect(DepacketizerFixture.malformedReasons(out.events) == [.truncatedFragment])
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:301:106: note: expanded code originates here
+299 |                               at: DepacketizerFixture.instant(1))
+300 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+301 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+302 |         #expect(nals == [slice])
+303 |     }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:301:106: note: expanded code originates here
+299 |                               at: DepacketizerFixture.instant(1))
+300 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+301 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+302 |         #expect(nals == [slice])
+303 |     }
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:78:110: note: expanded code originates here
+ 76 |             }
+ 77 |             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
+ 78 |             let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+ 79 |             #expect(nals == [nal])
+ 80 |         }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:78:110: note: expanded code originates here
+ 76 |             }
+ 77 |             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
+ 78 |             let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+ 79 |             #expect(nals == [nal])
+ 80 |         }
+
+/home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:90:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 88 |         for (payload, sequence) in [([0x62, 0x01, 0x93, 0xAA, 0xBB], UInt16(10)),
+ 89 |                                     ([0x62, 0x01, 0x53, 0xEE, 0xFF], UInt16(12))] {
+ 90 |             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 91 |                                                                    timestamp: 900),
+ 92 |                                         at: DepacketizerFixture.instant(0))
+[34/94] Compiling VigilBitstreamTests GateAndStoreTests.swift
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:64:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 62 |         var frames: [EncodedFrame] = []
+ 63 |         for (index, payload) in [[0x7C, 0x05, 0xCC, 0xDD], [0x7C, 0x45, 0xEE, 0xFF]].enumerated() {
+ 64 |             let out = depacketizer.push(DepacketizerFixture.packet(payload,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 65 |                                                                    sequence: UInt16(101 + index),
+ 66 |                                                                    timestamp: 679_056),
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:86:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 84 |         for (payload, sequence) in [([0x7C, 0x85, 0xAA, 0xBB], UInt16(100)),
+ 85 |                                     ([0x7C, 0x45, 0xEE, 0xFF], UInt16(102))] {
+ 86 |             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 87 |                                                                    timestamp: 679_056),
+ 88 |                                         at: DepacketizerFixture.instant(0))
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:107:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+105 |         var frames: [EncodedFrame] = []
+106 |         for (index, payload) in [[0x7C, 0x85, 0xAA, 0xBB], [0x7C, 0x05, 0xCC, 0xDD]].enumerated() {
+107 |             let out = depacketizer.push(DepacketizerFixture.packet(payload,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+108 |                                                                    sequence: UInt16(100 + index),
+109 |                                                                    timestamp: 679_056),
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:126:13: warning: variable 'depacketizer' was never mutated; consider changing to 'let' constant
+124 |     /// An FU header claiming a packet type that cannot itself be fragmented is rejected outright.
+125 |     @Test func h264FragmentUnitClaimingAnUnfragmentableTypeIsRejected() {
+126 |         var depacketizer = H264Depacketizer()
+    |             `- warning: variable 'depacketizer' was never mutated; consider changing to 'let' constant
+127 |         var reasons: [MalformedReason] = []
+128 |         for claimed: UInt8 in [24, 28, 29, 0, 31] {
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:252:106: note: expanded code originates here
+250 |                               at: DepacketizerFixture.instant(1))
+251 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+252 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+253 |         #expect(nals == [DepacketizerFixture.h264PPS, slice])
+254 |     }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:252:106: note: expanded code originates here
+250 |                               at: DepacketizerFixture.instant(1))
+251 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+252 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+253 |         #expect(nals == [DepacketizerFixture.h264PPS, slice])
+254 |     }
+
+/home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:282:61: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+280 |         for payload in [[0x7C], [0x7C, 0x85]] {
+281 |             var fresh = H264Depacketizer()
+282 |             let out = fresh.push(DepacketizerFixture.packet(payload, sequence: 1, timestamp: 900),
+    |                                                             |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                             `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+283 |                                  at: DepacketizerFixture.instant(0))
+284 |             #expect(DepacketizerFixture.malformedReasons(out.events) == [.truncatedFragment])
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:301:106: note: expanded code originates here
+299 |                               at: DepacketizerFixture.instant(1))
+300 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+301 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+302 |         #expect(nals == [slice])
+303 |     }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H264DepacketizerTests.swift:301:106: note: expanded code originates here
+299 |                               at: DepacketizerFixture.instant(1))
+300 |         let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+301 |         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+302 |         #expect(nals == [slice])
+303 |     }
+
+macro expansion #require:1:66: error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+`- /home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:78:110: note: expanded code originates here
+ 76 |             }
+ 77 |             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
+ 78 |             let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                                  `- error: recursive expansion of macro 'require(_:_:sourceLocation:)'
+    +-------------------------------------------------------------------
+ 79 |             #expect(nals == [nal])
+ 80 |         }
+
+macro expansion #require:1:62: warning: no calls to throwing functions occur within 'try' expression
+`- /home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:78:110: note: expanded code originates here
+ 76 |             }
+ 77 |             frames += depacketizer.flush(at: DepacketizerFixture.instant(40))
+ 78 |             let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+    +--- macro expansion #require --------------------------------------
+    |1 | Testing.__checkValue(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data),expression: .__fromSyntaxNode("DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data)"),comments: [],isRequired: true,sourceLocation: Testing.SourceLocation.__here()).__required()
+    |  |                                                              `- warning: no calls to throwing functions occur within 'try' expression
+    +-------------------------------------------------------------------
+ 79 |             #expect(nals == [nal])
+ 80 |         }
+
+/home/user/camera/Tests/VigilRTPTests/H265DepacketizerTests.swift:90:68: error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+ 88 |         for (payload, sequence) in [([0x62, 0x01, 0x93, 0xAA, 0xBB], UInt16(10)),
+ 89 |                                     ([0x62, 0x01, 0x53, 0xEE, 0xFF], UInt16(12))] {
+ 90 |             let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
+    |                                                                    |- error: cannot convert value of type '[Int]' to expected argument type '[UInt8]'
+    |                                                                    `- note: arguments to generic parameter 'Element' ('Int' and 'UInt8') are expected to be equal
+ 91 |                                                                    timestamp: 900),
+ 92 |                                         at: DepacketizerFixture.instant(0))
+[35/96] Compiling VigilBitstreamTests SEIAndSliceHeaderTests.swift
+[36/96] Compiling VigilRTPTests RTPTrackReceiverTests.swift
+[38/96] Compiling VigilRTPTests ReorderBufferTests.swift
+[39/97] Compiling VigilBitstreamTests DecoderConfigurationRecordTests.swift
+[40/97] Compiling VigilBitstreamTests ExpGolombTests.swift
+[42/97] Emitting module VigilRTSPTests
+[46/97] Compiling VigilRTSPTests ControlURLResolverTests.swift
+[47/98] Wrapping AST for VigilVideoTests for debugging
+[48/98] Wrapping AST for VigilTransportTests for debugging
+[49/98] Wrapping AST for VigilRTSPTests for debugging
+[50/98] Wrapping AST for VigilPipelineTests for debugging
+[51/98] Wrapping AST for VigilCoreTests for debugging
