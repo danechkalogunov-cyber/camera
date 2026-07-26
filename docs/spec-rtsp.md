@@ -1620,7 +1620,7 @@ Parsing rules:
 
 1. Split the field value on **top-level commas** (quote-aware; a URI may legally contain a
    comma, and `topLevelSplit` also refuses to split inside `<>` if present).
-2Within each entry, split on `;`, then on the first `=`. Parameter names are
+2. Within each entry, split on `;`, then on the first `=`. Parameter names are
    case-insensitive; `url` may be quoted (`url="rtsp://…"` — seen on ONVIF builds).
 3. Match the entry to a track by comparing `url` to the track's control URI using
    `RTSPURL.equivalent(_:_:)` (§10.1): case-insensitive scheme/host, default-port aware,

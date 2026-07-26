@@ -1,0 +1,4 @@
+# RTSP and SDP fixtures are protocol wire dumps: CRLF is significant, never normalise it.
+*.rtsp -text
+*.sdp -text
+*.rtsp.txt -text

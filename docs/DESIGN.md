@@ -1030,4 +1030,759 @@ Rules for reduced motion, in priority order:
 5. **Flashes are never substituted with other flashes.** The snapshot flash becomes a border pulse.
 
 ---
+
+## 8. Iconography
+
+### 8.1 Sizes and weights
+
+Symbols are paired to the text they sit beside. Use `Font.system(size:weight:)` on the `Image`, not
+`.imageScale`, so the size is exact.
+
+| Icon token | Size | Weight | Paired type | Optical alignment |
+|---|---|---|---|---|
+| `icon.xs` | 11 | `.semibold` | `Caption1`/`Caption2` | Baseline-align; 2 pt gap to label |
+| `icon.sm` | 12 | `.medium` | `Callout` | 4 pt gap |
+| `icon.md` | 13 | `.medium` | `Body`/`Headline` | 6 pt gap — **the default** |
+| `icon.lg` | 15 | `.medium` | `Title3` | 6 pt gap |
+| `icon.xl` | 17 | `.regular` | `Title2`/`Title1` | 8 pt gap |
+| `icon.hero` | 32 | `.light` | Empty states, connecting rings | Centred |
+| `icon.brand` | 18 | — | Menu-bar extra (template image) | Centred in an 18 × 18 box |
+
+⛔ Icon weight is never heavier than the adjacent text weight, and never `.bold` above 13 pt — heavy
+SF Symbols at large sizes look like clip art.
+
+### 8.2 Rendering modes
+
+| Mode | When | Example |
+|---|---|---|
+| `.monochrome` | **Default for ~90 % of the app.** Tinted by `foregroundStyle` from the text token. | Toolbar buttons, list rows, menus |
+| `.hierarchical` | Multi-layer glyphs where depth aids recognition, tinted with one colour. | `externaldrive.badge.exclamationmark`, `video.badge.waveform`, `bolt.fill` in the hardware-decode pill |
+| `.palette` | Exactly two-tone status glyphs where the badge must carry a different semantic colour. | `bell.badge` (glyph `text.secondary`, badge `motion`), `record.circle` (ring `text.secondary`, dot `live`) |
+| `.multicolor` | ⛔ **Forbidden**, with two exceptions: the Settings window's pane icons, and the About window. Apple's multicolour palettes clash with the dark cockpit and break the P3 colour rule. |
+
+Variable-value symbols are used for magnitude: `Image(systemName: "wifi", variableValue: signal)`
+(0…1 from RTCP round-trip + loss), `Image(systemName: "speaker.wave.3", variableValue: volume)`,
+`Image(systemName: "internaldrive", variableValue: diskUsedFraction)`.
+
+### 8.3 The action → symbol map
+
+Every action in Vigil. `Variant` column: `—` = base glyph; `.fill` = filled variant; `alt` = the
+second glyph used for the opposite/active state.
+
+| Action / concept | SF Symbol | Variant | Weight | Mode | Notes |
+|---|---|---|---|---|---|
+| **App / navigation** ||||||
+| Vigil brand mark | `vigil.aperture` | custom | — | mono | §8.5; menu-bar extra + About |
+| Toggle sidebar | `sidebar.leading` | — | `.medium` | mono | `⌘L` |
+| Toggle inspector | `sidebar.trailing` | — | `.medium` | mono | `⌘⌥I` |
+| Command palette | `command` | — | `.semibold` | mono | Also drawn as a `VKeyCap` |
+| Search | `magnifyingglass` | — | `.medium` | mono | `/` |
+| Settings | `gearshape` | `.fill` when active | `.medium` | mono | `⌘,` |
+| Help | `questionmark.circle` | — | `.medium` | mono | |
+| Close / dismiss | `xmark` | — | `.semibold` | mono | 11 pt in chips, 13 pt in sheets |
+| Disclosure | `chevron.right` / `chevron.down` | — | `.semibold` | mono | Rotates 90° with `snap`, never swapped |
+| Menu indicator | `chevron.up.chevron.down` | — | `.semibold` | mono | `VSelect` |
+| **Cameras** ||||||
+| Camera (generic) | `video` | `.fill` when live | `.medium` | mono | |
+| Camera offline | `video.slash` | `.fill` | `.medium` | hierarchical | `text.tertiary` |
+| Add camera | `plus` | — | `.semibold` | mono | In a `VButton(.primary)` |
+| Discover / scan | `antenna.radiowaves.left.and.right` | — | `.medium` | mono | `.symbolEffect(.variableColor.iterative)` while scanning |
+| NVR / device | `externaldrive.connected.to.line.below` | — | `.medium` | hierarchical | |
+| Channel | `rectangle.stack` | — | `.medium` | mono | |
+| Group | `folder` | `.fill` when selected | `.medium` | mono | |
+| New group | `folder.badge.plus` | — | `.medium` | mono | |
+| Rename | `pencil` | — | `.medium` | mono | |
+| Delete | `trash` | — | `.medium` | mono | `danger` tint in menus |
+| Reorder handle | `line.3.horizontal` | — | `.medium` | mono | `text.tertiary`, appears on row hover |
+| Credentials | `key.horizontal` | `.fill` | `.medium` | mono | |
+| Locked / secure | `lock` | `.fill` | `.medium` | mono | TLS indicator |
+| Insecure (plain HTTP) | `lock.open.trianglebadge.exclamationmark` | — | `.medium` | hierarchical | `warn` |
+| **Layout / stage** ||||||
+| Single view | `square` | — | `.medium` | mono | `⌘1` |
+| 2×2 | `square.grid.2x2` | — | `.medium` | mono | `⌘2` |
+| 3×3 | `square.grid.3x3` | — | `.medium` | mono | `⌘4` |
+| 4×4 | `square.grid.4x3.fill` | — | `.medium` | mono | `⌘5`; approximate glyph, see note |
+| Mosaic layouts (1+5, 1+7, 2+8, custom) | *drawn, not a symbol* | — | — | — | `VLayoutGlyph` draws a live 16×16 `Canvas` miniature of the actual mosaic. Decision: real miniatures beat approximate symbols for layout pickers. |
+| Enter fullscreen | `arrow.up.left.and.arrow.down.right` | — | `.medium` | mono | `⌘F` |
+| Exit fullscreen | `arrow.down.right.and.arrow.up.left` | — | `.medium` | mono | |
+| Cinema mode | `film` | `.fill` when active | `.medium` | mono | `⌘⌃F` |
+| Picture in picture | `pip.enter` / `pip.exit` | alt | `.medium` | mono | |
+| Video wall / second display | `display.2` | — | `.medium` | hierarchical | |
+| Cycle / patrol view | `play.square.stack` | `.fill` when running | `.medium` | mono | |
+| Aspect fit | `aspectratio` | — | `.medium` | mono | |
+| Aspect fill | `aspectratio.fill` | — | `.medium` | mono | |
+| Mainstream (high quality) | `dial.high` | `.fill` when active | `.medium` | mono | |
+| Substream (low quality) | `dial.low` | `.fill` when active | `.medium` | mono | |
+| **Media actions** ||||||
+| Snapshot | `camera` | `.fill` on press | `.medium` | mono | `⌘⇧S` |
+| Snapshot all | `camera.on.rectangle` | — | `.medium` | hierarchical | |
+| Copy to clipboard | `doc.on.doc` | — | `.medium` | mono | |
+| Record (start) | `record.circle` | — | `.medium` | palette (ring `text.secondary`, dot `live`) | `⌘R` |
+| Recording (active) | `record.circle.fill` | `.fill` | `.medium` | mono, `live` | `.symbolEffect(.pulse)` at T0 only |
+| Stop | `stop.fill` | `.fill` | `.medium` | mono | |
+| Mute | `speaker.slash.fill` | `.fill` | `.medium` | mono | |
+| Unmuted | `speaker.wave.2.fill` | `.fill` | `.medium` | mono | variableValue = volume |
+| Push to talk | `mic` / `mic.fill` | alt | `.medium` | mono | `.fill` + `live` while transmitting |
+| Export clip | `square.and.arrow.up` | — | `.medium` | mono | `⌘E` |
+| Trim in/out | `scissors` | — | `.medium` | mono | |
+| Import CSV/JSON | `square.and.arrow.down` | — | `.medium` | mono | |
+| **Playback** ||||||
+| Play | `play.fill` | `.fill` | `.medium` | mono | `Space`; swap to pause with `.contentTransition(.symbolEffect(.replace.downUp))` |
+| Pause | `pause.fill` | `.fill` | `.medium` | mono | |
+| Back 10 s | `gobackward.10` | — | `.medium` | mono | `←` |
+| Forward 10 s | `goforward.10` | — | `.medium` | mono | `→` |
+| Frame back | `backward.frame.fill` | `.fill` | `.medium` | mono | `⌥←` |
+| Frame forward | `forward.frame.fill` | `.fill` | `.medium` | mono | `⌥→` |
+| Speed | `speedometer` | — | `.medium` | mono | Opens a `VSelect` of 0.25×…8× |
+| Reverse | `backward.fill` | `.fill` | `.medium` | mono | |
+| Jump to live | `forward.end.alt.fill` | `.fill` | `.medium` | mono | |
+| Date picker | `calendar` | — | `.medium` | mono | |
+| Time / uptime | `clock` | — | `.medium` | mono | `clock.arrow.circlepath` for uptime |
+| Bookmark | `bookmark` / `bookmark.fill` | alt | `.medium` | mono | |
+| Synchronised playback | `link` | — | `.medium` | mono | |
+| **PTZ** ||||||
+| PTZ pad | `vigil.ptz.joystick` | custom | — | mono | §8.5 |
+| Zoom in / out | `plus.magnifyingglass` / `minus.magnifyingglass` | — | `.medium` | mono | |
+| Focus near / far | `viewfinder.circle` | — | `.medium` | hierarchical | Paired with `+`/`−` keycaps |
+| Iris open / close | `camera.aperture` | — | `.medium` | hierarchical | |
+| Preset | `star` / `star.fill` | alt | `.medium` | mono | `.fill` = assigned |
+| Set preset | `star.square.on.square` | — | `.medium` | hierarchical | |
+| Patrol | `arrow.triangle.capsulepath` | — | `.medium` | mono | |
+| Home position | `house` | — | `.medium` | mono | |
+| 3D positioning | `viewfinder.rectangular` | — | `.medium` | mono | Drag-a-box on the tile |
+| **Image settings** ||||||
+| Image panel | `slider.horizontal.3` | — | `.medium` | mono | |
+| Brightness | `sun.max` | — | `.medium` | mono | variableValue |
+| Contrast | `circle.lefthalf.filled` | — | `.medium` | mono | |
+| Saturation | `drop` | `.fill` | `.medium` | mono | |
+| Sharpness | `camera.filters` | — | `.medium` | hierarchical | |
+| WDR | `sun.haze` | `.fill` | `.medium` | hierarchical | |
+| Day / night mode | `moon.stars` | `.fill` when night | `.medium` | hierarchical | |
+| IR illuminator | `flashlight.on.fill` | `.fill` | `.medium` | mono | `warn` when forced on |
+| Flip / mirror | `arrow.left.and.right.righttriangle.left.righttriangle.right` | — | `.medium` | mono | |
+| **Events / alarms** ||||||
+| Events feed | `bell` | `.fill` when unread | `.medium` | palette | Badge = `motion` |
+| New events | `bell.badge` | — | `.medium` | palette | `.symbolEffect(.bounce.up)` once per arrival |
+| Motion detection | `figure.walk` | — | `.medium` | mono | `motion` tint |
+| Line crossing | `line.diagonal` | — | `.semibold` | mono | |
+| Intrusion | `rectangle.dashed` | — | `.medium` | mono | |
+| Tamper | `hand.raised.slash` | `.fill` | `.medium` | mono | `danger` |
+| Video loss | `video.slash` | `.fill` | `.medium` | mono | `danger` |
+| Disk error | `externaldrive.badge.exclamationmark` | — | `.medium` | hierarchical | `danger` |
+| Notification settings | `bell.and.waves.left.and.right` | — | `.medium` | hierarchical | |
+| **Diagnostics / telemetry** ||||||
+| Stream Doctor | `stethoscope` | — | `.medium` | mono | |
+| Health graph | `waveform.path.ecg` | — | `.medium` | mono | |
+| Hardware decode | `bolt.fill` | `.fill` | `.semibold` | mono, `ok` | Hollow `bolt` + `text.tertiary` when software |
+| CPU | `cpu` | — | `.medium` | hierarchical | |
+| Network | `network` | — | `.medium` | hierarchical | |
+| Signal / link quality | `wifi` | — | `.medium` | mono | variableValue |
+| Packet loss | `chart.line.downtrend.xyaxis` | — | `.medium` | mono | `warn`/`danger` |
+| Latency | `timer` | — | `.medium` | mono | |
+| Storage | `internaldrive` | — | `.medium` | hierarchical | variableValue = used |
+| Reconnecting | `arrow.triangle.2.circlepath` | — | `.medium` | mono | Rotates with `motion.spin` |
+| Export diagnostics | `doc.text.magnifyingglass` | — | `.medium` | hierarchical | |
+| Log level | `text.alignleft` | — | `.medium` | mono | |
+| Reset | `arrow.counterclockwise` | — | `.medium` | mono | |
+| **Status / feedback** ||||||
+| Success | `checkmark.circle.fill` | `.fill` | `.medium` | mono, `ok` | |
+| Warning | `exclamationmark.triangle.fill` | `.fill` | `.medium` | mono, `warn` | |
+| Error | `xmark.octagon.fill` | `.fill` | `.medium` | mono, `danger` | |
+| Info | `info.circle` | `.fill` in toasts | `.medium` | mono, `accent` | |
+| Status dot | `circle.fill` | `.fill` | — | mono | Replaced by `VLiveDot` in practice |
+| Keyboard shortcuts | `keyboard` | — | `.medium` | mono | |
+| Appearance | `circle.lefthalf.filled` | — | `.medium` | mono | |
+| Launch at login | `power` | — | `.medium` | mono | |
+
+Note on `square.grid.4x3.fill`: there is no exact 4×4 SF Symbol. The layout picker uses
+`VLayoutGlyph` miniatures for **all** layout modes (including 1, 2×2, 3×3) so the set is internally
+consistent; the SF Symbols above are used only in the menu bar, where a drawn glyph is not available.
+
+### 8.4 Symbol effects
+
+| Effect | Where | Guard |
+|---|---|---|
+| `.symbolEffect(.bounce.up, options: .nonRepeating, value: eventCount)` | Bell on new event | Off in `reduceMotion` and at governor T1 |
+| `.symbolEffect(.pulse, options: .repeating)` | `record.circle.fill` while recording | Off in `reduceMotion`; replaced by the static `live` fill |
+| `.symbolEffect(.variableColor.iterative.dimInactiveLayers)` | `antenna.radiowaves…` while discovery is scanning | Off in `reduceMotion`; replaced by a `Caption1` "Scanning…" |
+| `.contentTransition(.symbolEffect(.replace.downUp))` | play↔pause, mute↔unmute, fit↔fill, mainstream↔substream | `.replace.offUp` is used when the two glyphs differ in size class |
+| `.symbolEffect(.appear)` | Checkmarks confirming an optimistic action | Always allowed (100 ms, no loop) |
+
+### 8.5 The two custom symbols
+
+Both are authored as SF Symbols 5 `.svg` templates exported from the Apple template, with all three
+weights we use (Regular, Medium, Semibold) and all three scales (S/M/L), and shipped in
+`VigilUI/Resources/Symbols.xcassets`. They are referenced with `Image(systemName:)` (custom symbols
+resolve through the asset catalogue) and honour `foregroundStyle`, `imageScale` and `symbolRenderingMode`.
+
+**1. `vigil.aperture`** — the brand mark. A six-blade aperture: six identical circular-segment blades
+arranged at 60° intervals around a centre, each blade a 2.0-unit-wide stroke path, forming a hexagonal
+opening at the centre whose inscribed circle is 34 % of the outer diameter. The gap between blade tips
+is 1.5 units. Reads as a lens iris at 18 pt and as a hexagonal ring at 11 pt. Has a `.fill` variant
+where the blades are solid and the centre is knocked out. Used: menu-bar extra (as a **template**
+image, `isTemplate = true`), About window, empty state hero, the `⌘K` palette's default row icon.
+
+**2. `vigil.ptz.joystick`** — a four-way pad. A rounded-square outline (corner radius 4 units on a
+20-unit square, stroke 1.5) containing four small triangular arrowheads inset 2.5 units from each edge
+midpoint, plus a 3-unit filled centre dot. Distinguishable at 11 pt (SF Symbols' `dpad` reads as a
+game controller, and `arrow.up.and.down.and.arrow.left.and.right` reads as "move window" — neither
+communicates *pan/tilt*). Has a `.fill` variant with a solid pad. Used: inspector PTZ tab icon, the
+palette's PTZ actions, the tile hover toolbar's PTZ button.
+
+⛔ No other custom symbols. If a concept needs an icon that SF Symbols lacks, it gets a drawn
+`Canvas`/`Shape` (like `VLayoutGlyph`), not a new symbol — symbols must stay maintainable across SF
+Symbols releases.
+
+---
+
+## 9. Component inventory
+
+Every component lives in `VigilUI/Components/`, is prefixed `V`, takes no colours or fonts as
+parameters (only semantic variants), and has a `#Preview` covering **every state in its table**.
+
+States are always these six: **rest, hover, pressed, focused, disabled, loading.** A component that
+cannot be in a state says so.
+
+### 9.1 `VButton`
+
+```swift
+VButton("Add Camera", icon: "plus", style: .primary, size: .md) { … }
+
+enum VButtonStyle { case primary, secondary, ghost, destructive, icon }
+enum VButtonSize  { case xs, sm, md, lg, xl }   // maps to §5.5 heights
+```
+
+**Geometry** (from §5.5): height/radius/padding/font per size. Icon + label gap 6 pt (`md`). Icon-only
+buttons are square. Label is `Body` for `secondary`/`ghost`, `Headline` (semibold) for
+`primary`/`destructive`. Multi-word labels never wrap; they truncate with `.tail` at a 220 pt max.
+
+| State | primary | secondary | ghost | destructive | icon (on chrome) | icon (on video) |
+|---|---|---|---|---|---|---|
+| **rest** | fill `accentFill`, text/icon white, stroke none, E1 shadow (`black α 0.35 r4 y2`) | fill `surfaceRaised`, stroke `stroke.default`, text `text.primary` | fill clear, stroke none, text `text.secondary` | fill `dangerFill`, text white, E1 | fill clear, icon `text.secondary` | fill `scrim.base` (black α 0.62), icon `text.primary`, stroke `white α 0.14` |
+| **hover** | fill `accentHover`, shadow ×1.35 | fill `surfaceRaised` + white α 0.04, stroke `stroke.strong` | fill `white α 0.06`, text `text.primary` | fill `#D93A2B`, shadow ×1.35 | fill `white α 0.06`, icon `text.primary` | fill black α 0.74, icon white, stroke `white α 0.22` |
+| **pressed** | fill `accentPressed`, `scale 0.97`, shadow → none | fill `white α 0.10`, `scale 0.97` | fill `white α 0.10`, `scale 0.97` | fill `#B8281A`, `scale 0.97` | fill `white α 0.12`, `scale 0.94` | fill black α 0.86, `scale 0.94` |
+| **focused** | rest + focus ring (§9.30) | rest + ring | rest + ring | rest + ring | rest + ring | rest + ring inset 2 pt |
+| **disabled** | fill `accentFill α 0.30`, text `white α 0.45` | fill `surface`, stroke `stroke.subtle`, text `text.disabled` | text `text.disabled` | fill `dangerFill α 0.30`, text `white α 0.45` | icon `text.disabled` | n/a — chrome hides instead |
+| **loading** | fill unchanged, label `opacity 1 → 0` + a 13 pt trimmed ring (`motion.spin`, 1.5 pt, white) cross-faded in over 120 ms; **width is frozen** at the label width so the button never resizes | same, ring `accent` | same | same, ring white | icon → ring | icon → ring |
+
+Rules: `pressMinDuration` 80 ms (§7.2). Press `scale` anchors `.center`. Only **one**
+`primary` button may be visible in any container; a second becomes `secondary`. `destructive` requires
+a confirmation (`VPopover` with "Delete" / "Cancel") unless the action is undoable.
+`.keyboardShortcut` is declared on the button, not the parent, so the menu bar can mirror it.
+
+### 9.2 `VSegmentedControl`
+
+Track: height per size (`sm` 24 / `md` 28), fill `layer.canvas` (E0), stroke `stroke.default`, radius
+`radius.sm` 6, inner padding 2 pt. Thumb: fill `surfaceRaised`, stroke `stroke.strong`, radius 4,
+E1 shadow, animated with `matchedGeometryEffect(id: "segmented.\(id)", in: ns.selection)` + `snap`.
+Segment min width 44 pt, equal widths by default; `.hugging` mode sizes to content.
+
+| State | Selected segment | Unselected segment |
+|---|---|---|
+| rest | text `text.primary` (`Headline`), thumb visible | text `text.secondary` (`Body`) |
+| hover | — | text `text.primary`, fill `white α 0.04` |
+| pressed | thumb `scale 0.98` | fill `white α 0.08` |
+| focused | 2 pt ring around the **track**, not the thumb; `←`/`→` move selection | — |
+| disabled | thumb fill `surface`, text `text.disabled` | text `text.disabled` |
+| loading | n/a | n/a |
+
+Used for: layout family, transport (TCP/UDP), latency preset, aspect mode, appearance,
+timeline density, inspector tabs (in `.hugging` mode with an underline instead of a thumb).
+
+### 9.3 `VToggle`
+
+Track 32 × 18 pt, radius `full` (9). Knob 14 pt circle, inset 2 pt, fill white, E1 shadow
+(`black α 0.30 r2 y1`). Off track: `layer.canvas` + `stroke.default`. On track: `accentFill`, no
+stroke. Knob travel 14 pt.
+
+| State | Off | On |
+|---|---|---|
+| rest | track `canvas`, stroke `stroke.default`, knob `text.secondary` → actually white α 0.85 | track `accentFill`, knob white |
+| hover | stroke `stroke.strong` | track `accentHover` |
+| pressed | knob `scale 1.06` (`micro`) | knob `scale 1.06` |
+| focused | 2 pt ring, 3 pt outset, radius `full` | same |
+| disabled | track `surface`, knob `white α 0.35` | track `accentFill α 0.30`, knob `white α 0.6` |
+| loading | Track shows an indeterminate 1 pt `accent` sweep along its top edge while an optimistic device write is pending; reverts with a `rubber` bounce + toast on failure (`optimisticTimeout` 1200 ms) | same |
+
+Label sits leading, `Body`, 8 pt gap; the whole row (label + toggle) is the hit target and is
+`.contentShape(Rectangle())`. Row min height 28 pt.
+
+### 9.4 `VSlider`
+
+Track height 4 pt, radius `full`, E0. Inactive fill `white α 0.12`; active (leading) fill `accent`.
+Knob 14 pt circle, white, E1 shadow, 1 pt `black α 0.20` stroke. Tick marks (optional) 1 × 4 pt
+`white α 0.18` below the track at 8 pt spacing. Value label: `Mono` 11, `text.secondary`,
+trailing, reserved width per §4.4.
+
+| State | Spec |
+|---|---|
+| rest | as above |
+| hover | knob `scale 1.14`, track height 4 → 5 pt (`micro`); value label `opacity 0.7 → 1` |
+| pressed / dragging | knob `scale 1.20`, active fill `accentHover`, value label promoted to `Headline` and pinned above the knob in a 20 pt `scrim.base` capsule; **no animation on the knob position** (1:1 tracking) |
+| focused | 2 pt ring around the knob, `←`/`→` = ±1 step, `⌥←/→` = ±0.1 step, `⇧` = ×10 |
+| disabled | track `white α 0.06`, active fill `white α 0.10`, knob `text.disabled` |
+| loading | Optimistic: knob moves immediately; a 1 pt `accent` underline pulses beneath the track until the device confirms; on failure the knob returns with `rubber` and a toast |
+
+Bipolar variant (brightness/contrast, −100…+100): the active fill grows from the centre; a 1 pt
+`white α 0.28` centre detent is drawn and the knob snaps to 0 within 2 pt (`snap`).
+
+### 9.5 `VTextField`
+
+Height `md` 28 (`lg` 32 for the search field), radius `radius.md` 8, fill `layer.canvas` (E0), stroke
+`stroke.default`, inner top shadow `black α 0.24` 1 pt. H-padding 10 pt (10 + 20 when there is a
+leading icon). Text `Body` `text.primary`; placeholder `text.tertiary`. Monospaced variant for
+host/IP/port/URL fields (`Mono` 11) with `.autocorrectionDisabled()` and
+`.textContentType(nil)`.
+
+| State | Spec |
+|---|---|
+| rest | as above; label above in `Callout` `text.secondary`, 4 pt gap |
+| hover | stroke `stroke.strong` |
+| focused | stroke `accent` 1 pt **and** a 2 pt `focusRing α 0.35` outer glow at 3 pt outset; caret `accent`; selection `accent α 0.30` |
+| disabled | fill `surface`, stroke `stroke.subtle`, text `text.disabled`, no caret |
+| invalid | stroke `danger` 1 pt; inline message below (§below) |
+| loading / validating | 13 pt trimmed ring (`accent`, 1.5 pt, `motion.spin`) at the trailing edge, replacing any clear button |
+| valid (async-confirmed) | `checkmark.circle.fill` `ok` 13 pt at the trailing edge, `.symbolEffect(.appear)`, auto-hides after 2 s |
+
+**Inline validation:** validation runs on (a) `.onSubmit`, (b) focus loss, and (c) debounced 400 ms
+after typing stops — never on every keystroke. The message appears **below** the field: 16 pt row,
+`Caption1`, `danger`, with an 11 pt `exclamationmark.triangle.fill`, entering with
+`offset(y: −4 → 0)` + `opacity` on `micro`. The field's container reserves the 16 pt so nothing below
+it moves. Copy is specific and actionable: "Port must be between 1 and 65535", not "Invalid input".
+
+### 9.6 `VSearchField`
+
+`VTextField` at `lg` 32 with radius `radius.md` 8 (not a capsule — capsule search fields read as iOS),
+leading `magnifyingglass` 13 pt `text.tertiary` (→ `text.secondary` on focus), trailing
+`xmark.circle.fill` 13 pt clear button that appears with `micro` when non-empty. Placeholder
+"Search cameras" / "Search events". `/` focuses it from anywhere; `Esc` clears then blurs (two-stage).
+A trailing `VKeyCap("/")` at `text.tertiary` shows while unfocused and empty, cross-fading out on
+focus. Scoped variant adds a `VSelect` pill at the leading edge ("All", "Live", "Offline").
+
+### 9.7 `VSelect` (pop-up)
+
+Height per size, radius `radius.md` 8, fill `surfaceRaised` (E1), stroke `stroke.default`, trailing
+`chevron.up.chevron.down` 11 pt `text.tertiary` with 8 pt leading gap. Menu is a native `Menu` styled
+by `VPopover` rules: E2 glass, radius `radius.xl` 14, item height 24, item radius 6, item hover fill
+`accent α 0.16`, checkmark leading at 13 pt `accent`, section headers `Caption2` uppercase
+`text.tertiary`, dividers `stroke.subtle` hairline with 4 pt insets.
+
+| State | Spec |
+|---|---|
+| rest / hover / pressed / focused / disabled | as `VButton(.secondary)` |
+| loading | Value text → `VSkeleton` 60 × 11 pt; chevron `text.disabled` |
+
+### 9.8 `VBadge`
+
+Height 16 pt (`xs` 14 for inline), radius `radius.xs` 4 (or `full` for counts), H-padding 5 pt,
+`Caption2` uppercase, tracking +0.5. Variants:
+
+| Variant | Fill | Text | Use |
+|---|---|---|---|
+| `.neutral` | `white α 0.10` | `text.secondary` | `H.265`, `1080P`, `SUB` |
+| `.accent` | `accent α 0.18` | `accent` | `NEW`, `BETA` |
+| `.live` | `liveFill` | white | `REC` — plus a 4 pt pulsing dot leading |
+| `.ok` | `okFill α 0.22` | `ok` | `HW` (hardware decode) |
+| `.warn` | `warn α 0.20` | `warn` | `DEGRADED` |
+| `.danger` | `dangerFill α 0.22` | `danger` | `OFFLINE`, `AUTH` |
+| `.count` | `motion` | `text.inverse` | Event counts; radius `full`, min width 16, `numericText` transition |
+
+On video, all variants swap their fill for `scrim.base` + a 1 pt stroke in the variant colour, so the
+badge never brightens the frame. States: rest only (badges are not interactive). A badge inside an
+interactive row inherits that row's hover/pressed but does not change itself.
+
+### 9.9 `VChip`
+
+Height 20 pt, radius `radius.sm` 6, H-padding 6 pt, `Caption1`, optional 6 pt leading dot or 11 pt
+icon, optional trailing 11 pt `xmark` (removable). Two families:
+
+- **Identity chip** (camera name on a tile): fill `scrim.base`, text `text.primary`, leading 6 pt
+  dot in the camera's `ident` colour plus, when `differentiateWithoutColor`, the camera's initial in
+  `Caption2` inside the dot's place (9 pt box).
+- **Filter chip** (events, discovery): rest fill `white α 0.08` / stroke none; selected fill
+  `accent α 0.18` / stroke `accent α 0.40` / text `accent`.
+
+| State | Spec |
+|---|---|
+| rest | per family |
+| hover | fill +α 0.04; removable `xmark` `opacity 0 → 1` |
+| pressed | `scale 0.97` |
+| focused | 2 pt ring at 2 pt outset |
+| disabled | text `text.disabled`, fill `white α 0.04` |
+| loading | `VSkeleton` at the chip's exact size |
+
+### 9.10 `VCard`
+
+Fill `layer.surface`, stroke `stroke.default` 1 pt, radius `radius.lg` 10, padding `space.md` 12
+(`space.lg` 16 for cards with a header), E1 shadow only when the card is interactive or draggable —
+static content cards get **no** shadow (flat cards read as structure; shadowed cards read as objects).
+Optional header: 28 pt row, `Title3` + trailing accessory, hairline `stroke.subtle` divider beneath,
+full-bleed to the card edges (so the divider uses `outer − 0` and the header's top corners follow the
+nesting rule: 10 pt).
+
+| State (interactive cards) | Spec |
+|---|---|
+| rest | as above |
+| hover | fill `surfaceRaised`, stroke `stroke.strong`, shadow ×1.35 y+1 (`micro`) |
+| pressed | `scale 0.995` (cards are large; 0.97 looks broken), fill `white α 0.03` over `surfaceRaised` |
+| focused | 2 pt ring at 3 pt outset, radius 13 |
+| disabled | `opacity 0.5`, no hover |
+| loading | Content replaced by `VSkeleton` blocks matching the real layout's boxes (never a generic spinner) |
+
+### 9.11 `VToolbar` (floating glass)
+
+The tile hover toolbar and the cinema control bar. Height 32 pt (tile) / 56 pt (cinema). Radius
+`radius.xl` 14 (tile) / `radius.xxl` 20 (cinema). Background: **on video → `scrim.base` solid**
+(§2.3); **over chrome → E2 glass**. Item spacing 2 pt; group separators = 1 × 16 pt
+`white α 0.14` with 6 pt margins. Content inset 6 pt. Items are `VButton(.icon, size: .md)`.
+
+Tile toolbar item order (leading → trailing), all 28 × 28: mute, snapshot, record, PTZ,
+substream/mainstream, aspect, PiP, fullscreen, close. Overflow: if the tile's width < 44 × visible
+items + 12, items are removed from the **middle** outward in this priority (keep first and last):
+PiP → aspect → substream → PTZ → record → snapshot; the removed ones move into an `ellipsis` menu.
+Below 120 pt tile width, the toolbar is replaced by a single 28 pt `ellipsis.circle` button.
+
+Placement: tile toolbar is bottom-trailing, 8 pt inset. Appears on hover (§7.4 #23) with
+`hoverOutDelay` 260 ms. Never appears while the tile is being dragged or while the mouse is
+mid-scroll (digital zoom).
+
+### 9.12 `VSidebarRow`
+
+Height 44 pt. Layout, leading → trailing:
+
+```
+[2pt ident rail][8][40×22 thumbnail][8][ name (Headline, 1 line)          ][6][dot][8]
+                                        [ H.265 · 1080p · 25 (Caption1)   ]
+                                        [ ▁▂▅▃▁ 60×10 motion spark        ]  ← right of subtitle
+```
+
+- **Ident rail:** 2 × 28 pt rounded (radius 1) in the camera's `ident` colour, leading edge, `opacity`
+  0.9. Hidden for non-camera rows.
+- **Thumbnail:** 40 × 22 pt (16:9), radius `radius.xs` 4, `#000000` well, updated at **4 Hz** from the
+  decoder's already-decoded frames via a downscale to 80 × 44 px (never a separate decode). While
+  connecting it is a `VSkeleton`; offline it is the last frame at `opacity 0.35` with an 11 pt
+  `video.slash` centred.
+- **Status dot:** `VLiveDot` in a 14 pt box.
+- **Motion spark:** 60 × 10 pt `VSparkline` of the last 60 s of motion energy, `motion` colour at
+  α 0.7, only drawn when the row is hovered or the camera has had motion in the last 5 min.
+- **Subtitle:** `Caption1` `text.tertiary`, `monospacedDigit`, truncates before the name does.
+
+| State | Spec |
+|---|---|
+| rest | fill clear |
+| hover | fill `white α 0.05`, radius `radius.lg` 10, inset 6 pt from the sidebar edges; reorder handle fades in leading (replacing the rail) |
+| pressed | fill `white α 0.09` |
+| **selected** | fill `accent α 0.16`, 1 pt `accent α 0.30` stroke, name → `text.primary` semibold; when the window is inactive the fill drops to `white α 0.08` and the stroke to `stroke.default` |
+| selected + hover | fill `accent α 0.22` |
+| focused (keyboard) | selected treatment + 2 pt focus ring |
+| disabled | n/a (rows are never disabled; an unreachable camera is *offline*, which is content, not state) |
+| loading | Name → 90 × 11 skeleton, subtitle → 60 × 9 skeleton, thumbnail → skeleton |
+| drag source | `opacity 0.4`; the drag ghost is the row at `scale 1.04` with E2 shadow |
+| drop target (into group) | 2 pt `accent` dashed stroke (dash 4/3, phase animating at 12 pt/s), fill `accent α 0.32` |
+| drop target (between rows) | 2 pt `accent` insertion line with 6 pt round caps, inset 12 pt, entering with `snap` |
+
+Icon-rail collapsed mode (52 pt): thumbnail centred at 36 × 20, dot overlaid bottom-trailing at 6 pt,
+name hidden, tooltip after `tooltipDelay`.
+
+### 9.13 `VTile` — the video cell
+
+The most important component in the app.
+
+```
+┌──────────────────────────────────────────┐  radius 14 (continuous)
+│                                          │  well #000000, isOpaque
+│              [ live video ]              │  AVSampleBufferDisplayLayer / Metal
+│                                          │
+│ ●Front Door                    ⌁ REC ▮   │  ← name chip (BL), status cluster (TR)
+│                    [◍ ⚙ ⏺ ✥ ⤢ ⋯]        │  ← hover toolbar (BR), 8pt inset
+└──────────────────────────────────────────┘
+```
+
+| Element | Spec |
+|---|---|
+| Well | `#000000`, radius `radius.xl` 14, `clipShape(.rect(cornerRadius: 14, style: .continuous))`, no stroke at rest |
+| Gutter | 2 pt between tiles; stage inset 8 pt |
+| Name chip | `VChip` identity variant, bottom-**leading**, 8 pt inset. At rest `opacity 0.70`; on hover 1.0. Hidden entirely when the tile is < 160 pt wide unless hovered. |
+| Status cluster | Top-**trailing**, 8 pt inset, `HStack(spacing: 4)`: hardware-decode `bolt.fill` (`ok`, only when HW), audio state, `REC` badge, `VLiveDot`. Each is a `VBadge`/`VChip` on `scrim.base`. |
+| Stats HUD | Toggled per-tile (`I`) or always-on in Settings. Top-**leading**, 8 pt inset, `MonoSmall` 10 pt `text.secondary` on `scrim.base`, radius `radius.sm` 6, padding 4/6, 3 lines: `1920×1080 · 25 fps`, `4.2 Mb/s · 0.02% loss`, `184 ms · q2 · HW`. Reserved widths per §4.4. |
+| Hover toolbar | §9.11 |
+| Selection | 2 pt `accent` inner stroke (drawn inset by 1 pt so it is not clipped), plus a 1 pt `accent α 0.25` outer glow at radius 15 |
+| Focus (keyboard) | 2 pt `focusRing` inner stroke + 3 pt `focusRing α 0.30` outer glow; distinct from selection by the lighter tint and the glow |
+| Recording | 3 pt `live` inner stroke, breathing α 0.55 ↔ 1.0 (§7.4 #11) |
+| Degraded | Top banner inside the tile: 20 pt, `scrim.strong`, `Caption1` `warn`, "Packet loss 2.4 %", entering after a 1.5 s debounce |
+| Offline | Last frame at `opacity 0.30` + `scrim.strong` + centred 32 pt `video.slash` `text.tertiary` + `Title3` "No signal" + `Caption1` reconnect countdown ring (§7.4 #38) + a `VButton(.secondary, .sm)` "Retry now" |
+| Auth failure | Same layout, `lock.trianglebadge.exclamationmark`, "Sign-in failed", primary action "Update credentials…" |
+| Empty cell | `layer.canvas` fill, 1 pt `stroke.default` **dashed** (dash 4/4), centred 22 pt `plus` `text.tertiary`, `Caption1` "Drop a camera"; hover → stroke `accent`, fill `accent α 0.10` |
+| Loading | §7.6 tile skeleton |
+| Aspect | `.resizeAspect` default; letterbox bars `#000000`; fill mode crops via the renderer's texture transform, never via `clipped()` on a resized layer |
+
+Interaction: single-click selects (and focuses); double-click → fullscreen (`expressive`,
+`matchedGeometryEffect`); scroll → digital zoom 1.0…8.0× (renderer); drag with `⌥` → pan when zoomed;
+right-click → `VContextMenu`; `⌥`+arrows → move focus between tiles; drag-and-drop → reassign camera.
+
+⛔ The tile never animates its own `cornerRadius`, `frame` or `clipShape` while video is live —
+all such transitions go through `VTileTransitionProxy` (§7.9).
+
+### 9.14 `VTimeline`
+
+Height 88 pt (single) / 44 pt per lane (multi). Structure top → bottom:
+
+| Band | Height | Spec |
+|---|---|---|
+| Ruler | 16 pt | Hour/minute labels in `MonoSmall` 10 `text.tertiary`; major ticks 1 × 6 pt `white α 0.22`, minor 1 × 3 pt `white α 0.10`. Six zoom tiers: 24 h, 6 h, 1 h, 15 m, 5 m, 1 m — labels change per tier with `crossfade`. |
+| Density heatmap | 28 pt | The recording map. Continuous = `continuous` `#3B9CFF` α 0.55; motion = `motion` `#FF9F0A` α 0.75; alarm = `live` `#FF2E43` α 0.90; gap = `white α 0.05`. Drawn in a single `Canvas` with `.drawingGroup()`; segments quantised to 1 px at the current tier. Overlapping types stack: alarm > motion > continuous. |
+| Event markers | 10 pt | 6 pt inverted triangles in the event's semantic colour, at `text.primary` α 0.9 stroke on hover; click = jump. |
+| Scrub track | 24 pt | E0 track; the playhead is a 2 pt `text.primary` vertical line with a 10 pt `text.primary` circular cap at the top and a 1 pt `black α 0.6` outline so it is visible over every heatmap colour. |
+| Selection (in/out) | overlay | `accent α 0.22` fill between handles; handles are 4 × full-height `accent` bars with 8 pt grab areas; a `MonoSmall` duration pill floats above the centre. |
+
+Interaction: drag = scrub with a **live preview thumbnail** (160 × 90, radius `radius.sm` 6, E2, 12 pt
+above the cursor, `#000000` well, decoded on a background actor, showing a `VSkeleton` until ready);
+scroll = pan; `⌥`scroll / pinch = zoom about the cursor (`glide` on release); magnetism per §7.4 #20
+(6 pt to segment boundaries, event markers, whole minutes); `⇧`drag = select a range.
+
+| State | Spec |
+|---|---|
+| rest | as above |
+| hover | Ruler labels `opacity 0.7 → 1`; a 1 pt `white α 0.30` cursor line follows the pointer with a `MonoSmall` time pill at the top |
+| pressed / scrubbing | Playhead cap `scale 1.0 → 1.25` (`snap`); heatmap `opacity 1 → 0.8` so the playhead dominates; preview thumbnail visible |
+| focused | 2 pt ring around the whole strip; `←/→` = ±1 s, `⇧` = ±10 s, `⌥` = ±1 frame, `⌘←/→` = previous/next event |
+| disabled (no recordings) | Heatmap replaced by a 4 pt `white α 0.05` bar and a centred `Caption1` "No recordings on this day" |
+| loading | Heatmap is a shimmering `VSkeleton` bar; the ruler is drawn immediately (it is known) so the component does not change size |
+
+### 9.15 `VPTZPad`
+
+152 × 152 pt. Outer ring: 152 pt circle, 1.5 pt `stroke.strong` stroke, fill `layer.canvas` (E0) with
+a subtle radial `white α 0.03` centre. Four direction arrows (11 pt `chevron` glyphs) at the ring's
+edge midpoints, `text.tertiary`; four diagonal ticks at 45° (1 × 5 pt `white α 0.14`). Thumb: 28 pt
+circle, fill `surfaceRaised`, 1 pt `stroke.strong`, E2 shadow, with a 6 pt `accent` centre dot.
+Max travel radius 52 pt. Speed = `min(1, |offset| / 52)` mapped through a 1.6 gamma so slow moves are
+precise; direction = `atan2`. Continuous-move commands are sent at 10 Hz while displaced and a
+`stop` on release.
+
+| State | Spec |
+|---|---|
+| rest | thumb centred; arrows `text.tertiary` |
+| hover | ring stroke → `white α 0.24`; arrows → `text.secondary` |
+| dragging | thumb follows the cursor 1:1 (**no animation**); an `accent α 0.25` wedge (60° wide) is drawn from the centre in the active direction; the active arrow → `accent`; a `MonoSmall` "speed 0.42" pill sits below the pad |
+| key-nudge | Arrow keys: the corresponding arrow `scale 1.0 → 1.12 → 1.0` (`snap`) and a 200 ms move command; `⇧` = fast, `⌥` = single step |
+| at limit | §7.4 #14 `rubber` bump + the blocked arrow tints `warn` for 300 ms |
+| focused | 2 pt ring around the whole 152 pt circle |
+| disabled (no PTZ) | `opacity 0.4`, arrows `text.disabled`, centred `Caption1` "This camera does not support PTZ" replacing the thumb |
+| loading (command in flight) | Centre dot pulses `accent` α 0.5↔1.0 at 3 Hz; if `optimisticTimeout` elapses, a toast "Camera did not respond" |
+
+Below the pad: zoom/focus/iris as three `VSlider`-less rocker pairs (28 pt `VButton(.icon)` −/+ with a
+`Mono` value between), then a 3 × 3 presets grid of 72 × 40 thumbnails (radius `radius.lg` 10,
+`#000000` well, `Caption1` name overlay on `scrim.base`, `star.fill` when assigned; long-press or
+right-click → "Set to current position").
+
+### 9.16 `VCommandPalette`
+
+640 pt wide, max 520 pt tall, top inset 132 pt from the window's top, centred horizontally.
+E3 glass, radius `radius.xxl` 20, scrim `black α 0.44`. Entrance per §7.4 #15.
+
+| Band | Spec |
+|---|---|
+| Input | 52 pt tall, `Title3` 15 pt text, no border, leading 20 pt `magnifyingglass` 15 pt `text.tertiary`, placeholder "Search cameras and actions", trailing `VKeyCap("esc")`. Hairline `stroke.default` divider below, full-bleed. |
+| Results | Rows 40 pt (with a 28 × 16 thumbnail for cameras) or 32 pt (actions). Row layout: `[icon 15pt][10][title Headline][6][subtitle Caption1 text.tertiary][flex][badge][8][shortcut VKeyCaps][16]`. Selected row: fill `accent α 0.18`, 1 pt `accent α 0.30` stroke, radius `radius.md` 8, inset 8 pt, moved via `matchedGeometryEffect` + `snap`. Hover = fill `white α 0.06` (and hover **does not** move keyboard selection). |
+| Section headers | 24 pt, `Caption2` uppercase `text.tertiary`, 20 pt leading inset. Sections in fixed order: Cameras, Layouts, Actions, Playback, Settings. |
+| Footer | 32 pt, hairline divider above, `Caption1` `text.tertiary` hints: `↑↓ navigate` `↵ open` `⌘↵ open in new window`, trailing a result count. |
+| Empty | 120 pt, centred 22 pt `magnifyingglass` `text.disabled`, `Body` "No matches for "xyz"", `Caption1` "Try a camera name, a layout, or "record"". |
+| Loading | Only when a search hits the network (ISAPI event search): the footer shows a 11 pt spin ring + "Searching device…"; existing local results stay visible. |
+
+Focus is trapped inside the palette; `Esc` closes; clicking the scrim closes; `⌘K` toggles. The list
+is `List`-free (a `LazyVStack` in a `ScrollViewReader`) so selection scrolling is exact:
+`.scrollTo(id, anchor: .init(x: 0, y: 0.35))`.
+
+### 9.17 `VToast`
+
+320 pt wide, min 44 pt tall, radius `radius.xl` 14, E2 glass, bottom-trailing stack with 20 pt window
+inset and 8 pt between toasts, max 3 visible (older ones collapse into a "+2 more" row).
+Layout: `[16][icon 15pt][10][VStack: title Headline, message Caption1 text.secondary][flex][action VButton(.ghost,.sm)][8][xmark 11pt][12]`.
+
+| Variant | Icon | Icon colour | Leading edge |
+|---|---|---|---|
+| `.info` | `info.circle.fill` | `accent` | 3 pt `accent` bar, radius 1.5, full height inset 8 pt |
+| `.success` | `checkmark.circle.fill` | `ok` | 3 pt `ok` |
+| `.warning` | `exclamationmark.triangle.fill` | `warn` | 3 pt `warn` |
+| `.error` | `xmark.octagon.fill` | `danger` | 3 pt `danger` |
+| `.motion` | `figure.walk` | `motion` | 3 pt `motion`; includes a 64 × 36 event thumbnail leading, and clicking it jumps to playback |
+
+Dwell: 4 s (`.info`/`.success`), 6 s with an action, **indefinite** for `.error` (must be dismissed).
+Hovering pauses the dismiss timer and reveals the `xmark`. Entrance/exit per §7.4 #18–19. Stack
+re-flows with `standard`. Toasts are `accessibilityAddTraits(.isStaticText)` and posted to VoiceOver
+with `NSAccessibility.post(element:notification:.announcementRequested)` at
+`.high` priority for errors, `.medium` otherwise.
+
+### 9.18 `VEmptyState`
+
+Centred, max width 380 pt. Layout: 48 pt `icon.hero` (32 pt glyph in a 48 pt circle of `white α 0.05`
+with a 1 pt `stroke.default`) → 20 pt → `Title2` title → 8 pt → `Body` `text.secondary` message
+(2 lines max) → 24 pt → `VButton(.primary, .xl)` → 12 pt → optional `VButton(.ghost, .md)` secondary.
+Entrance per §7.4 #44.
+
+Instances: no cameras (`vigil.aperture` hero, "No cameras yet", "Vigil can find Hikvision cameras on
+your network automatically.", "Scan network" / "Add manually"); no events; no recordings on this day;
+empty group; no search results; second display not connected.
+
+### 9.19 `VSkeleton`
+
+§7.6. Sizes are always the **real** content's box, never a generic bar: a name skeleton is 90 × 11, a
+subtitle 60 × 9, a thumbnail 40 × 22, a card body three bars of 100 %/92 %/64 % width × 11 pt with
+6 pt gaps. Radius: 3 pt for text bars, the component's own radius for boxes.
+
+### 9.20 `VStatPill`
+
+Used throughout the inspector and the tile HUD. Height 24 pt (`sm`), radius `radius.sm` 6, fill
+`surfaceRaised` (E1, no shadow), stroke `stroke.default`, padding 6/8.
+Layout: `[icon 12pt text.tertiary][6][value Mono 11 text.primary][2][unit Caption1 text.tertiary]`.
+Value has a reserved width (§4.4) and `.contentTransition(.numericText())` when it changes at ≤ 2 Hz.
+
+Threshold tinting: the pill's **stroke and icon** (never its fill) take `ok`/`warn`/`danger` based on
+`VHealthThresholds`:
+
+| Metric | ok | warn | danger |
+|---|---|---|---|
+| Loss | < 0.5 % | 0.5–2 % | > 2 % |
+| Jitter | < 20 ms | 20–60 ms | > 60 ms |
+| Latency | < 250 ms | 250–600 ms | > 600 ms |
+| fps deviation from expected | < 10 % | 10–25 % | > 25 % |
+| Decode queue | ≤ 2 | 3–5 | > 5 |
+
+States: rest / hover (stroke `stroke.strong`, tooltip with the metric's definition and 60 s history) /
+focused (2 pt ring; `↵` opens the metric's graph) / loading (`VSkeleton` 40 × 11 in place of the
+value). Not pressable unless it has a graph.
+
+### 9.21 `VSparkline`
+
+Default 60 × 16 pt (inspector 240 × 44). Path: 1.25 pt stroke, round caps and joins, colour per
+metric (`accent` for bitrate, `ok` for fps, `warn` for loss, `motion` for motion energy). Fill: a
+`LinearGradient` from `colour α 0.22` to `colour α 0.0` top → bottom, only in the 240 pt variant.
+Baseline: 1 pt `white α 0.08`. Latest point: 3 pt filled circle in the metric colour with a 1 pt
+`layer.surface` ring. Window: 60 samples at 1 Hz. Y range: `[0, max(observedMax × 1.15, floor)]`,
+recomputed with a 5 s decay so the line does not jump on a single spike. Drawn in `Canvas` with
+`.drawingGroup()`; path updates animate per §7.4 #32 (`.linear(0.20)`).
+
+Threshold shading (loss/jitter only): a `warn α 0.10` band above the warn threshold and a
+`danger α 0.12` band above the danger threshold, drawn behind the path.
+States: rest / hover (a 1 pt `white α 0.24` cursor line + a `MonoSmall` value pill; the point under the
+cursor grows to 4 pt) / loading (`VSkeleton` at the sparkline's box) / empty (a flat baseline plus
+`Caption1` "No data yet", no path).
+
+### 9.22 `VContextMenu`
+
+A styled `.contextMenu`. Because AppKit owns menu rendering, our control is limited to structure, so
+the rules are structural: max 9 items before a submenu; items grouped by
+**act on this / configure this / destructive**, separated by dividers; every item carries its symbol
+and its `keyboardShortcut` so the menu doubles as shortcut discovery; destructive items last, with
+`.destructive` role (AppKit tints them red); no item without an icon; labels are verbs
+("Start Recording", not "Recording").
+
+Right-clicking a tile opens: *Open Fullscreen · Open in New Window · Picture in Picture* | *Snapshot ·
+Start Recording · Mute* | *Mainstream/Substream · Aspect Fit/Fill · Show Stats* | *PTZ Presets ▸ ·
+Image Settings…* | *Camera Info… · Stream Doctor…* | *Remove from Layout*.
+
+For the cases where a native menu is not enough (the layout picker with live miniatures, the preset
+grid), we use a `VPopover` instead — never a fake menu drawn in SwiftUI over a native one.
+
+### 9.23 `VPopover`
+
+E2 glass, radius `radius.xl` 14, padding `space.md` 12, max width 320 pt (420 for the Stream Doctor),
+arrow: **none** (macOS 14 `.popover` draws a system arrow; we use
+`.presentationCompactAdaptation(.popover)` and a 6 pt offset instead, because our glass edge plus a
+system arrow double-draws the border). Attachment: 6 pt gap from the source, edge-aligned to the
+source's leading unless it would clip. Header (optional): `Title3` + `xmark` 11 pt.
+
+States: presented/dismissed only (entrance §7.4 #29). Focus moves into the popover and returns to the
+source on dismiss. `Esc` dismisses. Click-outside dismisses. A popover never contains another popover;
+it may contain a `Menu`.
+
+### 9.24 `VSheet`
+
+Modal, E3. Width by content class: `.compact` 420, `.regular` 560, `.wide` 720 pt. Max height
+`min(content, windowHeight − 120)`. Radius `radius.xxl` 20. Structure: 52 pt header
+(`Title1` leading, `xmark` trailing, hairline divider) → scrollable content with `space.xl` 20 margins
+→ 64 pt footer (hairline divider above, `VButton(.ghost)` "Cancel" then `VButton(.primary)` trailing,
+12 pt gap, 20 pt margins). Scrim per §6.2. Entrance §7.4 #30.
+
+`⌘.`/`Esc` cancels; `⌘↵` triggers the primary action. If the content scrolls, the header gains a
+hairline divider only once scrolled (`scrollGeometry`-driven, cross-faded 120 ms). Sheets never nest;
+a sheet that needs a second step animates its content horizontally (`standard`, `offset(x:)` ±24 with
+opacity) inside the same sheet frame, and the frame height animates with `standard`.
+
+### 9.25 `VInspectorSection`
+
+A collapsible group. Header: 28 pt row, `chevron.right` 11 pt `text.tertiary` rotating 90° on expand
+(`snap`), `Caption2` uppercase `text.secondary` title, trailing accessory (a `VBadge` or a 20 pt
+`VButton(.icon, .xs)`). Body: `space.md` 12 vertical padding, rows of 24 pt.
+Row layout: `[label Callout text.secondary, width 96pt, trailing-aligned][12][value/control, flex]`.
+Divider between sections: hairline `stroke.subtle`, full-bleed, 12 pt above/below.
+
+Expansion animates the body's height with `standard` **and** its `opacity` with `fadeIn`, using
+`.clipped()` on the container so the content does not spill. Collapsed state persists per section in
+`@AppStorage("inspector.section.\(id).expanded")`.
+
+States: rest / hover (title → `text.primary`) / pressed (fill `white α 0.05` on the header only) /
+focused (2 pt ring on the header; `↵`/`Space` toggles) / disabled (title `text.disabled`, body hidden,
+a trailing `Caption1` reason, e.g. "Camera offline") / loading (body rows show `VSkeleton` values).
+
+### 9.26 `VKeyCap`
+
+Min 18 × 18 pt (grows with content), radius `radius.xs` 4, fill `white α 0.08`, stroke
+`stroke.default` 1 pt, **plus a 1 pt bottom inner shadow** `black α 0.30` that gives the key its cap
+look. Glyph: `Caption2` 10 pt `.semibold` `text.secondary`, or an 11 pt SF Symbol for modifiers
+(`command`, `option`, `shift`, `control`, `arrow.up`, `return`, `escape`, `delete.left`).
+H-padding 5 pt for multi-character caps ("esc", "⌘K" rendered as two caps with a 3 pt gap).
+
+States: rest / **pressed** (only in the Shortcuts settings pane while recording a chord:
+`offset(y: 1)`, inner shadow removed, fill `accent α 0.20`, stroke `accent`, `snap`) / recording (fill
+`accent α 0.16`, stroke `accent` dashed, `Caption2` "Press keys…") / conflict (stroke `danger`, with a
+`Caption1` "Already used by Snapshot" beneath). Not focusable outside the Shortcuts pane.
+
+### 9.27 Two more that the inventory implies
+
+**`VDivider`** — `Rectangle().fill(stroke.subtle).frame(height: 1/scale)`, with `.inset(12)` and
+`.fullBleed` variants. Never `Divider()`.
+
+**`VProgressRing`** — 13/22/32 pt, `lineWidth` 1.5/2/2.5, `trim` driven either by real progress
+(reconnect countdown, export) or by `motion.spin` when indeterminate; track `white α 0.10`, arc
+`accent` (or the semantic colour of the operation). In `reduceMotion`, indeterminate rings are
+replaced by a static 25 % arc plus a text label.
+
+### 9.28 The focus ring (used by every component)
+
+A single, consistent treatment, drawn by a modifier so no component reimplements it:
+
+```swift
+extension View {
+    func vFocusRing(_ isFocused: Bool, radius: CGFloat, outset: CGFloat = 3) -> some View {
+        self.overlay {
+            RoundedRectangle(cornerRadius: radius + outset, style: .continuous)
+                .strokeBorder(VTheme.Color.Semantic.focusRing, lineWidth: 2)
+                .padding(-outset)
+                .shadow(color: VTheme.Color.Semantic.focusRing.opacity(0.30), radius: 3)
+                .opacity(isFocused ? 1 : 0)
+                .scaleEffect(isFocused ? 1.0 : 1.06)
+        }
+        .animation(VTheme.Motion.micro, value: isFocused)
+    }
+}
+```
+
+Ring colour `focusRing` `#9581FF` clears 3:1 against every layer (§3.2), including over video
+(6.86:1). Outset 3 pt (2 pt on video tiles, where the ring is drawn **inside** so it is never
+clipped by the neighbouring tile). ⛔ `.focusEffectDisabled()` is applied to every custom control so
+the system ring never double-draws with ours; native controls we do not restyle (the Settings window's
+`Form` rows) keep the system ring.
+
+Focus travel uses `matchedGeometryEffect` in the `focus` namespace (§7.7) so the ring visibly moves
+between controls in the same container; between containers it fades (60 ms out / 60 ms in).
+
+### 9.29 Component QA matrix
+
+Every component ships previews for: dark rest, dark hover, dark pressed, dark focused, dark disabled,
+dark loading, light rest, `reduceMotion`, `increaseContrast`, `reduceTransparency`,
+`differentiateWithoutColor`, `textScale = 1.15`, and (for text-bearing components) a Russian string
+that is ~1.4× the English length.
+
+---
 <!-- PART2 -->
