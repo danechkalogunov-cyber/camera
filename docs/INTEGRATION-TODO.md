@@ -123,3 +123,43 @@ camera to send its format" is worth more than a black rectangle.
 and `VideoSink`'s extension adds no-op defaults for `streamDidReset`/`streamDidEnd` that
 API_CONTRACT §4.9 does not, which is what allows finding 8 to be silent. Consider making
 `streamDidReset` a requirement without a default.
+
+---
+
+## Found by the discovery wave
+
+### 10. Discovery has no coordinator, so nothing runs a discovery
+
+Both discovery agents finished their halves and both reported the same gap: **`DiscoveryCoordinator`
+and `Transport/Protocols.swift` were in neither brief.** What exists is every part a run needs and no
+run: SADP and WS-Discovery codecs (byte-exact, hostile-input tested), the sweep planner with its
+subnet guard, the Van der Corput host order, the ARP decoder, the vendor classifier, the union-find
+merge engine and the progress estimator — 6 179 lines, 293 tests.
+
+What is missing is the actor that sequences the phases, enforces the time budget, emits progress at
+20 Hz, handles cancellation, and the seven injected socket protocols it would talk through. So
+`spec-discovery.md` tests 78–100 cannot be written yet, and the feature is unreachable from the UI.
+
+This is a clean seam rather than a defect — everything the coordinator needs is in place and typed
+(`ProgressEstimator.shouldEmit`, `DiscoveryDeadline`, `MergeEngine`, `DiscoveryPlan`) — but it is the
+single largest remaining item in this module and it must not be mistaken for "discovery is done".
+
+### 11. Two fixtures are synthesised from a spec, not captured from a Mac
+
+Both are honestly labelled in their files, and both are the same class of risk as the whole macOS
+layer: verified against the documented layout, not against reality.
+
+* **`arp-routedump`** — built to §14.5's description of `rt_msghdr` (92 bytes, `sockaddr_dl` at
+  `roundup(16)`). No `sysctl(PF_ROUTE)` exists in this container. If the real struct differs, the ARP
+  decoder is wrong in a way no test here can see.
+* **SADP/ONVIF wire bytes** — no socket has been touched. Whether firmware accepts these exact probes,
+  whether the 37020 multicast bind needs the port-reuse fallback, and whether the entitlement is
+  right are all first-contact-on-a-Mac questions.
+
+### 12. Spec error found by implementing, corrected at source
+
+`spec-discovery.md` claimed the SADP probe is **121 bytes** in four places. It is **129**. Verified by
+encoding §4.2's prose XML and decoding §14.1's hex dump independently and comparing: byte-identical,
+129 long. The dump was right the whole time; the count was never recomputed after the UUID was chosen.
+Corrected in all four places, and the byte-exactness test asserts 129 so the code cannot be "fixed"
+toward the prose. This is the sixth spec vector the act of implementing has falsified.

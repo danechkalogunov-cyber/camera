@@ -432,7 +432,12 @@ Rules:
 * `Types` — literally `inquiry`. Lowercase. Do not send `Inquiry`.
 * Newlines: `\n` (0x0A) only. Some very old firmware chokes on `\r\n` inside the prolog; `\n` is
   universally accepted.
-* Total length: 121 bytes for the form above. Never pad.
+* Total length: **129 bytes** for the form above. Never pad.
+  *Corrected 2026-07-26.* This section said 121 in four places and the number was simply wrong
+  arithmetic — the XML above encodes to 129 bytes, and §14.1's hex dump is 129 bytes and byte-identical
+  to it. Checked by encoding the prose form and decoding the dump and comparing the two: equal. The
+  dump was right and the count was never recomputed after the UUID was chosen. `probeIsByteExact`
+  asserts 129 so nobody "corrects" the code toward the prose.
 * Optional element `<MAC>` carrying the *sender's* MAC is emitted by the official tool; it is **not
   required** and we omit it (it leaks our MAC to every device and no firmware requires it).
 
@@ -801,7 +806,8 @@ the backbone of our degraded mode (§9.5) because unicast UDP needs no multicast
   the ARP cache, we send one unicast SADP probe to `host:37020` from a single ephemeral UDP socket and
   collect replies for `600 ms`.
 * When multicast is unavailable, we widen this to **all** planned hosts, but rate-limit to
-  `256 datagrams/second` (one 121-byte datagram per host; a /24 costs 254 datagrams ≈ 1 s) and cap
+  `256 datagrams/second` (one 129-byte datagram per host — about 33 kB/s, so the rate limit is set by
+  politeness to the firmware rather than by bandwidth; a /24 costs 254 datagrams ≈ 1 s) and cap
   total unicast probes at `4 096` per run.
 * Replies are decoded by the identical `SADPCodec.decode`; `source` becomes `.sadpUnicast` (same trust
   weight as multicast — the payload is identical).
@@ -2517,7 +2523,7 @@ final actor VirtualClock: DiscoveryClock { … }
 
 | # | Test | Assertion |
 |---|---|---|
-| 1 | `probeIsByteExact` | `SADPCodec.encodeProbe(uuid:)` equals `Fixtures/sadp-probe.bin` byte for byte, length 121 |
+| 1 | `probeIsByteExact` | `SADPCodec.encodeProbe(uuid:)` equals `Fixtures/sadp-probe.bin` byte for byte, length **129** (see §4.2 — the spec's earlier 121 was wrong) |
 | 2 | `probeUUIDIsUppercaseHyphenated` | no braces, no lowercase hex, exactly 36 chars |
 | 3 | `decodeActivatedCamera` | `sadp-probematch-camera.xml` → all 20+ fields as in §4.4.1; `mac == c4:2f:90:ab:cd:ef`; `rtspPort == 554` |
 | 4 | `decodeNotActivated` | `sadp-probematch-inactive.xml` → `activated == false`, observation maps to `activation == .notActivated` |
@@ -2656,7 +2662,7 @@ every future change.
 
 ## 14. Fixture appendix
 
-### 14.1 `Fixtures/sadp-probe.bin` (121 bytes, exact)
+### 14.1 `Fixtures/sadp-probe.bin` (129 bytes, exact)
 
 ```
 3c 3f 78 6d 6c 20 76 65 72 73 69 6f 6e 3d 22 31   <?xml version="1
