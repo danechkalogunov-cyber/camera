@@ -259,8 +259,12 @@ extension AppSessionModel {
 
     func rememberThisCamera() {
         guard let activeRef, let camera else { return }
+        // `form.request.username`, not `form.username`: the request is the trimmed form, and it is
+        // what `knownHandle(for:)` compares against on the next connect. Storing the raw field
+        // would make a name typed with a trailing space fail to match itself, mint a second
+        // `CredentialRef`, orphan the Keychain item and lose the learned RTSP path.
         LastConnection(host: camera.host,
-                       account: form.username,
+                       account: form.request.username,
                        credentialRef: activeRef,
                        rtspPath: resolvedPath).save(to: defaults)
     }

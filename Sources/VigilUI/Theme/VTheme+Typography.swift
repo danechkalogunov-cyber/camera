@@ -211,7 +211,13 @@ extension VTheme.Typography {
     /// `@AppStorage("ui.textScale")` and published as `\.vTextScale` by `Theme/Environment.swift`;
     /// this namespace holds the factors themselves and the two rounding rules that keep the result
     /// on Vigil's grids.
-    @MainActor
+    ///
+    /// The one sub-namespace of `VTheme` that is deliberately **not** `@MainActor`. It holds three
+    /// `CGFloat` constants and three pure functions — nothing that reads a `Font`, a `Color` or any
+    /// main-actor state — and `Theme/Environment.swift` has to name ``standard`` from
+    /// `VTextScaleKey.defaultValue`, which is a `nonisolated` static requirement of
+    /// `EnvironmentKey`. A `@MainActor` value cannot initialise a nonisolated static, so the choice
+    /// is between isolating arithmetic and duplicating the number; the arithmetic loses.
     public enum Scale {
 
         /// Small.

@@ -178,6 +178,13 @@ public actor DecodePipeline {
         if awaitingKeyframe {
             guard frame.isKeyframe else {
                 drop(reason: .awaitingKeyframe)
+                // The request belongs **here**, not at the point the gate closes. Closing the gate
+                // and asking in the same breath fires a request on the very frame that opens it:
+                // the parameter sets arrive attached to the IDR, so `.firstSet` would ask the
+                // camera for a keyframe it has already sent. Asking only once a frame has actually
+                // been dropped for want of one is the same policy, one frame later, and costs
+                // nothing — the supplier of `requestKeyframe` may be restarting the session.
+                requestKeyframeOnce()
                 return
             }
             awaitingKeyframe = false
@@ -308,7 +315,13 @@ public actor DecodePipeline {
             counters.formatDescriptionsBuilt &+= 1
 
             if incompatible {
-                waitForKeyframe()
+                // Close the gate, but do **not** ask the camera for an IDR: these sets arrived
+                // attached to a frame `submit` is about to evaluate, and on every stream start and
+                // every real format change that frame *is* the IDR. Requesting here fired one
+                // spurious keyframe request per stream start — and the app maps a keyframe request
+                // onto a full RTSP restart, so the picture appeared and the session immediately
+                // reconnected. If the frame turns out not to be a keyframe, the gate below asks.
+                awaitingKeyframe = true
             }
 
             sink.didChangeFormat(to: info, generation: nextGeneration)
@@ -324,8 +337,21 @@ public actor DecodePipeline {
     // MARK: - Private: bookkeeping
 
     /// Stops decoding until an IDR/IRAP arrives, and asks for one — at most once per wait.
+    ///
+    /// Used only where the decoder has already lost its footing on a frame it was given: a corrupt
+    /// access unit, a CoreMedia failure, or parameter sets CoreMedia rejected. A gate closed for
+    /// any other reason uses `awaitingKeyframe = true` and lets `submit` ask, if it has to.
     private func waitForKeyframe() {
         awaitingKeyframe = true
+        requestKeyframeOnce()
+    }
+
+    /// Asks the camera for an IDR, at most once per wait.
+    ///
+    /// The `keyframeRequested` latch is cleared only when a keyframe actually arrives (or by
+    /// `reset()`), so a stream that sends nothing but undecodable frames asks once, not once per
+    /// frame — which would be a denial of service against the camera dressed up as error handling.
+    private func requestKeyframeOnce() {
         guard !keyframeRequested else { return }
         keyframeRequested = true
         requestKeyframe()

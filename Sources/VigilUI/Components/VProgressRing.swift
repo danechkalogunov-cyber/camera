@@ -40,6 +40,11 @@ package struct VProgressRing: View {
         case large
 
         /// The ring's diameter in points.
+        ///
+        /// `@MainActor` on the member, not on `Size`: a nested type does not inherit its enclosing
+        /// type's global actor, so this accessor would otherwise be nonisolated and could not read
+        /// `VTheme.Icon`.
+        @MainActor
         package var diameter: CGFloat {
             switch self {
             case .small: return VTheme.Icon.md
@@ -48,7 +53,8 @@ package struct VProgressRing: View {
             }
         }
 
-        /// The stroke width designed for this diameter.
+        /// The stroke width designed for this diameter. See ``diameter`` for the `@MainActor`.
+        @MainActor
         package var lineWidth: CGFloat {
             switch self {
             case .small: return VTheme.Border.ring

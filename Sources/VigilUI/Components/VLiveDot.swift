@@ -92,6 +92,12 @@ package struct VLiveDot: View {
         case authFailed
 
         /// The dot's colour, from the reserved status vocabulary (§3.2).
+        ///
+        /// `@MainActor` on the member rather than on `Status`: a nested type does not inherit its
+        /// enclosing type's global actor, so this would otherwise be nonisolated and unable to read
+        /// `VTheme.Color`. `Status` itself stays nonisolated, which is what lets the non-isolated
+        /// ``LiveConnectionState/dot`` return one.
+        @MainActor
         package var colour: SwiftUI.Color {
             switch self {
             case .connecting: return VTheme.Color.Semantic.warn

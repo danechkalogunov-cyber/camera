@@ -72,6 +72,12 @@ package struct VButton: View {
         case xl
 
         /// The geometry that follows from the height: radius, padding, type step, icon size.
+        ///
+        /// `@MainActor` on the *member*, not on `Size`: a nested type does **not** inherit its
+        /// enclosing type's global actor, so this accessor would otherwise be nonisolated and could
+        /// not read `VTheme.Metrics`, which is `@MainActor`. Isolating the member rather than the
+        /// enum keeps `Size` a plain `Sendable` value that a non-main context can still name.
+        @MainActor
         package var control: VTheme.Metrics.Control {
             switch self {
             case .xs: return VTheme.Metrics.controlXS

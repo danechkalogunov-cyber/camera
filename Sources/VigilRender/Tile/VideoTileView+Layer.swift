@@ -199,24 +199,40 @@ extension VideoTileView {
                            name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
-    /// Observes the two layer notifications the slice must not ignore.
+    /// Observes the two notifications the slice must not ignore, **on the renderer**.
     ///
-    /// AVFoundation, on `AVSampleBufferDisplayLayer`:
-    ///   `static let requiresFlushToResumeDecodingDidChangeNotification: NSNotification.Name`
-    ///   `static let failedToDecodeNotification: NSNotification.Name`
-    ///   `static let failedToDecodeNotificationErrorKey: String`
-    func observeLayerNotifications(_ videoLayer: AVSampleBufferDisplayLayer) {
+    /// The renderer, not the layer, for two independent reasons.
+    ///
+    /// 1. Samples go in through `layer.sampleBufferRenderer`, and AVFoundation's own header is
+    ///    explicit: *"Do not use AVSampleBufferDisplayLayer's AVQueuedSampleBufferRendering
+    ///    functions when using sampleBufferRenderer."* The layer's `requiresFlushToResumeDecoding`
+    ///    is deprecated from macOS 15 in favour of the renderer's, so the layer is the wrong object
+    ///    to ask whether decoding stopped. Observing it risked a picture frozen on a held frame
+    ///    with no recovery — indistinguishable from a network stall.
+    /// 2. The layer's spellings this file used previously do not exist in Swift at all.
+    ///    `AVSampleBufferDisplayLayerFailedToDecodeNotification` is declared `NSString *const`, not
+    ///    `NSNotificationName`, so it imports as `NSNotification.Name.AVSampleBufferDisplayLayer‌-`
+    ///    `FailedToDecode` rather than as a member of the layer; the same is true of the
+    ///    requires-flush notification. `AVSampleBufferDisplayLayer.failedToDecodeNotification` and
+    ///    `.failedToDecodeNotificationErrorKey` are not members of that class.
+    ///
+    /// AVFoundation, on `AVSampleBufferVideoRenderer` (macOS 14.0+, none deprecated):
+    ///   `class let requiresFlushToResumeDecodingDidChangeNotification: NSNotification.Name`
+    ///   `class let didFailToDecodeNotification: NSNotification.Name`
+    ///   `class let didFailToDecodeNotificationErrorKey: String`
+    ///   `var requiresFlushToResumeDecoding: Bool`
+    func observeRendererNotifications(_ renderer: AVSampleBufferVideoRenderer) {
         let center = NotificationCenter.default
         center.addObserver(
             self,
             selector: #selector(requiresFlushToResumeDecodingDidChange(_:)),
-            name: AVSampleBufferDisplayLayer.requiresFlushToResumeDecodingDidChangeNotification,
-            object: videoLayer)
+            name: AVSampleBufferVideoRenderer.requiresFlushToResumeDecodingDidChangeNotification,
+            object: renderer)
         center.addObserver(
             self,
-            selector: #selector(layerFailedToDecode(_:)),
-            name: AVSampleBufferDisplayLayer.failedToDecodeNotification,
-            object: videoLayer)
+            selector: #selector(rendererFailedToDecode(_:)),
+            name: AVSampleBufferVideoRenderer.didFailToDecodeNotification,
+            object: renderer)
     }
 
     @objc

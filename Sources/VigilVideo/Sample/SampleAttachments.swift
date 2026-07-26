@@ -85,7 +85,9 @@ package enum SampleAttachments {
             // NOT a sync sample. Omitted entirely on keyframes — setting it `false` there is not
             // the same thing and confuses some VT decoders.
             set(key: kCMSampleAttachmentKey_NotSync, to: cfTrue, in: dictionary)
-            // Safe for the layer to drop when it is behind.
+            // This sample needs earlier ones to decode, so decoding may not start here. It is
+            // **not** the "safe to drop" flag, whatever spec-video-pipeline.md §5.3's gloss says:
+            // that would be `IsDependedOnByOthers = false`, which is deliberately not set.
             set(key: kCMSampleAttachmentKey_DependsOnOthers, to: cfTrue, in: dictionary)
         }
 

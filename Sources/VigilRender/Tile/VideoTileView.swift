@@ -125,11 +125,12 @@ public final class VideoTileView: NSView {
 
     /// The lock-protected bridge between the decode thread and the display layer.
     ///
-    /// `nonisolated(unsafe)` rather than a new `@unchecked Sendable` type: docs/API_CONTRACT.md
-    /// §2 R-52 fixes the repo-wide census of `@unchecked Sendable` types at exactly three and this
-    /// is not one of them. The property is a `let`, the referenced object guards every one of its
-    /// fields with a single `NSLock`, and no other code path reaches it.
-    nonisolated(unsafe) let sampleBuffers = SampleBufferBackend()
+    /// A plain `let` of a `Sendable` type, so the three `nonisolated` ingest entry points below may
+    /// read it without hopping. `nonisolated(unsafe)` was tried first, to avoid spending an R-52
+    /// slot, and does **not** compile: Swift 6 will not let a non-`Sendable` value leave a
+    /// `@MainActor` class into `nonisolated` code however the property is annotated. See the
+    /// justification comment on `SampleBufferBackend`.
+    let sampleBuffers = SampleBufferBackend()
 
     /// `true` between `viewWillStartLiveResize()` and `viewDidEndLiveResize()`.
     var isLiveResizing = false

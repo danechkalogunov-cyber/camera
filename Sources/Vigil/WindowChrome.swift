@@ -32,7 +32,10 @@ enum WindowChrome {
     ///
     /// - Parameter window: the window hosting the root view. Auxiliary windows deliberately keep
     ///   the standard AppKit treatment (§11.2, last row) — the slice has none.
-    static func apply(to window: NSWindow) {
+    /// - Returns: the traffic-light container's origin *before* it was moved, for the caller to
+    ///   hand back to ``applyTrafficLightInset(to:baseline:)`` on every re-application.
+    @discardableResult
+    static func apply(to window: NSWindow) -> CGPoint? {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
@@ -46,7 +49,7 @@ enum WindowChrome {
         // "false" only when another window already owns the name, which for a single-window app
         // means the frame is being restored by that other window — nothing to do about it here.
         _ = window.setFrameAutosaveName(autosaveName)
-        applyTrafficLightInset(to: window)
+        return applyTrafficLightInset(to: window)
     }
 
     /// Shifts the traffic-light container to a 20 pt leading, 26 pt centre-y position.
@@ -58,15 +61,30 @@ enum WindowChrome {
     /// The `+13, −10` deltas are DESIGN.md's, measured against AppKit's default origin of about
     /// (7, y). If a future macOS changes that default the buttons will sit slightly wrong — a
     /// cosmetic defect, not a crash — which is why nothing here forces or asserts.
-    static func applyTrafficLightInset(to window: NSWindow) {
+    ///
+    /// ⛔ The vertical delta is applied to a **fixed baseline**, never to the container's current
+    /// origin. This method runs again on every key-window change and every full-screen transition;
+    /// re-deriving `origin.y − 10` from where the container already is subtracts a further 10 pt
+    /// each time, and the buttons walk down out of the title bar after a few activations. The
+    /// horizontal position is absolute and so is idempotent on its own.
+    ///
+    /// - Parameters:
+    ///   - window: the window to inset.
+    ///   - baseline: the container origin recorded the first time this ran. Pass `nil` on the first
+    ///     call to read and return AppKit's own origin.
+    /// - Returns: the baseline that was used, or `nil` when the window has no traffic lights.
+    @discardableResult
+    static func applyTrafficLightInset(to window: NSWindow,
+                                       baseline: CGPoint? = nil) -> CGPoint? {
         guard let close = window.standardWindowButton(.closeButton),
               let container = close.superview
         else {
-            return
+            return nil
         }
-        let target = CGPoint(x: 20 - 7, y: container.frame.origin.y - 10)
-        container.setFrameOrigin(target)
+        let origin = baseline ?? container.frame.origin
+        container.setFrameOrigin(CGPoint(x: 20 - 7, y: origin.y - 10))
         container.superview?.needsLayout = true
+        return origin
     }
 
     /// `NSWindow` frame autosave name, so the window comes back where the user left it.
@@ -95,10 +113,19 @@ struct WindowChromeInstaller: NSViewRepresentable {
 @MainActor
 private final class ChromeProbeView: NSView {
 
+    /// The traffic-light container's origin before Vigil moved it. See
+    /// ``WindowChrome/applyTrafficLightInset(to:baseline:)`` for why re-application needs it.
+    private var trafficLightBaseline: CGPoint?
+
+    /// The window we are already observing, so a view that SwiftUI re-parents does not register a
+    /// second set of observers and apply the chrome twice per notification.
+    private weak var observedWindow: NSWindow?
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard let window else { return }
-        WindowChrome.apply(to: window)
+        guard let window, window !== observedWindow else { return }
+        observedWindow = window
+        trafficLightBaseline = WindowChrome.apply(to: window)
         let center = NotificationCenter.default
         // Selector-based observation, not the block form: these notifications are posted on the
         // main thread, and an `@objc` method on a `@MainActor` view is the shape AppKit expects.
@@ -116,7 +143,7 @@ private final class ChromeProbeView: NSView {
     /// colour during a full-screen transition causes a visible flash.
     @objc private func reapplyChrome(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        WindowChrome.applyTrafficLightInset(to: window)
+        WindowChrome.applyTrafficLightInset(to: window, baseline: trafficLightBaseline)
     }
 }
 

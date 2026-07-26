@@ -44,16 +44,18 @@ extension StreamController {
     /// TCP connect budget (spec-core §7.4). Handed to the session so **it** owns the deadline.
     static let connectTimeout: Duration = .seconds(4)
 
-    /// The controller's own backstop around `connect()`, deliberately one second longer than the
-    /// budget the session was given.
+    /// The controller's own backstop around `connect()`: one second longer than the budget the
+    /// session was given, and **derived from it** so the two cannot drift apart.
     ///
     /// `RTSPConnection.connect()` awaits a bare `CheckedContinuation` — cancelling the task that
-    /// awaits it does **not** resume it, and only the connection's own watchdog does. A backstop
+    /// awaits it does **not** resume it, and `withDeadline`'s task group cannot return until every
+    /// child has, so only the connection's own watchdog ever ends a hung connect. A backstop
     /// shorter than that watchdog would therefore not save any time; it would only make this side
-    /// wait for the other side's timer with the cancellation already delivered. One second of
-    /// grace keeps the backstop meaningful for a session factory whose implementation never times
-    /// out at all.
-    static let connectDeadline: Duration = .seconds(5)
+    /// wait for the other side's timer with the cancellation already delivered. One second of grace
+    /// keeps the backstop meaningful for a session factory whose implementation never times out at
+    /// all. Writing it as `connectTimeout + 1 s` rather than as a second literal is the point:
+    /// changing the factory budget alone used to leave a deadline that silently did nothing.
+    static let connectDeadline: Duration = connectTimeout + .seconds(1)
 
     /// The whole connect sequence, from `resolving` to `playing`.
     static let overallWatchdog: Duration = .seconds(20)

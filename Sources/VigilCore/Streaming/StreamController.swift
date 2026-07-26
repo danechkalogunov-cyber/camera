@@ -104,6 +104,18 @@ public actor StreamController: Identifiable {
     var isStopping = false
     var isPaused = false
     var runTask: Task<Void, Never>?
+
+    /// Which run loop currently owns `runTask` and the per-attempt state. Bumped by every `start()`.
+    ///
+    /// `stop()` cancels the running loop but cannot make it *resume* promptly: the loop is normally
+    /// suspended inside `runAttempt()`'s `for await`, and it only observes the cancellation when the
+    /// actor next lets it run. `restart()` therefore routinely calls `start()` before the old loop
+    /// has finished unwinding, and without this stamp that stale loop would tear down the **new**
+    /// attempt's session and then clear `runTask` — leaving `start()`'s idempotence guard looking at
+    /// `nil` while a run loop is live, so the next `start()` spawns a second one. Two concurrent run
+    /// loops mean two concurrent probes, and two probes spend four credentialed 401s against a
+    /// device that locks an account at about five.
+    var runGeneration: UInt64 = 0
     var startedAt: MediaInstant?
     var resolvedFormat: StreamFormat?
     var latestStatistics = StreamStatistics()
@@ -253,8 +265,10 @@ public actor StreamController: Identifiable {
         isStopping = false
         attempt = 0
         startedAt = clock.now()
+        runGeneration &+= 1
+        let generation = runGeneration
         runTask = Task { [weak self] in
-            await self?.runLoop()
+            await self?.runLoop(generation: generation)
         }
     }
 
@@ -338,15 +352,19 @@ public actor StreamController: Identifiable {
 
     /// One attempt after another, with the ladder in between, until something terminal happens or
     /// the controller is stopped.
-    func runLoop() async {
-        while !isStopping, !Task.isCancelled {
+    func runLoop(generation: UInt64) async {
+        while !isStopping, !Task.isCancelled, generation == runGeneration {
             let outcome = await runAttempt()
+            // A newer `start()` may have taken ownership while this loop was suspended. From here
+            // on a stale loop must touch nothing shared: `teardown()` would close the new attempt's
+            // session, and `runTask = nil` would hide the new loop from `start()`'s guard.
+            guard generation == runGeneration else { return }
             await teardown()
             if isStopping || Task.isCancelled { break }
 
             switch outcome {
             case .stopped:
-                runTask = nil
+                endRun(generation)
                 return
 
             case let .redirect(url):
@@ -360,7 +378,7 @@ public actor StreamController: Identifiable {
                 if error.code.forbidsColdRetry {
                     logger.error(.core, "stream failed terminally",
                                  ["camera": id.short, "code": error.code.rawValue])
-                    runTask = nil
+                    endRun(generation)
                     return
                 }
                 // Non-auth failures get one slow retry every five minutes: a camera that was
@@ -393,6 +411,15 @@ public actor StreamController: Identifiable {
                 try? await clock.sleep(for: delay)
             }
         }
+        endRun(generation)
+    }
+
+    /// Releases `runTask`, but only when this run loop still owns it.
+    ///
+    /// A stale loop that cleared it unconditionally would let the next `start()` past its
+    /// idempotence guard while a live loop was still running.
+    func endRun(_ generation: UInt64) {
+        guard generation == runGeneration else { return }
         runTask = nil
     }
 

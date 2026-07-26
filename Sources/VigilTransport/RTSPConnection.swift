@@ -405,7 +405,11 @@ public actor RTSPConnection {
             } catch {
                 return                                   // cancelled: the connection settled first
             }
-            await self.connectTimedOut()
+            // No `await`: `Task { }` created in an actor-isolated context inherits that isolation,
+            // so this call is already on the actor and marking it produced
+            // "no 'async' operations occur within 'await' expression". If that inheritance ever
+            // changes the compiler will demand the `await` back, so this cannot rot silently.
+            self.connectTimedOut()
         }
 
         let failure: VigilError? = await withCheckedContinuation { continuation in
@@ -498,6 +502,16 @@ public actor RTSPConnection {
     ///     machine's `connectionClosed`. Kept separate from `failure` because the mapped error
     ///     deliberately loses detail — `.hostUnreachable` does not say which `NWError` produced it.
     private func terminate(with failure: VigilError, reason: String) {
+        // Only while the connection is still meant to be alive. `close()` cancels the socket, and
+        // a genuine `ECONNRESET` racing that cancel would otherwise arrive here during `.closing`
+        // and emit a `.failed` the owner never asked for — which `VigilCore` reads as a reason to
+        // reconnect a session the user had just stopped. `.cancelled` is handled separately in
+        // `socketStateChanged`, so the ordinary teardown never reaches this function at all.
+        guard lifecycle == .connecting || lifecycle == .running else {
+            logger.debug(.transport, "socket-layer failure after close, ignored",
+                         ["reason": reason])
+            return
+        }
         logger.notice(.transport, "connection ended by the socket layer", ["reason": reason])
         if connectContinuation != nil {
             finishConnect(with: failure)
@@ -771,8 +785,28 @@ public actor RTSPConnection {
             // Task cancellation has to reach the socket, or the receive above never completes and
             // this task leaks (API_CONTRACT §4.7). `cancel()` makes the completion fire with
             // `POSIXErrorCode.ECANCELED`.
-            socket.cancel()
+            //
+            // Routed through the actor rather than calling `socket.cancel()` here. `onCancel` is
+            // `@Sendable`, so naming the socket in it captures an `NWConnection` across an
+            // isolation boundary, and whether `NWConnection` is `Sendable` in the macOS 14/15 SDK
+            // is the one thing this file could not check — shadow-compiling against a
+            // non-`Sendable` stub gives "capture of 'socket' with non-sendable type 'NWConnection'
+            // in a '@Sendable' closure" on exactly this line and on the same line in
+            // `sendAtomically`, and nowhere else. Capturing the actor instead is correct either
+            // way and needs no `@unchecked Sendable` box, which ruling R-52 forbids. The hop costs
+            // one actor turn on a path that is already tearing down.
+            Task { await self.cancelSocket() }
         }
+    }
+
+    /// Cancels the socket from the actor's own isolation.
+    ///
+    /// Exists only so the two `@Sendable` cancellation handlers never have to name an
+    /// `NWConnection`. Reads `self.socket` rather than taking one: by the time a cancellation hop
+    /// lands, `finishClose` may already have cancelled and cleared it, and a second cancel of a
+    /// dead connection is a no-op.
+    private func cancelSocket() {
+        socket?.cancel()
     }
 
     /// Suspends the read loop while reads are paused.
@@ -890,7 +924,8 @@ public actor RTSPConnection {
                 })
             }
         } onCancel: {
-            socket.cancel()
+            // Through the actor, for the reason spelled out in `receiveOnce`.
+            Task { await self.cancelSocket() }
         }
     }
 
@@ -1027,7 +1062,7 @@ public actor RTSPConnection {
             } catch {
                 return
             }
-            await self.abandonQueuedWrites()
+            self.abandonQueuedWrites()   // already on the actor; see `waitForReady`'s watchdog
         }
 
         if let writeTask {
@@ -1046,12 +1081,22 @@ public actor RTSPConnection {
     }
 
     /// Drops whatever is still queued and cancels the socket, so the drain loop can end.
+    ///
+    /// **The cancel is unconditional, and that is the whole point of the watchdog.** The situation
+    /// this exists for is a `send` that is already in flight and never completes — a socket whose
+    /// window has closed because the camera stopped reading. In that situation `runWriteDrain` has
+    /// already taken the frame off the queue, so `writeQueue` is *empty*, and it is parked in
+    /// `sendAtomically` rather than `waitForWrite`, so `writeWaiter` is *nil*. An early return on
+    /// "nothing queued" therefore skipped the cancel in exactly the case the budget was written
+    /// for, and `finishClose`'s `await writeTask.value` waited for a send that would never
+    /// complete: `close()` never returned and the event stream was never finished.
     private func abandonQueuedWrites() {
-        guard !writeQueue.isEmpty || writeWaiter != nil else { return }
-        logger.warning(.transport, "abandoning queued writes at close",
-                       ["frames": String(writeQueue.count)])
-        writeQueue.removeAll()
-        writeQueueBytes = 0
+        if !writeQueue.isEmpty {
+            logger.warning(.transport, "abandoning queued writes at close",
+                           ["frames": String(writeQueue.count)])
+            writeQueue.removeAll()
+            writeQueueBytes = 0
+        }
         socket?.cancel()
         wakeWriteDrain()
     }

@@ -19,16 +19,26 @@ import Foundation
 /// The sample-buffer display path for one tile.
 ///
 /// Deliberately **not** `@MainActor`: `enqueue(_:generation:)` is called from the decode side and
-/// must not hop. Deliberately **not** `Sendable` either — it is reached only through a
-/// `nonisolated(unsafe) let` on `VideoTileView`, which keeps the repo-wide `@unchecked Sendable`
-/// census at the three types docs/API_CONTRACT.md §2 R-52 enumerates. Every stored property is
-/// guarded by one `NSLock` that is never held across anything slower than an `enqueue`.
+/// must not hop.
+///
+/// `@unchecked Sendable` justification: every stored property is guarded by one `NSLock` that is
+/// never held across anything slower than an `enqueue`, and no reference to the renderer or to any
+/// field escapes a locked region. Reviewed 2026-07. API_CONTRACT.md §2 R-52.
+///
+/// **This annotation is load-bearing, not decorative.** It was previously absent, with the type
+/// reached through a `nonisolated(unsafe) let` on `VideoTileView` in the belief that this kept the
+/// R-52 census at three. It does not compile: Swift 6 rejects a non-`Sendable` value read out of a
+/// `@MainActor` class from `nonisolated` code with "non-sendable type 'SampleBufferBackend' of
+/// property 'sampleBuffers' cannot exit nonisolated(unsafe) context", at all three ingest entry
+/// points. R-52's slot 3 (`LatestFrameBox`, `VigilRender`) is the Metal path's latest-frame slot
+/// and is not built in this slice, so the repo-wide count is unchanged — but the *name* in R-52's
+/// table is wrong for the slice and the supervisor must reconcile the two.
 ///
 /// `NSLock` rather than `OSAllocatedUnfairLock` for the same reason `LatestFrameBox` uses it
 /// (R-52, row 3): the lock is taken on VideoToolbox's thread, and spinning on a thread that may be
 /// donating priority to the GPU is not acceptable. Contention is effectively zero — one producer,
 /// and the main actor only at flush points.
-final class SampleBufferBackend {
+final class SampleBufferBackend: @unchecked Sendable {
 
     // MARK: - Types
 

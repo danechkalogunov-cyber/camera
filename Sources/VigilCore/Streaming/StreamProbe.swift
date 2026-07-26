@@ -114,22 +114,35 @@ public actor StreamProbe {
         // at a time until the device has answered something other than a `401` keeps the worst
         // case at exactly the two attempts the contract budgets. Rung 1 is also the right answer
         // for almost every current camera, so the common case is one round trip either way.
+        // How many candidates may run at once. **One until a rung has proved the credentials.**
+        // A rung that answers `404`, redirects, or offers an SDP we cannot use has authenticated
+        // first — Hikvision firmware authenticates before it decides whether a path exists — so
+        // after one of those the password is known good and R1.2's three-in-flight window is free.
+        // A rung that merely *timed out* or dropped the connection proves nothing, and widening on
+        // one of those would put three concurrent logins on the wire with a password that may still
+        // be wrong: six failed sign-ins in one burst against a device that locks at about five.
+        var inFlight = 1
+
         switch await evaluate([first], camera: camera, credential: credential) {
         case let .decided(outcome): return outcome
-        case let .keepGoing(failure): lastFailure = failure
+        case let .keepGoing(failure, proved):
+            lastFailure = failure
+            if proved { inFlight = Self.maxInFlight }
         }
 
-        // Phase 2 — the credentials are known good, because the device answered a question about
-        // the path rather than about the password. The rest of the ladder runs three in flight per
-        // R1.2, so first-frame latency is not the sum of the failures.
+        // Phase 2 — the rest of the ladder, three in flight per R1.2 once and only once the device
+        // has answered a question about the path rather than about the password, so first-frame
+        // latency is not the sum of the failures.
         var index = 1
         while index < candidates.count {
-            let end = min(index + Self.maxInFlight, candidates.count)
+            let end = min(index + inFlight, candidates.count)
             switch await evaluate(Array(candidates[index..<end]),
                                   camera: camera,
                                   credential: credential) {
             case let .decided(outcome): return outcome
-            case let .keepGoing(failure): lastFailure = failure
+            case let .keepGoing(failure, proved):
+                lastFailure = failure
+                if proved { inFlight = Self.maxInFlight }
             }
             index = end
         }
@@ -143,7 +156,10 @@ public actor StreamProbe {
         /// The ladder is over, for better or worse.
         case decided(StreamProbeOutcome)
         /// Nothing in this window answered; carry on with the most diagnostic failure seen.
-        case keepGoing(StreamError)
+        ///
+        /// `provedAuthentication` is true when at least one candidate's answer could only have come
+        /// **after** a successful sign-in. It is what licenses the next window to run wide.
+        case keepGoing(StreamError, provedAuthentication: Bool)
     }
 
     /// Runs one window concurrently and folds its results into a verdict.
@@ -167,8 +183,15 @@ public actor StreamProbe {
                     let result = await withDeadline(timeout, clock: dependencies.clock) {
                         await probeRun.run()
                     }
+                    let outcome = result ?? .advance(StreamError(code: .describeTimeout))
+                    // The winning rung drove a real session all the way to `PLAY`, and `close()`
+                    // only flushes what is already queued — it does not tear the session down. So
+                    // without this the camera holds that session slot for its whole timeout while
+                    // `StreamController` is already opening the next one for the same channel.
+                    // `StreamController.teardown()` does exactly this, for exactly this reason.
+                    if case .success = outcome { await session.perform(.teardown) }
                     await session.close()
-                    return (candidate, result ?? .advance(StreamError(code: .describeTimeout)))
+                    return (candidate, outcome)
                 }
             }
             var out: [(RTSPPathCandidate, ProbeResult)] = []
@@ -200,7 +223,8 @@ public actor StreamProbe {
                 return .decided(.exhausted(error))
             }
         }
-        return .keepGoing(lastFailure)
+        return .keepGoing(lastFailure,
+                          provedAuthentication: results.contains { $0.1.provesAuthentication })
     }
 }
 
@@ -217,6 +241,26 @@ enum ProbeResult: Sendable {
     /// Nothing about the path is at fault — the socket, the host or the network is. Stops the
     /// ladder, because every other candidate would fail the same way.
     case abort(StreamError)
+}
+
+extension ProbeResult {
+
+    /// True when this answer could only have come **after** the device accepted the credential.
+    ///
+    /// Hikvision firmware authenticates before it decides whether a path exists, so `404`, a
+    /// redirect, and an SDP whose tracks Vigil cannot use are all proof that the password is right.
+    /// A timeout, a dropped connection or a protocol error prove nothing — and treating them as
+    /// proof is what would let the ladder widen to three concurrent logins with a wrong password.
+    var provesAuthentication: Bool {
+        switch self {
+        case .success:
+            true
+        case let .advance(error):
+            error.code == .rtspPathNotFound || error.code == .unsupportedMedia
+        case .authenticationRequired, .abort:
+            false
+        }
+    }
 }
 
 // MARK: - ProbeRun

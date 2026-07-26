@@ -74,8 +74,14 @@ extension StreamController {
             }
         }
 
-        // 4 — the session. The event stream is taken **before** `connect()`, so nothing the
-        // connection emits between the socket coming up and this loop starting can be missed.
+        // 4 — the session. A cancelled attempt must not get this far: the user has stopped, or a
+        // newer run loop owns this controller, and a connection built here would both overwrite
+        // `session` out from under that loop and spend one of the account's two authentication
+        // attempts on a device that locks at about five.
+        if isStopping || Task.isCancelled { return .stopped }
+
+        // The event stream is taken **before** `connect()`, so nothing the connection emits between
+        // the socket coming up and this loop starting can be missed.
         var config = RTSPSessionConfig(url: url)
         config.transport = .tcpInterleaved
         config.setupAudio = false
