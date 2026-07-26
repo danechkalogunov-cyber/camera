@@ -116,3 +116,50 @@ decoding, SADP and WS-Discovery packet codecs, CIDR maths, and the synthetic-cam
 
 No specification claim about the build system is trusted until it has been executed. When a spec
 prescribes a command, run it against a scaffold. This document is appended to, never rewritten.
+
+---
+
+## Wave 1 — first implementation, and the fourth defect
+
+### What was verified
+
+`VigilProtocols` gained its byte, bit, hash, text and network primitives — 13 source files and 10
+test files, written by four agents working concurrently on disjoint paths.
+
+```
+$ .vigil/swift build --product VigilPure --scratch-path .build-verify
+[45/46] Archiving libVigilPure.a
+Build of product 'VigilPure' complete! (11.34s)
+```
+
+The purity gate holds: the whole wave compiles into `libVigilPure.a` on Linux, which means nothing
+in it reached for CryptoKit, CommonCrypto, CoreMedia or any other platform framework.
+
+### Defect 4 — two agents, one test-function name, whole target fails to compile
+
+An agent reported "216 tests passed". Re-running the suite from the supervisor's own scratch path
+immediately afterwards produced:
+
+```
+Tests/VigilProtocolsTests/Base64Tests.swift:186:12: error: invalid redeclaration of
+    'decodeOrNilReportsFailureWithoutThrowing()'
+error: compile command failed due to signal 4
+```
+
+Both `Base64Tests.swift` and `PercentEncodingTests.swift` declared a **free function** with that
+name. swift-testing's `@Test` attaches to free functions, and free functions share one namespace per
+module, so two agents writing "the same obvious test name" for two different types collide and the
+entire test target stops compiling — taking every other agent's passing tests down with it. A third
+agent logged `BLOCKED` on it within a minute.
+
+The agent's report was not dishonest; it was **stale**. Its run genuinely passed, and the colliding
+file landed afterwards. That is the structural hazard of parallel implementation, and the reason the
+supervisor re-runs the build rather than aggregating agent self-reports.
+
+**Fix:** renamed the percent-encoding one. **Rule, now binding:** a swift-testing function name must
+be unique across its whole test target, so every test function is prefixed with the type under test
+(`base64DecodeRejectsOddLength`, not `decodeRejectsOddLength`). Added to `.vigil/IMPL_RULES.md`.
+
+**Second rule:** an agent's green test run is evidence about the tree at that instant, not about the
+merged result. Every wave ends with a supervisor build and test from a clean scratch path, and only
+that result is reported as the wave's status.

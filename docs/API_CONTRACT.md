@@ -1036,5 +1036,433 @@ encoder in the app and no code path that could add one. All egress passes one **
 socket is opened, and the refusal is testable on Linux. There is no analytics SDK, no crash reporter,
 no usage ping, no remote config, no font or asset CDN, and no automatic update check in 1.0.
 
+### 2.5 Conflicts found while writing this contract
+
+These were not in `OPEN-CONFLICTS.md`. Each would have cost an implementation agent an hour or
+produced code that does not link.
+
+#### R-49 — decode admission: `DecodeAdmitting` (protocol, `VigilProtocols`) + `DecodeBudget` (actor, `VigilVideo`) **[BUILD]**
+
+*Said:* `spec-core.md` §8.4 declares `protocol DecodeAdmitting { currentBudget(); maxConcurrentSessions();
+acquire(cost: Double, priority: StreamPriority) async throws -> DecodeLease }` with cost
+`megapixels × fps × codecWeight` and a base-M1 budget of **900 units / 20 sessions**.
+`spec-video-pipeline.md` §12.4 declares `@globalActor public actor DecodeBudget` with
+`admit(Request) -> AdmissionResult`, `update`, `release`, `reserveTransient`, a `TilePriority` enum
+and DU costs normalised to 1080p30, base-M1 **20 DU / 24 sessions**. Two authorities, two cost
+units, two priority enums, two budget numbers, incompatible method names.
+
+*Ruling:*
+
+* **`protocol DecodeAdmitting`, `DecodeLease`, `DecodeCost`, `StreamPriority` and `TilePolicy` are
+  declared in `VigilProtocols`** — pure, Foundation-only, Linux-testable. This is what lets
+  `StreamCoordinator.makePlan` and the class A–E table be unit-tested without VideoToolbox, which
+  both specs asked for and neither could deliver from its own module.
+* **`DecodeBudget` is the single implementation**, a `@globalActor actor` in `VigilVideo` conforming
+  to `DecodeAdmitting`. It is the only authority that may admit a session. `StreamCoordinator`
+  computes priority, holds leases, and keeps **no** budget of its own.
+* **The unit is the decode unit (DU)**, per R-22. `megapixels × fps × codecWeight` is deleted; it
+  produced numbers like "829 units" that no human can sanity-check.
+* `TilePriority` is deleted in favour of `StreamPriority` (`spec-core.md` §7.1's enum). Note that
+  `TilePriority` as written **does not compile** — `visibleLarge` and `recording` both have raw
+  value `4`.
+* `DecodeBudget.admit` may return `.grantedDegraded(lease, DecodeMode)`; `StreamCoordinator` must
+  handle it and surface the demotion.
+
+*Amend:* `spec-core.md` §8.4 (cost unit, declaration site); `spec-video-pipeline.md` §12
+(`TilePriority` → `StreamPriority`, conform to `DecodeAdmitting`, fix the raw-value collision).
+
+#### R-50 — one format type: `VideoFormatInfo`. `VideoFormat` is deleted **[BUILD]**
+
+*Said:* `spec-bitstream.md` §22 declares `VideoFormatInfo` (27 fields, flat) in `VigilBitstream`.
+`spec-video-pipeline.md` §2.2 declares `VideoFormat` (16 fields, flat, `Int32`-typed) in
+`VigilVideo`. `spec-render.md` §3.1 declares `FrameGeometry` + `ColorInfo` + `FieldOrder` in
+`VigilProtocols`. All three describe the same coded/display/SAR/colour facts, with different field
+names and types.
+
+*Ruling:* **one type, `VideoFormatInfo`, in `VigilProtocols`**, composed of `FrameGeometry` and
+`ColorInfo` rather than restating their fields. `VigilBitstream` computes it from SPS/VPS VUI;
+`VigilVideo` consumes it and converts once in `FormatDescriptionFactory`; `VigilRender` reads
+`geometry` for its coordinate pipeline. `VigilVideo.VideoFormat` is deleted.
+`VideoFormatInfo` keeps `displayWidth`/`displayHeight`/`sarWidth`/`sarHeight`/`codedWidth`/
+`codedHeight` as **computed passthroughs** to `geometry`, so every line of `spec-bitstream.md` still
+reads correctly.
+
+*Amend:* `spec-bitstream.md` §22 (declaration site + composition); `spec-video-pipeline.md` §2.2
+(delete `VideoFormat`).
+
+#### R-51 — one decoded-frame type: `VideoFrame`; one `VideoSink` **[BUILD]**
+
+*Said:* `ARCHITECTURE.md` §2.4 → `DecodedFrame` in `VigilVideo`. `spec-video-pipeline.md` §2.2 →
+`DecodedVideoFrame` with a `Payload` enum, and `protocol VideoSink { present(_:); willChangeFormat;
+didChangeFormat; didDropFrames; didStall; didRecover }`. `spec-render.md` §3.1 → `VideoFrame`, and
+`protocol VideoSink { enqueue(_:); streamDidReset(); streamDidEnd(reason:) }` plus "must also offer a
+`CMSampleBuffer` overload". Three names for the frame, two incompatible protocols with **no member in
+common**.
+
+*Ruling:* **`VideoFrame`** (the consumer's name wins; `VigilRender` is the only implementer).
+`DecodedFrame` and `DecodedVideoFrame` are deleted. One `VideoSink` in `VigilVideo`, the union of
+both member sets, with `enqueue` as the frame-delivery verb (not `present`), and default no-op
+extensions on the six observability members so a minimal sink is three lines. Exact declaration in
+§4.9. The `Payload` enum is dropped: pixel-buffer delivery and sample-buffer delivery are two
+`enqueue` overloads, which removes a `switch` from every frame.
+
+`CMSampleBuffer` crossing `VigilVideo → VigilRender` through
+`nonisolated func enqueue(_:format:generation:)` is legal and needs no box: both sides are
+`nonisolated`, the call is synchronous, and no isolation boundary is crossed, so `Sendable` is not
+required. Do not wrap it. Do not store it.
+
+*Amend:* `ARCHITECTURE.md` §2.4; `spec-video-pipeline.md` §2.2/§2.4; `spec-render.md` §3.1.
+
+#### R-52 — exactly **three** `@unchecked Sendable` types, enumerated **[BUILD]**
+
+*Said:* `ARCHITECTURE.md` §5.9 → exactly two (`DecodeSinkBox`, `DecodedFrame`).
+`spec-render.md` §1.3 → `LatestFrameBox` plus a generic `struct UncheckedSendable<T>: @unchecked Sendable`.
+`spec-video-pipeline.md` §2.3 → `FormatBox` plus a generic `struct Unsafe<T>: @unchecked Sendable`.
+`spec-discovery.md` §11 → `final class MulticastDatagramChannel: @unchecked Sendable`.
+`spec-isapi.md` §4.6 → `final class URLSessionTransport: @unchecked Sendable`.
+
+*Ruling:* the count is **three**, and this is the complete list. `ARCHITECTURE.md`'s two was written
+before the render spec existed and did not foresee the latest-frame slot.
+
+| # | Type | Module | Justification that must appear as a comment |
+|---|---|---|---|
+| 1 | `DecodeSinkBox` | `VigilVideo` | Only mutable state is an `AsyncStream.Continuation` (documented thread-safe for `yield`/`finish`) and an `OSAllocatedUnfairLock`-protected counter struct. Nothing else stored. |
+| 2 | `VideoFrame` | `VigilVideo` | Wraps a `CVPixelBuffer` produced by VideoToolbox, never mutated after delivery; consumers only lock the base address for reading or wrap it via `CVMetalTextureCache`. Never handed to two writers. |
+| 3 | `LatestFrameBox` | `VigilRender` | A single `VideoFrame` slot plus a ≤3-deep pending array, both guarded by one `NSLock` held for < 200 ns. `NSLock`, not `OSAllocatedUnfairLock`, because `put` is called from VideoToolbox's thread and the lock must be re-entrant-safe across the C boundary; `Mutex` needs macOS 15 and the floor is 14. |
+
+**Forbidden:** the generic escape hatches `Unsafe<T>` and `UncheckedSendable<T>`. A generic
+`@unchecked Sendable` box is not a justification, it is a way to stop writing one, and it makes the
+lint rule that counts these unenforceable. `FormatBox` is unnecessary — `CMFormatDescription` is
+confined to the `DecodePipeline` actor and never crosses. `MulticastDatagramChannel` becomes an
+`actor` (it owns one `NWConnectionGroup` and a continuation; there is nothing an actor cannot hold).
+`URLSessionTransport` becomes an `actor` holding the delegate state, with the `URLSession` delegate
+methods hopping in via `Task`.
+
+`VigilTestKit.ManualClock` does not count: the cap is on `Sources/` excluding `VigilTestKit`, which
+ships to no product the app links.
+
+*Amend:* `ARCHITECTURE.md` §5.9; `spec-render.md` §1.3; `spec-video-pipeline.md` §2.3;
+`spec-discovery.md` §11; `spec-isapi.md` §4.6.
+
+#### R-53 — `parameterSets` are attached **only when they change** **[SEMANTIC]**
+
+*Said:* `spec-rtp.md` §2.4 → "Non-nil **only on the first frame after the set changed** (including
+the very first frame)". `spec-video-pipeline.md` §2.1 → "present on the first frame of every GOP",
+and its `ParameterSetStore` is built to dedupe "byte-identical resends (every GOP, which is normal)".
+
+*Ruling:* **only when changed.** `VigilRTP` holds the current sets, compares bytes, and attaches only
+on a real change. `VigilVideo.ParameterSetStore` still dedupes (belt and braces, and it also sees
+sets that arrive via SDP `sprop-*`), but the wire contract is changed-only: at 16 cameras with a 1 s
+GOP, per-GOP attachment is 16 needless `[Data]` allocations per second on the frame path.
+`VigilVideo` **must** retain the last non-`nil` sets for the lifetime of the stream — a decoder reset
+does not entitle it to ask for them again; it emits `.keyframeNeeded(.decoderReset)` and rebuilds
+from what it holds.
+
+*Amend:* `spec-video-pipeline.md` §2.1.
+
+#### R-54 — AAC `AudioSpecificConfig` lives in `AudioFormatInfo.magicCookie`, never in `ParameterSets.sps[0]` **[SEMANTIC]**
+
+*Said:* `spec-rtp.md` §2.3 → "For AAC this carries the AudioSpecificConfig in `sps[0]`".
+
+*Ruling:* deleted. `ParameterSets` is a **video** type (it carries `codec: VideoCodec`); smuggling an
+audio cookie through a field named `sps` is exactly the kind of thing that produces a decoder that
+works until someone adds a `precondition` on H.264 NAL types. `EncodedFrame.audioFormat:
+AudioFormatInfo?` carries `magicCookie: Data?`, which is what `AudioConverterRef` wants under
+`kAudioConverterDecompressionMagicCookie`.
+
+*Amend:* `spec-rtp.md` §2.3, §8.6.
+
+#### R-55 — `StreamQuality` replaces `StreamProfile.Kind` and `StreamIndex`; "auto" is `nil` **[BUILD]**
+
+*Said:* `spec-core.md` declares both `StreamQuality { main, sub, third, auto }` and
+`StreamProfile.Kind { main, sub, third }`, and uses `qualityOverride: StreamQuality?` where `nil`
+already means auto. `spec-isapi.md` declares `StreamIndex { main = 1, sub = 2, third = 3 }`.
+
+*Ruling:* one type, `StreamQuality`, in `VigilProtocols`, cases `main = 1, sub = 2, third = 3`,
+`Codable` as its lowercase string. **There is no `.auto` case** — "auto" is the absence of an
+override, expressed as `StreamQuality?` (which `CellAssignment.qualityOverride` already does).
+`StreamProfile.Kind` and `StreamIndex` are deleted; `StreamProfile.id` becomes `StreamQuality`.
+
+*Why:* an `.auto` case in an enum that is also used to *name a concrete stream* means every switch
+has an unreachable branch and every `streamingChannelID(for:)` needs a precondition. Optionality
+expresses "unset" without inventing a value.
+
+*Amend:* `spec-core.md` §3, §4.2, §4.5; `spec-isapi.md` §11.3.
+
+#### R-56 — layout geometry is the 12×12 integer grid; the persisted model is `LayoutMode` + `[CellAssignment]` **[BUILD]**
+
+*Said:* `UX.md` §5.1 → all 8 layouts are integer rectangles on a **12 × 12 unit grid**, cells are
+`LayoutCell { x, y, w, h, cameraID }`, mode enum
+`{ single, grid2x2, hero1p5, grid3x3, grid4x4, hero1p7, dual2p8, custom }`.
+`spec-core.md` §4.5 → `LayoutMode { single, grid(columns:rows:), onePlusFive, onePlusSeven,
+twoPlusEight, custom(frames: [MosaicFrame]) }`, assignments are
+`CellAssignment { cellIndex, cameraID, qualityOverride, aspectMode, isAudioSolo }`, geometry is
+`frames() -> [MosaicFrame]` in the **unit square with `Double` coordinates**.
+
+*Ruling:* take both, layered — they are solving different problems and each is right about its own.
+
+* **Geometry** is `UX.md`'s **12 × 12 integer grid**. `LayoutMode.cells() -> [GridCell]` returns
+  `GridCell { x, y, w, h }` with all fields `Int` in `0...12`. `MosaicFrame` and its `Double`
+  unit-square coordinates are deleted. Integers because a custom mosaic must snap exactly, because
+  `0.333333` cell widths accumulate a visible seam error at 4 K, and because layout equality has to
+  be exact for `@Observable` diffing.
+* **Persistence and identity** are `spec-core.md`'s: `LayoutMode` is the parameterised enum
+  (`grid(columns:rows:)` covers 2×2, 3×3, 4×4, 5×5, 1×N and N×1 in one case — `UX.md`'s five
+  separate `gridNxN` cases do not), and assignments are `[CellAssignment]` keyed by `cellIndex`,
+  sparse, sorted.
+* Pixel geometry is computed **once**, in `VigilUI/Stage/LayoutEngine.swift`, from
+  `cells()` + `VTheme.Metrics.tileGutter` + `VTheme.Metrics.stageInset`. No view computes a cell
+  rect; `StreamCoordinator` derives tile `Resolution` from the same function so the admission table
+  and the screen never disagree.
+* `matchedGeometryEffect` is keyed **by camera** (`DESIGN.md` §7.7), not by cell (`UX.md` §5.1).
+  A layout change must never tear down a decode session, and the tile has to fly from its old cell to
+  its new one — which is only expressible if the identity travelling through the transition is the
+  camera.
+
+*Amend:* `UX.md` §5.1 (`LayoutCell` → `GridCell` + `CellAssignment`; adopt the parameterised
+`LayoutMode`; key the namespace by camera); `spec-core.md` §4.5 (`MosaicFrame` → `GridCell`,
+`frames()` → `cells()`, integer units).
+
+#### R-57 — `Resolution` is the one size type; `PixelSize` is deleted **[BUILD]**
+
+*Said:* `spec-core.md` §3 declares `Resolution { width, height: Int }` and §8.1 separately declares
+`PixelSize { width, height: Int }` for tile backing size.
+
+*Ruling:* one type, `Resolution`, in `VigilProtocols`, used for stream dimensions, display
+dimensions and tile backing size alike. `PixelSize` is deleted. `Viewport.Tile.pixelSize:
+Resolution` keeps the field name, because the name carries the unit (backing pixels) and the doc
+comment says so.
+
+#### R-58 — `VideoCodec.decodeWeight` = 1.00 / 1.35 / 0.45, and the DU cost formula is fixed **[SEMANTIC]**
+
+*Said:* `spec-core.md` → H.264 1.00, H.265 1.35, MJPEG 0.45, unknown 1.35.
+`spec-video-pipeline.md` §12.2 → H.264 1.00, H.265 8-bit 1.35, H.265 Main10 1.70, MJPEG 0.40.
+
+*Ruling:* `decodeWeight` is `h264 1.00`, `h265 1.35`, `mjpeg 0.45`. The Main10 surcharge is real but
+belongs to the *bit depth*, not the codec: `DecodeCost` multiplies by an extra **1.26** when
+`geometry.bitDepth > 8`, which yields 1.70 for H.265 Main10 and also covers H.264 High10.
+
+```
+cost(DU) = ceil( (codedWidth × codedHeight × fps) / (1920 × 1080 × 30)
+                 × codec.decodeWeight × (bitDepth > 8 ? 1.26 : 1.0)
+                 × mode.weight × 4 ) / 4
+```
+
+`mode.weight`: `full 1.00`, `fpsCapped(15) 0.55`, `keyframesOnly 0.12`, `jpegPoll 0`, `paused 0`;
+`+0.05` additive when downscale-on-decode is active; `×6.0` for reverse playback. Rounded up to
+0.25 DU. Note `codedWidth × codedHeight`, not display size: the decoder allocates coded (1088), and
+that is what costs memory bandwidth.
+
+*Amend:* `spec-video-pipeline.md` §12.2; `spec-core.md` §8.4.
+
+#### R-59 — machine budget table **[SEMANTIC]**
+
+*Ruling:* `FEATURES.md`'s two named classes are exact; `spec-video-pipeline.md`'s finer classes fill
+in the rest. Detected once at launch, persisted to
+`~/Library/Application Support/Vigil/decode-budget.json`, user-overridable in
+Settings → Streams → "Maximum concurrent decodes".
+
+| Detection | Class | Budget DU | Max sessions |
+|---|---|---|---|
+| Apple silicon, two media engines (`Mac14,13`/`Mac14,14`/Ultra) | Max / Ultra | 48 | 32 |
+| Apple silicon, `hw.perflevel0.physicalcpu >= 6` | Pro | 32 | 28 |
+| Apple silicon, base M-series | **base** | **24** | 24 |
+| Intel, HEVC hardware probe succeeds (T2 / Kaby Lake+) | Intel + Quick Sync | **10** | 16 |
+| Intel, H.264 hardware only | Intel legacy | 6 | 8 |
+| Both probes fail (VM, stripped GPU) | software only | 3 | 4 |
+
+Runtime calibration may only **lower** the seed (`×0.90` on any `decodeLateRatio > 2 %` or
+`kVTCouldNotCreateInstanceErr`, floor 2 DU / 2 sessions) and may raise back to at most the seed.
+Thermal and power multipliers are applied on top, never persisted: `.fair ×0.85`, `.serious ×0.60`,
+`.critical ×0.35`, Low Power Mode `×0.60`, battery with `pauseOnBattery` `×0.75`.
+
+#### R-60 — log categories: 13, from `ARCHITECTURE.md`; the other two lists map onto them **[BUILD]**
+
+*Said:* a **third** list appeared — `spec-core.md` §15 declares `LogCategory { config, credentials,
+controller, coordinator, recording, snapshot, events, health, doctor, automation, persistence }`
+(11 cases), disjoint from both `ARCHITECTURE.md`'s 13 and `FEATURES.md`'s 14.
+
+*Ruling:* R-15 stands — `ARCHITECTURE.md`'s 13. Mapping for the other two lists:
+
+| From `spec-core.md` / `FEATURES.md` | Canonical |
+|---|---|
+| `config`, `persistence`, `store` | `storage` |
+| `credentials`, `security` | `core` |
+| `controller`, `coordinator`, `recording`, `snapshot`, `events`, `doctor`, `automation`, `playback` | `core` |
+| `health` | `perf` |
+| `decode` | `video` |
+
+If `core` proves too coarse in practice, the fix is a `subsystem` field on `LogEvent`, **not** a
+fourth category list.
+
+*Amend:* `spec-core.md` §15.
+
+#### R-61 — `EventKind` is the one event taxonomy; `VigilEventType` is deleted **[BUILD]**
+
+*Said:* `spec-core.md` §4.7 declares `EventKind` (19 cases, with
+`init(isapiEventType: String)`); `spec-isapi.md` Appendix B declares `VigilEventType`.
+
+*Ruling:* `EventKind` in `VigilProtocols`, with the lenient `init(isapiEventType:)` — `VigilISAPI`
+parses the wire string and constructs it, `VigilCore` stores it, `VigilUI` localises it via
+`displayNameKey`. `VigilEventType` is deleted. The wire string is preserved verbatim in
+`EventRecord.rawEventType` so an unrecognised event is still diagnosable.
+
+*Amend:* `spec-isapi.md` Appendix B and §14.
+
+#### R-62 — `EventNotificationAlert` vs the alert-stream owner (see also R-46) **[COSMETIC]**
+
+*Ruling:* `VigilISAPI.EventNotificationAlert` is the **wire** type (one parsed
+`<EventNotificationAlert>` part). `VigilCore.EventRecord` is the **domain** type (deduped,
+coalesced, persisted, with a thumbnail and a clip link). They are not the same type and neither
+replaces the other. `AlertStreamMonitor` emits the former; `EventCenter` produces the latter.
+
+#### R-63 — `StreamKey` replaces `StreamIdentifier` **[BUILD]**
+
+*Said:* `spec-video-pipeline.md` uses `StreamIdentifier` throughout and never declares it.
+
+*Ruling:* `struct StreamKey: Hashable, Sendable, Codable { var camera: CameraID; var quality: StreamQuality }`
+in `VigilProtocols`. It is what a decode pipeline, an audio route and a budget grant are actually
+keyed by — a camera alone is wrong the moment a main and a sub stream are both live during a
+quality switch, which is the exact 150 ms window R-21 mandates.
+
+#### R-64 — one `EncodedFrame` carries audio too; `EncodedAudioFrame` does not exist **[BUILD]**
+
+*Said:* `spec-video-pipeline.md` §13/§18 takes `EncodedAudioFrame` in `submitAudio(_:)` and never
+declares it. `spec-rtp.md` has a single `EncodedFrame` with `audioFormat` and audio codec cases.
+
+*Ruling:* one `EncodedFrame`. `submitAudio(_ frame: EncodedFrame)` takes the same type;
+`frame.codec.audio != nil` is the discriminator, and `DecodePipeline` asserts it in debug.
+
+*Amend:* `spec-video-pipeline.md` §13, §18.1, §18.2.
+
+#### R-65 — `AsyncStream` **properties** in the specs are all wrong; they must be factories **[BUILD]**
+
+*Said:* `spec-video-pipeline.md` (`var events: AsyncStream<PipelineEvent>`, `var changes`,
+`var sampleTap`, `var levels`), `spec-discovery.md` (`var inbound: AsyncStream<InboundDatagram>`,
+`var paths`, `var events`, `var responses`), `spec-core.md` §2 (`var paths`, `var events`,
+`var responses`) all declare stored/computed `AsyncStream` **properties**.
+
+*Ruling:* R-27 applies without exception. Every one becomes a factory
+(`func events() -> AsyncStream<E>`) over a shared bounded `Broadcaster`. The single permitted
+exception is a stream with a **structurally single consumer created by the same call that made it**
+— `DiscoveryCoordinator.start() -> AsyncStream<DiscoveryEvent>` and
+`StreamDoctor.diagnose(camera:) -> AsyncStream<DoctorProgress>` qualify, because each call starts a
+new run. A *property* never qualifies.
+
+`spec-core.md` §6.9's `Broadcaster<Element>` actor is adopted verbatim as the shared implementation
+and moves to `VigilProtocols` so `VigilISAPI` and `VigilDiscovery` can use it too. Standing
+buffering policies: `ConfigStore.changes()` `.bufferingNewest(1)` + replay;
+`EventLog.changes()` `.bufferingNewest(256)`; `StreamController.events()` `.bufferingNewest(64)` +
+replay; `StreamCoordinator.plans()` `.bufferingNewest(1)` + replay;
+`HealthMonitor.samples()` `.bufferingNewest(16)`; decoded frames `.bufferingNewest(3)`;
+alert-stream events `.bufferingNewest(256)`; ISAPI byte streams `.bufferingNewest(64)`;
+discovery datagrams `.bufferingNewest(512)`.
+
+#### R-66 — types referenced by the specs but never declared **[BUILD]**
+
+The specs collectively reference **41** types they never declare. Every one is declared here (§3 or
+§4) or explicitly deleted. Implementation agents: if you meet a name not in this contract, it does
+not exist — do not invent it, raise it.
+
+| Referenced in | Name | Disposition |
+|---|---|---|
+| isapi | `HTTPHeaders`, `ISAPIChunkedUpload`, `ISAPIUploadHandle` | declared, §3.14 / §4.5 |
+| isapi | `InvalidationReason`, `PathSegment`, `DataTaskState`, `StreamTaskState` | module-internal; implementer's choice |
+| core | `PowerEventObserving`, `PasteboardWriting`, `WindowID`, `FileAttributes` | declared, §3.17 / §4.8 |
+| core | `ISAPIEndpoint`, `RTSPEndpoint` | declared, §3.13 |
+| core | `BudgetPressure`, `PowerConditions`, `CameraRef`, `LayoutRef`, `SettingsPane`, `DeepLinkError`, `NotificationSound`, `NotificationResponse`, `SnapshotRequest`, `RecordingEvent`, `AuthScheme`, `SuppressionReason` | declared, §4.8 |
+| core | `CodableRect`, `CodableColor` | deleted — use `GridCell` and `ColorTag`; no view type is persisted |
+| core / video | `DecodeSinkOptions`, `RTSPTransport`, `FrameTap`, `DecodeLease` | declared, §4.8 / §4.9 |
+| video | `StreamIdentifier` | → `StreamKey` (R-63) |
+| video | `EncodedAudioFrame` | deleted (R-64) |
+| video | `VTConfig`, `DecodeOutput`, `PendingAU`, `DropOutcome`, `FormatOverrides`, `ParameterSetChange`, `SnapshotError`, `AudioError`, `TalkbackError`, `AudioStatistics`, `PlaybackEvent`, `DenialReason`, `PauseReason`, `ModeChangeReason`, `BudgetChange`, `BudgetSnapshot`, `FrameDropReason`, `StreamEndReason`, `PacingMode`, `ColorSpaceTag` | declared, §4.9; `ColorSpaceTag` → `ColorInfo` (R-50) |
+| render | `TileRenderer`, `PrivacyMaskSet.disabled`, `StreamEndReason`, `PacingMode` | declared, §4.10 |
+| discovery | `BudgetKind`, `ClassificationEvidence`, `ClassificationVerdict`, `POSIXCode`, `HostProbeResult`, `DiscoveryDiagnostic.Severity` | declared, §4.6 |
+| discovery | `MulticastGroupSpec.localAddress` | added to the struct, §4.6 |
+
+#### R-67 — defects in the source specs, corrected here **[BUILD]**
+
+These do not compile or are internally contradictory as written. The corrected form is in §3/§4.
+
+| Where | Defect | Correction |
+|---|---|---|
+| `spec-video-pipeline.md` §12.4 | `TilePriority` has two cases with raw value `4` | type deleted (R-49) |
+| `spec-video-pipeline.md` §4.5 | `mutating func ingest` on a `final class ParameterSetStore` | `ParameterSetStore` is a `struct` (as `spec-bitstream.md` §21 already says) |
+| `spec-video-pipeline.md` §18.4 | `VideoPipelineError` carries `underlying: Error?` yet claims `Sendable` | carries `underlyingDescription: String` |
+| `spec-video-pipeline.md` §18.3 | `DecodeStatistics: Codable` over non-`Codable` members | every member made `Codable` in §3/§4 |
+| `spec-video-pipeline.md` §18.1 | `public struct DecodePipelineConfiguration` uses its internal memberwise init from another module | explicit `public init` with defaults |
+| `spec-video-pipeline.md` §6.2 | `public struct StrategyInputs` with internal members | all members `public` |
+| `spec-video-pipeline.md` §10.4 | `enum LatencyLevel` not `Sendable` yet crosses boundaries | `: Int, Sendable, Codable, Comparable` |
+| `spec-video-pipeline.md` §15.3 | `options.format == .png` on a payload-carrying enum | `SnapshotFormat` is a plain `String`-raw enum; quality moves to `SnapshotOptions` |
+| `spec-discovery.md` §6.2 | `IPv4Subnet.addressCount` — both ternary branches identical | `1 << (32 - prefixLength)`, with `prefixLength == 0` handled |
+| `spec-discovery.md` §5.5 vs §10.5 | `WSDiscoveryCodec.decodeProbeMatches` declared twice with different signatures | §10.5's superset wins |
+| `spec-discovery.md` §11 | `MulticastGroupSpec.localAddress` used, not declared | added |
+| `spec-discovery.md` §11 vs §6.3 | `ARPTableReader.swift` vs `SystemARPTableReader.swift` | `SystemARPTableReader.swift` |
+| `spec-discovery.md` §12 | `SweepPlanError.noEligibleInterfaces` duplicates `DiscoveryError.noEligibleInterfaces` | one case, on `DiscoveryError` |
+| `spec-render.md` §14 | `PTZDirection.isaptiltPan` | `isapiPanTilt` |
+| `spec-render.md` §3.2 | `RenderStats.droppedFrames` vs `droppedByReplacement` | `droppedByReplacement` |
+| `spec-core.md` §17.6 test 2 | class letters contradict §8.5's own examples | see R-21 |
+| `spec-core.md` §4 | `Library.schemaVersion` cross-referenced to §5.5, declared in §5.2 | §5.2 |
+| `spec-isapi.md` Appendix B | `EventNotification` vs `EventNotificationAlert` | `EventNotificationAlert` (R-46) |
+
+#### R-68 — UI structure, naming and remaining `DESIGN.md` / `UX.md` splits **[COSMETIC]**
+
+| Question | Ruling | Loser amends |
+|---|---|---|
+| Sidebar / inspector widths | `UX.md`: 208 / **264** / 380 and 288 / **320** / 440 (R-34) | `DESIGN.md` §5.1 + `VTheme.Metrics` |
+| Sidebar rail width | **`UX.md`: 68 pt** — 52 cannot fit a 28 pt glyph beside a 44×26 thumbnail | `DESIGN.md` (`sidebarRail = 68`) |
+| Tile gutter (stage) / stage inset | `DESIGN.md`: **2 pt / 8 pt** (R-35) | `UX.md` §5.1 |
+| Tile gutter (video wall) | **`DESIGN.md`: 0 pt**, edge-to-edge — "full bleed" is the point of the wall | `UX.md` §5.1 |
+| Unified toolbar height | **`DESIGN.md`: 52 pt** (it is a token) | `UX.md` §3 |
+| Main window default / min / scene type | **`UX.md`: 1440 × 900, min 960 × 600, `Window(id:)`, `.contentMinSize`** — `UX.md` §0 explicitly owns the scene graph and sizing | `DESIGN.md` §11.2 |
+| Command palette geometry | **`DESIGN.md`: 640 wide, top inset 132, max height 520** — and it is the one that fits `UX.md`'s own row math (56 input + 9 × 44 rows + 28 footer = 480) | `UX.md` §10.1 |
+| `V*` component location | **all `V`-prefixed types in `Sources/VigilUI/Components/`**; `Shared/` holds only non-prefixed helpers | `UX.md` §17 |
+| Naming rule | **`V` prefix ⇔ reusable design-system type in `Components/` or `Theme/`.** Screens, screen-local subviews and state types take no prefix. So: `VTile`, `VTimeline`, `VSidebarRow`, `VCommandPalette`, `VTheme`; but `MainWindowView`, `StageView`, `PlaybackWindowView`, `AppModel`. `VMainWindowView` is renamed `MainWindowView` | `DESIGN.md` §12.3 |
+| `\.vNamespaces` setter | `MainWindowView` | — |
+| Camera row height | 44 pt, legal (R-37) | `DESIGN.md` §5.5 gains `VTheme.Metrics.Row` |
+
+#### R-69 — `HikvisionURL` returns paths; `VigilCore` builds the URL **[BUILD]**
+
+Restating the mechanical consequence of R-23, because it is the one place a plausible-looking
+`import` would be rejected at review: `VigilRTSP` has **no** dependency on `VigilISAPI` and must not
+gain one. `HikvisionURL` (in `VigilISAPI`) returns `String` paths and `RTSPPathCandidate` values.
+`VigilCore.StreamProbe` combines a candidate with `Camera.host`/`rtspPort`/`transport` to make an
+`RTSPURL` (a `VigilRTSP` type) and drives `RTSPSessionMachine` with `RTSPCommand.describeOnly`.
+`VigilDiscovery` may not call `HikvisionURL` either — it has no edge — and keeps only
+`DiscoveredDevice.suggestedRTSPPath` for display and fingerprinting.
+
+#### R-70 — `Placeholder.swift` and the scaffolding invariants **[BUILD]**
+
+*Ruling:* every target keeps its `Placeholder.swift` until it has at least one real source file, at
+which point the **supervisor** deletes it — not the implementing agent, because an agent that
+deletes it and then fails to land its own file breaks the build for everyone. Likewise the 12
+`.placeholder` files in resource directories are **never** deleted, even after real resources land:
+they cost nothing and they are what stops a `git clean` from re-creating defect #2 of
+`docs/BUILD-VERIFICATION.md`.
+
+#### R-71 — where `HostPolicy` lives and what it gates **[BUILD]**
+
+*Ruling:* `enum HostPolicy` in `VigilProtocols` (`Net/HostPolicy.swift`), pure, Linux-tested:
+
+```swift
+public static func classify(_ host: String) -> HostClass
+```
+
+returning `.loopback`, `.privateLAN`, `.linkLocal`, `.multicast`, `.publicInternet`, `.invalid`.
+**Every** outbound socket, `URLSession` task and multicast join in `VigilTransport`, `VigilISAPI` and
+`VigilDiscovery` passes its destination through it first and refuses `.publicInternet` **before the
+socket is created**, throwing `TransportError.egressBlocked(host:)`. This is what makes
+`FEATURES.md` §20.3's "zero egress with no cameras configured" test a code property rather than a
+packet-capture ritual, and it is testable on Linux.
+
+#### R-72 — one shared `Broadcaster`, one shared `ConcurrencyLimiter`, one shared `RingBuffer` **[COSMETIC]**
+
+Three utilities are independently specified in three modules. Each is declared once, in
+`VigilProtocols`: `Broadcaster<Element>` (R-65), `ConcurrencyLimiter` (FIFO, priority-aware,
+cancellation-safe, `spec-core.md` §8.8), and `RingBuffer<Element>` (fixed capacity, preallocated,
+O(1) append — used by `HealthRing`, the RTP reorder buffer, `FrameQueue` and the statistics
+reservoirs). `DispatchSemaphore` is forbidden everywhere: it blocks a cooperative thread and
+deadlocks the pool under Swift 6.
+
 ---
 <!-- APPEND-HERE -->

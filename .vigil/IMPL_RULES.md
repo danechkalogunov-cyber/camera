@@ -63,6 +63,12 @@ even when filtered.
 - Use **swift-testing** (`import Testing`, `@Test`, `#expect`, `#require`), not XCTest — it is in the
   toolchain and works on Linux.
 - Test names describe the behaviour: `@Test func digestResponseMatchesRFC2617Example()`.
+- **Test function names must be unique across the entire test target, so prefix every one with the
+  type under test** — `base64DecodeRejectsOddLength`, never `decodeRejectsOddLength`. swift-testing
+  attaches `@Test` to free functions, and free functions share one namespace per module: two agents
+  independently choosing the same obvious name makes the whole target fail to compile and takes
+  every other agent's tests down with it. This has already happened once; see
+  docs/BUILD-VERIFICATION.md defect 4.
 - Prefer **published test vectors** over self-generated expectations. Where a spec document lists
   vectors, use exactly those and cite them in a comment. Where you must synthesise a fixture, say so
   in the comment — never imply a fabricated value came from real hardware.

@@ -31,7 +31,7 @@ private typealias Allowed = PercentEncoding.AllowedBytes
     ]
     for sample in samples {
         let encoded = PercentEncoding.encode(sample, allowing: .unreserved)
-        #expect(try PercentEncoding.decode(encoded) == sample, sample.debugDescription)
+        #expect(try PercentEncoding.decode(encoded) == sample, "\(sample.debugDescription)")
     }
 }
 
@@ -166,8 +166,9 @@ private typealias Allowed = PercentEncoding.AllowedBytes
     #expect(throws: PercentEncodingError.invalidHexDigit(byte: UInt8(ascii: "%"), offset: 1)) {
         try PercentEncoding.decode("%%20")
     }
-    // The offset points into the input, past the characters that decoded cleanly.
-    #expect(throws: PercentEncodingError.invalidHexDigit(byte: UInt8(ascii: " "), offset: 5)) {
+    // The offset points into the input, past the characters that decoded cleanly: the second
+    // '%' sits at input offset 5, so its first hex digit is offset 6.
+    #expect(throws: PercentEncodingError.invalidHexDigit(byte: UInt8(ascii: " "), offset: 6)) {
         try PercentEncoding.decode("ab%41% 0")
     }
 }
@@ -186,7 +187,7 @@ private typealias Allowed = PercentEncoding.AllowedBytes
     #expect(try PercentEncoding.decodeBytes(utf8: Array("%C3%A9".utf8)) == [0xC3, 0xA9])
 }
 
-@Test func decodeOrNilReportsFailureWithoutThrowing() {
+@Test func percentDecodeOrNilReportsFailureWithoutThrowing() {
     #expect(PercentEncoding.decodeOrNil("a%20b") == "a b")
     #expect(PercentEncoding.decodeOrNil("a%2") == nil)
     #expect(PercentEncoding.decodeOrNil("%ZZ") == nil)

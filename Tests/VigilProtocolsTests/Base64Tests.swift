@@ -183,7 +183,7 @@ private func unpadded(_ encoded: String) -> String {
     #expect(throws: Base64Error.dataAfterPadding(offset: 4)) { try Base64.decode("Zg==Zg==") }
 }
 
-@Test func decodeOrNilReportsFailureWithoutThrowing() {
+@Test func base64DecodeOrNilReportsFailureWithoutThrowing() {
     #expect(Base64.decodeOrNil("Zm9vYmFy") == Array("foobar".utf8))
     #expect(Base64.decodeOrNil("Zm9vYmFyZ") == nil)
     #expect(Base64.decodeOrNil("Zm$vYmFy") == nil)

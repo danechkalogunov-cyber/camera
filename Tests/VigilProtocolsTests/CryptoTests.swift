@@ -25,7 +25,7 @@ import VigilProtocols
 /// the 8-byte length field no longer fits in the final block, 63/64/65 straddle the block boundary
 /// itself, and 119/120/121 repeat both one block later. Synthesised with Python `hashlib`, which is an
 /// implementation independent of the code under test — these are not published vectors.
-struct BoundaryVector: Sendable, CustomStringConvertible {
+struct CryptoBoundaryVector: Sendable, CustomStringConvertible {
     let length: Int
     let md5: String
     let sha1: String
@@ -37,62 +37,62 @@ struct BoundaryVector: Sendable, CustomStringConvertible {
     var input: [UInt8] { (0 ..< length).map { UInt8(0x61 + ($0 % 26)) } }
 }
 
-let boundaryVectors: [BoundaryVector] = [
-    BoundaryVector(length: 0,
-                   md5: "d41d8cd98f00b204e9800998ecf8427e",
-                   sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-                   sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-    BoundaryVector(length: 1,
-                   md5: "0cc175b9c0f1b6a831c399e269772661",
-                   sha1: "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8",
-                   sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"),
-    BoundaryVector(length: 55,
-                   md5: "0d7ae056b2f015cd7dc67494efd658f1",
-                   sha1: "a617d006d1ca12671785098a19a87fe58443bde9",
-                   sha256: "595615dbe4f0f407ae397d08b4c2cb870cb9b0e11937416f950c5160acf9c005"),
-    BoundaryVector(length: 56,
-                   md5: "31fcfb5165169eb55898e7e4cf34d19a",
-                   sha1: "4ad5bb7ae3c4024768d364b77c52128ea3cffebe",
-                   sha256: "784f623b787495078e93ff28a25b581df0584055a7e71d8cd90c454716b92f51"),
-    BoundaryVector(length: 57,
-                   md5: "fd62afaf3aa1e2a52882cb464f5ccc4d",
-                   sha1: "e1b3b34da0f7b299090824d9aa81fff6711a79ad",
-                   sha256: "808f0738aa4401bdee842e5a15a7baad5809f976d8eb6f9bd2683cebd2e8d671"),
-    BoundaryVector(length: 63,
-                   md5: "1b30c0670c15e7da3c2ba7bce77ebe99",
-                   sha1: "fc8a5ab77259625085ead3ec96515b3b8d933fad",
-                   sha256: "5ca3e1ef5207490eac01a795e5cc94d59582a5118bf9534665c8668d87aa647c"),
-    BoundaryVector(length: 64,
-                   md5: "a2eaf6295c32adc403865fd96a2f182b",
-                   sha1: "93249d4c2f8903ebf41ac358473148ae6ddd7042",
-                   sha256: "2fcd5a0d60e4c941381fcc4e00a4bf8be422c3ddfafb93c809e8d1e2bfffae8e"),
-    BoundaryVector(length: 65,
-                   md5: "eba2cce0ca8df47e62414a736b3105a2",
-                   sha1: "cf2a63cc308225cf07b498d2309a01dd0df52f67",
-                   sha256: "1b3cd1877ab2f2f19f7be001722554f336cb799df0329de0bb4c118dc6abc06d"),
-    BoundaryVector(length: 119,
-                   md5: "b05187e08da41fa3ef16bd56afaafd99",
-                   sha1: "edd0f1133d0e4ca5f3e98bb7e0295f31d20d2cdb",
-                   sha256: "faef67da856d6fd9c8d12f9ed0a4fefd3cf0ce085ab43e2907418d457e3c354b"),
-    BoundaryVector(length: 120,
-                   md5: "62af9b597a9f55e16ab2b897387fc052",
-                   sha1: "23a58eee587aa1f50d19a969ab36a3fe3e88c393",
-                   sha256: "c9512b08619c19fbb503c7da6b46ef20301e5f7a7a5f43989182398536f5c5c8"),
-    BoundaryVector(length: 121,
-                   md5: "ac6fa3571578e922ab77f3d08a1ed8c0",
-                   sha1: "9b1ce2490012a9e55bbf22fb701dac21e9c29f88",
-                   sha256: "6ce395ba6c616565668116ef1d4ab2894dd21b9c3e11e42ec5f57f77417fd623"),
+let cryptoBoundaryVectors: [CryptoBoundaryVector] = [
+    CryptoBoundaryVector(length: 0,
+                         md5: "d41d8cd98f00b204e9800998ecf8427e",
+                         sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                         sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    CryptoBoundaryVector(length: 1,
+                         md5: "0cc175b9c0f1b6a831c399e269772661",
+                         sha1: "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8",
+                         sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"),
+    CryptoBoundaryVector(length: 55,
+                         md5: "0d7ae056b2f015cd7dc67494efd658f1",
+                         sha1: "a617d006d1ca12671785098a19a87fe58443bde9",
+                         sha256: "595615dbe4f0f407ae397d08b4c2cb870cb9b0e11937416f950c5160acf9c005"),
+    CryptoBoundaryVector(length: 56,
+                         md5: "31fcfb5165169eb55898e7e4cf34d19a",
+                         sha1: "4ad5bb7ae3c4024768d364b77c52128ea3cffebe",
+                         sha256: "784f623b787495078e93ff28a25b581df0584055a7e71d8cd90c454716b92f51"),
+    CryptoBoundaryVector(length: 57,
+                         md5: "fd62afaf3aa1e2a52882cb464f5ccc4d",
+                         sha1: "e1b3b34da0f7b299090824d9aa81fff6711a79ad",
+                         sha256: "808f0738aa4401bdee842e5a15a7baad5809f976d8eb6f9bd2683cebd2e8d671"),
+    CryptoBoundaryVector(length: 63,
+                         md5: "1b30c0670c15e7da3c2ba7bce77ebe99",
+                         sha1: "fc8a5ab77259625085ead3ec96515b3b8d933fad",
+                         sha256: "5ca3e1ef5207490eac01a795e5cc94d59582a5118bf9534665c8668d87aa647c"),
+    CryptoBoundaryVector(length: 64,
+                         md5: "a2eaf6295c32adc403865fd96a2f182b",
+                         sha1: "93249d4c2f8903ebf41ac358473148ae6ddd7042",
+                         sha256: "2fcd5a0d60e4c941381fcc4e00a4bf8be422c3ddfafb93c809e8d1e2bfffae8e"),
+    CryptoBoundaryVector(length: 65,
+                         md5: "eba2cce0ca8df47e62414a736b3105a2",
+                         sha1: "cf2a63cc308225cf07b498d2309a01dd0df52f67",
+                         sha256: "1b3cd1877ab2f2f19f7be001722554f336cb799df0329de0bb4c118dc6abc06d"),
+    CryptoBoundaryVector(length: 119,
+                         md5: "b05187e08da41fa3ef16bd56afaafd99",
+                         sha1: "edd0f1133d0e4ca5f3e98bb7e0295f31d20d2cdb",
+                         sha256: "faef67da856d6fd9c8d12f9ed0a4fefd3cf0ce085ab43e2907418d457e3c354b"),
+    CryptoBoundaryVector(length: 120,
+                         md5: "62af9b597a9f55e16ab2b897387fc052",
+                         sha1: "23a58eee587aa1f50d19a969ab36a3fe3e88c393",
+                         sha256: "c9512b08619c19fbb503c7da6b46ef20301e5f7a7a5f43989182398536f5c5c8"),
+    CryptoBoundaryVector(length: 121,
+                         md5: "ac6fa3571578e922ab77f3d08a1ed8c0",
+                         sha1: "9b1ce2490012a9e55bbf22fb701dac21e9c29f88",
+                         sha256: "6ce395ba6c616565668116ef1d4ab2894dd21b9c3e11e42ec5f57f77417fd623"),
 ]
 
 /// Chunk sizes used by the streaming-equivalence tests. 1/3 are the pathological small cases, 63/64/65
 /// straddle the block boundary, and 7/13/25/26 are the sizes docs/spec-rtsp.md §6.3 asks for.
-let streamingChunkSizes = [1, 2, 3, 7, 13, 25, 26, 63, 64, 65, 127, 128]
+let cryptoStreamingChunkSizes = [1, 2, 3, 7, 13, 25, 26, 63, 64, 65, 127, 128]
 
 /// Input lengths used by the streaming-equivalence tests.
-let streamingInputLengths = [0, 1, 2, 55, 56, 57, 63, 64, 65, 119, 120, 121, 200, 1000]
+let cryptoStreamingInputLengths = [0, 1, 2, 55, 56, 57, 63, 64, 65, 119, 120, 121, 200, 1000]
 
 /// `count` bytes of the `"abcdefghij…"` pattern.
-func patternBytes(_ count: Int) -> [UInt8] {
+func cryptoPatternBytes(_ count: Int) -> [UInt8] {
     (0 ..< count).map { UInt8(0x61 + ($0 % 26)) }
 }
 
@@ -221,15 +221,15 @@ struct MD5Tests {
         #expect(sessionHA1 == "8e02847dbbf1e8b0643c4dc284808c30")
     }
 
-    @Test("Digests at block and length-field boundaries", arguments: boundaryVectors)
-    func boundaryLengths(vector: BoundaryVector) {
+    @Test("Digests at block and length-field boundaries", arguments: cryptoBoundaryVectors)
+    func boundaryLengths(vector: CryptoBoundaryVector) {
         #expect(Hex.lowercase(MD5.digest(vector.input)) == vector.md5)
     }
 
-    @Test("Chunked updates equal the one-shot digest", arguments: streamingChunkSizes)
+    @Test("Chunked updates equal the one-shot digest", arguments: cryptoStreamingChunkSizes)
     func streamingEquivalence(chunkSize: Int) {
-        for length in streamingInputLengths {
-            let input = patternBytes(length)
+        for length in cryptoStreamingInputLengths {
+            let input = cryptoPatternBytes(length)
             let oneShot = Hex.lowercase(MD5.digest(input))
             var context = MD5()
             var offset = 0
@@ -245,7 +245,7 @@ struct MD5Tests {
 
     @Test("Every update entry point yields the same digest")
     func updateOverloadsAgree() {
-        let input = patternBytes(200)
+        let input = cryptoPatternBytes(200)
         let expected = Hex.lowercase(MD5.digest(input))
 
         var viaData = MD5()
@@ -313,15 +313,15 @@ struct SHA1Tests {
         #expect(Hex.lowercase(SHA1().finalize()) == "da39a3ee5e6b4b0d3255bfef95601890afd80709")
     }
 
-    @Test("Digests at block and length-field boundaries", arguments: boundaryVectors)
-    func boundaryLengths(vector: BoundaryVector) {
+    @Test("Digests at block and length-field boundaries", arguments: cryptoBoundaryVectors)
+    func boundaryLengths(vector: CryptoBoundaryVector) {
         #expect(Hex.lowercase(SHA1.digest(vector.input)) == vector.sha1)
     }
 
-    @Test("Chunked updates equal the one-shot digest", arguments: streamingChunkSizes)
+    @Test("Chunked updates equal the one-shot digest", arguments: cryptoStreamingChunkSizes)
     func streamingEquivalence(chunkSize: Int) {
-        for length in streamingInputLengths {
-            let input = patternBytes(length)
+        for length in cryptoStreamingInputLengths {
+            let input = cryptoPatternBytes(length)
             let oneShot = Hex.lowercase(SHA1.digest(input))
             var context = SHA1()
             var offset = 0
@@ -401,15 +401,15 @@ struct SHA256Tests {
             == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
     }
 
-    @Test("Digests at block and length-field boundaries", arguments: boundaryVectors)
-    func boundaryLengths(vector: BoundaryVector) {
+    @Test("Digests at block and length-field boundaries", arguments: cryptoBoundaryVectors)
+    func boundaryLengths(vector: CryptoBoundaryVector) {
         #expect(Hex.lowercase(SHA256.digest(vector.input)) == vector.sha256)
     }
 
-    @Test("Chunked updates equal the one-shot digest", arguments: streamingChunkSizes)
+    @Test("Chunked updates equal the one-shot digest", arguments: cryptoStreamingChunkSizes)
     func streamingEquivalence(chunkSize: Int) {
-        for length in streamingInputLengths {
-            let input = patternBytes(length)
+        for length in cryptoStreamingInputLengths {
+            let input = cryptoPatternBytes(length)
             let oneShot = Hex.lowercase(SHA256.digest(input))
             var context = SHA256()
             var offset = 0
@@ -425,7 +425,7 @@ struct SHA256Tests {
 
     @Test("Every update entry point yields the same digest")
     func updateOverloadsAgree() {
-        let input = patternBytes(300)
+        let input = cryptoPatternBytes(300)
         let expected = Hex.lowercase(SHA256.digest(input))
 
         var viaData = SHA256()

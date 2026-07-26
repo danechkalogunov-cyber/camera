@@ -38,7 +38,8 @@ public enum ByteReaderError: Error, Equatable, Sendable, CustomStringConvertible
     public var description: String {
         switch self {
         case let .outOfBounds(needed, remaining, offset):
-            return "ByteReader out of bounds: needed \(needed) B, \(remaining) B remaining at offset \(offset)"
+            return "ByteReader out of bounds: needed \(needed) B, "
+                + "\(remaining) B remaining at offset \(offset)"
         case let .negativeLength(n):
             return "ByteReader negative length \(n)"
         case let .delimiterNotFound(offset):

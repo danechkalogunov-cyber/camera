@@ -207,9 +207,10 @@ public struct MD5: Sendable {
         count: Int,
         blockOffset: Int
     ) {
+        let chunk = UnsafeRawBufferPointer(rebasing: source[sourceOffset ..< sourceOffset + count])
         withUnsafeMutableBytes(of: &block) { raw in
             UnsafeMutableRawBufferPointer(rebasing: raw[blockOffset ..< blockOffset + count])
-                .copyMemory(from: UnsafeRawBufferPointer(rebasing: source[sourceOffset ..< sourceOffset + count]))
+                .copyMemory(from: chunk)
         }
     }
 
