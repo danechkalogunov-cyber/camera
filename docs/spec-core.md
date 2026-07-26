@@ -759,7 +759,7 @@ public struct EventRecord: Identifiable, Sendable, Codable, Hashable {
     public var isRead: Bool
     public var deviceTimeRaw: String       // "2026-07-26T14:25:30+03:00" as sent
 
-    /// Dedupe/coalesce key. §10.3
+    /// Dedupe/coalesce key. §11.3
     public var coalesceKey: CoalesceKey { CoalesceKey(cameraID, channel, kind) }
 }
 
@@ -1340,7 +1340,7 @@ public actor EventLog {
     public func load() async -> [EventRecord]
     public func snapshot() -> [EventRecord]                        // newest first
     public func append(_ event: EventRecord)                       // evicts oldest past capacity
-    public func upsert(_ event: EventRecord)                       // coalescing (§10.3)
+    public func upsert(_ event: EventRecord)                       // coalescing (§11.3)
     public func markRead(_ ids: Set<EventID>)
     public func delete(_ ids: Set<EventID>)
     public func clear(olderThan: Date?)
@@ -2280,3 +2280,1911 @@ public struct StreamError: Error, Sendable, Hashable, LocalizedError {
 
 Every `Code` maps to one row of the Stream Doctor table (§13.2). Adding a `Code` without adding that
 row fails a unit test (§17.9) — the taxonomy and the user-facing help are kept in lockstep by force.
+
+---
+
+## 8. `StreamCoordinator` — app-wide arbitration
+
+### 8.1 Role and API
+
+Exactly one instance, owned by the `Vigil` app target. It is the **only** thing that creates,
+starts, stops and destroys `StreamController`s. It answers one question continuously: *given the
+current layout, window state, decode budget, thermal state and network, which cameras should be
+live, at which quality, in which order?*
+
+```swift
+public actor StreamCoordinator {
+    public init(configStore: ConfigStore,
+                credentialStore: CredentialStore,
+                eventCenter: EventCenter,
+                healthMonitor: HealthMonitor,
+                dependencies: CoreDependencies)
+
+    /// Starts observing config, network, occlusion and power. Call once at launch.
+    public func activate() async
+
+    // MARK: Inputs from the UI (all idempotent; call as often as you like)
+    /// The authoritative description of what is on screen. VigilUI calls this on layout change,
+    /// window resize (debounced 100 ms by the caller), scroll, tab change and display change.
+    public func setViewport(_ viewport: Viewport) async
+    public func setFocusedCamera(_ id: CameraID?) async
+    public func setFullscreenCamera(_ id: CameraID?) async
+    public func setSidebarVisibleCameras(_ ids: [CameraID]) async
+    public func setAudioSoloCamera(_ id: CameraID?) async
+
+    // MARK: Direct actions (proxied to the right controller)
+    public func controller(for id: CameraID) -> StreamController?
+    public func start(_ id: CameraID) async
+    public func stop(_ id: CameraID) async
+    public func restart(_ id: CameraID) async
+    public func setQuality(_ q: StreamQuality, for id: CameraID) async
+    public func snapshot(_ id: CameraID, options: SnapshotOptions) async throws -> SnapshotResult
+    public func snapshotAll(options: SnapshotOptions) async -> [CameraID: Result<SnapshotResult, any Error>]
+    public func startRecording(_ id: CameraID, options: RecordingOptions) async throws -> RecordingHandle
+    public func stopRecording(_ id: CameraID) async throws -> RecordingClip?
+    public func stopAllRecordings() async -> [RecordingClip]
+
+    // MARK: Observation
+    public nonisolated func plans() -> AsyncStream<LivePlan>
+    public func plan() -> LivePlan
+    public func states() -> [CameraID: StreamState]
+
+    // MARK: Shutdown
+    /// Awaited on app termination: finalize recordings, flush stores, TEARDOWN all sessions.
+    /// Hard budget 4.0 s; anything unfinished is abandoned with `.partial` files intact.
+    public func shutdown() async
+}
+```
+
+```swift
+public struct Viewport: Sendable, Hashable {
+    public struct Tile: Sendable, Hashable {
+        public var cameraID: CameraID
+        public var cellIndex: Int
+        /// Size in **backing pixels** = points × backingScaleFactor. The coordinator must never
+        /// reason in points, because a 480-point tile is 960 px on Retina and that changes the
+        /// quality decision by two rows of §8.5.
+        public var pixelSize: PixelSize
+        public var isVisible: Bool           // false when scrolled out or in a hidden tab
+        public var qualityOverride: StreamQuality?
+        public var windowID: WindowID
+    }
+    public var tiles: [Tile]
+    public var focusedCameraID: CameraID?
+    public var fullscreenCameraID: CameraID?
+    public var sidebarCameraIDs: [CameraID]      // rows currently on screen only
+    public var occludedWindowIDs: Set<WindowID>
+    public var isAppActive: Bool
+    public var screensAreAsleep: Bool
+}
+
+public struct PixelSize: Sendable, Hashable {
+    public var width: Int, height: Int
+    public var pixels: Int { width * height }
+}
+
+public struct LivePlan: Sendable, Hashable {
+    public struct Entry: Sendable, Hashable {
+        public var cameraID: CameraID
+        public var mode: DeliveryMode
+        public var priority: StreamPriority
+        public var reason: String                 // human-readable, shown in Advanced diagnostics
+        public var cost: Double                   // decode units (§8.4)
+    }
+    public var entries: [Entry]                   // sorted by priority descending
+    public var totalCost: Double
+    public var budget: Double
+    public var admittedCount: Int
+    public var jpegFallbackCount: Int
+    public var pausedCount: Int
+    public var generatedAt: Date
+    public var pressure: BudgetPressure           // .none / .moderate / .severe
+}
+
+public enum DeliveryMode: Sendable, Hashable {
+    case decode(StreamProfile.Kind)       // full decode of this profile
+    case keyframeOnly(StreamProfile.Kind) // decode IDR frames only
+    case jpegPoll(interval: Double)       // ISAPI JPEG, no RTSP session at all
+    case paused                           // session alive, decode released
+    case stopped                          // no session
+}
+```
+
+### 8.2 Computing the live set
+
+`recomputePlan()` runs when any input changes, coalesced over **150 ms** (a window resize fires
+dozens of viewport updates per second; the plan must not be recomputed per frame). It is a **pure
+function** of its inputs, which is what makes §17.6 possible:
+
+```swift
+func makePlan(library: Library, viewport: Viewport, network: NetworkPathState,
+              power: PowerConditions, budget: Double, now: Date) -> LivePlan
+```
+
+Steps, in order:
+
+1. **Candidate set** = every `Camera` where `isEnabled` and (appears in `viewport.tiles`) or
+   (`isPinnedLive`) or (appears in `viewport.sidebarCameraIDs`) or (is recording) or (has
+   `autoRecordOnMotion` and `EventCenter` is armed for it) or (is the audio-solo camera).
+2. **Hard stops** — these produce `.stopped` regardless of everything else:
+   `!isEnabled`; `state == .failed` with `code.isUserFixable`; `viewport.screensAreAsleep` and not
+   recording; `!network.isSatisfied` (controllers stay alive but in `reconnecting`).
+3. **Assign priority** (§8.3).
+4. **Assign a desired `DeliveryMode`** from the tile-size policy table (§8.5), then apply overrides:
+   `Tile.qualityOverride` → `CellAssignment.qualityOverride` → `Camera.streamProfile` when the camera
+   is focused/fullscreen.
+5. **Occlusion override** — any tile whose `windowID ∈ occludedWindowIDs`, or `isVisible == false`,
+   or `!viewport.isAppActive` while `settings.pauseWhenOccluded`, becomes `.paused` **unless** it is
+   recording or is the audio-solo camera.
+6. **Admission** (§8.4): walk entries in priority order accumulating cost; when the budget is
+   exceeded, degrade the *lowest*-priority entries in this order —
+   `decode(main) → decode(sub) → keyframeOnly(sub) → jpegPoll → paused` — recomputing the total after
+   each step, until it fits.
+7. **Diff against the running set** and emit the minimum action list: create / start / stop /
+   `setQuality` / `setPaused` / `setPriority`. A camera whose mode is unchanged is **not** touched;
+   this is what prevents a layout change from restarting every stream.
+8. Emit `LivePlan` on `plans()` and mirror it into `LiveViewState` (§8.9).
+
+**Anti-thrash rules.** A mode may change at most **once per 750 ms** per camera; a demotion caused by
+budget pressure sticks for at least **3 s** before a promotion is considered; and the hysteresis in
+§7.8 applies to every automatic quality decision.
+
+### 8.3 Priority ordering
+
+Priority is a computed score, evaluated in this exact order (first match wins):
+
+| Order | Condition | Priority |
+|---|---|---|
+| 1 | `cameraID == viewport.fullscreenCameraID` | `.focused` (400) |
+| 2 | `cameraID == viewport.focusedCameraID` and the tile is visible | `.focused` (400) |
+| 3 | `cameraID == audioSoloCameraID` | `.focused` (400) |
+| 4 | actively recording (manual or motion) | **`max(computed, .visibleLarge)`** — a recording stream is never demoted below full decode |
+| 5 | visible tile, `pixelSize.pixels ≥ 350_000` | `.visibleLarge` (300) |
+| 6 | visible tile, `pixelSize.pixels < 350_000` | `.visibleSmall` (200) |
+| 7 | tile in the layout but not visible / occluded | `.offscreen` (100) |
+| 8 | only present in `sidebarCameraIDs` | `.thumbnail` (50) |
+| 9 | `isPinnedLive` only | `.background` (10) |
+
+Ties break by: recording first, then lower `Layout` `cellIndex`, then lower `Camera.orderIndex`,
+then `CameraID` UUID order (so the plan is fully deterministic and testable).
+
+**Rule 4 is load-bearing.** A user recording an incident must never lose frames because they opened a
+16-up grid. Recording streams are admitted *before* the budget walk and their cost is subtracted from
+the budget up front.
+
+### 8.4 Decode budget and admission
+
+macOS has a finite number of concurrent hardware decode sessions and a finite decode throughput.
+`VigilVideo` owns the authority (`DecodeAdmitting`); VigilCore owns the *policy* — which streams get
+to ask.
+
+```swift
+public protocol DecodeAdmitting: Sendable {
+    /// Total cost units available now. Reflects chip class, thermal state and low-power mode.
+    func currentBudget() async -> Double
+    /// Hard ceiling on simultaneous VTDecompressionSessions / AVSampleBufferDisplayLayers.
+    func maxConcurrentSessions() async -> Int
+    /// Reserves capacity. Throws `.budgetExhausted` if it cannot be satisfied.
+    func acquire(cost: Double, priority: StreamPriority) async throws -> DecodeLease
+}
+```
+
+**Cost model.** `cost = megapixels × fps × codecWeight`, with `codecWeight` from §3
+(H.264 1.00, H.265 1.35, MJPEG 0.45). Worked examples:
+
+| Stream | Cost |
+|---|---|
+| 1080p25 H.264 (main) | 2.07 × 25 × 1.00 = **51.8** |
+| 1080p25 H.265 | 2.07 × 25 × 1.35 = **69.9** |
+| 4 MP 20 fps H.265 (main) | 4.00 × 20 × 1.35 = **108.0** |
+| D1 (704×576) 12 fps H.264 (sub) | 0.41 × 12 × 1.00 = **4.9** |
+| 640×360 15 fps H.264 (sub) | 0.23 × 15 × 1.00 = **3.5** |
+| keyframe-only sub (GOP 2 s → ~0.5 fps) | 0.23 × 0.5 × 1.00 = **0.12** |
+| JPEG poll | **0** (no decode session; ImageIO on a utility queue) |
+
+**Default budgets** (VigilVideo owns the table; reproduced here because the policy depends on it, and
+`AppSettings.maxConcurrentDecodes == 0` means "use this"):
+
+| Chip class | Budget (cost units) | Max sessions | Comfortable 1080p25 H.264 streams |
+|---|---|---|---|
+| Intel, integrated graphics only | 260 | 8 | 5 |
+| Intel + discrete / T2 | 420 | 12 | 8 |
+| Apple M1 / M2 / M3 (base) | 900 | 20 | 17 |
+| M-series Pro | 1500 | 32 | 28 |
+| M-series Max / Ultra | 2200 | 48 | 42 |
+
+Multipliers applied by `DecodeAdmitting`, which VigilCore reacts to rather than duplicates:
+`.thermalState == .fair` × 0.85, `.serious` × 0.6, `.critical` × 0.35;
+`isLowPowerModeEnabled` × 0.6; on battery with `pauseOnBattery` × 0.75.
+
+**The 16-up grid must fit.** 16 × 640×360 15 fps H.264 sub-streams = 16 × 3.5 = **56 cost units**,
+comfortably inside every budget above — which is precisely why §8.5 forces sub-streams in grids. The
+same grid at main stream would be 16 × 51.8 = **829 units**, over the M1's budget, and the admission
+walk would demote 6–8 tiles. That is the failure the policy exists to prevent.
+
+`BudgetPressure` is reported so the UI can explain itself:
+`.none` (< 70 % of budget), `.moderate` (70–95 %), `.severe` (> 95 % or any tile demoted). Under
+`.severe` the UI shows a one-line, dismissible notice: *"Vigil reduced quality on 3 cameras to keep
+playback smooth."* with a link to Settings → Streams.
+
+### 8.5 Tile pixel size → delivery mode (the policy table)
+
+The input is the tile's size in **backing pixels**. Thresholds are on **total pixels**, not width,
+because a 1+5 layout produces very non-square cells.
+
+| Class | Tile pixels (backing) | Typical case | Video source | Decode | Effective refresh |
+|---|---|---|---|---|---|
+| **A — Hero** | ≥ 1 500 000 (e.g. ≥ 1632×920) | fullscreen, 1-up, hero cell of 1+5 | **main** | full | native fps |
+| **B — Large** | 350 000 – 1 499 999 (e.g. 960×540) | 2×2 on a 27″, hero of 3×3 | **sub** if sub height ≥ 0.7 × tile height, else **main** | full | native fps |
+| **C — Medium** | 60 000 – 349 999 (e.g. 640×360, 480×270) | 3×3, 4×4 on a large display | **sub** | full, fps capped at 15 by dropping non-reference frames | ≤ 15 fps |
+| **D — Small** | 12 000 – 59 999 (e.g. 240×135, 160×90) | 5×5, dense video wall | **sub** | **keyframe-only** | 1 / GOP (≈ 0.5 fps) |
+| **E — Thumbnail** | < 12 000 (e.g. 110×62 sidebar row) | sidebar micro-preview, PiP dot | **ISAPI JPEG poll** | none | 2 s |
+| **F — Hidden** | any, `isVisible == false` or occluded | scrolled away, other tab, occluded window | none | **paused** | last frame held 30 s, then released |
+
+Class-A promotion additionally requires that the main stream's cost fits the *remaining* budget after
+all higher-priority entries; otherwise the tile stays on sub and the reason string reads
+`"main stream withheld: budget"`.
+
+**JPEG poll intervals** (class E), chosen so a 64-camera sidebar does not melt the control plane:
+
+| Visible thumbnails | Interval | Effective ISAPI request rate |
+|---|---|---|
+| 1 – 8 | 2.0 s | ≤ 4 req/s |
+| 9 – 24 | 4.0 s | ≤ 6 req/s |
+| 25 – 48 | 8.0 s | ≤ 6 req/s |
+| 49+ | 15.0 s | ≤ 4 req/s |
+| window not active | 30.0 s | — |
+| `Camera.jpegPollIntervalOverride` set | that value, clamped to 1...60 s | — |
+
+JPEG polling requests `?videoResolutionWidth=352&videoResolutionHeight=198` (or the device's nearest
+supported size) so the payload is ~12 KB rather than ~350 KB, and is issued through the per-device
+ISAPI concurrency limiter (§8.8). If a device sets `jpegSnapshotIgnoresSizeParams`, the full-size
+image is fetched and downscaled locally, and the interval doubles.
+
+**Fallback when JPEG is unavailable** (`supportsJPEGSnapshot == false`, or 3 consecutive failures):
+class E degrades to `keyframeOnly(.sub)` if the budget allows, else to a static generated placeholder
+(camera name on a neutral tile). It never silently shows nothing.
+
+**Hysteresis at every boundary:** a class change requires crossing the threshold by > 15 % of the
+threshold value **and** holding for 750 ms. Downward changes (toward cheaper) may apply after 250 ms
+when `pressure == .severe`, because relieving overload is more urgent than avoiding a flicker.
+
+### 8.6 Occlusion, sleep/wake, thermal and power
+
+**Occlusion.** `OcclusionObserving` translates AppKit notifications into `OcclusionEvent`s. The
+AppKit adapter observes: `NSWindow.didChangeOcclusionStateNotification` (checking
+`window.occlusionState.contains(.visible)`), `NSWindow.didMiniaturizeNotification` /
+`didDeminiaturizeNotification`, `NSApplication.didHideNotification` / `didUnhideNotification`,
+`NSApplication.didBecomeActiveNotification` / `didResignActiveNotification`, and
+`NSWorkspace.screensDidSleepNotification` / `screensDidWakeNotification`.
+
+| Condition | Effect | Exceptions |
+|---|---|---|
+| Window fully occluded (another window covers it) | all its tiles → `.paused` | recording, audio-solo |
+| Window miniaturized | all its tiles → `.paused` | recording, audio-solo |
+| App hidden (⌘H) | every tile → `.paused` | recording, audio-solo, `isPinnedLive` |
+| App inactive but visible | no change; sidebar JPEG interval → 30 s | — |
+| Screens asleep | every controller → `.paused`; JPEG polling stops entirely | recording continues; motion-armed cameras keep their RTSP session for the pre-roll |
+| Display sleep > 10 min with nothing recording | full `stop()`, releasing sockets | `isPinnedLive` cameras keep the session |
+
+Pausing releases the `DecodeLease` and stops feeding the sink but **keeps the RTSP session and the
+keepalive**, so resuming costs one keyframe wait (~GOP/2, typically 1 s) instead of a full
+connect (~600 ms–2 s). Un-pausing always issues `requestKeyframe(.qualitySwitch)`.
+
+**Sleep and wake.** On `willSleep`: `await configStore.flush()`, `await eventLog.flush()`, finalize
+every recording (they will be split, not lost), then `setPaused(true)` on all controllers — no
+`TEARDOWN`, because the sockets are about to die anyway and TEARDOWN would just block the sleep.
+
+On `didWake` the sockets are dead but the app does not know it yet, and waiting for the 12 s stall
+timer would be a terrible experience. Therefore, on `didWake`:
+
+1. Mark every controller's transport as invalid and force `reconnecting`, **without** consuming a
+   reconnect attempt.
+2. Wait for `NetworkPathMonitoring` to report `isSatisfied`, with a 10 s ceiling (Wi-Fi typically
+   reassociates in 1–3 s).
+3. Reconnect in priority order with a **250 ms** stagger, so 16 cameras spread over 4 s rather than
+   hammering the switch simultaneously.
+4. Re-probe capabilities only for devices whose `probedAt` is stale (§4.3) — not on every wake.
+5. Restart JPEG polling after the visible decoded tiles have their first frame.
+
+**Thermal and low power.** On `thermalStateChanged` or `lowPowerModeChanged`, the coordinator does
+*not* independently throttle; it re-reads `DecodeAdmitting.currentBudget()` and lets the normal
+admission walk (§8.4) demote tiles. This keeps one code path for all pressure sources. At
+`.critical` the coordinator additionally: caps every tile at class C or lower, stops all JPEG
+polling, and emits a UI notice — *"Your Mac is very warm. Vigil lowered video quality."*
+
+### 8.7 Network changes
+
+```
+NWPathMonitor (VigilTransport) → NetworkPathMonitoring → coordinator
+```
+
+| Transition | Action |
+|---|---|
+| satisfied → unsatisfied | Every controller receives `networkLost` (transition 47): transports cancelled, attempt counters **frozen**, no timers armed. UI shows "No network connection" once, globally — **not** 16 per-camera errors. |
+| unsatisfied → satisfied | Every controller receives `networkAvailable`; reconnect in priority order with a 100 ms stagger; attempt counters reset. |
+| `interfaceFingerprint` changed while satisfied (Wi-Fi → Ethernet, VPN up/down, new SSID) | Treated as a full network change: `restart()` all controllers, because the local address changed and any UDP path is now wrong. Cached DNS is dropped. |
+| `isConstrained` becomes true (Low Data Mode) | Cap all tiles at class C, stop JPEG polling, emit `.networkConstrained`. Do **not** stop streams — this is a LAN app and the user may be on a constrained interface unrelated to the cameras. |
+| `isExpensive` becomes true | No automatic action; log at `.info`. Cameras are LAN devices; treating tethering as a reason to stop would be wrong. |
+
+**Global, not per-camera, messaging.** When `!network.isSatisfied`, per-camera error UI is suppressed
+entirely and replaced by one app-level banner. This single rule removes the most common "16 red
+error toasts" complaint pattern.
+
+### 8.8 Global concurrency limiters
+
+Four separate limiters, because they protect different scarce resources:
+
+```swift
+/// FIFO, priority-aware, cancellation-safe. No unfair wake-ups, no thundering herd.
+public actor ConcurrencyLimiter {
+    public init(limit: Int, name: String)
+    public func withPermit<T: Sendable>(priority: StreamPriority = .visibleSmall,
+                                        _ body: @Sendable () async throws -> T) async rethrows -> T
+    public func setLimit(_ limit: Int) async
+    public var inFlight: Int { get }
+    public var queueDepth: Int { get }
+}
+```
+
+| Limiter | Default limit | Protects | Notes |
+|---|---|---|---|
+| `connectLimiter` | **4** (`AppSettings.maxConcurrentConnects`) | switch/AP CPU and ARP tables during mass reconnect | held from `connecting` through `playOK`, then released |
+| `isapiGlobalLimiter` | **8** | the app's own URLSession and the control plane generally | — |
+| `isapiPerDeviceLimiter` | **2** (**1** when `rejectsConcurrentISAPI`) | cheap Hikvision HTTP servers, which drop or 503 under parallel load | keyed by `host:port`, created lazily |
+| `snapshotLimiter` | **3** | ImageIO/CoreGraphics encode bursts during "Snapshot All" | JPEG-poll fetches also pass through here |
+
+`withPermit` acquires in **priority order**, so the focused camera's reconnect jumps the queue ahead
+of 15 thumbnails. Permits are released on cancellation via `defer`, and a permit is never held across
+a user-interaction wait.
+
+### 8.9 `LiveViewState` — the UI mirror
+
+The UI must not `await` an actor to draw a frame. `StreamCoordinator` therefore maintains a
+`@MainActor` observable mirror, and VigilUI reads **only** this.
+
+```swift
+@MainActor
+@Observable
+public final class LiveViewState {
+    public private(set) var tiles: [CameraID: TileState] = [:]
+    public private(set) var plan: LivePlan?
+    public private(set) var globalBanner: GlobalBanner?
+    public private(set) var networkIsSatisfied: Bool = true
+    public private(set) var activeRecordings: Set<CameraID> = []
+    public private(set) var unreadEventCount: Int = 0
+    public private(set) var budgetPressure: BudgetPressure = .none
+}
+
+public struct TileState: Sendable, Hashable {
+    public var cameraID: CameraID
+    public var name: String
+    public var state: StreamState
+    public var detail: StateDetail?
+    public var mode: DeliveryMode
+    public var format: StreamFormat?
+    public var isHardwareDecoded: Bool
+    public var isRecording: Bool
+    public var isMuted: Bool
+    public var stats: StreamStatistics?
+    public var lastKeyframeAt: Date?
+    public var degradation: DegradationReason?
+    public var lastThumbnailJPEG: Data?
+    public var motionRegions: [NormalizedRect]
+    public var motionExpiresAt: Date?
+}
+
+public enum GlobalBanner: Sendable, Hashable {
+    case noNetwork
+    case budgetReduced(count: Int)
+    case thermalThrottled
+    case diskAlmostFull(freeGB: Int)
+    case recordingsFolderUnavailable
+    case configSaveFailing(String)
+    case libraryRecovered(RecoverySource)
+    case libraryReadOnly(futureVersion: Int)
+}
+```
+
+**Update cadence — a hard rule.** `TileState` is refreshed at:
+
+| Field group | Cadence | Why |
+|---|---|---|
+| `state`, `detail`, `mode`, `isRecording`, `degradation` | immediately on change, coalesced over 100 ms | these drive visible chrome |
+| `stats` | **1 Hz** | 60 Hz statistics updates would re-render the whole grid every frame and blow the 120 Hz budget |
+| `lastThumbnailJPEG` | on keyframe, at most every 2 s | sidebar previews |
+| `motionRegions` | on event, auto-cleared 3 s after `motionExpiresAt` | overlay lifetime |
+
+Video pixels **never** pass through `LiveViewState`. Frames go
+`StreamController → DecodeSink → VigilRender` layer-side, entirely off the SwiftUI update path. This
+is the single most important performance rule in the app: SwiftUI observes *status*, never *frames*.
+
+---
+
+## 9. Recording — `ClipRecorder`
+
+### 9.1 Principle: passthrough, never re-encode
+
+The camera already produced a hardware-encoded H.264/H.265 elementary stream. Re-encoding it would
+cost CPU, add latency, and lose quality for nothing. `ClipRecorder` therefore **muxes** the existing
+compressed samples into MP4/MOV using `AVAssetWriter` with an input created with **`outputSettings:
+nil`** and a `sourceFormatHint` — the documented Apple contract for passthrough.
+
+Consequences that shape the whole design:
+
+- Recording works **without a decode session**. `ClipRecorder` consumes `EncodedFrame` (VigilRTP),
+  not `CVPixelBuffer`, so an occluded or class-F tile can record at full main-stream quality while
+  decoding nothing. This is why §8.3 rule 4 exists and why §8.6 keeps paused streams' RTSP alive.
+- CPU cost is ~**0.4 % of one core** per 1080p stream — essentially `memcpy` plus atom bookkeeping.
+- The recorder cannot change resolution mid-file (a format change forces a split, §9.7).
+- The first sample **must** be a keyframe, or the file will not decode from the start (§9.4).
+
+```swift
+public actor ClipRecorder {
+    public init(options: RecordingOptions,
+                format: StreamFormat,
+                camera: Camera,
+                dependencies: CoreDependencies)
+
+    /// Opens the writer, writes the pre-roll, and starts accepting frames.
+    /// Throws before creating any file if disk or folder checks fail (§9.6).
+    public func begin(preRoll: [EncodedFrame], audioPreRoll: [EncodedFrame]) async throws -> RecordingHandle
+
+    /// Non-blocking. Frames are appended if the input is ready, else counted as dropped.
+    public func append(video frame: EncodedFrame) async
+    public func append(audio frame: EncodedFrame) async
+
+    /// Finalizes: marks inputs finished, awaits `finishWriting`, renames .partial → final,
+    /// writes the thumbnail, returns the clip record. Idempotent.
+    public func finish(reason: RecordingEndReason) async -> RecordingClip
+
+    /// Emergency path used on crash-adjacent teardown. Does NOT await finishWriting.
+    /// Leaves the fragmented .partial file, which is playable (§9.9).
+    public func abandon() async -> RecordingClip
+
+    public func progress() -> RecordingProgress
+    public nonisolated func events() -> AsyncStream<RecordingEvent>
+}
+
+public struct RecordingOptions: Sendable, Hashable {
+    public var trigger: RecordingTrigger
+    public var container: ClipContainer = .mp4
+    public var preRollSeconds: Double = 5           // 0...30
+    public var maxDurationSeconds: Double = 1800    // auto-split at 30 min
+    public var includeAudio: Bool = true
+    public var neverReencodeAudio: Bool = false
+    public var fileNameTemplate: String = RecordingNaming.defaultTemplate
+    public var destinationRoot: URL
+    public var eventID: EventID? = nil
+    public var minimumFreeBytes: Int64 = 2 << 30    // 2 GiB
+    public var fragmentIntervalSeconds: Double = 2  // 0 disables fragmentation
+    public var burnInTimestamp: Bool = false        // §9.10 — deliberately restricted
+}
+
+public struct RecordingHandle: Sendable, Hashable {
+    public var clipID: ClipID
+    public var cameraID: CameraID
+    public var partialURL: URL      // …/name.mp4.partial while writing
+    public var finalURL: URL
+    public var startedAt: Date
+    public var preRollSecondsIncluded: Double
+}
+
+public struct RecordingProgress: Sendable, Hashable {
+    public var duration: Double, byteCount: Int64
+    public var framesWritten: Int, framesDropped: Int
+    public var audioFramesWritten: Int
+    public var estimatedFinalBytes: Int64
+    public var freeBytesRemaining: Int64
+}
+
+public enum RecordingEndReason: String, Sendable, Codable {
+    case userStopped, durationLimit, diskFull, formatChanged, streamLost, appQuitting
+    case motionEnded, writeError, cameraDeleted
+}
+```
+
+### 9.2 Writer construction — exact code
+
+```swift
+private func makeWriter(format: StreamFormat, url: URL) throws -> (AVAssetWriter,
+                                                                   AVAssetWriterInput,
+                                                                   AVAssetWriterInput?) {
+    let writer = try AVAssetWriter(outputURL: url, fileType: options.container.avFileType)
+
+    // Crash resilience: emit a moof/mdat fragment every 2 s so a killed process still leaves a
+    // playable file. MUST be set before startWriting(); it is ignored afterwards.
+    if options.fragmentIntervalSeconds > 0 {
+        writer.movieFragmentInterval = CMTime(seconds: options.fragmentIntervalSeconds,
+                                              preferredTimescale: 1)
+    }
+    // Mutually exclusive with fragmentation in practice: faststart rewrites the moov at the end,
+    // which is exactly what we cannot rely on happening.
+    writer.shouldOptimizeForNetworkUse = false
+
+    // Passthrough video: nil settings + a format hint built from the parameter sets.
+    let videoFormat = try SampleBufferFactory.makeVideoFormatDescription(
+        codec: format.videoCodec,
+        parameterSets: format.parameterSets,
+        nalUnitHeaderLength: 4)               // we always feed 4-byte length-prefixed NALs
+    let videoInput = AVAssetWriterInput(mediaType: .video,
+                                        outputSettings: nil,
+                                        sourceFormatHint: videoFormat)
+    videoInput.expectsMediaDataInRealTime = true
+    // Non-square pixels and the 1088→1080 crop are carried by the format description itself
+    // (CleanAperture + PixelAspectRatio extensions built by VigilBitstream), so no transform here.
+    videoInput.transform = .identity
+    guard writer.canAdd(videoInput) else { throw StreamError(code: .recordingWriteFailed) }
+    writer.add(videoInput)
+
+    var audioInput: AVAssetWriterInput?
+    if options.includeAudio, let audioFormat = try makeAudioFormatDescription(format) {
+        let input = AVAssetWriterInput(mediaType: .audio,
+                                       outputSettings: nil,
+                                       sourceFormatHint: audioFormat)
+        input.expectsMediaDataInRealTime = true
+        if writer.canAdd(input) { writer.add(input); audioInput = input }
+    }
+    guard writer.startWriting() else {
+        throw StreamError(code: .recordingWriteFailed,
+                          underlyingDescription: writer.error?.localizedDescription)
+    }
+    return (writer, videoInput, audioInput)
+}
+```
+
+Appending a frame:
+
+```swift
+private func write(_ frame: EncodedFrame, to input: AVAssetWriterInput,
+                   formatDescription: CMFormatDescription) throws {
+    guard input.isReadyForMoreMediaData else { droppedFrames += 1; return }
+
+    let pts = rebase(frame.pts)                 // §9.5
+    let duration = frame.duration ?? nominalFrameDuration
+    var timing = CMSampleTimingInfo(duration: duration,
+                                    presentationTimeStamp: pts,
+                                    decodeTimeStamp: frame.dts.map(rebase) ?? .invalid)
+
+    let sample = try SampleBufferFactory.makeSampleBuffer(
+        data: frame.data,                       // 4-byte length-prefixed NALs, as required
+        formatDescription: formatDescription,
+        timing: timing,
+        isKeyframe: frame.isKeyframe)
+
+    guard input.append(sample) else {
+        throw StreamError(code: .recordingWriteFailed,
+                          underlyingDescription: writer.error?.localizedDescription)
+    }
+}
+```
+
+`SampleBufferFactory` (VigilVideo) sets `kCMSampleAttachmentKey_NotSync = true` on non-keyframes and
+`kCMSampleAttachmentKey_DependsOnOthers` appropriately; the writer relies on those attachments to
+build a correct `stss` sync-sample table. Getting this wrong produces a file that seeks incorrectly —
+which is why the sample-buffer construction lives in exactly one place, shared with the decode path.
+
+### 9.3 Pre-roll ring buffer
+
+The pre-roll is the feature that makes motion recording useful: without it, every clip starts *after*
+the interesting moment.
+
+```swift
+/// Holds whole GOPs of compressed frames so a recording can start in the past.
+/// Lives inside StreamController and runs whenever pre-roll is armed, independent of recording.
+struct PreRollBuffer: Sendable {
+    private(set) var gops: [GOP] = []          // oldest first; each starts with a keyframe
+    var targetSeconds: Double                  // 0...30
+    var maxBytes: Int = 96 << 20               // 96 MiB hard ceiling
+    var maxGOPs: Int = 240
+
+    struct GOP: Sendable {
+        var frames: [EncodedFrame]             // frames[0].isKeyframe == true, always
+        var startPTS: MediaTimestamp
+        var endPTS: MediaTimestamp
+        var byteCount: Int
+        var duration: Double
+    }
+
+    /// Appends. A keyframe opens a new GOP; non-keyframes before the first keyframe are discarded.
+    /// Then evicts whole GOPs from the front while any budget is exceeded — never partial GOPs.
+    mutating func append(_ frame: EncodedFrame)
+
+    /// Frames from the newest keyframe at or before (now - seconds). Always keyframe-first.
+    func drain(seconds: Double) -> [EncodedFrame]
+
+    var bufferedSeconds: Double { get }
+    var byteCount: Int { get }
+    mutating func reset()
+}
+```
+
+**Why whole GOPs.** Truncating mid-GOP yields P/B frames whose references are missing: the first
+second of every clip would be visual garbage. Evicting whole GOPs guarantees `drain` always begins
+with a keyframe.
+
+**Arming policy** (the buffer costs memory, so it is not always on):
+
+| Condition | Pre-roll armed? | Seconds |
+|---|---|---|
+| `Camera.autoRecordOnMotion` or the global setting is on | yes | `AppSettings.preRollSeconds` |
+| A schedule window is within 60 s | yes | as configured |
+| Camera is focused or fullscreen | yes | `min(configured, 5)` — so ⌘R captures the moment just seen |
+| Otherwise | **no** | 0 |
+
+**Memory envelope.** 5 s of 1080p at 4 Mbps ≈ **2.5 MB** per camera. 16 armed cameras ≈ **40 MB**.
+30 s at 8 Mbps ≈ 30 MB, hence the 96 MiB per-camera ceiling and a coordinator-level global ceiling of
+**512 MiB** across all pre-roll buffers; when exceeded, buffers are trimmed starting from the
+lowest-priority camera and the UI reports the effective pre-roll it actually achieved
+(`RecordingHandle.preRollSecondsIncluded`), never a fictional number.
+
+Audio pre-roll is a parallel ring keyed by the same timeline, drained from the video keyframe's PTS
+minus 100 ms so audio never starts after video.
+
+### 9.4 The first-sample-must-be-a-keyframe rule
+
+```
+startRecording()
+├── pre-roll armed and non-empty
+│     └── drain(seconds:) → begins with a keyframe → write immediately.  Latency: 0 ms.
+└── pre-roll empty or disarmed
+      ├── the last live frame was a keyframe < 200 ms ago → start from it
+      ├── requestKeyframe(.recordingStart)
+      │     ├── ISAPI requestKeyFrame honoured → keyframe in ~50–200 ms
+      │     └── unsupported → wait for the natural GOP
+      └── while waiting: state = .waitingForKeyframe, UI shows a pulsing REC dot and
+          "Starting in ~1.4 s" computed from gopSeconds; frames are buffered, not written.
+          Timeout: max(3 × gopSeconds, 6 s) → fail with .recordingNoKeyframe.
+```
+
+**Non-keyframes received before the first keyframe are discarded, never written.** The writer would
+accept them and produce a file whose first samples reference nothing.
+
+The pending-start window also buffers audio, which is then trimmed to the video start PTS so the two
+tracks begin aligned.
+
+### 9.5 Timestamp rebasing and file naming
+
+**Rebasing.** RTP timestamps start at an arbitrary 32-bit value and the presentation clock is
+camera-relative. A file must start at zero, so:
+
+```swift
+private var epoch: CMTime?            // PTS of the first written sample
+
+private func rebase(_ ts: MediaTimestamp) -> CMTime {
+    let t = CMTime(value: ts.value, timescale: ts.timescale)   // 90 kHz for video
+    if let epoch { return CMTimeSubtract(t, epoch) }
+    epoch = t
+    return .zero
+}
+```
+
+- `writer.startSession(atSourceTime: .zero)` is called immediately after `startWriting()`.
+- **Wraparound and discontinuity.** VigilRTP hands over already-unwrapped `MediaTimestamp`s
+  (it tracks the 2^32 rollover), so the recorder never sees a backwards jump from wrapping. If it
+  nevertheless sees `pts < lastPTS` or a forward gap > **10 s**, it treats it as a discontinuity:
+  emit `.timestampDiscontinuity`, and *shift the epoch* by the gap rather than writing a file with a
+  10-second frozen frame. A discontinuity greater than **60 s** forces a split (§9.7).
+- **Audio/video alignment** uses one shared `epoch`, taken from whichever track writes first
+  (always video, by construction).
+- `RecordingClip.startedAt` is the **wall-clock** time corresponding to the epoch, derived from the
+  RTCP SR NTP mapping when available (VigilRTP supplies it) and from `clock.wallNow` otherwise. This
+  is what makes "jump to this moment" work across a clip and the device timeline.
+
+**Naming.**
+
+```swift
+public enum RecordingNaming {
+    public static let defaultTemplate =
+        "{camera}/{yyyy}-{MM}-{dd}/{camera}_{yyyy}{MM}{dd}_{HHmmss}_{trigger}"
+    public static func render(_ template: String, camera: Camera, date: Date,
+                             trigger: RecordingTrigger, format: StreamFormat,
+                             sequence: Int) -> String
+}
+```
+
+| Token | Expands to | Example |
+|---|---|---|
+| `{camera}` | `Camera.slug` | `front-door` |
+| `{cameraName}` | sanitized display name | `Front Door` |
+| `{group}` | group slug, or `ungrouped` | `driveway` |
+| `{host}` | host with `.`/`:` → `-` | `192-168-1-64` |
+| `{channel}` | channel number | `1` |
+| `{yyyy}` `{MM}` `{dd}` `{HH}` `{mm}` `{ss}` | local-time components | `2026` `07` `26` |
+| `{HHmmss}` | compact time | `142530` |
+| `{epoch}` | UNIX seconds | `1784125530` |
+| `{trigger}` | `RecordingTrigger.rawValue` | `motion` |
+| `{codec}` | `h264` / `h265` | `h265` |
+| `{res}` | `WxH` | `1920x1080` |
+| `{seq}` | 3-digit split index, only for splits | `002` |
+
+Sanitization: NFC-normalize; replace `/ \ : * ? " < > |` and every control character with `-`;
+collapse runs of `-`; strip leading/trailing `.` and whitespace; reject the reserved names `.`/`..`;
+truncate each path component to **200 bytes UTF-8** (leaving room for `.mp4.partial`); if the result
+is empty, use the camera UUID. **Collision handling:** if the final URL exists, append ` (2)`,
+` (3)`, … before the extension, up to 999, then fall back to `-<uuid-prefix>`.
+
+`Camera.slug` = lowercased display name, non-alphanumerics → `-`, collapsed, trimmed, ≤ 48 chars;
+empty result → `camera-<first 8 of UUID>`. Slugs are **not** guaranteed unique; the date folder and
+the timestamp disambiguate.
+
+### 9.6 Pre-flight checks and disk space
+
+Checked in `begin()`, **before** any file is created, so a failure costs nothing:
+
+| # | Check | Failure |
+|---|---|---|
+| 1 | Destination root exists, or can be created | `.recordingFolderUnavailable` |
+| 2 | Security-scoped bookmark resolved and access started (sandbox) | `.recordingFolderUnavailable` with a "Choose Folder…" action |
+| 3 | Root is writable (`FileManager.isWritableFile`) | `.recordingFolderUnavailable` |
+| 4 | `availableCapacityForImportantUsage ≥ max(minimumFreeBytes, estimate × 1.5)` | `.recordingDiskFull` |
+| 5 | The volume is not read-only and not a network mount flagged unreliable (warn only) | warning |
+| 6 | `StreamFormat` has usable parameter sets | `.recordingWriteFailed` |
+
+`estimate = (videoBitrateKbps + audioBitrateKbps) / 8 × expectedDurationSeconds`, using
+`maxDurationSeconds` when the recording is open-ended.
+
+**During recording**, free space is re-checked every **10 s** (and every 64 MB written):
+
+| Free space | Action |
+|---|---|
+| < `minimumFreeBytes` (2 GiB default) | finish cleanly with `.diskFull`; notify; set the `diskAlmostFull` banner |
+| < 512 MiB | finish immediately, and disable all recording until space is freed |
+| < 5 GiB | warn once per session |
+
+Retention (`AppSettings.retentionDays` / `retentionMaxGigabytes`) is enforced by a **separate**
+maintenance pass at launch and every 6 hours, never by the recorder mid-write. It deletes oldest-first,
+skips clips referenced by an unread event or a bookmark, moves files to the Trash rather than
+unlinking (`FileManager.trashItem`) so a misconfiguration is recoverable, and never touches files it
+has no clip record for.
+
+### 9.7 Splitting
+
+A single recording becomes multiple files when any of these occur. Splits are seamless in the sense
+that no frames are lost: the new file's first sample is the keyframe that triggered or immediately
+follows the split.
+
+| Trigger | Behaviour |
+|---|---|
+| `maxDurationSeconds` reached (default 30 min) | at the next keyframe: finish, open `{seq}+1` |
+| Mid-stream format change (transition 41) | finish immediately, open a new file with the new format hint |
+| Quality switch main↔sub | same as a format change |
+| Timestamp discontinuity > 60 s | finish, open new |
+| File approaching 4 GiB | split at the next keyframe (MP4 `stco` vs `co64` interoperability caution) |
+| Disk pressure | finish, do not reopen |
+
+Each part is its own `RecordingClip`, linked by a shared `sessionID` in `RecordingClip.notes`
+(`"session:<uuid> part:2"`) so the UI can present them as one incident and export can concatenate.
+
+### 9.8 Graceful finish
+
+```swift
+public func finish(reason: RecordingEndReason) async -> RecordingClip {
+    guard !isFinishing else { return await finishedClip }
+    isFinishing = true
+    videoInput.markAsFinished()
+    audioInput?.markAsFinished()
+    if writer.status == .writing {
+        writer.endSession(atSourceTime: lastWrittenPTS)
+        await writer.finishWriting()            // async overload; no semaphores
+    }
+    if writer.status == .completed {
+        try? fs.moveItem(at: partialURL, to: finalURL)   // atomic rename within the volume
+    } else {
+        // .failed — keep the .partial file; a fragmented MP4 is still playable (§9.9)
+        clip.isPartial = true
+        logger.error("recording failed", metadata: ["error": "\(writer.error?.localizedDescription ?? "")"])
+    }
+    await writeThumbnail()
+    return clip
+}
+```
+
+Ordering rules:
+
+- **The `.partial` suffix is the crash marker.** A file is named `name.mp4.partial` while writing and
+  renamed only after `finishWriting()` reports `.completed`. Any `.partial` file found at launch was
+  interrupted.
+- `finish()` is called **before** `TEARDOWN` in `StreamController.stop()` (transition 56) and before
+  the transport is closed on `socketClosed` (transition 39), so the last fragment is always flushed.
+- `shutdown()` (§8.1) budgets **4.0 s** total for all recorders. Recorders that do not finish in time
+  get `abandon()`, which skips `finishWriting()` and leaves a playable fragmented file.
+- On `willSleep`, all recordings are finished (not paused). Resuming a muxer across a sleep is not
+  reliable, and a split file is strictly better than a corrupt one.
+
+### 9.9 Crash recovery
+
+At launch, `RecordingRecovery.scan()` walks the recordings root for `*.partial`:
+
+1. `AVURLAsset` load with `.isPlayable` / `duration` checked. Because the file was written with
+   `movieFragmentInterval = 2 s`, everything up to the last completed fragment is present and
+   playable — this is the entire reason fragmentation is enabled.
+2. Playable and duration ≥ 1 s → rename to the final name, insert/update a `RecordingClip` with
+   `isPartial = true`, and surface it in the UI as "Recovered".
+3. Playable but < 1 s, or unplayable → move to the Trash and log at `.notice`. Sub-second garbage is
+   not worth a UI row.
+4. A matching clip record already exists (the app crashed after recording it) → reconcile duration,
+   `byteCount` and `endedAt` from the file.
+5. Orphaned `.partial` files with no clip record → recovered with a synthesized record whose
+   `cameraID` is parsed from the path; if that fails, the file is left alone and reported once.
+
+The scan is bounded: at most 5 000 files examined, 10 s wall clock, run off the main actor.
+
+### 9.10 Two deliberate restrictions
+
+- **Burn-in timestamp on recordings is not supported in passthrough mode.** Drawing pixels requires
+  decode + re-encode, which the whole design refuses. `RecordingOptions.burnInTimestamp` therefore
+  applies only to **snapshots** (§10.5); attempting it on a clip returns
+  `.recordingWriteFailed` with the message *"Timestamps can't be burned into recordings without
+  re-encoding. Use the camera's own OSD instead."* Hikvision cameras can render an OSD server-side,
+  and the Inspector links to that setting — which is the correct fix.
+- **Audio: G.711 in MP4.** `alaw`/`ulaw` are not valid MP4 audio codecs. Resolution:
+
+| `neverReencodeAudio` | Audio codec | Result |
+|---|---|---|
+| `false` (default) | AAC | passthrough into MP4 |
+| `false` | G.711 / G.726 | **transcode to AAC-LC** 64 kbps mono via `AVAudioConverter` (VigilVideo). Cost: < 0.1 % CPU. Video is still passthrough. |
+| `true` | AAC | passthrough into MP4 |
+| `true` | G.711 | container switches to **`.mov`**, `alaw`/`ulaw` passthrough; the UI states the reason |
+| any | unsupported/unknown | audio dropped, `.audioCodecUnsupported` warning, video recorded |
+
+---
+
+## 10. Snapshots — `SnapshotService`
+
+### 10.1 Two sources, one API
+
+```swift
+public actor SnapshotService {
+    public init(dependencies: CoreDependencies, isapiLimiter: ConcurrencyLimiter,
+                snapshotLimiter: ConcurrencyLimiter)
+
+    public func capture(camera: Camera,
+                        credential: Credential?,
+                        frameTap: (any FrameTap)?,      // nil when nothing is decoding
+                        options: SnapshotOptions) async throws -> SnapshotResult
+
+    /// "Snapshot All" — bounded concurrency, per-camera failures isolated.
+    public func captureAll(_ requests: [SnapshotRequest],
+                           options: SnapshotOptions) async -> [CameraID: Result<SnapshotResult, any Error>]
+}
+
+public struct SnapshotOptions: Sendable, Hashable {
+    public var source: SnapshotSourcePreference = .automatic
+    public var format: SnapshotFormat = .png
+    public var jpegQuality: Double = 0.9            // also used for HEIC
+    public var destinations: Set<SnapshotDestination> = [.file]
+    public var destinationRoot: URL?                // nil = ~/Pictures/Vigil
+    public var nameTemplate: String = SnapshotNaming.defaultTemplate
+    public var burnInOverlay: BurnInOverlay? = nil
+    public var maxLongEdge: Int? = nil              // nil = native; used for thumbnails
+    public var includeEXIF: Bool = true
+    public var deviceJPEGSize: Resolution? = nil    // ISAPI resize hint
+}
+
+public enum SnapshotDestination: String, Sendable, Hashable, CaseIterable {
+    case file, clipboard, quickLook, shareSheet, dataOnly
+}
+
+public struct SnapshotResult: Sendable, Hashable {
+    public var cameraID: CameraID
+    public var url: URL?                  // nil when no .file destination
+    public var data: Data                 // the encoded bytes, always present
+    public var format: SnapshotFormat
+    public var pixelSize: PixelSize
+    public var capturedAt: Date
+    public var source: Source
+    public var byteCount: Int
+    public enum Source: String, Sendable, Codable { case renderedFrame, deviceJPEG, cachedThumbnail }
+}
+```
+
+| Source | Latency | Pixels | Cost | Chosen when |
+|---|---|---|---|---|
+| `renderedFrame` | 8–30 ms | **exactly what the user sees**, including digital zoom, colour adjustments and deinterlacing | one `CVPixelBuffer` copy + one encode | a decode session exists and the tile is not paused |
+| `deviceJPEG` | 60–400 ms (LAN) | the camera's own encode at full sensor resolution, no client effects | one HTTP GET | nothing is decoding, or `source == .deviceJPEG`, or the user wants full resolution from a sub-stream tile |
+| `cachedThumbnail` | < 1 ms | last keyframe thumbnail, ≤ 640 px | none | last-resort fallback so ⌘⇧S never simply fails |
+
+`.automatic` resolution order: `renderedFrame` → `deviceJPEG` → `cachedThumbnail`. Each fallback emits
+a `.warning` so the UI can note *"Saved from the camera's own snapshot (full resolution)."*
+
+### 10.2 Rendered-frame path
+
+```swift
+guard let pixelBuffer = await frameTap.captureCurrentFrame() else { throw … }
+// Prefer VideoToolbox's converter: it handles biplanar 8- and 10-bit and the correct YCbCr matrix.
+var cgImage: CGImage?
+let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+if status != noErr || cgImage == nil {
+    // Fallback: CIContext, which also lets us apply the render pipeline's colour adjustments.
+    let ci = CIImage(cvPixelBuffer: pixelBuffer)
+    cgImage = ciContext.createCGImage(ci, from: ci.extent,
+                                      format: .RGBA8,
+                                      colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+}
+```
+
+- The `CIContext` is created **once** (`CIContext(mtlDevice:options:[.cacheIntermediates: false])`)
+  and shared, using the app-wide `MTLDevice` from VigilRender. Creating one per snapshot costs ~40 ms.
+- 10-bit HEVC (`420YpCbCr10BiPlanarVideoRange`) goes through the `CIContext` path with a
+  `displayP3` working space, and defaults to **HEIC** output to preserve the extra depth. Choosing PNG
+  for 10-bit content emits a warning that the image was reduced to 8-bit.
+- Non-square pixels (SAR ≠ 1) and the 1088→1080 clean aperture are corrected **before** encoding, so a
+  saved image matches the on-screen aspect ratio. This is a scale of the `CGImage` to the display
+  aspect, using `CGContext` with `interpolationQuality = .high`.
+- `maxLongEdge` downscaling happens here, in one pass, before encoding.
+
+### 10.3 Device-JPEG path
+
+`GET /ISAPI/Streaming/channels/{channelID}/picture?videoResolutionWidth=W&videoResolutionHeight=H`
+through `ISAPIClient`, wrapped in `isapiPerDeviceLimiter`, with a **5 s** timeout.
+
+- If the camera sets `jpegSnapshotIgnoresSizeParams`, the parameters are omitted and any downscale is
+  done locally.
+- If `jpegSnapshotNeedsChannelSuffix`, the alternate path form is used (the ISAPI spec owns it).
+- Format conversion: when `options.format != .jpeg`, the returned JPEG is decoded with
+  `CGImageSourceCreateWithData` and re-encoded. When `.jpeg` and there is no overlay and no resize,
+  **the original bytes are written verbatim** — no decode/re-encode round trip, so the file is exactly
+  what the camera produced.
+- HTTP 503 / `deviceBusy` retries twice with 300 ms spacing; three consecutive failures set
+  `supportsJPEGSnapshot = false` for 10 minutes (soft-disable, not persisted).
+
+### 10.4 Encoding, EXIF and metadata
+
+One code path for all three formats, via ImageIO:
+
+```swift
+private func encode(_ image: CGImage, format: SnapshotFormat, quality: Double,
+                    metadata: SnapshotMetadata) throws -> Data {
+    let type: CFString = switch format {
+        case .png:  UTType.png.identifier as CFString
+        case .jpeg: UTType.jpeg.identifier as CFString
+        case .heic: UTType.heic.identifier as CFString
+    }
+    let out = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(out, type, 1, nil) else {
+        throw SnapshotError.encoderUnavailable(format)
+    }
+    var props: [CFString: Any] = [:]
+    if format != .png { props[kCGImageDestinationLossyCompressionQuality] = quality }
+    props[kCGImagePropertyExifDictionary] = [
+        kCGImagePropertyExifDateTimeOriginal: Self.exifDate(metadata.capturedAt),
+        kCGImagePropertyExifSubsecTimeOriginal: Self.exifSubsec(metadata.capturedAt),
+        kCGImagePropertyExifOffsetTime: Self.exifOffset(metadata.timeZone),
+        kCGImagePropertyExifUserComment: metadata.userComment,
+        kCGImagePropertyExifPixelXDimension: image.width,
+        kCGImagePropertyExifPixelYDimension: image.height,
+    ]
+    props[kCGImagePropertyTIFFDictionary] = [
+        kCGImagePropertyTIFFMake: metadata.make,                 // "Hikvision" or "Unknown"
+        kCGImagePropertyTIFFModel: metadata.model,                // "DS-2CD2143G0-I"
+        kCGImagePropertyTIFFSoftware: metadata.software,          // "Vigil 1.0 (412)"
+        kCGImagePropertyTIFFDateTime: Self.exifDate(metadata.capturedAt),
+        kCGImagePropertyTIFFImageDescription: metadata.cameraName,
+        kCGImagePropertyTIFFArtist: metadata.cameraName,
+    ]
+    props[kCGImagePropertyIPTCDictionary] = [
+        kCGImagePropertyIPTCObjectName: metadata.cameraName,
+        kCGImagePropertyIPTCCaptionAbstract: metadata.userComment,
+        kCGImagePropertyIPTCKeywords: metadata.keywords,          // ["Vigil", camera, group, trigger]
+        kCGImagePropertyIPTCDateCreated: Self.iptcDate(metadata.capturedAt),
+        kCGImagePropertyIPTCTimeCreated: Self.iptcTime(metadata.capturedAt),
+    ]
+    CGImageDestinationAddImage(dest, image, props as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { throw SnapshotError.encodeFailed }
+    return out as Data
+}
+```
+
+- EXIF date format is **`"yyyy:MM:dd HH:mm:ss"`** (colons in the date — the classic mistake), in the
+  camera's local time, with `OffsetTimeOriginal` carrying the zone so the instant is unambiguous.
+- `userComment` = `"Front Door — 2026-07-26 14:25:30 +03:00 — 1920×1080 H.265 — Vigil 1.0"`.
+- **No GPS is ever written.** Camera locations are sensitive and we do not have them.
+- **`serialNumber` is never written into metadata.** Same redaction rule as logs (§6.1).
+- PNG additionally gets `kCGImagePropertyPNGDictionary` with `Description`, `Software` and
+  `CreationTime`, because many PNG viewers ignore EXIF.
+- HEIC availability is checked once via `CGImageDestinationCopyTypeIdentifiers()`; if HEIC is
+  unavailable the service falls back to JPEG and tells the user once.
+
+### 10.5 Burn-in overlay
+
+Optional, snapshot-only (§9.10), drawn into a `CGContext` after the image is composed and before
+encoding.
+
+```swift
+public struct BurnInOverlay: Sendable, Hashable {
+    public enum Corner: String, Sendable, Codable { case topLeft, topRight, bottomLeft, bottomRight }
+    public var corner: Corner = .bottomLeft
+    public var showCameraName: Bool = true
+    public var showTimestamp: Bool = true
+    public var showResolution: Bool = false
+    public var dateFormat: String = "yyyy-MM-dd HH:mm:ss"
+    /// Point size at 1080p; scaled linearly with image height, clamped to 9...48.
+    public var baseFontSize: Double = 16
+    public var textColor: CodableColor = .white
+    public var backgroundOpacity: Double = 0.55       // rounded plate behind the text
+}
+```
+
+Drawing rules: `CTFramesetter` with the system font at
+`clamp(baseFontSize × imageHeight / 1080, 9, 48)`; a 6 pt inset rounded plate at
+`backgroundOpacity` black; 12 pt margin from the chosen corner, respecting the image's own scale; text
+is rendered in the user's locale. The overlay is drawn **once**, at full resolution, before any
+downscale, so text stays crisp.
+
+### 10.6 Destinations
+
+| Destination | Implementation | Notes |
+|---|---|---|
+| `.file` | `writeDurably` to `root/rendered-name.ext`, collision-suffixed like §9.5 | `SnapshotNaming.defaultTemplate = "{camera}_{yyyy}{MM}{dd}_{HHmmss}"`, root `~/Pictures/Vigil` |
+| `.clipboard` | `NSPasteboard.general.clearContents()`, then `setData(_:forType:)` with `.png` / `.tiff` **and** a `.fileURL` when a file was also written, so paste works in both Mail and Finder | AppKit adapter behind `PasteboardWriting` |
+| `.quickLook` | write to `<Caches>/Vigil/QuickLook/`, then hand the URL to the app layer which drives `QLPreviewPanel` | VigilCore never touches `QLPreviewPanel` itself |
+| `.shareSheet` | returns the URL; the app layer presents `NSSharingServicePicker` | — |
+| `.dataOnly` | returns `SnapshotResult.data` with no side effects | used by App Intents (§14.1) and event thumbnails |
+
+"Snapshot All" (⌘⇧S with no focus, or the intent) runs through `snapshotLimiter` (limit 3), writes
+into a single dated folder `~/Pictures/Vigil/All Cameras/{yyyy-MM-dd HH.mm.ss}/`, reports progress as
+`n of m`, and returns per-camera `Result`s so one offline camera does not abort the batch. A summary
+notification lists successes and failures.
+
+---
+
+## 11. Events — `EventCenter`
+
+### 11.1 Role
+
+`EventCenter` turns per-device ISAPI alert streams into a coherent, deduplicated, persisted,
+user-visible event history — and into automatic recordings.
+
+```swift
+public actor EventCenter {
+    public init(configStore: ConfigStore, credentialStore: CredentialStore,
+                eventLog: EventLog, dependencies: CoreDependencies)
+
+    /// Starts/stops per-device subscriptions to match the library. Idempotent; call on any change.
+    public func reconcileSubscriptions() async
+
+    public func setCoordinator(_ coordinator: StreamCoordinator) async   // for auto-record
+    public func markRead(_ ids: Set<EventID>) async
+    public func markAllRead() async
+    public func delete(_ ids: Set<EventID>) async
+    public func recent(_ query: EventQuery) async -> [EventRecord]
+    public func unreadCount() async -> Int
+    /// Synthesized events raised by Vigil itself, not by a device.
+    public func recordSynthetic(_ kind: EventKind, camera: CameraID, detail: String) async
+    public nonisolated func events() -> AsyncStream<EventCenterEvent>
+    public func subscriptionStates() async -> [CameraID: AlertSubscriptionState]
+}
+
+public enum AlertSubscriptionState: Sendable, Hashable {
+    case notSupported, idle, connecting, streaming(since: Date)
+    case polling(interval: Double)          // fallback when the stream is unavailable
+    case failed(reason: String, retryAt: Date)
+}
+
+public enum EventCenterEvent: Sendable {
+    case received(EventRecord)
+    case coalesced(EventRecord)               // an existing record was extended
+    case cleared(EventID)                    // eventState went inactive
+    case subscriptionChanged(CameraID, AlertSubscriptionState)
+    case autoRecordStarted(CameraID, EventID, ClipID)
+    case autoRecordSuppressed(CameraID, reason: SuppressionReason)
+}
+```
+
+### 11.2 Subscriptions
+
+One long-lived subscription **per device**, not per channel: an NVR's single alert stream carries
+every channel, and opening 32 streams to one NVR would be abusive. Devices are keyed by
+`host:httpPort`; cameras sharing a host share a subscription and are demultiplexed by `channelID`.
+
+- Started for a device when **any** of its cameras is enabled and (`notificationsEnabled` for a kind
+  the device supports, or `autoRecordOnMotion`, or the Events feed is open).
+- `GET /ISAPI/Event/notification/alertStream` with Digest, `Accept: multipart/mixed`, no timeout on
+  the body. `ISAPIClient` owns the streaming multipart parser (bounded buffers, per the ISAPI spec);
+  `EventCenter` consumes an `AsyncStream<AlertStreamPart>`.
+- **Reconnect policy** (independent of the RTSP ladder, because the failure modes differ):
+  `1, 2, 5, 10, 20, 30 s`, capped at 30 s, ±20 % jitter; reset after 120 s of a healthy stream.
+  Auth failure is terminal and disables the subscription with a UI reason (no lockout risk, §6.8).
+- **Heartbeat.** Many firmwares send nothing at all when idle. If no bytes (not even a boundary)
+  arrive for **120 s**, the stream is presumed dead and reconnected. Devices flagged
+  `alertStreamDropsWithoutTraffic` additionally get a cheap `GET /ISAPI/System/status` probe every
+  30 s to keep the TCP path warm.
+- **Fallback to polling.** When `supportsAlertStream == false` or 5 consecutive stream failures occur,
+  `EventCenter` polls `/ISAPI/Event/triggers` status every **10 s** and synthesizes events from
+  transitions. State becomes `.polling(interval:)` and the UI says *"Events are being checked every
+  10 seconds (this camera doesn't support live alerts)."*
+- Subscriptions pass through `isapiPerDeviceLimiter` on **connect only**; the streaming body does not
+  hold a permit, or one alert stream would starve every other ISAPI call.
+
+### 11.3 Dedupe and coalescing
+
+Cameras re-announce an active event every 1–2 s for its entire duration (`activePostCount` climbs).
+Writing each as a row would produce hundreds of identical entries per minute.
+
+```swift
+public struct CoalesceKey: Hashable, Sendable {
+    public let cameraID: CameraID
+    public let channel: Int
+    public let kind: EventKind
+}
+```
+
+**The rule.** An incoming alert with the same `CoalesceKey` as a record whose `lastAt` is within
+**3.0 s** *extends* that record instead of creating a new one:
+
+```
+lastAt   = max(lastAt, incoming.dateTime)
+count   += 1
+isActive = incoming.isActive
+regions  = incoming.regions.isEmpty ? regions : incoming.regions   // keep the last known polygon
+severity = max(severity, incoming.severity)
+thumbnail: kept from the first alert; replaced only if the first had none
+```
+
+- A gap **> 3.0 s** starts a new record. So continuous motion for 5 minutes yields one record with
+  `count ≈ 200` and a 5-minute span — exactly one row in the feed, with a duration.
+- `eventState == "inactive"` sets `isActive = false`, emits `.cleared`, and closes the window
+  immediately (the next alert starts a new record regardless of the 3 s rule).
+- **Exact duplicates** — same key, same `dateTimeRaw`, same `activePostCount` — are dropped entirely
+  (some firmwares send each alert twice).
+- Rate limiting: a hard ceiling of **10 new records per camera per minute** and **60 app-wide per
+  minute**. Beyond it, alerts still coalesce into existing records but no new records are created, one
+  `.notice` is logged, and a synthetic `EventKind.unknown` record named "Event storm" is written once
+  per hour with the suppressed count. This is the defence against a misconfigured camera with
+  sensitivity at maximum pointed at a tree.
+- Clock skew: if a device's `dateTime` differs from `clock.wallNow` by more than **60 s**, the record
+  stores the device time in `deviceTimeRaw` but uses **local receipt time** for `firstAt`/`lastAt`, and
+  a one-time `.deviceClockSkew` warning is raised (a wrong device clock otherwise scatters events
+  across the timeline). The Inspector offers "Sync camera clock to this Mac" via ISAPI.
+
+Coalescing state lives in memory (`[CoalesceKey: EventID]` plus `lastAt`) and is rebuilt from the last
+200 records of `EventLog` at launch, so a restart mid-motion does not duplicate the record.
+
+### 11.4 Thumbnails
+
+The `image/jpeg` part of the multipart alert is the cheapest possible thumbnail and is used when
+present. Otherwise, and only for kinds in `notifyKinds`, a snapshot is fetched via
+`SnapshotService.capture(..., options: .eventThumbnail)` — `maxLongEdge: 640`, `.jpeg`, quality 0.7,
+`.dataOnly` — preferring the rendered frame when the camera is already live (free) and the device JPEG
+otherwise.
+
+Storage: `<Caches>/Vigil/EventThumbnails/<eventID>.jpg`, `EventRecord.thumbnailPath` holding the
+relative name. Cache limits: **5 000 files** and **512 MB**, LRU-pruned at launch and every 6 hours;
+pruning updates `thumbnailPath` to `nil`. Thumbnails are in Caches, not Application Support, because
+they are regenerable and must not be backed up.
+
+Thumbnail fetch is fire-and-forget with a 3 s budget and never blocks the event record from being
+written — the event row appears instantly, the image fills in.
+
+### 11.5 Notifications
+
+```swift
+public protocol NotificationScheduling: Sendable {
+    func requestAuthorizationIfNeeded() async -> Bool
+    func registerCategories() async
+    func post(_ request: LocalNotification) async throws
+    func removeDelivered(matching: Set<String>) async
+    var responses: AsyncStream<NotificationResponse> { get }
+}
+
+public struct LocalNotification: Sendable {
+    public var identifier: String          // "event.<eventID>" — stable, so updates replace
+    public var categoryIdentifier: String  // "vigil.event.motion", "vigil.stream.lost"
+    public var threadIdentifier: String    // "camera.<cameraID>" — groups by camera in Notification Centre
+    public var title: String               // camera name
+    public var subtitle: String            // event kind, localized
+    public var body: String                // "Motion detected · 14:25:30"
+    public var attachmentURL: URL?         // the JPEG thumbnail
+    public var interruptionLevel: UNNotificationInterruptionLevel
+    public var relevanceScore: Double      // severity / 3.0
+    public var userInfo: [String: String]  // ["cameraID", "eventID", "clipID", "deepLink"]
+    public var sound: NotificationSound
+}
+```
+
+Live implementation notes:
+
+- `UNUserNotificationCenter.current().add(_:)` with a `nil` trigger (immediate).
+- Attachment: `UNNotificationAttachment(identifier: eventID, url: fileURL, options: nil)`. **The file
+  is copied into a temporary directory first** — `UNNotificationAttachment` *moves* the file into its
+  own store, which would delete our cached thumbnail.
+- Categories registered once at launch: `vigil.event.motion` etc. with actions
+  **View Live** (`vigil.action.viewLive`, foreground), **Open Clip**
+  (`vigil.action.openClip`, foreground, shown only when `clipID != nil`), **Snapshot**
+  (`vigil.action.snapshot`, background), **Mute 1 Hour** (`vigil.action.mute1h`, destructive).
+- `interruptionLevel`: `.timeSensitive` for `.alarm` severity, `.active` for `.warning`,
+  `.passive` for `.info`/`.notice`.
+- **Throttle** (independent of §11.3's record coalescing, because a user's tolerance differs from a
+  database's): at most **1** notification per camera per **60 s** per kind, and **6** app-wide per
+  minute. Suppressed notifications increment a counter that is folded into the next one:
+  *"Motion detected · 4 more times"*.
+- Quiet hours suppress delivery entirely for `.info`/`.notice`/`.warning`; `.alarm` still posts.
+- `notifyOnStreamLossAfterSeconds` (default 30 s) produces a `.streamLost` synthetic event and a
+  notification, throttled to once per camera per 10 minutes, and is **cancelled** if the stream
+  recovers before the timer fires. On recovery a delivered stream-loss notification is removed via
+  `removeDelivered`.
+- Authorization is requested **lazily** — the first time the user enables notifications or a
+  notifiable event occurs — never at launch. A denied authorization disables the toggle with a link to
+  System Settings.
+- Notification responses arrive as `NotificationResponse` and are routed through exactly the same
+  handler as `vigil://` deep links (§14.3), so there is one action-dispatch path in the app.
+
+### 11.6 Motion → auto-record
+
+```swift
+public enum SuppressionReason: String, Sendable {
+    case cooldown, alreadyRecording, diskFull, cameraDisabled, folderUnavailable
+    case globalLimit, budgetExhausted, quietHoursNoRecord
+}
+```
+
+Trigger conditions, all required:
+
+1. `EventKind` is in the auto-record set: `.motion`, `.lineCrossing`, `.intrusion`, `.regionEntrance`,
+   `.tamper` (configurable per camera).
+2. `Camera.autoRecordOnMotion || AppSettings.autoRecordOnMotionGlobal`.
+3. The event is `isActive` and newly created (a coalesced extension does **not** start a second clip;
+   it extends the running one).
+4. Cooldown elapsed: `autoRecordCooldownSeconds` (default **60 s**) since the *end* of the previous
+   auto-recording for that camera.
+5. Not already recording that camera (a manual recording always wins; the event is annotated onto it).
+6. Disk and folder pre-flight (§9.6) pass.
+7. Global cap: at most **8** concurrent auto-recordings; beyond that, suppress with `.globalLimit`
+   ordered by camera priority.
+
+Recording shape:
+
+```
+motion starts ──► clip begins at (event time − preRollSeconds)   [pre-roll ring, §9.3]
+                  ├── while further alerts coalesce: extend the planned end
+motion inactive ─► planned end = lastAt + postRollSeconds (default 15 s)
+                  ├── new motion before the planned end: extend, do not split
+                  └── hard cap: maxDurationSeconds (30 min) → split (§9.7)
+```
+
+On completion, `RecordingClip.eventID` and `EventRecord.clipID` are cross-linked in one
+`ConfigStore.mutate` + `EventLog.upsert` pair, so the Events feed gets a working "Play clip" button
+and the clip list shows why it exists.
+
+**The pre-roll requirement is the whole point.** A camera reports motion 200–800 ms after it starts,
+and an RTSP-only recording would additionally wait up to a full GOP for a keyframe — so a naive
+implementation misses the first 1–3 seconds, which is usually the only part that matters. The ring
+buffer (armed whenever `autoRecordOnMotion` is set, §9.3) makes the clip start *before* the event.
+
+---
+
+## 12. `HealthMonitor` — 1 Hz sampling and history
+
+### 12.1 API
+
+```swift
+public actor HealthMonitor {
+    public init(historyMinutes: Int = 10, dependencies: CoreDependencies)
+
+    public func register(_ controller: StreamController) async
+    public func unregister(_ id: CameraID) async
+
+    /// Starts the 1 Hz tick. One timer for the whole app, not one per camera.
+    public func activate() async
+    public func deactivate() async
+
+    public func history(for id: CameraID) -> [HealthSample]        // oldest → newest
+    public func latest(for id: CameraID) -> HealthSample?
+    public func summary(for id: CameraID, window: Duration) -> HealthSummary
+    public func allLatest() -> [CameraID: HealthSample]
+    public nonisolated func samples() -> AsyncStream<(CameraID, HealthSample)>
+
+    /// CSV for the diagnostics bundle (§13.4).
+    public func exportCSV(for id: CameraID) -> String
+}
+
+public struct HealthSummary: Sendable, Hashable {
+    public var meanFPS: Double, minFPS: Double
+    public var meanKbps: Double, peakKbps: Double
+    public var meanLossPercent: Double, peakLossPercent: Double
+    public var meanJitterMs: Double, peakJitterMs: Double
+    public var meanLatencyMs: Double
+    public var uptimeFraction: Double        // time in .playing/.degraded ÷ window
+    public var reconnectCount: Int
+    public var droppedFrames: Int
+    public var keyframeIntervalSeconds: Double
+    public var grade: HealthGrade            // .good / .fair / .poor / .offline
+}
+
+public enum HealthGrade: String, Sendable, Codable { case good, fair, poor, offline }
+```
+
+`HealthGrade` thresholds, used for the sidebar status dot colour:
+
+| Grade | Condition |
+|---|---|
+| `.good` | state `.playing`, loss < 0.5 %, jitter < 40 ms, fps ≥ 85 % of declared |
+| `.fair` | state `.playing`/`.degraded`, loss < 2 %, jitter < 80 ms, fps ≥ 60 % |
+| `.poor` | state `.degraded`, or any threshold worse than `.fair` |
+| `.offline` | state `.failed`/`.stopped`/`.reconnecting` |
+
+### 12.2 The ring
+
+```swift
+/// 24 bytes, no padding, no reference types. Fixed capacity, O(1) insert, zero allocation
+/// after construction.
+public struct HealthSample: Sendable, Codable, Hashable {
+    public var tSeconds: UInt32       // seconds since the monitor's epoch
+    public var fps: Float             // 4
+    public var kbps: Float            // 4
+    public var lossPermille: UInt16   // 0...1000 = 0...100.0 %
+    public var jitterMs: UInt16
+    public var latencyMs: UInt16      // end-to-end estimate from VigilRTP
+    public var droppedFrames: UInt16  // delta since the previous sample
+    public var decodeQueueDepth: UInt8
+    public var state: UInt8           // StreamState index
+    public var flags: Flags           // UInt8
+
+    public struct Flags: OptionSet, Sendable, Codable, Hashable {
+        public let rawValue: UInt8
+        public static let hardwareDecode = Flags(rawValue: 1 << 0)
+        public static let recording      = Flags(rawValue: 1 << 1)
+        public static let audioActive    = Flags(rawValue: 1 << 2)
+        public static let keyframeInWindow = Flags(rawValue: 1 << 3)
+        public static let mainStream     = Flags(rawValue: 1 << 4)
+        public static let jpegFallback   = Flags(rawValue: 1 << 5)
+        public static let paused         = Flags(rawValue: 1 << 6)
+        public static let degraded       = Flags(rawValue: 1 << 7)
+    }
+}
+
+struct HealthRing: Sendable {
+    private var storage: [HealthSample]     // count == capacity, pre-filled
+    private var head: Int = 0               // next write index
+    private var filled: Int = 0
+    let capacity: Int                       // 600 for 10 minutes at 1 Hz
+    mutating func append(_ s: HealthSample)          // O(1), overwrites the oldest
+    func ordered() -> [HealthSample]                  // oldest → newest
+    func suffix(_ n: Int) -> ArraySlice<HealthSample>
+}
+```
+
+**Memory budget.** 24 B × 600 = **14.4 KB** per camera. 16 cameras = **230 KB**; 64 cameras = **922 KB**.
+A `[Date: Double]`-style design would be ~40× larger and would allocate on every sample; that is why
+this is a packed struct in a pre-allocated array.
+
+### 12.3 Sampling
+
+- **One** repeating timer at 1 Hz for the whole app (`clock.timer(after: .seconds(1))`,
+  re-armed), not one per camera. It walks the registered controllers and calls
+  `healthSnapshot()` on each — a cheap actor hop that reads already-computed values.
+- Sampling continues while a stream is `.paused`, `.reconnecting` or `.failed`, recording zeros with
+  the correct `state` byte. This is what lets the sparkline show *gaps and outages* rather than
+  silently compressing time, which is the whole diagnostic value.
+- Latency estimate comes from VigilRTP (RTCP SR NTP mapping plus queue depth); `HealthMonitor` never
+  computes it.
+- `reconnectCount` is accumulated from `StreamEvent.reconnectScheduled`, not derived from samples.
+- **History is not persisted.** It is a 10-minute diagnostic window, and writing it would add 1 Hz disk
+  traffic for no user benefit. The diagnostics bundle captures it as CSV at export time (§13.4).
+- On `deactivate()` (screens asleep with nothing recording) sampling stops and the ring is left
+  intact, so waking shows the gap explicitly.
+
+### 12.4 UI contract for sparklines
+
+`VigilUI` reads `history(for:)` at most **once per second** and renders from the `[HealthSample]`
+array directly — no re-mapping into a chart model, no `Date` objects, and no `@Observable` per sample.
+The inspector's four sparklines (fps, kbps, loss, jitter) share one array read. A `Canvas`-based
+renderer draws 600 points in under 0.4 ms, which is what keeps the inspector inside the 120 Hz budget.
+
+---
+
+## 13. Diagnostics — `StreamDoctor` and the bundle
+
+### 13.1 Stream Doctor sequence
+
+Stream Doctor answers "why won't this camera connect?" with a specific cause and a specific fix. It is
+reachable from any `.failed` tile, from the Inspector, from the command palette, and from the
+discovery flow's credential test.
+
+```swift
+public actor StreamDoctor {
+    public init(dependencies: CoreDependencies, credentialStore: CredentialStore)
+
+    /// Runs the full sequence, emitting each step as it completes so the UI fills in live.
+    public func diagnose(camera: Camera) -> AsyncStream<DoctorProgress>
+    /// Convenience that awaits the whole run.
+    public func report(for camera: Camera) async -> DoctorReport
+}
+
+public struct DoctorProgress: Sendable {
+    public var step: DoctorStep
+    public var index: Int, total: Int
+    public var outcome: DoctorOutcome
+    public var elapsed: Duration
+}
+
+public enum DoctorStep: String, Sendable, Codable, CaseIterable {
+    case networkPath          // 0. is there a network at all?
+    case hostReachable       // 1. resolve + ICMP-free reachability via TCP
+    case rtspPortOpen        // 2. TCP connect to rtspPort (554)
+    case httpPortOpen        // 3. TCP connect to httpPort (80/443)
+    case rtspOptions         // 4. RTSP OPTIONS, unauthenticated
+    case credentialCheck     // 5. ISAPI /Security/userCheck with Digest
+    case deviceIdentity      // 6. ISAPI /System/deviceInfo → model, firmware, vendor
+    case rtspDescribe        // 7. DESCRIBE with Digest → SDP
+    case sdpCodecCheck       // 8. is there a video track we can decode?
+    case rtspSetupPlay       // 9. SETUP + PLAY
+    case firstRTPPacket      // 10. first RTP within 4 s
+    case firstKeyframe       // 11. first decodable keyframe within 6 s
+    case decodeProbe         // 12. VideoToolbox accepts the format and decodes one frame
+}
+
+public enum DoctorOutcome: Sendable, Hashable {
+    case pass(detail: String)
+    case warn(detail: String, cause: DoctorCause)
+    case fail(detail: String, cause: DoctorCause)
+    case skipped(reason: String)
+}
+
+public struct DoctorReport: Sendable, Hashable {
+    public var cameraID: CameraID
+    public var startedAt: Date
+    public var duration: Duration
+    public var steps: [DoctorProgress]
+    public var verdict: Verdict
+    public var primaryCause: DoctorCause?
+    public var sdpDump: String?              // captured for the bundle
+    public var rtspTranscript: [String]      // request/response lines, Authorization redacted
+    public var suggestedFixes: [DoctorFix]
+    public enum Verdict: String, Sendable, Codable { case healthy, degraded, broken }
+}
+
+public struct DoctorFix: Sendable, Hashable {
+    public var title: String                 // "Enter the camera's password"
+    public var detail: String
+    public var action: DoctorAction?          // deep-linked, one-tap where possible
+}
+
+public enum DoctorAction: Sendable, Hashable {
+    case openCredentialSheet(CameraID)
+    case setTransport(CameraID, RTSPTransportKind)
+    case setRTSPPath(CameraID, String)
+    case setChannel(CameraID, Int)
+    case setPort(CameraID, rtsp: Int?, http: Int?)
+    case enableSubstream(CameraID)
+    case openSystemSettings(URL)             // Local Network privacy pane
+    case openDeviceWebUI(URL)
+    case reprobeCapabilities(CameraID)
+    case exportDiagnostics
+}
+```
+
+Execution rules: steps run **in order**, each with its own budget; a `fail` stops the sequence *unless*
+the step is marked continuable (`httpPortOpen`, `credentialCheck`, `deviceIdentity` continue, because
+RTSP can work without ISAPI). Total budget **25 s**. The whole run uses a *separate* transport and
+does **not** disturb the live `StreamController` — Doctor never steals the session. Step budgets:
+`networkPath` 0.2 s, port probes 2.0 s each, `rtspOptions` 3 s, `credentialCheck` 4 s,
+`deviceIdentity` 4 s, `rtspDescribe` 5 s, `sdpCodecCheck` instant, `rtspSetupPlay` 5 s,
+`firstRTPPacket` 4 s, `firstKeyframe` 6 s, `decodeProbe` 3 s.
+
+### 13.2 Failure → cause → fix mapping
+
+```swift
+public enum DoctorCause: String, Sendable, Codable, CaseIterable {
+    case noNetwork, localNetworkPermissionDenied, hostUnreachable, dnsFailure
+    case rtspPortClosed, rtspPortFiltered, httpPortClosed, wrongPortGuess
+    case notAnRTSPServer, rtspVersionUnsupported
+    case wrongPassword, accountLocked, insufficientPrivilege, deviceNotActivated
+    case notHikvision, wrongChannel, rtspPathWrong, describeRejected
+    case noVideoTrack, unsupportedCodec, mjpegOnly, parameterSetsMissing
+    case transportBlocked, multicastBlocked, udpBlocked
+    case noMediaFlowing, noKeyframe, decodeUnsupported, decodeBudgetExhausted
+    case deviceOverloaded, cameraRebooting, clockSkew
+}
+```
+
+| Step that failed | Signal observed | `DoctorCause` | User-facing cause | Fix offered |
+|---|---|---|---|---|
+| `networkPath` | path unsatisfied | `noNetwork` | "Your Mac isn't on a network." | "Connect to Wi-Fi or Ethernet, then try again." |
+| `hostReachable` | all TCP probes time out, but other hosts on the subnet answer | `hostUnreachable` | "The camera isn't answering at 192.168.1.64." | "Check that the camera has power and the same IP. Run Discovery to find its current address." → `reprobeCapabilities` |
+| `hostReachable` | every probe fails immediately on first launch | `localNetworkPermissionDenied` | "macOS is blocking Vigil from reaching devices on your network." | "Allow Vigil in System Settings → Privacy & Security → Local Network." → `openSystemSettings` |
+| `hostReachable` | DNS returns nothing | `dnsFailure` | "That hostname couldn't be found." | "Use the camera's IP address instead." |
+| `rtspPortOpen` | `ECONNREFUSED` on 554, HTTP port open | `rtspPortClosed` | "The camera answers on port 80 but refuses port 554." | "RTSP may be disabled or on another port. Try 8554, or enable RTSP in the camera's web page." → `setPort`, `openDeviceWebUI` |
+| `rtspPortOpen` | timeout on 554, HTTP open | `rtspPortFiltered` | "Something is blocking port 554." | "Check your firewall or VLAN rules between this Mac and the camera." |
+| `httpPortOpen` | refused, RTSP open | `httpPortClosed` | "Streaming works, but the camera's control port is closed." | "PTZ, events and snapshots need port 80. Video will still work." (warn, continue) |
+| `rtspOptions` | garbage / HTTP response on 554 | `notAnRTSPServer` | "Whatever is on port 554 isn't an RTSP camera." | "Double-check the address and port." |
+| `rtspOptions` | `RTSP/2.0` or 505 | `rtspVersionUnsupported` | "This device speaks a version of RTSP Vigil doesn't." | "Please export diagnostics and send them to us." → `exportDiagnostics` |
+| `credentialCheck` | 401 with a fresh nonce, twice | `wrongPassword` | "That username or password isn't right." | "Enter the camera's password again." → `openCredentialSheet` |
+| `credentialCheck` | `lockStatus`/retry fields present | `accountLocked` | "The camera locked this account after too many failed sign-ins." | "Wait 30 minutes, or reboot the camera, then try again." |
+| `credentialCheck` | 403 with valid credentials | `insufficientPrivilege` | "This account can't view live video." | "Use an account with Live View and Playback permissions." → `openDeviceWebUI` |
+| `credentialCheck` | SADP said `Activated=false` | `deviceNotActivated` | "This camera hasn't been set up yet." | "Set an admin password to activate it." |
+| `deviceIdentity` | non-Hikvision vendor, or ISAPI 404 | `notHikvision` | "This looks like a <vendor> device, not a Hikvision one." | "Vigil will use generic RTSP/ONVIF. PTZ and events may not work." (warn, continue) |
+| `rtspDescribe` | 404 / 455 on every candidate path | `rtspPathWrong` | "The camera doesn't recognise this stream address." | "Try channel 1 or a different stream path." → `setRTSPPath`, `setChannel` |
+| `rtspDescribe` | 404 only for this channel, channel 1 works | `wrongChannel` | "Channel 3 doesn't exist on this device." | "This device has 2 channels. Pick one of those." → `setChannel` |
+| `rtspDescribe` | 5xx | `describeRejected` | "The camera refused to describe the stream." | "It may be busy or restarting. Try again in a moment." |
+| `sdpCodecCheck` | no `m=video` | `noVideoTrack` | "The camera offered no video." | "Check that this channel has a video source." |
+| `sdpCodecCheck` | codec not H.264/H.265/MJPEG | `unsupportedCodec` | "This stream uses <codec>, which Vigil can't decode." | "Set the camera's video codec to H.264 or H.265." → `openDeviceWebUI` |
+| `sdpCodecCheck` | MJPEG only | `mjpegOnly` | "Only MJPEG is available." | "Vigil will show it, but H.264 uses far less network and power." (warn) |
+| `sdpCodecCheck` | no `sprop-parameter-sets` | `parameterSetsMissing` | "The camera didn't send stream headers up front." | "Vigil will wait for them in the video. Playback may take a second longer." (warn, sets `sdpMissingParameterSets`) |
+| `rtspSetupPlay` | 461 on every transport | `transportBlocked` | "The camera rejected every connection type." | "Switch to TCP." → `setTransport(.tcpInterleaved)` |
+| `firstRTPPacket` | UDP: nothing; TCP: works | `udpBlocked` | "Video packets aren't getting through over UDP." | "Use TCP for this camera." → `setTransport(.tcpInterleaved)` |
+| `firstRTPPacket` | multicast: nothing | `multicastBlocked` | "Multicast video is being blocked." | "Your network or macOS is blocking multicast. Use unicast." → `setTransport(.udpUnicast)` |
+| `firstRTPPacket` | TCP, PLAY succeeded, no data | `noMediaFlowing` | "The camera accepted the request but sent no video." | "It may be at its connection limit. Close other viewers, or use the sub-stream." → `enableSubstream` |
+| `firstKeyframe` | RTP flowing, no IDR in 6 s | `noKeyframe` | "Video is arriving but the first full frame is late." | "Lower the camera's I-frame interval (GOP) to 1–2 seconds." → `openDeviceWebUI` |
+| `decodeProbe` | VideoToolbox rejects the format | `decodeUnsupported` | "This Mac can't hardware-decode this stream." | "Try H.264 instead of H.265, or a lower resolution." |
+| `decodeProbe` | `budgetExhausted` | `decodeBudgetExhausted` | "Too many cameras are decoding at once." | "Close some tiles, or lower Max Concurrent Decodes." → `exportDiagnostics` |
+| any | 503 / `deviceBusy` repeatedly | `deviceOverloaded` | "The camera is too busy to answer." | "Reduce the number of viewers, or use the sub-stream." |
+| any | connection resets in a loop, uptime < 60 s | `cameraRebooting` | "The camera keeps restarting." | "Check its power supply — PoE undervoltage causes this." |
+| `deviceIdentity` | device time off by > 60 s | `clockSkew` | "The camera's clock is 4 minutes off." | "Sync the camera's clock so events and recordings line up." |
+
+Every `StreamError.Code` maps onto a row here; §17.9 enforces that.
+
+### 13.3 Report presentation
+
+The UI renders the step list as a checklist that fills in live (pass / warn / fail with the elapsed
+time), then a single prominent **cause** sentence, then up to three **fixes** as buttons wired to
+`DoctorAction`. The full transcript sits behind a "Show technical details" disclosure and is
+copyable. Every report can be saved with **Export Diagnostics…**, which produces §13.4's bundle with
+this report already inside.
+
+### 13.4 Diagnostics bundle
+
+**Packaging decision.** Foundation has no public zip API, `Compression` is outside our allowed
+framework list, and shelling out to `/usr/bin/ditto` is unavailable under the App Sandbox. So the
+builder produces **two** things and no third-party code:
+
+1. a staging **folder** at the user's chosen location, revealed in Finder (Finder's own
+   *Compress* is one right-click away, and most users will just drag the folder into an email); and
+2. a single-file `Vigil-Diagnostics-<stamp>.vigildiag` archive written by our own ~180-line
+   `TarWriter` — POSIX `ustar`, no compression, pure Foundation, `Data`-streamed so memory stays flat.
+
+`TarWriter` is unit-tested by round-tripping against `/usr/bin/tar -tvf` in a macOS-only test. The
+uncompressed archive is ~1.3× the folder size, which is irrelevant at the 25 MB budget below.
+
+```swift
+public actor DiagnosticsBundleBuilder {
+    public init(configStore: ConfigStore, eventLog: EventLog, healthMonitor: HealthMonitor,
+                coordinator: StreamCoordinator, dependencies: CoreDependencies)
+    public func build(destination: URL,
+                      includeCameras: Set<CameraID>? = nil,
+                      doctorReports: [DoctorReport] = []) async throws -> URL
+}
+```
+
+Contents:
+
+```
+Vigil-Diagnostics-20260726-142530/
+├── README.txt                       what this is, what was redacted, how to send it
+├── manifest.json                    bundle version, app version/build, generatedAt, file list + sizes
+├── system.txt                       macOS version, hardware model, chip, core count, RAM,
+│                                    thermal state, low-power mode, locale, display list with
+│                                    scale factors and refresh rates, free disk space
+├── app.txt                          Vigil version/build, uptime, sandboxed?, entitlements present,
+│                                    launch arguments, decode budget + max sessions, plan summary
+├── library.redacted.json            full library.json with the redaction rules of §13.5 applied
+├── settings.json                    AppSettings verbatim (contains no secrets by construction)
+├── events.redacted.json             last 500 events, `deviceTimeRaw` kept, thumbnails excluded
+├── logs/
+│   ├── vigil-20260726.log           OSLogStore export, last 24 h, this process only, redacted
+│   └── log-export.txt               how many entries, which subsystem/categories, any truncation
+├── streams/<camera-slug>/
+│   ├── camera.json                  the camera record, redacted
+│   ├── capabilities.json            DeviceCapabilities incl. quirks and deniedEndpoints
+│   ├── sdp.txt                      the last SDP received, verbatim
+│   ├── rtsp-transcript.txt          request/response headers only; Authorization redacted;
+│   │                                interleaved media bytes replaced by "[N bytes RTP ch0]"
+│   ├── stats.csv                    HealthMonitor CSV (§13.6)
+│   ├── doctor.json                  the DoctorReport, if one was run
+│   └── isapi/
+│       ├── deviceInfo.xml           redacted serial
+│       ├── capabilities.xml         redacted
+│       └── streaming-channels.xml
+└── plan.json                        the current LivePlan with per-entry reasons
+```
+
+`OSLogStore` export:
+
+```swift
+let store = try OSLogStore(scope: .currentProcessIdentifier)   // .system needs an entitlement we lack
+let since = store.position(date: Date().addingTimeInterval(-86_400))
+let predicate = NSPredicate(format: "subsystem == %@", "com.vigil.app")
+for entry in try store.getEntries(with: [], at: since, matching: predicate) {
+    guard let log = entry as? OSLogEntryLog else { continue }
+    out.append("\(fmt(log.date)) [\(log.level.name)] \(log.category): \(redact(log.composedMessage))")
+}
+```
+
+The export is capped at **50 000 entries** and **20 MB**; truncation is recorded in
+`log-export.txt`. Because `\(…, privacy: .private)` interpolations are redacted by the system in the
+store, private values appear as `<private>` — belt and braces alongside §13.5.
+
+Total bundle size budget: **< 25 MB** for a 16-camera setup. No video, no images, no thumbnails, no
+recordings are ever included, and the builder refuses to include any file over 5 MB.
+
+### 13.5 Redaction rules
+
+Applied by `DiagnosticsRedactor`, a pure function, unit-tested with a corpus of realistic inputs
+(§17.10).
+
+| Item | Treatment | Example |
+|---|---|---|
+| Passwords, `kSecValueData` | never present anywhere by construction | — |
+| `Authorization:` header value | `Digest username="admin", realm="…", response=<redacted>` | keeps the scheme and realm, which are diagnostically useful |
+| `WWW-Authenticate` nonce | kept — it is public and useful | — |
+| RTSP `Session:` | first 4 chars + `…` | `Session: 1A2B…` |
+| Device serial (`serialNumber`, `DeviceSN`) | SHA-256, first 8 hex chars, prefixed | `serial:9f3a1c04` (stable across a bundle so records correlate) |
+| MAC addresses | last 3 octets masked | `28:57:BE:xx:xx:xx` |
+| Private IPv4 (RFC 1918), IPv6 ULA | **kept in full** — a LAN topology is the diagnostic content, and it is not sensitive | `192.168.1.64` |
+| Public IP addresses | masked to `/24` | `203.0.113.xxx` |
+| Hostnames outside `.local`/`.lan` | first label kept, rest masked | `cam1.****` |
+| Camera names, group names, notes | **kept** — the user chose them and they aid support | — |
+| File paths under the user's home | `~/` substituted for the home prefix | `~/Movies/Vigil/front-door/…` |
+| Username in paths | replaced by `<user>` when it appears outside `~` | — |
+| Keychain refs (`CredentialRef` UUIDs) | kept — they reveal nothing | — |
+| Anything matching `(?i)(pass|pwd|secret|token|key)\s*[:=]\s*\S+` | value → `<redacted>` | catch-all safety net |
+
+`README.txt` lists exactly what was redacted, so a user can decide whether to send the bundle. A
+**Preview Contents** step in the UI shows the file tree and lets the user exclude any camera before
+the bundle is written.
+
+### 13.6 Stats CSV
+
+```
+t,state,fps,kbps,loss_permille,jitter_ms,latency_ms,dropped,queue,hwdecode,recording,keyframe
+0,playing,25.0,4102.5,0,12,148,0,1,1,0,1
+1,playing,25.1,4088.0,0,11,151,0,1,1,0,0
+2,degraded,18.4,3011.2,34,96,412,3,3,1,0,0
+```
+
+One file per camera, one row per second, RFC 4180, `.` as the decimal separator regardless of locale
+(`Locale(identifier: "en_US_POSIX")`). This format is directly plottable in Numbers, Excel and
+`gnuplot`, which is the point.
+
+---
+
+## 14. Automation surface
+
+### 14.1 App Intents
+
+All intents live in VigilCore (they are domain operations, not views) and are surfaced by the `Vigil`
+target's `AppShortcutsProvider`. Every intent is `@available(macOS 14.0, *)`, resolves against
+`StreamCoordinator`, and is annotated for both Shortcuts and Spotlight.
+
+```swift
+public struct CameraEntity: AppEntity, Sendable, Identifiable {
+    public static var typeDisplayRepresentation: TypeDisplayRepresentation = "Camera"
+    public static var defaultQuery = CameraEntityQuery()
+
+    public var id: CameraID
+    @Property(title: "Name")        public var name: String
+    @Property(title: "Group")       public var groupName: String?
+    @Property(title: "Status")      public var status: String
+    @Property(title: "Host")        public var host: String
+    @Property(title: "Resolution")  public var resolution: String?
+    @Property(title: "Recording")   public var isRecording: Bool
+
+    public var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(name)",
+                              subtitle: "\(groupName ?? host) · \(status)",
+                              image: thumbnailData.map { .init(data: $0) })
+    }
+}
+
+public struct CameraEntityQuery: EntityStringQuery, EnumerableEntityQuery {
+    public func entities(for ids: [CameraID]) async throws -> [CameraEntity]
+    /// Substring match on name, group and host, ranked name-prefix first.
+    public func entities(matching string: String) async throws -> [CameraEntity]
+    public func allEntities() async throws -> [CameraEntity]
+    public func suggestedEntities() async throws -> [CameraEntity]   // enabled, by orderIndex, max 12
+}
+```
+
+Peer entities: `CameraGroupEntity`, `LayoutEntity` (built-ins plus saved presets),
+`PTZPresetEntity` (dependent on a `CameraEntity`, so Shortcuts offers only that camera's presets),
+`RecordingClipEntity`, `EventEntity`.
+
+| Intent | Title | Parameters | Returns | Notes |
+|---|---|---|---|---|
+| `ViewCameraIntent` | "View Camera" | `camera`, `fullscreen: Bool = false` | none | `openAppWhenRun = true`; brings the window forward and focuses the tile |
+| `SetLayoutIntent` | "Set Layout" | `layout: LayoutEntity` | none | `openAppWhenRun = true` |
+| `TakeSnapshotIntent` | "Take Snapshot" | `camera`, `format: SnapshotFormatAppEnum = .png`, `saveToFile: Bool = true`, `copyToClipboard: Bool = false` | `IntentFile` | works **without** opening the app: device-JPEG path when nothing is live |
+| `SnapshotAllCamerasIntent` | "Snapshot All Cameras" | `format`, `group: CameraGroupEntity?` | `[IntentFile]` | bounded by `snapshotLimiter` |
+| `StartRecordingIntent` | "Start Recording" | `camera`, `duration: Measurement<UnitDuration>?` | `RecordingClipEntity?` | a `duration` schedules an automatic stop; without it, records until stopped |
+| `StopRecordingIntent` | "Stop Recording" | `camera: CameraEntity?` (nil = all) | `[RecordingClipEntity]` | — |
+| `GoToPTZPresetIntent` | "Go to PTZ Preset" | `camera`, `preset: PTZPresetEntity` | none | fails clearly when the camera has no PTZ |
+| `MovePTZIntent` | "Move Camera" | `camera`, `direction: PTZDirectionAppEnum`, `duration: Measurement<UnitDuration> = 0.5 s` | none | momentary move; safer than continuous for automation |
+| `SetAudioIntent` | "Set Camera Audio" | `camera`, `state: EnableDisableAppEnum` | none | — |
+| `GetCameraStatusIntent` | "Get Camera Status" | `camera` | `CameraStatusResult` (state, fps, kbps, loss, uptime, grade, isRecording) | read-only; runs in the background |
+| `ListCamerasIntent` | "Find Cameras" | `group?`, `onlyOffline: Bool = false` | `[CameraEntity]` | the Shortcuts "Find" verb |
+| `GetRecentEventsIntent` | "Get Recent Events" | `camera?`, `kind?`, `limit: Int = 10` | `[EventEntity]` | — |
+| `ExportClipIntent` | "Export Clip" | `camera`, `start: Date`, `end: Date` | `IntentFile` | ISAPI search + RTSP playback passthrough export |
+| `StartCycleModeIntent` | "Start Camera Cycling" | `group?`, `dwell: Measurement<UnitDuration> = 10 s` | none | `openAppWhenRun = true` |
+| `SetRecordOnMotionIntent` | "Set Motion Recording" | `camera`, `state` | none | writes through `ConfigStore` |
+| `RunStreamDoctorIntent` | "Diagnose Camera" | `camera` | `DoctorReportResult` (verdict, cause, fixes as strings) | genuinely useful in a "notify me if a camera breaks" automation |
+
+```swift
+public struct VigilShortcuts: AppShortcutsProvider {
+    public static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: ViewCameraIntent(), phrases: [
+            "Show \(\.$camera) in \(.applicationName)",
+            "Open \(\.$camera) in \(.applicationName)",
+        ], shortTitle: "View Camera", systemImageName: "video")
+        AppShortcut(intent: TakeSnapshotIntent(), phrases: [
+            "Take a snapshot of \(\.$camera) with \(.applicationName)",
+        ], shortTitle: "Snapshot", systemImageName: "camera")
+        AppShortcut(intent: StartRecordingIntent(), phrases: [
+            "Start recording \(\.$camera) in \(.applicationName)",
+        ], shortTitle: "Record", systemImageName: "record.circle")
+        AppShortcut(intent: SetLayoutIntent(), phrases: [
+            "Set \(.applicationName) layout to \(\.$layout)",
+        ], shortTitle: "Set Layout", systemImageName: "square.grid.2x2")
+    }
+}
+```
+
+Rules for every intent:
+
+- **Background-capable where possible.** Only intents that must show something set
+  `openAppWhenRun = true`. `TakeSnapshotIntent` and `GetCameraStatusIntent` work with the app closed,
+  using the ISAPI paths — which is what makes them useful in automations.
+- Errors are thrown as `IntentError` with a `localizedStringResource` message drawn from the same
+  strings table as the UI, so Shortcuts shows the same wording the app does.
+- Write actions (`StartRecording`, `MovePTZ`, `SetRecordOnMotion`, `GoToPTZPreset`) are gated by
+  `AppSettings.allowURLSchemeWriteActions`? **No** — Shortcuts is an explicit user action with its own
+  permission model, so intents are always allowed. That gate applies only to URL scheme (§14.3).
+- `IntentDescription` includes `resultValueName` and a `searchKeywords` list for Spotlight.
+- Intent donation: `ViewCameraIntent` is donated on each camera focus so Spotlight learns the user's
+  habits.
+
+### 14.2 Menu-bar and Focus integration
+
+`GetCameraStatusIntent` doubles as the data source for a `WidgetKit`-free menu-bar summary. The
+`vigil.menubar.badge` count comes from `LiveViewState.unreadEventCount`; no separate plumbing.
+
+### 14.3 URL scheme
+
+Registered as `vigil` (`CFBundleURLTypes` in Info.plist, owned by `ARCHITECTURE.md`).
+
+**Grammar** (ABNF-ish; all components percent-decoded, all matching case-insensitive except UUIDs):
+
+```
+url        = "vigil://" action [ "/" path ] [ "?" query ]
+action     = "camera" / "layout" / "playback" / "event" / "clip" / "snapshot"
+           / "record" / "ptz" / "audio" / "cycle" / "palette" / "settings"
+           / "discover" / "import" / "doctor" / "wall"
+cam-ref    = uuid / slug / name          ; resolution order below
+```
+
+| URL | Effect | Write action? |
+|---|---|---|
+| `vigil://camera/<cam-ref>` | focus that camera in the current layout, bringing the window forward | no |
+| `vigil://camera/<cam-ref>?fullscreen=1` | open it fullscreen | no |
+| `vigil://camera/<cam-ref>?quality=main\|sub\|auto` | pin the quality | **yes** |
+| `vigil://layout/<name>` or `vigil://layout/2x2` | switch layout; accepts built-in mode names `1`, `2x2`, `3x3`, `4x4`, `1+5`, `1+7`, `2+8` | no |
+| `vigil://playback/<cam-ref>?t=<ISO8601>&span=<sec>` | open Playback at that instant | no |
+| `vigil://event/<uuid>` | select that event in the feed and jump to its moment | no |
+| `vigil://clip/<uuid>` | open that clip | no |
+| `vigil://snapshot?camera=<cam-ref>&format=png\|jpeg\|heic&dest=file\|clipboard\|quicklook` | take a snapshot | **yes** |
+| `vigil://record/start?camera=<cam-ref>&duration=<sec>` | start recording | **yes** |
+| `vigil://record/stop?camera=<cam-ref>` (`camera=all`) | stop recording | **yes** |
+| `vigil://ptz/<cam-ref>/preset/<n>` | go to preset *n* (1…255) | **yes** |
+| `vigil://ptz/<cam-ref>/move?dir=up\|down\|left\|right\|in\|out&ms=<50…5000>` | momentary move | **yes** |
+| `vigil://audio/<cam-ref>?state=on\|off\|toggle` | audio control | **yes** |
+| `vigil://cycle?group=<name>&dwell=<sec>&state=start\|stop` | camera cycling | no |
+| `vigil://palette?q=<text>` | open the command palette, pre-filled | no |
+| `vigil://settings/<pane>` — `general\|streams\|recording\|notifications\|shortcuts\|advanced\|about` | open Settings | no |
+| `vigil://discover` | open the Discovery sheet and start a scan | no |
+| `vigil://doctor/<cam-ref>` | run Stream Doctor | no |
+| `vigil://wall?display=<uuid>&layout=<name>` | open the video wall on a display | no |
+| `vigil://import?url=<percent-encoded file URL>` | open the CSV/JSON import sheet pre-loaded | no (always confirmed) |
+
+**Security model.** This is the one place an outside party (a web page, a Mail link) can drive the app,
+so:
+
+1. Read/navigate actions always run.
+2. **Write actions require `AppSettings.allowURLSchemeWriteActions` (default `false`).** When
+   disabled, the app shows a one-time sheet naming the exact action and offering
+   *Allow Once* / *Always Allow* / *Deny*. This is the difference between a convenience and a
+   remote-control vulnerability.
+3. `vigil://import` **always** confirms, regardless of the setting, and never auto-applies.
+4. Rate limit: **10** URLs per 10 seconds; the excess is dropped with a `.notice` log.
+5. Unknown actions, malformed UUIDs and out-of-range parameters produce a single toast
+   *"Vigil didn't understand that link."* and a `.debug` log — never a crash, never a partial action.
+6. No URL can read data out (there is no callback/return-URL mechanism) or change credentials.
+
+**Camera reference resolution**, in order, first unique match wins:
+(1) exact `CameraID` UUID; (2) exact case-insensitive `name`; (3) exact `slug`; (4) unique
+case-insensitive prefix of `name`; (5) exact `host`. Ambiguity opens a small disambiguation picker
+rather than guessing. No match → the "didn't understand" toast naming the reference.
+
+```swift
+public enum DeepLink: Sendable, Hashable {
+    case focusCamera(CameraRef, fullscreen: Bool, quality: StreamQuality?)
+    case setLayout(LayoutRef)
+    case playback(CameraRef, at: Date, span: Double?)
+    case showEvent(EventID)
+    case showClip(ClipID)
+    case snapshot(CameraRef, SnapshotFormat, Set<SnapshotDestination>)
+    case startRecording(CameraRef, duration: Double?)
+    case stopRecording(CameraRef?)
+    case ptzPreset(CameraRef, Int)
+    case ptzMove(CameraRef, PTZDirection, milliseconds: Int)
+    case audio(CameraRef, AudioAction)
+    case cycle(group: String?, dwell: Double?, start: Bool)
+    case palette(query: String?)
+    case settings(SettingsPane)
+    case discover
+    case doctor(CameraRef)
+    case videoWall(displayUUID: String?, LayoutRef?)
+    case importConfiguration(URL)
+
+    public var isWriteAction: Bool { get }
+    /// The single parse entry point. Total function: never throws, never traps.
+    public static func parse(_ url: URL) -> Result<DeepLink, DeepLinkError>
+}
+```
+
+`DeepLink.parse` is pure and is the subject of a large table-driven test (§17.11) including hostile
+inputs: `vigil://record/start?camera=../../etc/passwd`, 4 KB names, non-UTF-8 percent escapes,
+`camera=all` where it is not allowed, negative and NaN numbers, nested URL encoding.
+
+### 14.4 AppleScript
+
+App Intents already deliver Shortcuts and `shortcuts run` from the command line, so AppleScript is a
+**thin, deliberately small** surface for users with existing AppleScript workflows — not a second full
+API.
+
+`Vigil.sdef` (in the `Vigil` target's resources; `NSAppleScriptEnabled = true` and
+`OSAScriptingDefinition = Vigil.sdef` in Info.plist) defines one suite:
+
+| Element / command | AppleScript | Maps to |
+|---|---|---|
+| `cameras` element of `application` | `cameras`, `camera "Front Door"`, `camera id "…"` | `Library.cameras` |
+| camera properties | `name`, `id`, `host`, `enabled`, `status`, `recording`, `group` | read-only except `enabled` |
+| `layouts` element | `layouts`, `current layout` | `Library.layouts` |
+| `snapshot` | `snapshot camera "Front Door" saving to file "…" as «constant ****png »` | `SnapshotService` |
+| `start recording` | `start recording camera "Front Door" for 60` | `StreamCoordinator.startRecording` |
+| `stop recording` | `stop recording camera "Front Door"` | — |
+| `set layout` | `set layout to layout "2x2"` | — |
+| `goto preset` | `goto preset 3 of camera "Gate"` | PTZ |
+| `diagnose` | `diagnose camera "Gate"` → verdict text | `StreamDoctor` |
+
+Implementation: `NSScriptCommand` subclasses in the `Vigil` target whose `performDefaultImplementation`
+hops to `@MainActor`, calls the coordinator, and — for commands that must return a value — uses
+`suspendExecution()` / `resumeExecution(withResult:)` so a slow ISAPI snapshot does not block the
+Apple Event timeout. VigilCore itself contains no AppleScript code; it exposes the async operations the
+commands call. `cameras` and `layouts` are exposed via `NSApplication`'s scripting container using
+`valueForKey`-style accessors backed by `LiveViewState`.
+
+Priority: P1. If it slips, the intents plus URL scheme cover every automation story.
+
+### 14.5 Configuration import and export
+
+```swift
+public enum ImportStrategy: Sendable, Hashable {
+    case merge          // match on (host, channel) then on name; update matches, add the rest
+    case addOnly        // never modify existing records
+    case replace        // dangerous; requires an extra typed confirmation in the UI
+}
+
+public struct ImportReport: Sendable, Hashable {
+    public var added: [CameraID], updated: [CameraID], skipped: [String]
+    public var errors: [ImportError]                 // row number + reason, all rows reported
+    public var credentialsNeeded: [CameraID]         // imported without a password
+    public var groupsCreated: [GroupID]
+}
+```
+
+| Format | Direction | Contents |
+|---|---|---|
+| **JSON** (`.vigilcameras`) | both | `{ "schemaVersion": 3, "cameras": [...], "groups": [...], "layouts": [...] }` — a subset of `library.json`, **never** credentials |
+| **CSV** | both | header `name,host,httpPort,rtspPort,useTLS,channel,transport,streamProfile,group,colorTag,enabled,username,notes` — `username` is exported but **`password` is never exported**; on import a `password` column *is* accepted (many users build these from a spreadsheet) and each value is moved straight into the Keychain and never retained in memory beyond the import |
+| **Encrypted** (`.vigilbackup`) | both | the full JSON **plus** credentials, encrypted with `CryptoKit.AES.GCM` (256-bit) under a key derived from the user's passphrase by PBKDF2-HMAC-SHA256, 600 000 iterations, 16-byte random salt, 12-byte nonce. CryptoKit has no PBKDF2, so it is implemented in ~25 lines over `CryptoKit.HMAC<SHA256>` and unit-tested against RFC 6070 vectors — no `CommonCrypto`, no external dependency. Header: `VIGILBK1` \| salt \| iterations (UInt32 BE) \| nonce \| ciphertext \| tag |
+
+CSV parsing is strict about the header and lenient about the rows: quoted fields with embedded commas
+and newlines, BOM tolerated, CRLF or LF, `TRUE/true/1/yes` all parse as true, unknown columns ignored
+with a warning, and **every** bad row reported by number rather than aborting the file. Export writes
+CRLF with a UTF-8 BOM so Excel opens it correctly without an import wizard.
+
+Import is transactional: the whole `Library` mutation is applied in one `ConfigStore.mutate`, so a
+failure part-way leaves nothing changed. Credentials are written to the Keychain **after** the library
+mutation commits, and any Keychain failure is reported per camera in
+`ImportReport.credentialsNeeded` rather than rolling back the cameras — a camera without a password is
+recoverable; a lost import is annoying.
