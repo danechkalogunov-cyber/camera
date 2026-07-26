@@ -93,7 +93,7 @@ struct RootView: View {
     ///
     ///     @MainActor public struct LiveVideoView: View {
     ///         public init(controller: StreamController?, status: String, message: String?,
-    ///                     isShowingPicture: Bool, onDisconnect: @escaping () -> Void)
+    ///                     isReceivingMedia: Bool, onDisconnect: @escaping () -> Void)
     ///     }
     ///
     /// The controller is passed rather than a frame handle because `VigilUI` is the only module
@@ -105,7 +105,7 @@ struct RootView: View {
         LiveVideoView(controller: session.controller,
                       status: session.statusLine,
                       message: session.failureBanner,
-                      isShowingPicture: session.isShowingPicture,
+                      isReceivingMedia: session.isReceivingMedia,
                       onDisconnect: { session.disconnect() })
     }
 }

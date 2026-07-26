@@ -217,7 +217,7 @@ final class AppSessionModel {
         activeRef = nil
         phase = .connect
         isConnecting = false
-        isShowingPicture = false
+        isReceivingMedia = false
         streamState = nil
         statusLine = ""
         firstFrameLatency = nil
@@ -236,9 +236,9 @@ final class AppSessionModel {
         failure = nil
         failureRemedy = nil
         isConnecting = true
-        isShowingPicture = false
+        isReceivingMedia = false
         firstFrameLatency = nil
-        statusLine = Self.narration(for: nil)
+        statusLine = Self.openingNarration
         phase = .live
     }
 
@@ -261,6 +261,11 @@ final class AppSessionModel {
 
     /// The remembered-camera path: no form, no Keychain write, straight to streaming.
     private func resume(_ remembered: LastConnection) async {
+        // Straight to the video screen, before the Keychain is even asked. A remembered connection
+        // means we already believe there is a camera, and showing the form for the few milliseconds
+        // the Keychain takes would put a flash of "type your password" in front of a user who is
+        // about to be shown video.
+        beginConnecting()
         do {
             // A missing item is a normal outcome, not an error (`errSecItemNotFound`,
             // docs/spec-core.md §6.4) — it means the user removed it in Keychain Access, so we ask.
@@ -268,10 +273,13 @@ final class AppSessionModel {
             // does not decrypt the secret; the controller's provider does that when it connects.
             guard try await credentials.hasCredential(for: remembered.credentialRef) else {
                 LastConnection.clear(in: defaults)
+                phase = .connect
+                isConnecting = false
+                report(failure: "Vigil no longer has this camera's password.",
+                       remedy: "Enter it again.")
                 return
             }
             let camera = try makeCamera(host: remembered.host, ref: remembered.credentialRef)
-            beginConnecting()
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
             // Nothing is on screen yet, so the honest result is the form plus an explanation.
@@ -332,9 +340,10 @@ final class AppSessionModel {
 
     /// Folds one controller event into observable state.
     ///
-    /// The `default` arm is deliberate: `StreamEvent` has thirty cases (docs/spec-core.md §7.2) and
-    /// the slice reacts to five of them. Statistics, health, recording and quality events are
-    /// consumed and dropped rather than left to fill the stream's buffer.
+    /// The `default` arm is deliberate: the slice reacts to four of `StreamEvent`'s cases and must
+    /// keep consuming the rest — statistics, keyframes, warnings, path resolution — rather than
+    /// leave them to fill the stream's bounded buffer. It also means a case added in W4 cannot stop
+    /// this file compiling.
     private func apply(_ event: StreamEvent) {
         switch event {
         case .stateChanged(_, let to, let detail):

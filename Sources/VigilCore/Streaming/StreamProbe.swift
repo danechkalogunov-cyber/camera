@@ -121,39 +121,79 @@ public actor StreamProbe {
         }
 
         var lastFailure = StreamError(code: .rtspPathNotFound)
-        var window = 0
-        while window * Self.maxInFlight < candidates.count {
-            let start = window * Self.maxInFlight
-            let end = min(start + Self.maxInFlight, candidates.count)
-            let batch = Array(candidates[start..<end])
-            let results = await run(batch, camera: camera, credential: credential)
 
-            // Lowest rung first, so a device that answers on two forms is remembered by the one
-            // the ladder trusts more.
-            for (candidate, result) in results.sorted(by: { $0.0.order < $1.0.order }) {
-                switch result {
-                case let .success(codec):
-                    logger.info(.core, "rtsp path resolved",
-                                ["path": Redact.path(candidate.path),
-                                 "codec": codec?.rawValue ?? "unknown"])
-                    return .resolved(candidate, videoCodec: codec)
-                case let .authenticationRequired(error):
-                    logger.notice(.core, "rtsp path answered 401; ladder stopped",
-                                  ["path": Redact.path(candidate.path)])
-                    return .authenticationRequired(candidate, error)
-                case let .advance(error):
-                    lastFailure = error
-                case let .abort(error):
-                    // A refused port or an unreachable host fails identically for every candidate;
-                    // spending four more connects on it only delays the real diagnosis.
-                    logger.notice(.core, "ladder aborted; the failure is not path-shaped",
-                                  ["code": error.code.rawValue])
-                    return .exhausted(error)
-                }
+        // Phase 1 — the first rung runs **alone**, however many are in flight afterwards.
+        //
+        // This is an authentication-safety rule, not a performance one. Hikvision firmware
+        // authenticates before it decides whether a path exists, so telling `404` from `401`
+        // requires sending credentials; three concurrent candidates would therefore be three
+        // concurrent logins, and a wrong password would spend up to six failed attempts in one
+        // burst against a device that locks an account at about five (API_CONTRACT §2 R-25). One
+        // candidate at a time until the device has answered something other than a `401` keeps the
+        // worst case at exactly the two attempts the contract budgets. Rung 1 is also the right
+        // answer for almost every current camera, so the common case is one round trip either way.
+        guard let first = candidates.first else { return .exhausted(lastFailure) }
+        switch await evaluate([first], camera: camera, credential: credential) {
+        case let .decided(outcome): return outcome
+        case let .continue(failure): lastFailure = failure
+        }
+
+        // Phase 2 — the credentials are known good (the device answered a path question, not an
+        // authentication one), so the remaining rungs run three in flight per R1.2.
+        var index = 1
+        while index < candidates.count {
+            let end = min(index + Self.maxInFlight, candidates.count)
+            let batch = Array(candidates[index..<end])
+            switch await evaluate(batch, camera: camera, credential: credential) {
+            case let .decided(outcome): return outcome
+            case let .continue(failure): lastFailure = failure
             }
-            window += 1
+            index = end
         }
         return .exhausted(lastFailure)
+    }
+
+    // MARK: Window evaluation
+
+    /// What one window of candidates concluded.
+    private enum WindowVerdict {
+        /// The ladder is over, for better or worse.
+        case decided(StreamProbeOutcome)
+        /// Nothing in this window answered; carry on with the most diagnostic failure seen.
+        case `continue`(StreamError)
+    }
+
+    /// Runs one window and folds its results into a verdict.
+    private func evaluate(_ batch: [RTSPPathCandidate],
+                          camera: Camera,
+                          credential: Credential?) async -> WindowVerdict {
+        let results = await run(batch, camera: camera, credential: credential)
+        var lastFailure = StreamError(code: .rtspPathNotFound)
+
+        // Lowest rung first, so a device that answers on two forms is remembered by the one the
+        // ladder trusts more — not by whichever socket happened to be quicker.
+        for (candidate, result) in results.sorted(by: { $0.0.order < $1.0.order }) {
+            switch result {
+            case let .success(codec):
+                logger.info(.core, "rtsp path resolved",
+                            ["path": Redact.path(candidate.path),
+                             "codec": codec?.rawValue ?? "unknown"])
+                return .decided(.resolved(candidate, videoCodec: codec))
+            case let .authenticationRequired(error):
+                logger.notice(.core, "rtsp path answered 401; ladder stopped",
+                              ["path": Redact.path(candidate.path)])
+                return .decided(.authenticationRequired(candidate, error))
+            case let .advance(error):
+                lastFailure = error
+            case let .abort(error):
+                // A refused port or an unreachable host fails identically for every candidate;
+                // spending four more connects on it only delays the real diagnosis.
+                logger.notice(.core, "ladder aborted; the failure is not path-shaped",
+                              ["code": error.code.rawValue])
+                return .decided(.exhausted(error))
+            }
+        }
+        return .continue(lastFailure)
     }
 
     // MARK: Batch execution

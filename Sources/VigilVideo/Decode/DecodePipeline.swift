@@ -99,8 +99,12 @@ public actor DecodePipeline {
     /// dimensions rather than blocking the picture.
     private var formatInfo: VideoFormatInfo?
 
-    /// Bumps on every parameter-set change, compatible or not. Taken from the store so the two can
-    /// never disagree.
+    /// Bumps on every parameter-set change, compatible or not.
+    ///
+    /// Counted here rather than copied from `store.generation`, because the store's counter goes
+    /// back to zero on `reset()` — and a generation number that repeats is worse than useless to a
+    /// sink whose whole job with it is to tell new buffers from stale ones. This one only ever
+    /// increases, across a rejected parameter set and across a reconnect alike.
     private var generation: UInt32 = 0
 
     /// The §3.3 duration chain.
@@ -219,8 +223,9 @@ public actor DecodePipeline {
         counters
     }
 
-    /// Forgets everything about the stream: parameter sets, format description, generation and the
-    /// duration history. Counters are kept, because they are cumulative for the session.
+    /// Forgets everything about the stream: parameter sets, format description and the duration
+    /// history. Counters are kept, because they are cumulative for the session, and so is
+    /// `generation`, which must never repeat a number a sink has already seen.
     ///
     /// Call on reconnect. The sink is told, so it can show its "reconnecting" state **over** the
     /// frozen last frame — it must not clear to black (API_CONTRACT §4.9, the no-black-flash rule).
@@ -228,7 +233,6 @@ public actor DecodePipeline {
         store.reset()
         formatDescription = nil
         formatInfo = nil
-        generation = 0
         estimator.reset()
         estimator.nominalFrameRate = nil
         awaitingKeyframe = true
@@ -283,7 +287,7 @@ public actor DecodePipeline {
         guard let sets = store.sets else { return }
 
         let parsed = store.format
-        let nextGeneration = store.generation
+        let nextGeneration = generation &+ 1
 
         do {
             let description = try FormatDescriptionFactory.make(codec: codec,
