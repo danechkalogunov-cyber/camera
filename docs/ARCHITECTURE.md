@@ -994,4 +994,1010 @@ exactly. This is non-negotiable for a networking app.
 
 ---
 
-<!-- PART2 -->
+## 6. End-to-end data flow
+
+### 6.1 The pipeline, with the exact type at every boundary
+
+| # | Stage | Runs in | Input type | Output type | Owner module |
+|---|---|---|---|---|---|
+| 1 | Multicast/unicast probe | `MulticastResponder` actor | `SADPProbe` / `WSDiscoveryProbe` → `Data` | `Data` → `DiscoveredDevice` | Discovery + Transport |
+| 2 | Subnet sweep | `SweepEngine` actor | `IPv4CIDR` | `[DiscoveredDevice]` | Discovery + Transport |
+| 3 | Fingerprint | `ISAPIHTTPClient` actor | `DiscoveredDevice` | `DeviceInfo` | ISAPI |
+| 4 | Persist | `ConfigStore` actor | `Camera` | `Camera` (in `library.json`) | Core |
+| 5 | Resolve credentials | `CredentialStore` actor | `CredentialRef` | `Credential` | Core |
+| 6 | Connect | `RTSPConnection` actor | `NWEndpoint` | `Data` chunks | Transport |
+| 7 | Parse RTSP | `RTSPSessionMachine` (struct, in `RTSPConnection`) | `Data` → `ingest(_:)` | `[RTSPEvent]`, `[RTSPAction]` | RTSP |
+| 8 | Describe | same | `RTSPResponse` (SDP body) | `SDPDescription` → `[TrackDescription]` | RTSP |
+| 9 | Demux interleaved | `StreamController` actor | `InterleavedFrame(channel:payload:)` | `RTPPacket` / `RTCPPacket` | RTSP → RTP |
+| 10 | Reorder | `JitterBuffer` (struct) | `RTPPacket` | `RTPPacket` in sequence, `GapEvent` | RTP |
+| 11 | Depacketize | `H264Depacketizer` / `H265Depacketizer` (struct) | `RTPPacket` | **`EncodedFrame`** | RTP |
+| 12 | Parameter sets | `SPSParser` (struct) | `Data` (SPS/PPS/VPS) | `ParameterSets`, `VideoGeometry` | Bitstream |
+| 13 | Format description | `DecodePipeline` actor | `ParameterSets` | `CMVideoFormatDescription` | Video |
+| 14 | Sample buffer | `DecodePipeline` actor | `EncodedFrame` + format desc | `CMSampleBuffer` | Video |
+| 15 | Decode | `VTDecompressionSession` (VT queue) | `CMSampleBuffer` | `CVPixelBuffer` | Video |
+| 16 | Deliver | `DecodeSinkBox` | `CVPixelBuffer` | **`DecodedFrame`** in `AsyncStream` | Video |
+| 17 | Texture | `MetalVideoRenderer` `@MainActor` | `DecodedFrame` | 2× `MTLTexture` via `CVMetalTextureCache` | Render |
+| 18 | Draw | `MetalVideoRenderer` | `MTLTexture` | `CAMetalDrawable` → `CAMetalLayer` | Render |
+| 18′ | Fast path | `VideoTileView` `@MainActor` | `CMSampleBuffer` | `AVSampleBufferDisplayLayer.enqueue` | Render |
+| 19 | Screen | WindowServer | — | photons | — |
+
+Stage 18′ is the default for a plain tile with no pixel-level features enabled; stage 17–18 is used
+whenever digital zoom, colour adjust, motion overlay, deinterlace, snapshot-of-displayed-frame or
+video-wall atlas compositing is active. `spec-video-pipeline.md` §"Two display strategies" owns the
+switch, and it MUST be switchable at runtime without dropping the RTSP session.
+
+### 6.2 The boundary signatures, verbatim
+
+These signatures are part of the cross-module contract. Module specs may add members; they may not
+change these.
+
+```swift
+// ── VigilProtocols ────────────────────────────────────────────────────────────────────────────
+
+/// Codec-independent presentation timestamp. Never a CMTime in the pure layer.
+public struct MediaTimestamp: Hashable, Sendable, Codable {
+    public var value: Int64
+    public var timescale: Int32          // 90_000 for RTP video, sample rate for audio
+    public init(value: Int64, timescale: Int32)
+    public var seconds: Double { Double(value) / Double(timescale) }
+    public func converted(to newTimescale: Int32) -> MediaTimestamp
+}
+
+/// One compressed access unit, ready for a decoder. NALs are 4-byte big-endian length-prefixed.
+public struct EncodedFrame: Sendable {
+    public var data: Data                    // 4-byte-length-prefixed NAL units, no start codes
+    public var pts: MediaTimestamp
+    public var dts: MediaTimestamp?          // nil ⇒ dts == pts (live H.264 baseline/main w/o B)
+    public var duration: MediaTimestamp?
+    public var isKeyframe: Bool              // IDR (H.264) or IRAP 16…23 (H.265)
+    public var codec: VideoCodec
+    public var parameterSets: ParameterSets? // non-nil when they changed at/ before this frame
+    public var sequenceNumber: UInt64        // monotonic per stream, for logging and drop accounting
+    public var receivedAtNanos: UInt64       // MonotonicClock stamp of the LAST packet of the AU
+}
+
+public struct ParameterSets: Hashable, Sendable {
+    public var codec: VideoCodec
+    public var vps: [Data]      // H.265 only
+    public var sps: [Data]
+    public var pps: [Data]
+}
+
+public enum VideoCodec: String, Sendable, Codable, CaseIterable { case h264, h265, mjpeg }
+public enum AudioCodec: String, Sendable, Codable, CaseIterable { case aac, pcmA, pcmU, g726 }
+
+// ── VigilRTSP ─────────────────────────────────────────────────────────────────────────────────
+
+/// One `$`-framed chunk demultiplexed off the RTSP TCP socket.
+public struct InterleavedFrame: Sendable {
+    public var channel: UInt8      // even = RTP, odd = RTCP, as negotiated in SETUP
+    public var payload: Data
+}
+
+/// The transport-agnostic core. No sockets, no clock reads, no Task.
+public struct RTSPSessionMachine: ~Copyable {
+    public init(configuration: RTSPConfiguration, credential: Credential?)
+    /// Feed raw socket bytes. Returns everything that became knowable.
+    public mutating func ingest(_ bytes: Data) -> [RTSPEvent]
+    /// Advance time. Returns what the caller must now do.
+    public mutating func step(nowNanos: UInt64) -> [RTSPAction]
+    public var state: RTSPSessionState { get }
+}
+
+public enum RTSPAction: Sendable {
+    case send(Data)
+    case setTimer(id: RTSPTimerID, deadlineNanos: UInt64)
+    case cancelTimer(id: RTSPTimerID)
+    case emitTrack(TrackDescription)
+    case media(InterleavedFrame)
+    case sessionEstablished(sessionID: String, timeoutSeconds: Int)
+    case fail(RTSPError)
+    case closed
+}
+
+// ── VigilRTP ──────────────────────────────────────────────────────────────────────────────────
+
+public protocol Depacketizer: ~Copyable {
+    /// Push one in-order RTP packet. Returns zero or more completed access units.
+    mutating func push(_ packet: RTPPacket) -> [EncodedFrame]
+    /// Called on a detected sequence gap; the depacketizer discards its partial AU.
+    mutating func reset(reason: DepacketizerResetReason)
+    var statistics: StreamStatistics { get }
+}
+
+// ── VigilVideo ────────────────────────────────────────────────────────────────────────────────
+
+/// A decoded frame on its way to the screen. See ARCHITECTURE §5.9 for the Sendable justification.
+public struct DecodedFrame: @unchecked Sendable {
+    public let pixelBuffer: CVPixelBuffer
+    public let pts: MediaTimestamp
+    public let decodedAtNanos: UInt64
+    public let geometry: VideoGeometry      // display w/h, SAR, crop rect, colour primaries
+    public let isKeyframe: Bool
+}
+
+@MainActor public protocol VideoSink: AnyObject {
+    func present(_ frame: DecodedFrame)
+    func presentCompressed(_ sample: CMSampleBuffer)     // 18′ fast path
+    func flush(reason: FlushReason)
+    var preferredDeliveryMode: DeliveryMode { get }       // .pixelBuffer | .compressed
+}
+
+/// Snapshot of the exact pixels on screen. Implemented by VigilRender, called by VigilCore.
+public protocol SnapshotSource: Sendable {
+    func captureDisplayedFrame() async throws -> DecodedFrame
+}
+```
+
+### 6.3 Threading of the frame path (the latency-critical answer)
+
+```
+NWConnection queue (com.vigil.net.<id>)
+      │  Data
+      ▼
+RTSPConnection actor ── InterleavedFrame ──► StreamController actor
+                                                    │  (JitterBuffer + Depacketizer are
+                                                    │   plain structs, same actor, no hop)
+                                                    │  EncodedFrame
+                                                    ▼
+                                             DecodePipeline actor ── CMSampleBuffer ──► VT
+                                                                                         │
+                        DecodedFrame  ◄── DecodeSinkBox ◄── VT private queue ◄───────────┘
+                              │
+                              ├─ preferredDeliveryMode == .compressed ─► @MainActor enqueue()
+                              └─ .pixelBuffer ─► renderer task ─► MTLCommandQueue.commit()
+```
+
+Actor hops on the frame path: **2** (into `StreamController`, into `DecodePipeline`), plus **1** to the
+main actor only on the `.compressed` path. Budget: each hop is < 20 µs on Apple silicon; total actor
+overhead is < 100 µs per frame, i.e. < 0.4 % of a 33 ms frame at 30 fps, and negligible against the
+250 ms glass-to-glass budget (which is dominated by the camera's own encoder GOP structure and the
+jitter buffer depth).
+
+**Rule:** no `await` on the frame path may target an actor that also performs I/O or file writes.
+`ClipRecorder` and `ConfigStore` are therefore separate actors, and recording receives frames by
+`AsyncStream` fan-out, never by an inline `await`.
+
+---
+
+## 7. Error taxonomy
+
+### 7.1 Shape
+
+One root enum in `VigilProtocols`, one nested domain enum per module. Every error carries enough to
+(a) log, (b) show a human a sentence, (c) decide whether to retry.
+
+```swift
+public enum VigilError: Error, Sendable, Hashable {
+    case transport(TransportError)
+    case rtsp(RTSPError)
+    case rtp(RTPError)
+    case bitstream(BitstreamError)
+    case isapi(ISAPIError)
+    case discovery(DiscoveryError)
+    case decode(DecodeError)
+    case render(RenderError)
+    case storage(StorageError)
+    case credential(CredentialError)
+    case recording(RecordingError)
+    case cancelled
+    case internalInvariant(String, file: StaticString, line: UInt)
+}
+
+public enum ErrorSeverity: Int, Sendable, Comparable { case degraded, recoverable, fatal }
+
+public enum RetryDisposition: Sendable, Hashable {
+    case retryWithBackoff          // transient: network blip, timeout, camera reboot
+    case retryImmediatelyOnce      // stale Digest nonce, 401 with a new nonce, kVTInvalidSessionErr
+    case retryAfterUserAction      // wrong password, camera not activated, unsupported codec
+    case noRetry                   // programmer error, unsupported OS feature
+}
+
+public protocol VigilErrorDescribing: Error, Sendable {
+    /// Stable machine code for logs, diagnostics bundles and support: e.g. "VG-RTSP-0401".
+    var diagnosticCode: String { get }
+    var severity: ErrorSeverity { get }
+    var disposition: RetryDisposition { get }
+    /// One sentence, sentence case, no jargon, no error numbers. Localised. See UX.md copy rules.
+    var userMessage: String { get }
+    /// One imperative sentence telling the user what to do, or nil if there is nothing to do.
+    var userRemedy: String? { get }
+    /// Extra key/values for the log line. MUST NOT contain secrets. See §8.6.
+    var logMetadata: [String: String] { get }
+}
+```
+
+`VigilError` and every domain enum conform to `VigilErrorDescribing`. `LocalizedError` conformance is
+added in `VigilCore` (an extension) so the pure layer stays Foundation-minimal but AppKit alerts still
+work.
+
+### 7.2 Domain enums and dispositions
+
+| Domain | Cases (abridged — module specs are normative for the full list) | Severity | Disposition |
+|---|---|---|---|
+| `TransportError` | `.connectTimeout`, `.connectRefused`, `.hostUnreachable`, `.peerClosed`, `.readIdleTimeout`, `.tlsFailed(reason)`, `.tlsUntrusted(fingerprint)`, `.multicastBlocked`, `.localNetworkDenied`, `.network(NWError)` | recoverable; `.localNetworkDenied` fatal | backoff; `.localNetworkDenied` → user action |
+| `RTSPError` | `.malformedResponse`, `.headerTooLarge(bytes)`, `.unexpectedStatus(code)`, `.unauthorized`, `.authRejected`, `.methodNotSupported`, `.noSuitableTrack`, `.sdpParse(detail)`, `.transportRejected`, `.sessionNotFound`, `.interleaveDesync(recovered:)`, `.timeout(RTSPTimerID)` | `.authRejected` fatal; `.interleaveDesync(recovered: true)` degraded; rest recoverable | `.unauthorized` → immediate once; `.authRejected` → user action; rest → backoff |
+| `RTPError` | `.shortPacket(len)`, `.unknownPayloadType(pt)`, `.badFragment`, `.aggregationOverflow`, `.jitterBufferOverflow(dropped)`, `.gap(count)` | degraded | none (counted in stats, never fails the session) |
+| `BitstreamError` | `.truncated(atBit)`, `.unsupportedProfile(idc)`, `.unsupportedChromaFormat(idc)`, `.scalingListOverrun`, `.noParameterSets`, `.exponentialGolombOverflow` | recoverable | `.noParameterSets` → wait for next IRAP; rest → backoff |
+| `ISAPIError` | `.http(status)`, `.digestChallengeMissing`, `.responseStatus(code:sub:)`, `.xmlUnexpected(path)`, `.notSupported(endpoint)`, `.deviceBusy`, `.accountLocked(retryAfter)` | `.accountLocked` fatal | `.deviceBusy` → backoff; `.notSupported` → no retry (capability cached as false) |
+| `DiscoveryError` | `.multicastEntitlementMissing`, `.noUsableInterface`, `.prefixTooWide(bits)`, `.probeSendFailed`, `.cancelled` | recoverable | `.multicastEntitlementMissing` → fall back to sweep, surface a one-time notice |
+| `DecodeError` | `.vt(OSStatus)`, `.badData`, `.invalidSession`, `.malfunction`, `.formatChangeUnsupported`, `.noHardwareDecoder`, `.budgetDenied(cost)` | `.noHardwareDecoder` degraded | `.invalidSession`/`.malfunction` → immediate once (recreate + wait for IDR); `.badData` → drop to next keyframe, no session restart |
+| `RenderError` | `.metalUnavailable`, `.textureCacheFailed(CVReturn)`, `.pipelineCompileFailed(String)`, `.drawableUnavailable` | `.metalUnavailable` degraded (fall back to AVSBDL) | no retry |
+| `StorageError` | `.notWritable(URL)`, `.corruptDocument(reason)`, `.schemaTooNew(found:supported:)`, `.diskFull(needBytes)`, `.atomicReplaceFailed` | fatal for `.schemaTooNew` | user action |
+| `CredentialError` | `.keychainStatus(OSStatus)`, `.notFound`, `.duplicate`, `.userCancelledUnlock` | recoverable | user action |
+| `RecordingError` | `.firstSampleNotKeyframe`, `.writerFailed(NSError)`, `.destinationUnwritable`, `.spaceBelowReserve` | recoverable | user action |
+
+### 7.3 Diagnostic code format
+
+`VG-<DOMAIN>-<4 digits>` — e.g. `VG-RTSP-0401` (unauthorized), `VG-RTSP-0453` (transport rejected),
+`VG-DEC-0011` (`kVTVideoDecoderBadDataErr`), `VG-STOR-0002` (corrupt document). Codes are **stable
+forever**; they appear in logs, in the diagnostics bundle, and in the Stream Doctor UI's "copy details"
+text. Each module spec MUST publish its own code table. Never reuse a retired code.
+
+### 7.4 Invariant failures
+
+`case internalInvariant(String, file:line:)` is thrown by a helper:
+
+```swift
+@inline(__always)
+public func vigilRequire(
+    _ condition: Bool, _ message: @autoclosure () -> String,
+    file: StaticString = #fileID, line: UInt = #line
+) throws {
+    guard !condition else { return }
+    throw VigilError.internalInvariant(message(), file: file, line: line)
+}
+```
+
+We **throw**, not `fatalError`, everywhere a surveillance app could otherwise take the whole window
+down because one camera sent something odd. `fatalError`/`precondition` is permitted only in
+`VigilRender` and `VigilVideo` setup paths where continuing would corrupt GPU state, and only with a
+`// RATIONALE:` comment. A malformed packet from one camera MUST NEVER be able to crash the app — this
+is a security property, not just robustness: these bytes come from the network.
+
+### 7.5 The reconnect state machine
+
+Owned by `StreamController` (see `spec-core.md` for the full state table, which MUST match this).
+States and the transitions that matter for retry:
+
+```
+                     ┌──────────────────────────────────────────────────────────┐
+                     │                                                          │
+                     ▼                                                          │
+ ┌──────┐  start   ┌────────────┐  addr ok   ┌────────────┐  TCP up  ┌──────────────┐
+ │ idle │─────────►│ resolving  │───────────►│ connecting │─────────►│authenticating│
+ └──────┘          └─────┬──────┘            └─────┬──────┘          └──────┬───────┘
+     ▲                   │ DNS/host fail           │ refused/timeout        │ 401 w/ new nonce
+     │                   ▼                         ▼                        │ (retry once)
+     │            ┌──────────────┐          ┌──────────────┐                ▼
+     │            │ reconnecting │◄─────────┤ reconnecting │        ┌───────────────┐
+     │            └──────┬───────┘          └──────────────┘        │  describing   │
+     │                   │ backoff elapsed                          └───────┬───────┘
+     │                   └──────────────────────────► connecting            │ SDP ok
+     │                                                                      ▼
+     │                                                              ┌───────────────┐
+     │                                                              │  settingUp    │
+     │  stop()                                                      └───────┬───────┘
+     │                                                                      │ all tracks SETUP
+     │                                                                      ▼
+ ┌────────┐   stop()   ┌─────────┐   loss > 5% for 3 s   ┌──────────┐  PLAY 200 ┌──────────┐
+ │stopped │◄───────────│ playing │──────────────────────►│ degraded │◄──────────│  playing │
+ └────────┘            └────┬────┘◄──────────────────────└──────────┘            └──────────┘
+                            │  read-idle 8 s / peer close / RTCP BYE / decode malfunction
+                            ▼
+                     ┌──────────────┐  attempts exhausted / authRejected  ┌────────┐
+                     │ reconnecting │────────────────────────────────────►│ failed │
+                     └──────────────┘                                     └────────┘
+                                                                              │ user retry
+                                                                              └──► resolving
+```
+
+#### Timings — normative
+
+| Parameter | Value | Notes |
+|---|---|---|
+| DNS/`NWEndpoint` resolve timeout | 2 s | IPs skip this state |
+| TCP connect timeout | 3 s | `NWConnection` `.waiting` for > 3 s counts as timeout |
+| RTSP `OPTIONS` timeout | 3 s | skipped if the camera is known-good from cache |
+| `DESCRIBE` timeout | 5 s | includes the 401 round trip |
+| `SETUP` timeout (per track) | 5 s | |
+| `PLAY` timeout | 5 s | |
+| First RTP packet after `PLAY` | 4 s | failure ⇒ `RTSPError.timeout(.firstPacket)`; strongly suggests UDP blocked → auto-switch to TCP once |
+| First keyframe after first packet | 6 s | failure ⇒ send keyframe request, then 6 s more, then reconnect |
+| Read-idle while playing | 8 s | no bytes at all on the RTSP socket |
+| Keepalive interval | `min(sessionTimeout / 2, 25 s)`, floor 5 s | `GET_PARAMETER`, or `OPTIONS` if the camera rejects it |
+| Backoff schedule | **0.5, 1, 2, 4, 8, 15, 30 s**, then 30 s forever | index advances per consecutive failure |
+| Jitter | **± 20 %** uniform, from injected `RandomSource` | prevents 16 cameras reconnecting in lockstep and DoS-ing a small NVR |
+| Backoff reset | after **60 s** continuously in `playing` | index → 0 |
+| Network-restored override | on `NWPath.status == .satisfied` transition, cancel the pending delay and retry **immediately** (one free attempt, index unchanged) | |
+| Wake-from-sleep override | same as network-restored, after a 1.5 s settle delay | Wi-Fi needs time to associate |
+| Max consecutive auth attempts | **2** | then `.failed(.rtsp(.authRejected))` |
+
+The delay is computed as:
+
+```swift
+func delay(forAttempt n: Int, using rng: inout some RandomSource) -> Duration {
+    let table: [Double] = [0.5, 1, 2, 4, 8, 15, 30]
+    let base = table[min(n, table.count - 1)]
+    let jitter = 1.0 + (Double(rng.next() % 40_001) / 100_000.0 - 0.20)   // 0.80 … 1.20
+    return .milliseconds(Int(base * jitter * 1000))
+}
+```
+
+#### The auth-lockout rule — cross-cutting and important
+
+Hikvision firmware **locks an account for 30 minutes after 5 consecutive failed logins** (default
+`illegalLoginLock`). A naive reconnect loop with wrong credentials will therefore lock the user out of
+their own camera, including its web UI. Therefore:
+
+* A `401` whose `WWW-Authenticate` nonce differs from the one we used, or carries `stale=true`, is
+  **not** a failed login: retry immediately, once, and it does not count as an attempt.
+* A `401` in response to a request that already carried a correct-looking `Authorization` header
+  counts as attempt 1. A second such `401` ⇒ `authRejected`, stop, **do not retry on any schedule**,
+  set the camera's UI state to "Password rejected", and require explicit user action.
+* `StreamController` and `ISAPIHTTPClient` share one per-device auth-failure counter, held by
+  `StreamCoordinator`, so RTSP and ISAPI cannot each burn attempts independently.
+* Before any reconnect on a camera whose credentials were just edited, `GET /ISAPI/Security/userCheck`
+  is used as the cheap probe (`spec-isapi.md`), because it reports lockout state and remaining
+  attempts.
+
+### 7.6 Degraded mode (not an error state)
+
+`degraded` means "showing video, but worse than it should be". Entry conditions (any):
+packet loss > 5 % over 3 s; jitter > 80 ms; decoder dropping > 10 % of frames; sustained bitrate
+< 40 % of the negotiated value; more than 2 gaps per second. Exit: all clear for 10 s. Degraded MUST
+NOT tear down the session, MUST show the UX.md packet-loss banner, and MUST be recorded in the health
+ring so the inspector graph explains what happened.
+
+---
+
+## 8. Observability
+
+### 8.1 OSLog subsystem and categories
+
+Subsystem: **`com.vigil.app`** (one subsystem, always). Categories are a fixed enum; do not invent
+strings at call sites.
+
+| Category | Used for | Default level |
+|---|---|---|
+| `app` | launch, scenes, windows, quit, migration | info |
+| `discovery` | SADP/WS-Discovery/sweep progress, merge decisions | info |
+| `rtsp` | method/status lines, session IDs (masked), state transitions | info; debug for full headers |
+| `rtp` | gaps, resets, jitter-buffer overflow (rate-limited) | error only, debug for per-packet |
+| `bitstream` | parameter-set changes, geometry changes, unsupported syntax | info |
+| `isapi` | endpoint, status, ResponseStatus codes | info |
+| `transport` | connect/disconnect, TLS, path changes, multicast | info |
+| `video` | decode session lifecycle, format changes, VT errors, budget decisions | info |
+| `render` | Metal init, pipeline compile, display changes, fallbacks | info |
+| `core` | controller state machine, coordinator policy, recording, events | info |
+| `storage` | config load/save, migrations, corruption recovery | info |
+| `ui` | user-visible errors, command-palette actions | info |
+| `perf` | signpost companions, budget breaches, frame-time p99 | info |
+
+```swift
+// VigilProtocols
+public enum LogCategory: String, Sendable, CaseIterable {
+    case app, discovery, rtsp, rtp, bitstream, isapi, transport, video, render, core, storage, ui, perf
+}
+public enum LogLevel: Int, Sendable, Comparable { case debug, info, notice, warning, error, fault }
+```
+
+### 8.2 The pure layer logs through an injected protocol
+
+The pure layer cannot `import OSLog`. It logs through:
+
+```swift
+// VigilProtocols
+public struct LogEvent: Sendable {
+    public var level: LogLevel
+    public var category: LogCategory
+    public var message: String
+    public var metadata: [String: String]     // MUST be pre-redacted by the caller
+    public var file: StaticString
+    public var line: UInt
+}
+
+public protocol LoggerProtocol: Sendable {
+    /// Cheap gate so callers can skip building strings for disabled levels.
+    func isEnabled(_ level: LogLevel, _ category: LogCategory) -> Bool
+    func log(_ event: LogEvent)
+}
+
+public extension LoggerProtocol {
+    @inline(__always)
+    func debug(_ category: LogCategory, _ message: @autoclosure () -> String,
+               _ metadata: @autoclosure () -> [String: String] = [:],
+               file: StaticString = #fileID, line: UInt = #line) {
+        guard isEnabled(.debug, category) else { return }        // no string built when disabled
+        log(LogEvent(level: .debug, category: category, message: message(),
+                     metadata: metadata(), file: file, line: line))
+    }
+    // …info, notice, warning, error, fault…
+}
+
+/// Default for tests and for code paths with no logger wired yet.
+public struct NullLogger: LoggerProtocol {
+    public init() {}
+    public func isEnabled(_: LogLevel, _: LogCategory) -> Bool { false }
+    public func log(_: LogEvent) {}
+}
+
+/// Test double: records everything so tests can assert on log content.
+/// (Lives in VigilTestKit, not here.)
+```
+
+Every pure type takes `logger: any LoggerProtocol = NullLogger()` in its initialiser. Never a global.
+
+The macOS adapter lives in `VigilCore`:
+
+```swift
+#if os(macOS)
+import OSLog
+
+public struct OSLogLogger: LoggerProtocol {
+    private static let loggers: [LogCategory: Logger] = Dictionary(
+        uniqueKeysWithValues: LogCategory.allCases.map {
+            ($0, Logger(subsystem: "com.vigil.app", category: $0.rawValue))
+        })
+    public var minimumLevel: LogLevel
+
+    public func isEnabled(_ level: LogLevel, _ category: LogCategory) -> Bool { level >= minimumLevel }
+
+    public func log(_ event: LogEvent) {
+        let logger = Self.loggers[event.category]!   // exhaustive by construction
+        let line = event.metadata.isEmpty
+            ? event.message
+            : "\(event.message) \(event.metadata.sorted(by: { $0.key < $1.key }).map { "\($0)=\($1)" }.joined(separator: " "))"
+        switch event.level {
+        case .debug:   logger.debug("\(line, privacy: .public)")
+        case .info:    logger.info("\(line, privacy: .public)")
+        case .notice:  logger.notice("\(line, privacy: .public)")
+        case .warning: logger.warning("\(line, privacy: .public)")
+        case .error:   logger.error("\(line, privacy: .public)")
+        case .fault:   logger.fault("\(line, privacy: .public)")
+        }
+    }
+}
+#endif
+```
+
+`privacy: .public` is correct **only because** §8.6 guarantees the string is already redacted. That is
+the trade: we redact at the source so diagnostics bundles are useful, instead of relying on
+`.private` and getting `<private>` in every support log.
+
+### 8.3 Signposts
+
+`OSSignposter` with the same subsystem, category `perf`. Intervals and events:
+
+| Name | Kind | Begin → End | Metadata |
+|---|---|---|---|
+| `stream.connect` | interval | `start()` → first RTP packet | camera short ID, transport |
+| `stream.firstFrame` | interval | `start()` → first frame on screen | codec, resolution |
+| `rtsp.exchange` | interval | request written → response parsed | method, status |
+| `frame.decode` | interval | `VTDecompressionSessionDecodeFrame` → output handler | pts, size, isKeyframe |
+| `frame.present` | interval | `present(_:)` → drawable presented | pts |
+| `layout.change` | interval | layout mutation → all tiles first-frame | mode, tile count |
+| `discovery.scan` | interval | scan start → complete | method, found count |
+| `frame.dropped` | event | — | stage (`preDecode`/`preDisplay`), reason |
+| `budget.denied` | event | — | cost, camera |
+| `reconnect` | event | — | attempt, delay, cause code |
+
+`stream.firstFrame` is the app's headline metric; `Scripts/bench.sh` extracts it with
+`xcrun xctrace` / `log stream --signpost` and asserts the FEATURES.md budget.
+
+### 8.4 Per-stream statistics
+
+Shape is fixed here; the update algebra (EWMA constants, jitter formula) is owned by `spec-rtp.md`.
+
+```swift
+public struct StreamStatistics: Sendable, Hashable, Codable {
+    // Throughput
+    public var framesDecoded: UInt64
+    public var framesPerSecond: Double              // EWMA
+    public var bitsPerSecond: Double                // EWMA
+    public var keyframeIntervalSeconds: Double
+    // Loss and order
+    public var packetsReceived: UInt64
+    public var packetsLost: UInt64
+    public var packetsOutOfOrder: UInt64
+    public var packetsDuplicated: UInt64
+    public var lossFraction: Double                 // over the last 2 s window
+    public var gapCount: UInt32
+    // Timing
+    public var jitterMilliseconds: Double           // RFC 3550 A.8, converted from timescale units
+    public var jitterBufferDepthPackets: Int
+    public var jitterBufferDepthMilliseconds: Double
+    public var estimatedLatencyMilliseconds: Double // capture→display estimate, RTCP-anchored
+    // Decode
+    public var decodeQueueDepth: Int
+    public var framesDroppedPreDecode: UInt64
+    public var framesDroppedPreDisplay: UInt64
+    public var decodeMillisecondsP50: Double
+    public var decodeMillisecondsP99: Double
+    public var isHardwareAccelerated: Bool
+    // Session
+    public var uptimeSeconds: Double
+    public var reconnectCount: UInt32
+    public var lastErrorCode: String?               // diagnosticCode, never a message
+}
+```
+
+Sampled at 1 Hz by `HealthMonitor` into a fixed 600-slot ring (10 minutes) per camera. The ring is a
+`struct` of a preallocated array — no allocation per sample, because 16 cameras × 1 Hz × 10 min must be
+free.
+
+### 8.5 Log volume control
+
+* Per-packet logging is compiled out of release builds: `#if DEBUG` around `.debug`-level calls on the
+  `rtp` and `rtsp` categories that fire per packet.
+* Rate limiting: `RateLimitedLogger` decorator in `VigilProtocols` — at most N events per key per
+  window (default 5 per 10 s per `(category, callsite)`), with a `"… suppressed \(k) similar"` summary.
+  Every repeated-error path (jitter overflow, bad data, gap) MUST be wrapped in it.
+* Log level is user-settable in Settings → Advanced (`debug`/`info`/`error`), persisted, and applied by
+  swapping `OSLogLogger.minimumLevel` at the injection site.
+
+### 8.6 Redaction — hard rules
+
+Never log, in any form, at any level, in release or debug:
+
+| Item | Rule |
+|---|---|
+| Passwords | never, not even lengths. `Credential` has `var description: String { "Credential(user: \(user), password: <redacted>)" }` and `CustomDebugStringConvertible` doing the same. |
+| `Authorization` / `WWW-Authenticate` header values | log only the scheme and the realm; `response=` and `cnonce=` are elided. |
+| RTSP `Session:` IDs | last 4 characters only: `…A31F`. |
+| Camera serial numbers | first 2 + last 2: `DS…9K`. |
+| URLs | strip userinfo; keep scheme/host/port/path. `URL.redactedForLogging`. |
+| MAC addresses | last octet only in `info`; full only at `debug`. |
+| Keychain data | never; log `OSStatus` codes only. |
+| Snapshot/recording file paths | log the filename, not the user's directory tree. |
+
+`VigilProtocols` provides `String.redactingSecrets()` (regex-driven, covers `password=`, `pwd=`,
+`response=`, `Basic <b64>`) and the diagnostics bundle runs it over collected logs a **second** time as
+defence in depth.
+
+---
+
+## 9. Persistence
+
+### 9.1 Locations
+
+| What | Path | Format |
+|---|---|---|
+| Library (cameras, groups, layouts, bookmarks) | `~/Library/Application Support/Vigil/library.json` | JSON, `schemaVersion` |
+| Previous good copy | `~/Library/Application Support/Vigil/library.bak.json` | JSON |
+| Quarantined corrupt copy | `…/Vigil/Corrupt/library-<ISO8601>.json` | JSON |
+| Events (last 5000) | `…/Vigil/events.json` | JSON, separate file so a big event log never risks the library |
+| Thumbnail cache | `~/Library/Caches/com.vigil.app/thumbnails/<uuid>.heic` | evictable, never backed up |
+| Logs export | user-chosen, via save panel | `.zip` |
+| Snapshots | user-chosen folder, default `~/Pictures/Vigil` | PNG/JPEG/HEIC |
+| Recordings | user-chosen folder, default `~/Movies/Vigil` | MP4/MOV |
+| Secrets | Keychain, `kSecClassInternetPassword` | — |
+| UI-only preferences (window frames, sidebar width, last layout, appearance) | `UserDefaults` suite `com.vigil.app` | — |
+
+**Sandbox note:** because the app is sandboxed (§13.4), the Snapshots and Recordings folders are
+reached through **security-scoped bookmarks**. The bookmark `Data` (base64) is stored in
+`library.json` under `folderBookmarks`, resolved at launch with
+`URL(resolvingBookmarkData:options:.withSecurityScope,…)`, and wrapped in
+`startAccessingSecurityScopedResource()` / `stopAccessing…` pairs. Storing a bare path string is
+forbidden — it will silently fail to write. This is a cross-cutting rule for `spec-core.md`.
+
+### 9.2 Atomic write
+
+```swift
+// actor ConfigStore
+private func writeAtomically(_ document: LibraryDocument) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]   // stable diffs; the file is git-able
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(document)
+
+    let dir = Self.supportDirectory
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    // 1. Rotate current -> .bak (best effort; a missing current is fine on first run).
+    if FileManager.default.fileExists(atPath: url.path) {
+        try? FileManager.default.removeItem(at: backupURL)
+        try? FileManager.default.copyItem(at: url, to: backupURL)
+    }
+
+    // 2. Write to a sibling temp file in the SAME volume, then atomically swap.
+    let temp = dir.appendingPathComponent("library-\(UUID().uuidString).tmp")
+    try data.write(to: temp, options: [.atomic])
+    _ = try FileManager.default.replaceItemAt(url, withItemAt: temp,
+                                             backupItemName: nil,
+                                             options: [.usingNewMetadataOnly])
+    // replaceItemAt removes `temp` on success. On throw, clean up.
+}
+```
+
+Saves are **debounced 500 ms** and coalesced: `ConfigStore.markDirty()` restarts a 500 ms timer task;
+at most one write is in flight. `ConfigStore.flush()` is awaited on quit, on
+`applicationWillTerminate`, and before any export. A write is never skipped because of debounce — the
+final state always lands.
+
+### 9.3 Schema versioning and migration
+
+```swift
+public struct LibraryDocument: Codable, Sendable {
+    public static let currentSchemaVersion = 1
+    public var schemaVersion: Int
+    public var cameras: [Camera]
+    public var groups: [CameraGroup]
+    public var layouts: [Layout]
+    public var bookmarks: [Bookmark]
+    public var folderBookmarks: [String: Data]
+    public var settings: PersistedSettings
+    public var updatedAt: Date
+}
+
+protocol Migration: Sendable {
+    var from: Int { get }
+    var to: Int { get }
+    /// Operates on a loosely-typed JSON tree so old shapes need no retained Swift types.
+    func migrate(_ json: inout [String: Any]) throws
+}
+```
+
+Load algorithm:
+
+1. Read bytes. Decode `{"schemaVersion": Int}` only (a tiny `VersionProbe: Decodable`).
+2. `version > currentSchemaVersion` → throw `StorageError.schemaTooNew`. **Do not** write anything;
+   show "This library was created by a newer version of Vigil." and open read-only. Silently
+   downgrading destroys user data.
+3. `version < current` → decode to `[String: Any]` via `JSONSerialization`, apply the migration chain
+   in ascending order (`1→2`, `2→3`, …) — never a jump table, always the chain, so every path is
+   exercised — re-serialise, decode into `LibraryDocument`, write immediately, log at `notice`.
+4. `version == current` → decode directly.
+5. Any decode failure → try `library.bak.json` (same algorithm). Success ⇒ log `warning`, notify the
+   user once ("Recovered your camera list from a backup.").
+6. Both fail ⇒ move both to `Corrupt/`, start empty, show a non-modal recovery banner offering
+   "Reveal corrupted file in Finder". **Never silently start empty without telling the user.**
+
+Migration tests are mandatory: `Tests/VigilCoreTests/Fixtures/library-v1.json`, `-v2.json`, … each with
+a test that migrates it to current and asserts the resulting `LibraryDocument`. Every schema bump adds
+a fixture in the same commit.
+
+### 9.4 Why JSON and not SwiftData/CoreData
+
+| Reason | Detail |
+|---|---|
+| Diffable and inspectable | users and support can read and hand-edit the file; it survives in git |
+| No store-migration risk | CoreData lightweight migration failing in the field leaves users with no cameras; our chain is plain code with fixtures |
+| Trivially exportable | the export/import feature (FEATURES.md) is `cp` plus redaction |
+| Correct scale | a big deployment is ~200 cameras; the document is < 200 KB and loads in < 5 ms |
+| No dependency on a framework's threading model | `ConfigStore` is one actor; no `NSManagedObjectContext` confinement rules |
+
+**When we would change:** past ~10 000 records, or when events need range queries, we move *events*
+(not the library) to SQLite via the built-in `libsqlite3` C API — still zero SPM dependencies. The
+library document itself stays JSON.
+
+---
+
+## 10. Testing strategy
+
+### 10.1 What runs where
+
+| Target | Linux CI | macOS CI | Notes |
+|---|---|---|---|
+| `VigilProtocolsTests` | ✅ | ✅ | MD5 RFC 1321 vectors, bit/byte readers, `MediaTimestamp` algebra, redaction |
+| `VigilBitstreamTests` | ✅ | ✅ | real base64 SPS/PPS from Hikvision cameras → expected geometry; avcC/hvcC byte-exact |
+| `VigilRTSPTests` | ✅ | ✅ | message parse/serialise, Digest vectors, SDP corpus, interleaved desync recovery, state machine transcripts |
+| `VigilRTPTests` | ✅ | ✅ | FU-A/FU reassembly, STAP-A/AP, AU boundaries, seq wrap, jitter buffer, RFC 3550 jitter |
+| `VigilISAPITests` | ✅ | ✅ | XML corpus per firmware; `HTTPTransporting` fake — **no sockets** |
+| `VigilDiscoveryTests` | ✅ | ✅ | recorded SADP/WS-Discovery bytes, CIDR maths, merge/dedupe |
+| `VigilPipelineTests` | ✅ | ✅ | **the end-to-end pure pipeline against `SyntheticCamera`** |
+| `VigilTransportTests` | ⬜ | ✅ | `NWListener` on `127.0.0.1` hosting `SyntheticRTSPServer`; TLS; path changes |
+| `VigilVideoTests` | ⬜ | ✅ | real `VTDecompressionSession` on golden clips; format change; budget policy |
+| `VigilRenderTests` | ⬜ | ✅ | Metal pipeline compile, YUV→RGB reference-image comparison, SAR/crop geometry |
+| `VigilCoreTests` | ⬜ | ✅ | controller state machine with fakes, migrations, Keychain (a dedicated test keychain), recorder |
+| `VigilUITests` | ⬜ | ✅ | snapshot tests of components in both appearances; token contrast assertions |
+
+Coverage floors, enforced by `Scripts/coverage.sh`: **90 %** lines for every pure target, **70 %** for
+macOS targets. A pure target below 90 % fails CI.
+
+### 10.2 `VigilTestKit` — the synthetic camera
+
+This is the most important test asset in the repository. It makes the entire pure pipeline testable
+with **no camera, no sockets, no Mac, and no wall clock**, and it is what lets us assert behaviour on
+the failure modes real Hikvision firmware exhibits.
+
+Design principle: the synthetic server is a **pure byte function**, not a network service.
+
+```swift
+// Sources/VigilTestKit/SyntheticCamera.swift
+
+/// Everything about the camera we are pretending to be.
+public struct SyntheticCameraProfile: Sendable {
+    public enum Model: Sendable {
+        case ipCamera(model: String)      // e.g. "DS-2CD2143G2-I": 1 video track, optional audio
+        case nvr(channels: Int)           // e.g. DS-7608: /Streaming/Channels/{ch}01
+        case analogEncoder                // interlaced, 704x576
+    }
+    public var model: Model
+    public var firmware: String                      // affects header casing and SDP extras
+    public var videoCodec: VideoCodec                // .h264 | .h265 | .mjpeg
+    public var audioCodec: AudioCodec?               // nil = video only
+    public var width: Int, height: Int
+    public var frameRate: Double                     // 25, 30, 12.5, 20…
+    public var gopLength: Int                        // frames between IRAPs
+    public var bitrateKbps: Int
+    public var authMode: AuthMode                    // .none | .basic | .digestQopAuth | .digestNoQop
+    public var username: String, password: String
+    public var sessionTimeoutSeconds: Int            // advertised in SETUP
+    public var supportsGetParameter: Bool
+    public var quirks: Set<Quirk>
+    public var seed: UInt64                          // drives ALL randomness; print it on failure
+
+    public static func ds2cd2143g2(seed: UInt64 = 0xVIGIL) -> Self
+    public static func ds7608nvr(channels: Int = 8, seed: UInt64 = 0xVIGIL) -> Self
+    public static func hevcCamera(seed: UInt64 = 0xVIGIL) -> Self
+    public static func mjpegCamera(seed: UInt64 = 0xVIGIL) -> Self
+}
+```
+
+#### Quirks — the fault-injection vocabulary
+
+Each quirk reproduces something a real Hikvision device or network actually does. Tests name the
+quirk, so a failure report reads like a bug report.
+
+```swift
+public enum Quirk: Hashable, Sendable {
+    // ── RTSP / transport shape ──────────────────────────────────────────────
+    case slowDrip(bytesPerRead: Int)          // TCP delivers 7 bytes at a time; parser must accumulate
+    case splitInterleavedHeader               // the 4-byte $ header straddles two reads
+    case responseAndMediaInSameRead           // an RTSP 200 and an RTP frame in one TCP segment
+    case jumboHeader(bytes: Int)              // 64 KB of headers; must hit headerTooLarge, not OOM
+    case missingContentLength                 // body must be read to connection close
+    case crOnlyLineEndings                    // firmware that emits \r instead of \r\n
+    case lowercaseHeaderNames                 // "cseq:" instead of "CSeq:"
+    case extraSDPAttributes                   // a=Media_header, a=appversion, unknown a= lines
+    case truncatedSDP
+    case absoluteControlURL                   // a=control: rtsp://<other-host>/track1
+    case noContentBase                        // control URL must resolve against the request URI
+    case tcpHalfClose(afterBytes: Int)
+    case garbageBeforeResponse(bytes: Int)    // forces interleave resynchronisation
+    // ── Auth ────────────────────────────────────────────────────────────────
+    case digestStaleNonce(afterRequests: Int) // 401 stale=TRUE mid-session
+    case rotateNonceEveryRequest
+    case wrongPasswordAlways                  // asserts we stop at 2 attempts, never 5
+    case accountLocked(retryAfterSeconds: Int)
+    // ── RTP ─────────────────────────────────────────────────────────────────
+    case unreliableMarkerBit                  // marker set on random packets, cleared on real AU ends
+    case packetLoss(rate: Double)             // 0.0…1.0, deterministic from seed
+    case reorder(windowPackets: Int)
+    case duplicate(rate: Double)
+    case sequenceWrapSoon                     // start seq at 65_500
+    case timestampWrapSoon                    // start RTP ts at 0xFFFF_F000
+    case startMidGOP                          // first packets are non-IRAP slices; must drop to IRAP
+    case parameterSetsOnlyInBand              // no sprop-parameter-sets in SDP
+    case parameterSetsOnlyInSDP               // never repeated in band
+    case midStreamResolutionChange(atFrame: Int, newWidth: Int, newHeight: Int)
+    case aggregationPackets                   // STAP-A (H.264) / AP (H.265) heavy
+    case donlPresent(maxDonDiff: Int)         // H.265 DONL field present
+    case rtcpByeAfter(seconds: Double)
+    case noRTCP
+    case audioInterleavedOutOfOrder
+}
+```
+
+#### The server API
+
+```swift
+/// A Hikvision camera that exists only as a function from client bytes to server bytes.
+///
+/// No sockets. No threads. No clock. Drive it from a test loop; every run is byte-identical for a
+/// given `profile.seed`.
+public struct SyntheticRTSPServer: Sendable {
+
+    public init(profile: SyntheticCameraProfile)
+
+    /// Feed bytes the client wrote. Returns bytes the server writes back **immediately**
+    /// (responses only; media comes from `tick`). May return empty.
+    public mutating func ingest(_ bytes: Data) -> Data
+
+    /// Advance the virtual clock to `nowNanos`. Returns interleaved media/RTCP bytes that the
+    /// camera would have sent by now, honouring `frameRate`, `gopLength` and every quirk.
+    /// Idempotent for a non-advancing `now`.
+    public mutating func tick(nowNanos: UInt64) -> Data
+
+    /// Inspection for assertions.
+    public var receivedRequests: [RTSPRequest] { get }
+    public var state: SyntheticSessionState { get }   // .init, .described, .setUp, .playing, .torndown
+    public var sentFrameCount: Int { get }
+    public var advertisedSDP: String { get }
+    public var groundTruth: GroundTruth { get }
+}
+
+/// What the server *intended* to send — the oracle every pipeline test compares against.
+public struct GroundTruth: Sendable {
+    public var frames: [ExpectedFrame]
+    public var parameterSets: ParameterSets
+    public var geometry: (width: Int, height: Int, sarNum: Int, sarDen: Int, fps: Double)
+    public var injectedPacketLosses: [UInt16]          // RTP sequence numbers actually dropped
+    public var expectedRecoverableFrameLosses: Int     // frames the client is allowed to miss
+}
+
+public struct ExpectedFrame: Sendable, Hashable {
+    public var index: Int
+    public var pts: MediaTimestamp
+    public var isKeyframe: Bool
+    public var nalTypes: [UInt8]
+    public var byteCount: Int
+    public var payloadChecksum: UInt32     // CRC-32 of the length-prefixed AU we generated
+}
+```
+
+#### The RTP generator
+
+```swift
+/// Produces RFC 6184 / RFC 7798 / RFC 3640 / G.711 packet streams from synthetic access units.
+public struct RTPStreamGenerator: Sendable {
+    public init(profile: SyntheticCameraProfile, ssrc: UInt32, startSequence: UInt16,
+                startTimestamp: UInt32)
+
+    /// One access unit, already fragmented/aggregated per the profile's MTU and quirks.
+    public mutating func nextAccessUnit(nowNanos: UInt64) -> [RTPPacketBytes]
+
+    public mutating func receiverReportDue(nowNanos: UInt64) -> Data?
+    public mutating func senderReport(nowNanos: UInt64) -> Data      // with NTP for clock mapping
+    public var mtu: Int { get set }                                  // default 1400
+}
+
+/// Two tiers of payload realism. Pick per test; the API is identical.
+public enum PayloadRealism: Sendable {
+    /// Syntactically valid NALs (real SPS/PPS/VPS built with BitWriter; slices with valid headers
+    /// and filler payload). Parses correctly; will NOT decode to an image. Linux-safe, fast,
+    /// and sufficient for every pure test.
+    case syntactic
+    /// Real captured GOPs from `Tests/Fixtures/Clips/*.vgclip`. Decodes on a Mac. Used by
+    /// VigilVideoTests and VigilRenderTests.
+    case recorded(clip: String)
+}
+```
+
+The `syntactic` tier is what makes this work on Linux: `SyntheticEncoder` builds a **real, spec-valid**
+H.264 SPS/PPS (and H.265 VPS/SPS/PPS) with `BitWriter` from the profile's width/height/fps, so
+`VigilBitstream` parses it and derives exactly the geometry in `GroundTruth`. Slice NALs carry a valid
+`first_mb_in_slice`/`slice_type`/`pic_parameter_set_id` prefix followed by pseudorandom filler sized to
+hit `bitrateKbps`. Nothing in the pure pipeline needs the residual data to be decodable — and the AU
+boundary tests specifically need `first_mb_in_slice == 0` to be *real*, which it is.
+
+#### The harness
+
+```swift
+/// Wires SyntheticRTSPServer ↔ RTSPSessionMachine ↔ demux ↔ JitterBuffer ↔ Depacketizer
+/// and runs the whole thing on a virtual clock, with an in-memory "wire".
+public struct PipelineHarness: Sendable {
+
+    public init(profile: SyntheticCameraProfile,
+                clientConfiguration: RTSPConfiguration = .default,
+                realism: PayloadRealism = .syntactic,
+                logger: any LoggerProtocol = RecordingLogger())
+
+    /// Run until `frames` access units have been delivered, or `virtualTimeout` elapses.
+    /// Advances the virtual clock in `stepNanos` increments (default 1 ms).
+    public mutating func run(untilFrames frames: Int,
+                             virtualTimeout: Duration = .seconds(30),
+                             stepNanos: UInt64 = 1_000_000) throws -> HarnessReport
+
+    /// Run for a fixed span of virtual time (for loss/degradation tests).
+    public mutating func run(forVirtualTime span: Duration) throws -> HarnessReport
+
+    /// Deliberately partition the wire, to test read-idle and reconnect.
+    public mutating func partitionWire(forVirtualTime span: Duration)
+    public mutating func closeWire()
+}
+
+public struct HarnessReport: Sendable {
+    public var frames: [EncodedFrame]
+    public var statistics: StreamStatistics
+    public var groundTruth: GroundTruth
+    public var rtspRequests: [RTSPRequest]
+    public var rtspResponses: [RTSPResponse]
+    public var events: [RTSPEvent]
+    public var logEvents: [LogEvent]
+    public var peakBufferedBytes: Int          // asserts we never buffer unboundedly
+    public var virtualElapsed: Duration
+    public var clientErrors: [VigilError]
+
+    // Convenience assertions used by tests.
+    public func assertFramesMatchGroundTruth(allowingLoss: Bool) throws
+    public func assertMonotonicPTS() throws
+    public func assertFirstFrameIsKeyframe() throws
+    public func assertNoUnboundedGrowth(limitBytes: Int) throws
+}
+```
+
+#### The mandatory test matrix
+
+`VigilPipelineTests` MUST contain at least one test per row. Each is parameterised over
+`[.h264, .h265]` and over `[.digestQopAuth, .digestNoQop, .basic]` where relevant.
+
+| # | Scenario | Assertion |
+|---|---|---|
+| 1 | Happy path, IP camera, TCP interleaved, 100 frames | frames == ground truth, checksums match, first frame is keyframe, PTS monotonic, loss 0 |
+| 2 | Happy path, H.265 with VPS | `ParameterSets.vps.count == 1`, geometry matches conformance-window maths |
+| 3 | NVR channel 3 substream | request URI is `/Streaming/Channels/302`, session established |
+| 4 | `slowDrip(bytesPerRead: 7)` | identical result to #1 |
+| 5 | `splitInterleavedHeader` + `responseAndMediaInSameRead` | identical to #1 |
+| 6 | `jumboHeader(bytes: 65_536)` | throws `RTSPError.headerTooLarge`; `peakBufferedBytes < 128 KB` |
+| 7 | `garbageBeforeResponse(bytes: 999)` | resynchronises; ≤ 1 frame lost; logs one `interleaveDesync(recovered: true)` |
+| 8 | `digestStaleNonce(afterRequests: 3)` | re-authenticates, session continues, auth attempt counter stays 0 |
+| 9 | `wrongPasswordAlways` | exactly **2** authenticated requests are sent, then `authRejected`; **never 5** |
+| 10 | `accountLocked` | surfaces `ISAPIError.accountLocked`, no retry |
+| 11 | `packetLoss(rate: 0.02)` | frames == ground truth minus `expectedRecoverableFrameLosses`; `lossFraction` within ±0.5 % of 2 %; recovery to a keyframe within one GOP |
+| 12 | `reorder(windowPackets: 8)` | zero frame loss (jitter buffer reorders); `packetsOutOfOrder > 0` |
+| 13 | `duplicate(rate: 0.05)` | zero duplicate frames emitted; `packetsDuplicated > 0` |
+| 14 | `unreliableMarkerBit` | frame count exactly matches ground truth — proves slice-header AU detection |
+| 15 | `sequenceWrapSoon` running past 65 535 | no loss, no reset |
+| 16 | `timestampWrapSoon` running past 2³² | PTS remains monotonic after unwrapping |
+| 17 | `startMidGOP` | all frames before the first IRAP are dropped; first delivered frame is a keyframe |
+| 18 | `parameterSetsOnlyInBand` | geometry derived from in-band SPS; first frame still a keyframe |
+| 19 | `parameterSetsOnlyInSDP` | decoding config comes from `sprop-parameter-sets` |
+| 20 | `midStreamResolutionChange(atFrame: 50, …)` | a second `ParameterSets` is attached at the boundary frame; no frames lost around it |
+| 21 | `aggregationPackets` | STAP-A/AP correctly split into separate NALs |
+| 22 | `donlPresent(maxDonDiff: 1)` | H.265 FU DONL parsed, frames intact |
+| 23 | AAC audio alongside video | audio AUs have correct timescale; ADTS/ASC derived from `config=1210` |
+| 24 | G.711 PCMA audio | 160-sample packets at 8 kHz, PTS spacing 20 ms |
+| 25 | `rtcpByeAfter(seconds: 5)` | client observes `closed`, transitions to `reconnecting` |
+| 26 | `noRTCP` | latency estimate falls back to arrival-time heuristic; no error |
+| 27 | `tcpHalfClose(afterBytes: 50_000)` | `TransportError.peerClosed`, backoff attempt 0 = 0.5 s ±20 % |
+| 28 | `partitionWire(forVirtualTime: .seconds(10))` | read-idle fires at 8 s ±100 ms |
+| 29 | `crOnlyLineEndings`, `lowercaseHeaderNames`, `extraSDPAttributes` | identical to #1 |
+| 30 | `absoluteControlURL`, `noContentBase` | control URL resolution matches `spec-rtsp.md` precedence |
+| 31 | 30-minute virtual soak at 30 fps (54 000 frames) | `peakBufferedBytes` bounded; no growth in retained frames; runs in < 20 s wall clock |
+| 32 | Fuzz: 2 000 iterations of random byte mutation of a valid transcript, seeded | never throws anything but a `VigilError`; never hangs; never allocates > 4 MB |
+
+Test #31 and #32 are the reason the harness must be a pure function of virtual time: they are
+impossible to run in CI otherwise.
+
+#### macOS bridge
+
+For `VigilTransportTests`, the same `SyntheticRTSPServer` is wrapped in a real socket:
+
+```swift
+#if os(macOS)
+/// Hosts a SyntheticRTSPServer on 127.0.0.1 with an OS-assigned port, so the real
+/// NWConnection-based RTSPConnection can be tested against the same fixture and quirks.
+public actor LoopbackRTSPListener {
+    public init(profile: SyntheticCameraProfile) throws
+    public var port: UInt16 { get }
+    public func start() throws
+    public func stop()
+    public var groundTruth: GroundTruth { get }
+}
+#endif
+```
+
+Note the payoff: a quirk written once is exercised by both the pure harness and the real socket path.
+
+### 10.3 Golden fixture formats
+
+| Extension | Contents | Used by |
+|---|---|---|
+| `.rtsptranscript` | UTF-8 text; lines prefixed `C> ` / `S> ` for direction, `\r\n` escaped as `\\r\\n`, `#` comments | `VigilRTSPTests` |
+| `.sdp` | raw SDP as captured | `VigilRTSPTests` |
+| `.vrtp` | binary: `"VRTP"` magic, `u8` version, then records of `u64` monotonic-ns + `u16` length + payload | `VigilRTPTests` |
+| `.vgclip` | binary: `"VGCL"` magic, `u8` version, `u8` codec, `u16`×2 dimensions, `u32` fps×1000, parameter-set block, then `u32` length + `u64` pts records of length-prefixed AUs | `VigilVideoTests`, `VigilRenderTests` |
+| `.xml` | ISAPI responses, one file per endpoint per firmware, named `deviceInfo-5.5.82.xml` | `VigilISAPITests` |
+| `.sadp` / `.wsd` | raw UDP payload bytes | `VigilDiscoveryTests` |
+
+`VigilTestKit` provides readers and writers for all of these, plus `Fixtures.url(named:in:)` which
+resolves through `Bundle.module` and works identically on Linux and macOS.
+
+### 10.4 Test style
+
+* Swift Testing: `@Test`, `#expect`, `#require`, `@Test(arguments:)` for parameterisation,
+  `@Suite(.serialized)` only where an actual shared resource forces it (the test keychain).
+* Every test that involves randomness prints the seed in the failure message:
+  `#expect(x == y, "seed=\(profile.seed)")`.
+* `.timeLimit(.minutes(1))` on every test; the soak test gets `.minutes(3)`.
+* No test may touch the network, the user's keychain, `~/Library/Application Support/Vigil`, or sleep
+  on a real clock. `Scripts/lint.sh` greps test sources for `Thread.sleep`, `URLSession.shared`, and
+  the real support-directory path.
+* macOS Keychain tests use a dedicated file-based keychain created in a temp directory and deleted in
+  a `deinit`/teardown; they never write to the login keychain.
+
+---
+
+<!-- PART3 -->

@@ -1039,3 +1039,582 @@ Export Clip
 - Export never blocks playback; it runs on a background `Task` with `.utility` priority.
 
 ---
+
+## 8. Discovery & add camera
+
+### 8.1 Wireframe (the discovery sheet / window body)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Add Cameras                                                            ✕    │
+│  ●━━━━━━━━●━━━━━━━━○━━━━━━━━○   Scan · Select · Sign in · Channels           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ⟳ Scanning 192.168.1.0/24 …  found 7 devices          [ Stop ]  [ Manual ] │
+│   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░  198 / 254 hosts · SADP ✓ · ONVIF ✓        │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │ ☑  DS-2CD2143G2-I      192.168.1.64    Hikvision   4 ch   V5.7.3  ✓    │  │
+│  │      Front hallway dome · MAC c4:2f:90:… · activated                   │  │
+│  ├────────────────────────────────────────────────────────────────────────┤  │
+│  │ ☑  DS-7608NI-K2/8P     192.168.1.10    NVR         8 ch   V4.30.0 ✓    │  │
+│  │      NVR · 6 channels online, 2 empty                                  │  │
+│  ├────────────────────────────────────────────────────────────────────────┤  │
+│  │ ☐  DS-2CD2043G0-I      192.168.1.71    Hikvision   1 ch   V5.5.8  ⚠    │  │
+│  │      Not activated — set a password before use            [ Activate ] │  │
+│  ├────────────────────────────────────────────────────────────────────────┤  │
+│  │ ☐  IPC-HFW2431         192.168.1.88    ONVIF only  1 ch   —       ⓘ    │  │
+│  │      Not a Hikvision device — will use the ONVIF fallback              │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│  ☑ Select all reachable            7 found · 2 selected                      │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Credentials for the selected devices                                        │
+│  User [ admin              ]  Password [ ••••••••••  ]  ☑ Remember in Keychain│
+│  ○ Use the same for all      ● Ask per device                                │
+│  Transport [ Auto ▾ ]   RTSP port [ 554 ]   HTTP port [ 80 ]   ☐ Use TLS     │
+│                                            ⓘ Tested 192.168.1.64 — signed in │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  [ Import CSV… ]                                  [ Back ]  [ Test ]  [ Add ]│
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Flow
+
+`DiscoveryRootView(presentation: .window | .sheet)` — the same view is a `Window` (⇧⌘N, File ▸
+Discover Cameras…) and a `.sheet` presented over the first-run empty state. Four steps in a
+`PhaseAnimator`-driven horizontal pager; steps are non-linear (you may jump back), and the progress
+dots at the top are clickable for completed steps.
+
+**Step 0 — Local network permission pre-explain (first run only).** macOS 14 prompts for local
+network access on our first multicast send. We show a 380 pt card *before* triggering it:
+`discovery.permission.title` / `.body` / primary `Continue` / secondary `Add manually instead`. If
+the user has previously denied it, the scan step shows an inline strip with a
+`Open System Settings` button (`x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork`)
+and the manual-add path remains fully functional.
+
+**Step 1 — Scan.** Three probes run concurrently (`VigilDiscovery`):
+
+| Probe | Wire | Progress contribution |
+|---|---|---|
+| SADP | UDP multicast `239.255.255.255:37020` broadcast + listen `37020` | instant hits, 0–2 s |
+| ONVIF WS-Discovery | UDP multicast `239.255.255.250:3702` `Probe` | instant hits, 0–3 s |
+| Subnet sweep | TCP connect to `:554`, `:80`, `:8000` across the interface CIDR (≤ /22), 64-way concurrency | the determinate bar (`n / total hosts`) |
+
+Scan animation: a 2 pt accent sweep line traverses the results panel once per 1.6 s while scanning
+(`PhaseAnimator`, `reduceMotion` → a static indeterminate bar). Each new device row springs in
+(scale 0.96→1, opacity, `VTheme.Motion.standard`) at the top and the list re-sorts by IP after a
+600 ms settle so rows do not jump under the cursor. Rows already added to the library appear dimmed
+with an `Added` badge and are unselectable.
+
+Narration under the progress bar, updated live: `"SADP ✓ · ONVIF ✓ · sweeping 198/254"`. Scanning
+never blocks the Add button — a manually typed device can be added while the sweep runs.
+
+**Step 2 — Select.** Row anatomy: checkbox · model (Headline) · IP (Mono, Caption1) · kind chip
+(`Hikvision` / `NVR` / `ONVIF only`) · channel count · firmware · status glyph. Second line:
+device name / channel summary / warning with an inline action. Multi-select via checkboxes, ⇧-click
+ranges, ⌘A select all reachable.
+
+**Step 3 — Sign in.** Shared credentials by default, `Ask per device` for mixed passwords. `Test`
+runs the credential probe against every selected device concurrently (max 8) and annotates each row
+with a result glyph + one-line reason (§8.4). `Add` is enabled as soon as ≥ 1 device tests
+successfully; devices that failed stay in the list with their reason so the user can fix them.
+
+**Step 4 — Channels (NVR/DVR only).** For each selected NVR we enumerate channels
+(`/ISAPI/ContentMgmt/InputProxy/channels` + `/ISAPI/Streaming/channels`) and show a checkbox list:
+
+```
+DS-7608NI-K2/8P · 192.168.1.10                    ☑ Select all online (6)
+  ☑ 1  Front Door      1920×1080  H.265  online
+  ☑ 2  Back Yard       1920×1080  H.265  online
+  ☐ 3  —               —          —      no signal
+  ☑ 4  Side Gate       1280×720   H.264  online
+  Name imported cameras as  [ {device} · {channelName} ▾ ]
+```
+
+Naming templates: `{channelName}`, `{device} · {channelName}`, `{device} CH{channel}`, `Custom…`.
+Channels with no signal are unchecked by default but still addable (they will show "offline").
+
+**Bulk add** commits atomically: one `ConfigStore` transaction, one Keychain write per distinct
+credential, then the Discovery window closes and the main window shows a toast
+`discovery.added.body` with an `Undo` action (5 s window, backed by `UndoManager`). New cameras are
+appended to the sidebar with a 3-frame accent flash and the first 4 are auto-assigned to empty
+Stage cells.
+
+### 8.3 Manual add form
+
+Reachable from `＋` ▸ Add Manually…, ⌘N, or Discovery ▸ `Manual`. A 420 pt form; **Test** is always
+enabled, **Add** is enabled when host + credentials are non-empty (we never require a successful
+test — some cameras only answer once recording, and blocking the user is worse than a bad row).
+
+| Field | Type | Default | Validation |
+|---|---|---|---|
+| Name | text | auto-filled from the device after a successful test, else `"Camera {n}"` | non-empty after trim |
+| Host | text | — | IPv4 / IPv6 / hostname; live-validated; paste of `rtsp://user:pass@host:554/Streaming/Channels/101` **auto-parses into every field** (a genuinely delightful touch, and the fastest path for advanced users) |
+| RTSP port | number stepper | 554 | 1–65535 |
+| HTTP port | number stepper | 80 (443 when TLS on) | 1–65535 |
+| Use TLS | toggle | off | on ⇒ HTTP port defaults to 443 |
+| Username | text | `admin` | non-empty |
+| Password | secure field with a reveal eye | — | ≥ 1 char; strength not judged (it's the camera's) |
+| Channel | number stepper | 1 | 1–64; helper text shows the resolved RTSP path |
+| Stream | segmented Main / Sub / Third / Auto | Auto | — |
+| Transport | segmented Auto / TCP / UDP | Auto | Auto = TCP first, UDP on failure |
+| Group | picker + New Group… | None | — |
+| Colour tag | 6 swatches + None | None | — |
+| Advanced ▸ | disclosure: custom RTSP path override, ONVIF-only mode, keepalive interval, "Ignore certificate errors (this device)" | — | the path override shows the computed default as placeholder: `/Streaming/Channels/101` |
+
+Helper text under Channel, always live: `rtsp://192.168.1.64:554/Streaming/Channels/101` with the
+password never shown.
+
+### 8.4 Credential test — distinct failure reasons
+
+`Test` runs the `Stream Doctor` prefix sequence (`spec-core.md`): TCP 80/554 → RTSP `OPTIONS` →
+ISAPI `GET /ISAPI/System/deviceInfo` with Digest → RTSP `DESCRIBE` with Digest → SDP codec check.
+The UI must never say "failed" without a cause and a next step.
+
+| Detected condition | Signal | Row glyph | Message key | Primary fix offered |
+|---|---|---|---|---|
+| Signed in | 200 + deviceInfo | ✓ green | `test.ok.body` | — |
+| Wrong password | HTTP 401 with `<subStatusCode>badAuthentication` / RTSP 401 after a fresh nonce | ✕ red | `error.auth.wrongPassword.*` | focus the password field, offer `Show password` |
+| Wrong user name | 401 + `userNotExist` | ✕ red | `error.auth.unknownUser.*` | focus user field |
+| Locked out | 401 + `userLocked` / `Device Locked` | ⏱ red | `error.auth.locked.*` (includes the remaining minutes when reported) | `Try again in {n} min`, `Unlock via web UI` |
+| Not activated | 401 + `notActivated`, or SADP flag `activated=false` | ⚠ amber | `error.notActivated.*` | `Activate…` (sets the first password via `/ISAPI/System/activate`) |
+| Unreachable | TCP connect timeout (3 s) / `ECONNREFUSED` / no route | ○ grey | `error.unreachable.*` | `Check the address`, `Rescan` |
+| Reachable but no ISAPI | 404/405 on deviceInfo, or non-XML body | ⓘ blue | `error.notHikvision.*` | `Use ONVIF fallback` toggle |
+| TLS not trusted | `NWError` TLS `errSSLXCertChainInvalid` / self-signed | 🔒 amber | `error.tlsUntrusted.*` | `Trust this device` (pins the SPKI hash for this camera only) |
+| RTSP port closed but HTTP open | 554 refused, 80 ok | ⚠ amber | `error.rtspBlocked.*` | `Try port 8554`, `Use TCP`, `Check the device's RTSP setting` |
+| Unsupported codec | SDP has neither H.264/H.265/MJPEG | ⚠ amber | `error.codecUnsupported.*` | `Switch this channel to H.264 in the web UI` |
+| Wrong channel | DESCRIBE 404 on the path | ⚠ amber | `error.channelMissing.*` | `Detect channels` |
+| Too many streams on device | RTSP 453 / `Not Enough Bandwidth` | ⚠ amber | `error.deviceBusy.*` | `Use the sub-stream`, `Retry` |
+
+Every reason renders as a single sentence in the row plus a `Details` disclosure with the raw
+status line (redacted) for support. Failure never produces a modal alert during discovery.
+
+### 8.5 CSV import
+
+- File ▸ Import Cameras from CSV… (⇧⌘I) or the `Import CSV…` button. `NSOpenPanel` limited to
+  `UTType.commaSeparatedText`, `UTType.tabSeparatedText`, `UTType.plainText`.
+- Header row required (case-insensitive, order-free). Recognised columns:
+  `name, host, rtsp_port, http_port, tls, username, password, channel, stream, transport, group,
+  color`. Unknown columns are ignored (listed in the preview). Missing optional columns take the
+  manual-form defaults.
+- Delimiter auto-detected (`,` `;` `\t`), encoding sniffed (UTF-8, UTF-16 BOM, CP1251 for Russian
+  exports from other VMS tools).
+- A **dry-run preview table** appears before anything is written: one row per line with a status
+  chip — `New`, `Duplicate (host+channel exists)`, `Invalid: {reason}` — and editable cells for
+  quick fixes. Footer: `"18 new · 3 duplicates · 1 invalid"`, checkbox `Skip duplicates` (default
+  on), `Import 18`.
+- Passwords in CSV go straight to the Keychain and the source file is never copied. A note in the
+  sheet says exactly that (`import.csv.passwordNote.body`).
+- Export (File ▸ Export Configuration…, ⌥⌘E) writes the same schema **without passwords** by
+  default, with a checkbox "Include passwords (encrypted with a password you choose)" producing an
+  encrypted `.vigilconfig` bundle instead of CSV.
+
+---
+
+## 9. Events
+
+### 9.1 Feed (Stage route `events`)
+
+```
+Events                     [ All ▾ ] [ Cameras ▾ ] [ Today ▾ ]   ⊞ / ☰   Clear   Export CSV
+──────────────────────────────────────────────────────────────────────────────────────────
+Today
+ ┌──────┐  Motion · Front Door                                   10:14:38   ▶  ⤢  ⌫
+ │ thumb│  3 s · 2 boxes                                          just now
+ └──────┘
+ ┌──────┐  Line crossing · Side Gate                             09:52:07   ▶  ⤢  ⌫
+ │ thumb│  Rule "Driveway A→B"                                    22 min ago
+ └──────┘
+ ┌──────┐  Video loss · Hallway                                   09:31:00   ▶      ⌫
+ │ thumb│  Recovered after 41 s                                    43 min ago
+ └──────┘
+Yesterday …
+```
+
+- Two presentations: **list** (☰, 56 pt rows, 96×54 thumbnails) and **grid** (⊞, 200 pt cards with
+  a 16:9 thumbnail, type chip, camera name, time). Toggle persisted per window.
+- Filters: type (multi-select chips with counts: Motion, Line crossing, Intrusion, Tamper, Video
+  loss, Disk error), cameras (multi-select popover), time range (Today / Last 24 h / Last 7 days /
+  Custom…). Filters compose and appear as removable chips. The sidebar Events badge counts *unread*
+  events (events newer than `lastEventsViewedAt`), and clearing happens on view, not on click.
+- Row actions: `▶` opens Playback at `timestamp − 5 s` (`⌘⏎` opens in a new window), `⤢` opens the
+  full-size snapshot in Quick Look, `⌫` deletes the record (local only — never touches the device).
+- Selection + ⌘C copies a text summary; ⌘⏎ = play; Space = Quick Look; ↑↓ navigate; type-ahead
+  jumps by camera name.
+- Live insertion: new events slide in at the top (`VTheme.Motion.standard`, 220 ms) **only when the
+  list is scrolled to the top**; otherwise a floating pill `"3 new events ↑"` appears at the top
+  centre and taps scroll-to-top (the classic "don't move content under the reader" rule).
+- Empty: `empty.events.title` "No events yet." / body with a link to enable motion detection.
+
+### 9.2 Notifications
+
+- `UNUserNotificationCenter` local notifications (permission asked on first *enable*, never at
+  launch — with a pre-explain card in Settings ▸ Notifications).
+- Content: title `"Motion · Front Door"`, body `"10:14:38"`, `UNNotificationAttachment` with the
+  JPEG thumbnail, category `VIGIL_EVENT` with actions **View** (opens Playback at the moment) and
+  **Snooze camera 30 min**. `threadIdentifier = camera.id.uuidString` so the system groups per
+  camera. `interruptionLevel = .active` (`.timeSensitive` for tamper/video-loss/disk-error).
+- Rate limiting: at most 1 notification per camera per 60 s (configurable 15–600 s), plus a global
+  cap of 20/hour; suppressed events still land in the feed. A suppressed burst produces one summary
+  notification `"12 motion events · Front Door"`.
+- Per-camera and per-type toggles live in Settings ▸ Notifications; a Do-Not-Disturb-respecting
+  "Quiet hours" range is available.
+
+### 9.3 Watch mode
+
+`AppModel.watchMode ∈ { off, toast, overlay }` — set in the toolbar `⋯` menu and Settings.
+
+| Mode | Behaviour on a motion event |
+|---|---|
+| `off` | feed + badge only |
+| `toast` (default) | a 320 pt `VToast` slides in bottom-trailing: 64×36 thumbnail, `"Motion · Front Door"`, relative time, buttons `Show` / `Dismiss`. Dwell 4 s, hover pauses the dwell, max 3 stacked (older ones collapse into `"+4 more"`). Clicking `Show` focuses that camera's tile (assigning it to a cell if absent). |
+| `overlay` | the event camera is promoted: in `single`/hero modes it takes the hero cell for 20 s (with a 2 pt `motion`-coloured tile ring and a countdown pip), then returns. In grid modes only the ring + a corner chip appears. Promotion is suppressed while the user is interacting (8 s window) and while a tile is fullscreen. |
+
+Motion boxes (ISAPI region data mapped from the 0–1000 space, `spec-render.md`) draw for 1.5 s per
+event with a 0.3 s fade, `motion` colour at 70 %, 1.5 pt stroke, no fill.
+
+---
+
+## 10. Command palette (⌘K)
+
+### 10.1 Anatomy
+
+```
+                    ┌────────────────────────────────────────────────────┐
+                    │ ⌘  front do|                                   ⎋   │  56pt input row
+                    ├────────────────────────────────────────────────────┤
+                    │ CAMERAS                                            │  22pt section header
+                    │ ┌──┐ Front Door                       [thumb]  ⏎   │  44pt row (selected)
+                    │ │▣ │ 192.168.1.64 · Live · H.265 · Perimeter       │
+                    │ └──┘                                               │
+                    │  ▣  Front Gate                        [thumb]      │
+                    │     192.168.1.71 · Offline                         │
+                    │ ACTIONS                                            │
+                    │  ◎  Snapshot “Front Door”                    ⇧⌘S   │
+                    │  ●  Start Recording “Front Door”              ⌘R   │
+                    │  ⌖  PTZ Preset ▸ “Front Door”                      │
+                    │ LAYOUTS                                            │
+                    │  ⊞  Switch to 3×3                             ⌘4   │
+                    ├────────────────────────────────────────────────────┤
+                    │ ⏎ Run   ⌘⏎ New window   ⇥ Filter   ⌥⏎ Reveal       │  28pt footer hint row
+                    └────────────────────────────────────────────────────┘
+                     640pt wide, top offset 88pt, max height 420pt
+```
+
+- Container: `VTheme.Elevation.4` glass (material + 1 px top inner highlight + hairline stroke),
+  radius 14, shadow `0 24 60 rgba(0,0,0,0.45)`. Backdrop: window content dimmed to 55 % with a
+  6 pt blur, click-outside dismisses.
+- Open: scale 0.97→1.0 + opacity + blur-in over 180 ms (`VTheme.Motion.standard`); close: 120 ms
+  ease-out, no scale. `reduceMotion` → opacity only.
+- Input row: `command` glyph, 17 pt text field, live scope chip when a mode prefix is active,
+  trailing `⎋` keycap. Placeholder: `palette.placeholder` = "Search cameras, actions, layouts…".
+- Rows: 44 pt; 20 pt leading icon in a 28 pt rounded container tinted by category; title (Body,
+  matched ranges in accent semibold); subtitle (Caption1, tertiary, 1 line, ellipsis middle for
+  paths); trailing zone = live 40×22 thumbnail (cameras) **or** `VKeyCap` shortcut **or** `▸` for
+  submenus. Selected row: accent fill 12 %, 1 pt accent inner stroke, and the icon container fills
+  with accent.
+- Max 9 rows visible, scrolls with ↑↓ (selection scrolls into view, never wraps past the ends);
+  section headers are sticky.
+- Footer hints change with the selected row's capabilities.
+
+### 10.2 Modes (prefix filters, also reachable with ⇥ on the empty field)
+
+| Prefix | Scope | Example |
+|---|---|---|
+| *(none)* | everything, ranked | `front` |
+| `>` | actions only | `>rec` |
+| `@` | cameras only | `@gate` |
+| `#` | layouts & presets | `#3x3` |
+| `:` | PTZ presets of the focused camera | `:gate` |
+| `/` | events (last 500) | `/motion` |
+| `?` | help & shortcuts | `?export` |
+| `=` | settings panes & individual settings | `=latency` |
+
+Empty query shows: **Recent** (last 5 invoked items) then **Suggested** (context-aware: if a camera
+is focused → its snapshot/record/PTZ actions; if degraded cameras exist → "Run Stream Doctor";
+always → "Add Camera", "Switch Layout"). Never an empty palette.
+
+### 10.3 Ranking algorithm (normative)
+
+Items are pre-indexed once and re-indexed on library change. Each item exposes an ASCII-folded,
+lowercased `haystack` (`title + "\u{1}" + subtitle + "\u{1}" + keywords`) plus per-character
+metadata (`isWordStart`).
+
+```swift
+public struct PaletteItem: Identifiable, Sendable {
+    public let id: String                 // stable: "camera:<uuid>", "action:snapshot", …
+    public let category: PaletteCategory  // camera, action, layout, preset, event, setting, help
+    public let title: String
+    public let subtitle: String
+    public let keywords: [String]         // synonyms incl. Russian: ["снимок","screenshot","photo"]
+    public let shortcut: KeyboardShortcutSpec?
+    public let isAvailable: Bool          // false ⇒ dimmed + reason
+    public let unavailableReason: String?
+    let folded: [UInt8]                   // precomputed
+    let wordStarts: Set<Int>
+}
+
+public struct MatchResult { public let score: Int; public let ranges: [Range<Int>] }
+
+/// Greedy forward scan with limited backtracking (≤ 32 restarts). O(n·m) worst case, O(n) typical.
+func score(query q: [UInt8], item: PaletteItem, now: Date, usage: UsageStats) -> MatchResult? {
+    guard !q.isEmpty else { return MatchResult(score: baseline(item, usage, now), ranges: []) }
+    guard let m = bestMatch(q, item.folded, item.wordStarts) else { return nil }
+
+    var s = 0
+    s += m.matched * 12                       // every matched character
+    s += m.consecutiveRuns.reduce(0) { $0 + max(0, ($1 - 1)) * 18 }   // adjacency bonus
+    s += m.wordStartHits * 25                 // matched at a word boundary
+    if m.first == 0 { s += 40 }               // matched the very first character
+    s -= min(60, m.gaps * 2)                  // skipped characters
+    s -= Int(Double(item.folded.count - m.last) * 0.5)   // unmatched tail
+    if item.folded.starts(with: q) { s += 400 }          // prefix of the title
+    if titleEquals(item, q) { s += 1000 }                // exact title
+    if isAcronym(q, item) { s += 350 }                   // "fd" → "Front Door"
+    if m.inSubtitleOnly { s = Int(Double(s) * 0.55) }    // subtitle matches rank below title
+    s = Int(Double(s) * item.category.weight)            // camera 1.05, action 1.00, layout 0.95,
+                                                         // preset 0.95, event 0.90, setting 0.85, help 0.75
+    s += min(120, Int(40 * log2(1 + Double(usage.count(item.id)))))   // frecency: frequency
+    s += Int(80 * exp(-usage.age(item.id) / (7 * 86_400)))            // frecency: recency
+    if item.category == .camera, item.isLive { s += 30 }              // live cameras first
+    if !item.isAvailable { s = Int(Double(s) * 0.35) }
+    return s >= 30 ? MatchResult(score: s, ranges: m.ranges) : nil
+}
+```
+
+Ordering: `score` desc → title length asc → `title` localized asc → `id` asc (fully deterministic;
+no visual instability while typing). Results are capped at 50 and grouped by category, with
+categories ordered by their best member's score.
+
+Performance contract: 2 000 items scored in **< 2 ms** on an M1 (measured in
+`PaletteRankingTests.testScoreThroughput`). Scoring is synchronous on the main actor — the palette
+must feel like a text field, and a `Task` hop would cost a frame. Above 5 000 items, scoring moves
+to a detached task with a 1-frame debounce (documented as the only exception).
+
+### 10.4 Actions inventory (P0)
+
+| Category | Items |
+|---|---|
+| Cameras | every camera (jump / assign / focus). ⌘⏎ = open Playback, ⌥⏎ = reveal in sidebar |
+| Actions | Snapshot, Snapshot All, Start/Stop Recording, Record All, Mute/Unmute, Mute All, Two-Way Audio, Reconnect, Request Keyframe, Quality ▸ Auto/Main/Sub/Third, Transport ▸ TCP/UDP, Toggle Sidebar, Toggle Inspector, Cinema Mode, Picture in Picture, Video Wall, Cycle Cameras, Add Camera, Discover Cameras, Import CSV, Export Configuration, Export Diagnostics, Run Stream Doctor, Open Recordings Folder, Open Settings, Check for Updates, Quit |
+| Layouts | the 8 modes + every saved preset + "Edit Mosaic", "Save Layout as Preset…" |
+| Presets | PTZ presets 1–255 of the focused camera, patrols, Home, Set Home |
+| Events | the last 500 events (`"Motion · Front Door · 10:14"`) → jump to playback |
+| Settings | every settings pane + high-value individual settings (latency preset, hardware decode, substream in grid, launch at login) |
+| Help | every shortcut (executes it), Vigil Help, Release Notes, Report an Issue |
+
+Submenu items (`▸`) push a second level inside the palette (breadcrumb chip in the input row,
+`⌫` on an empty field pops back).
+
+---
+
+## 11. Keyboard shortcuts & menu bar
+
+### 11.1 Complete shortcut table
+
+Scope: **G** = global to the app, **M** = main window, **P** = playback window, **T** = a focused
+tile, **S** = sidebar focused, **L** = timeline focused, **K** = palette open.
+
+| Shortcut | Scope | Action |
+|---|---|---|
+| ⌘K | G | Open command palette |
+| ⌘, | G | Settings |
+| ⌘Q | G | Quit (confirms if recording, §15 `confirm.quitWhileRecording.*`) |
+| ⌘H / ⌥⌘H | G | Hide / Hide others |
+| ⌘W | G | Close window |
+| ⌥⌘W | G | Close all windows |
+| ⌘M | G | Minimize |
+| ⌘N | G | Add camera… |
+| ⇧⌘N | G | Discover cameras… |
+| ⇧⌘I | G | Import cameras from CSV… |
+| ⌥⌘E | G | Export configuration… |
+| ⇧⌘O | G | Open recordings folder |
+| ⌥⌘D | G | Run Stream Doctor… |
+| ⌘? | G | Vigil Help |
+| ⌘/ | G | Keyboard shortcuts cheat sheet |
+| ⌘1 … ⌘8 | M | Layout: single, 2×2, 1+5, 3×3, 4×4, 1+7, 2+8, custom mosaic |
+| ⌘9 | M | Apply layout preset 1 (hold to open the preset menu) |
+| ⌥⌘8 | M | Edit mosaic |
+| ⌘Y | M | Cycle cameras (patrol) on/off |
+| ⌥⌘Y | M | Cycle dwell menu |
+| ⌘F | M/T | Fullscreen the focused tile (solo) |
+| ⌃⌘F | M | Cinema mode (macOS full screen, chrome hidden) |
+| ⌃⌘P | M | Picture in Picture for the focused camera |
+| ⌃⌘W | M | Video wall on second display |
+| ⌘L | M | Show/hide sidebar |
+| ⌥⌘L | M | Sidebar as icon rail |
+| ⌥⌘I | M | Show/hide inspector |
+| ⌃1 … ⌃6 | M | Inspector tab: Info, Stream, PTZ, Image, Events, Recording |
+| ⌘= / ⌘- | M/T | Digital zoom in / out (focused tile) |
+| ⌘0 | M/T | Reset digital zoom / actual size |
+| ⌥← ⌥→ ⌥↑ ⌥↓ | M | Move tile focus |
+| ⇥ / ⇧⇥ | M | Next / previous tile (then sidebar, inspector) |
+| ⏎ | M/T | Filled cell: select camera. Empty cell: open the camera picker |
+| ⌫ | M/T | Clear the focused cell |
+| / | M | Focus the search field |
+| ⌥⌘F | M | Open the sidebar filter menu |
+| ⌥N / ⌥S / ⌥T / ⌥B | M | Toggle overlays: name chip, stats, timestamp, motion boxes |
+| ⌥⌘H | M | Pin tile controls for the focused tile |
+| ⇧⌘S | T | Snapshot the focused camera |
+| ⌥⇧⌘S | M | Snapshot all live cameras |
+| ⌘R | T | Start/stop recording the focused camera |
+| ⌥⌘R | M | Start/stop recording all live cameras |
+| ⌃⌘R | T | Reconnect now |
+| ⌥⌘M | T | Mute/unmute the focused camera |
+| ⇧⌥⌘M | M | Mute all |
+| T (hold) | T | Push-to-talk (two-way audio) |
+| ⌃⌘T | T | Toggle two-way audio latched |
+| ⌥1 / ⌥2 / ⌥3 / ⌥0 | T | Quality: main / sub / third / auto |
+| ⌃⌘1 / ⌃⌘2 | T | Transport: TCP / UDP |
+| ← → ↑ ↓ | T | PTZ pan/tilt (hold = continuous) |
+| ⇧ + arrows | T | PTZ at max speed |
+| ⌥ + arrows | T | PTZ fine step *(⌥+arrows moves tile focus when the tile has no PTZ)* |
+| - / = | T | PTZ zoom out / in |
+| [ / ] | T | Focus near / far |
+| ; / ' | T | Iris close / open |
+| H | T | PTZ home |
+| 1 … 9 | T | Recall PTZ preset 1–9 |
+| ⇧1 … ⇧9 | T | Store PTZ preset 1–9 (confirm) |
+| ⌥⌘P | G | Open playback for the selection |
+| Space | P | Play / pause |
+| K | P | Pause / normal speed |
+| J / L | P | Shuttle reverse / forward (repeat to accelerate) |
+| ← / → | P/L | Back / forward 10 s |
+| ⇧← / ⇧→ | P/L | Back / forward 1 min |
+| ⌥← / ⌥→ | P/L | Frame step |
+| ⌘← / ⌘→ | P/L | Previous / next recording segment |
+| , / . | P/L | Previous / next event marker |
+| ⇧, / ⇧. | P | Slower / faster |
+| Home / End | L | Day start / day end |
+| ⌘G | P | Go to date/time… |
+| ⇧⌘G | P | Go to now (live edge) |
+| B | P | Add bookmark at the playhead |
+| I / O | P | Set in / out point |
+| ⌃⌘X | P | Clear in/out selection |
+| ⌘E | P | Export clip… |
+| ⇧⌘Y | P | Toggle synchronized cameras |
+| ⌘= / ⌘- | L | Timeline zoom in / out |
+| ⌘0 | L | Fit the day |
+| ↑ ↓ | S/K | Move selection |
+| ⏎ | S | Rename inline (sidebar) / run (palette) |
+| ⌘⏎ | K | Run in a new window |
+| ⌥⏎ | K | Reveal / secondary action |
+| ⇥ | K | Enter the selected scope filter |
+| Esc | G | See the precedence chain below |
+
+**Esc precedence** (first applicable wins): dismiss palette → cancel an in-progress drag →
+close the topmost popover/sheet → exit tile fullscreen → exit cinema mode → clear the in/out
+selection → clear search text → blur the focused text field → clear multi-selection → nothing
+(never closes the window).
+
+### 11.2 Menu bar structure
+
+Every shortcut above appears in exactly one menu item. Items disabled by context show the reason
+in their tooltip.
+
+```
+Vigil        About Vigil · Check for Updates… · ─ · Settings… ⌘, · ─ · Services ▸ · ─ ·
+             Hide Vigil ⌘H · Hide Others ⌥⌘H · Show All · ─ · Quit Vigil ⌘Q
+
+File         Add Camera… ⌘N · Discover Cameras… ⇧⌘N · Import Cameras from CSV… ⇧⌘I ·
+             Export Configuration… ⌥⌘E · ─ · Open Playback ⌥⌘P · Open Recordings Folder ⇧⌘O · ─ ·
+             Save Snapshot ⇧⌘S · Save Snapshot of All Cameras ⌥⇧⌘S · Export Clip… ⌘E · ─ ·
+             Close Window ⌘W · Close All Windows ⌥⌘W
+
+Edit         Undo ⌘Z · Redo ⇧⌘Z · ─ · Cut ⌘X · Copy ⌘C · Paste ⌘V · Delete ⌫ · Select All ⌘A · ─ ·
+             Rename ⏎ · ─ · Find ▸ (Search Cameras /, Filter… ⌥⌘F) · ─ · Emoji & Symbols
+
+View         Command Palette ⌘K · ─ ·
+             Layout ▸ (Single ⌘1, 2×2 ⌘2, 1+5 ⌘3, 3×3 ⌘4, 4×4 ⌘5, 1+7 ⌘6, 2+8 ⌘7,
+                       Custom Mosaic ⌘8, Edit Mosaic ⌥⌘8, ─, Presets ▸ …, Save as Preset…,
+                       Manage Presets…) ·
+             Cycle Cameras ⌘Y · Cycle Dwell ▸ (5/10/15/30/60 s, Custom…) · ─ ·
+             Fullscreen Tile ⌘F · Cinema Mode ⌃⌘F · Picture in Picture ⌃⌘P ·
+             Video Wall ▸ (On Display 2 ⌃⌘W, Choose Display…, Wall Layout ▸) · ─ ·
+             Zoom In ⌘= · Zoom Out ⌘- · Actual Size ⌘0 · ─ ·
+             Show Sidebar ⌘L · Sidebar as Icons ⌥⌘L · Show Inspector ⌥⌘I ·
+             Inspector Tab ▸ (Info ⌃1 … Recording ⌃6) · ─ ·
+             Tile Overlays ▸ (Camera Name ⌥N, Stats ⌥S, Timestamp ⌥T, Motion Boxes ⌥B,
+                              Pin Tile Controls ⌥⌘H) · ─ ·
+             Appearance ▸ (System, Light, Dark) · Customize Toolbar…
+
+Camera       Connect · Disconnect · Reconnect Now ⌃⌘R · ─ ·
+             Snapshot ⇧⌘S · Start Recording ⌘R · Record All ⌥⌘R · ─ ·
+             Audio ▸ (Mute ⌥⌘M, Mute All ⇧⌥⌘M, Volume ▸, Two-Way Audio ⌃⌘T) · ─ ·
+             Quality ▸ (Auto ⌥0, Main ⌥1, Sub ⌥2, Third ⌥3) ·
+             Transport ▸ (TCP ⌃⌘1, UDP ⌃⌘2) · Request Keyframe · ─ ·
+             PTZ ▸ (Up ↑, Down ↓, Left ←, Right →, Zoom In =, Zoom Out -, Focus Near [,
+                    Focus Far ], Iris Open ', Iris Close ;, Home H, ─, Presets ▸ 1–9,
+                    Store Preset ▸, Patrols ▸) · ─ ·
+             Image Settings… ⌃4 · Edit Camera… ⌘I · ─ ·
+             Run Stream Doctor… ⌥⌘D · Copy Diagnostics · ─ ·
+             Disable Camera · Delete Camera… ⌫
+
+Playback     Open Playback ⌥⌘P · Go to Date… ⌘G · Go to Now ⇧⌘G · ─ ·
+             Play/Pause Space · Normal Speed K · Reverse J · Forward L · ─ ·
+             Back 10 Seconds ← · Forward 10 Seconds → · Back 1 Minute ⇧← · Forward 1 Minute ⇧→ ·
+             Step Backward ⌥← · Step Forward ⌥→ · ─ ·
+             Previous Segment ⌘← · Next Segment ⌘→ · Previous Event , · Next Event . · ─ ·
+             Slower ⇧, · Faster ⇧. · Speed ▸ (0.25× … 8×) · ─ ·
+             Set In Point I · Set Out Point O · Clear Selection ⌃⌘X · Export Clip… ⌘E · ─ ·
+             Add Bookmark B · Synchronize Cameras ⇧⌘Y
+
+Window       Minimize ⌘M · Zoom · ─ · Vigil · Video Wall ⌃⌘W · Discovery ⇧⌘N · Playback ▸ (open
+             playback windows) · ─ · Bring All to Front
+
+Help         Vigil Help ⌘? · Keyboard Shortcuts ⌘/ · ─ · Run Stream Doctor… ⌥⌘D ·
+             Export Diagnostics… · ─ · Release Notes · Report an Issue…
+```
+
+`SwiftUI` implementation: `CommandMenu("Camera")`, `CommandMenu("Playback")`, plus
+`CommandGroup(replacing: .newItem)`, `.textEditing`, `.sidebar`, `.toolbar`, `.windowList`,
+`.help`, `.appInfo`, `.appSettings`. Enablement is driven by `@FocusedValue`:
+
+```swift
+struct ActiveCameraKey: FocusedValueKey { typealias Value = CameraContext }
+extension FocusedValues { var activeCamera: CameraContext? { get { self[ActiveCameraKey.self] } set { … } } }
+
+// StageView:
+.focusedSceneValue(\.activeCamera, CameraContext(camera: focusedCamera, controller: controller))
+// VigilCommands:
+@FocusedValue(\.activeCamera) private var active
+Button("Snapshot") { active?.snapshot() }.disabled(active == nil).keyboardShortcut("s", modifiers: [.shift, .command])
+```
+
+### 11.3 Cheat sheet (⌘/)
+
+An in-window overlay (same glass recipe as the palette, 720 pt wide, up to 560 pt tall) with a
+3-column grid of `VKeyCap` + label grouped by scope, a search field, and a `Customize…` button that
+opens Settings ▸ Shortcuts. It renders **live from the shortcut registry**, so a rebound key is
+always shown correctly. Printable via ⌘P.
+
+### 11.4 Rebindable shortcuts
+
+```swift
+public struct ShortcutSpec: Codable, Hashable, Sendable {
+    public var key: String                       // "s", "1", "left", "space"
+    public var modifiers: EventModifiers         // stored as a raw bitmask
+}
+public enum ShortcutAction: String, Codable, CaseIterable, Sendable { case snapshot, record, palette, … }
+
+@MainActor @Observable public final class ShortcutStore {
+    public private(set) var bindings: [ShortcutAction: ShortcutSpec]   // defaults ⊕ overrides
+    public func rebind(_ action: ShortcutAction, to spec: ShortcutSpec) -> RebindResult
+    public func reset(_ action: ShortcutAction); public func resetAll()
+}
+public enum RebindResult { case ok, conflict(with: ShortcutAction), reserved(String) }
+```
+
+- Menu items read `shortcuts.bindings[action]` so a rebind updates the menu immediately (the
+  `Commands` builder observes `ShortcutStore`).
+- Reserved and rejected: ⌘Q, ⌘W, ⌘H, ⌘M, ⌘,, ⌘⇥, ⌘Space, and anything without a modifier **except**
+  the documented tile/playback single keys.
+- Conflicts are shown inline in Settings ▸ Shortcuts: the conflicting row highlights amber with
+  `"Also used by {action}"` and a `Swap` / `Replace` choice; the store never allows a duplicate.
+- **Implementation note (important):** unmodified single-key shortcuts (`/ B I O J K L H T`,
+  digits, arrows) are **not** registered as menu `keyboardShortcut`s — they would steal keystrokes
+  from text fields. They are handled with the macOS 14 `onKeyPress(_:phases:action:)` modifier on
+  the focused surface (`StageView`, `TimelineView`, `SidebarView`), which respects text-field focus
+  automatically. The menu item still *displays* the key via a trailing `Text` in its label.
+
+---

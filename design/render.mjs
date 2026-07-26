@@ -53,8 +53,16 @@ async function main() {
       await page.evaluate(() => document.fonts.ready)
       await page.waitForTimeout(450)
 
+      // A mockup that declares <meta name="shot-fullpage" content="true"> is captured at its full
+      // content height instead of being cropped to (or padded out to) the viewport.
+      const fullPage =
+        (await page
+          .locator('meta[name="shot-fullpage"]')
+          .getAttribute('content')
+          .catch(() => null)) === 'true'
+
       const out = path.join(SHOTS, `${name}.png`)
-      await page.screenshot({ path: out })
+      await page.screenshot({ path: out, fullPage })
       const { size } = await stat(out)
       results.push({ name, out, kb: Math.round(size / 1024) })
       console.log(`ok   ${name}  ->  ${path.relative(HERE, out)}  (${Math.round(size / 1024)} KB)`)

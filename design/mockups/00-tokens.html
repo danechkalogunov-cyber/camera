@@ -1,0 +1,335 @@
+<title>Vigil — design tokens</title>
+<meta name="shot-viewport" content="1440x900">
+<meta name="shot-fullpage" content="true">
+<style>
+  /* Tokens transcribed verbatim from docs/DESIGN.md §3–§5.
+     SF Pro is substituted by Inter in this mockup because the container has no Apple fonts;
+     metrics are near-identical, so sizes and rhythm read true. */
+  :root {
+    --canvas: #0B0C0F;   --sidebar: #101116;  --surface: #16181D;
+    --raised: #1D2026;   --overlay: #252932;  --well: #000000;
+
+    --text-1: #F2F4F8;   --text-2: #A7AEBC;   --text-3: #88909D;   --text-dis: #4E5563;
+
+    --accent: #7B61FF;   --accent-hover: #8B74FF; --accent-pressed: #6A4CF7;
+    --accent-fill: #6247E8; --focus: #9581FF;
+
+    --live: #FF2E43;     --live-fill: #DE1327; --ok: #32D74B;      --ok-fill: #157F28;
+    --warn: #FFD426;     --motion: #FF9F0A;    --danger: #FF5F52;  --danger-fill: #CE3223;
+    --continuous: #3B9CFF;
+
+    --id1: #2FB8E8; --id2: #37D6A0; --id3: #F0DE5C;
+    --id4: #F5674A; --id5: #A867F5; --id6: #7A8BA4;
+
+    --s-subtle: rgba(255,255,255,.06);
+    --s-default: rgba(255,255,255,.10);
+    --s-strong: rgba(255,255,255,.18);
+    --s-contrast: rgba(255,255,255,.28);
+
+    --ui: "Inter Variable", Inter, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--canvas); color: var(--text-1);
+    font-family: var(--ui); font-size: 13px; line-height: 18px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { padding: 28px 32px 30px; }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .mark {
+    width: 34px; height: 34px; border-radius: 10px; flex: none;
+    background: linear-gradient(145deg, #8B74FF, #5B44E0 62%, #3B2BA8);
+    box-shadow: 0 4px 14px rgba(123,97,255,.34), inset 0 1px 0 rgba(255,255,255,.28);
+    display: grid; place-items: center;
+  }
+  .mark::after {
+    content: ""; width: 11px; height: 11px; border-radius: 50%;
+    background: #0B0C0F; box-shadow: 0 0 0 3px rgba(255,255,255,.86);
+  }
+  h1 { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -.3px; margin: 0; }
+  .sub { color: var(--text-3); font-size: 11px; line-height: 14px; margin-top: 1px; }
+  .meta { text-align: right; color: var(--text-3); font-family: var(--mono); font-size: 10px; line-height: 16px; }
+  .meta b { color: var(--text-2); font-weight: 500; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; align-items: start; }
+  .span2 { grid-column: span 2; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--s-default); border-radius: 10px;
+    padding: 14px 16px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .eyebrow {
+    font-size: 10px; line-height: 13px; font-weight: 600; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--text-3); margin-bottom: 10px;
+  }
+  .eyebrow span { color: var(--text-dis); letter-spacing: 0; text-transform: none; font-weight: 500; }
+
+  /* ---- swatches ---- */
+  .sw-row { display: flex; align-items: center; gap: 9px; padding: 3px 0; }
+  .sw { width: 26px; height: 26px; border-radius: 6px; flex: none; border: 1px solid var(--s-default); }
+  .sw-name { font-size: 12px; font-weight: 500; flex: 1; }
+  .sw-hex { font-family: var(--mono); font-size: 10px; color: var(--text-3); }
+  .sw-cr  { font-family: var(--mono); font-size: 10px; color: var(--text-2); width: 46px; text-align: right; }
+
+  /* ---- identity chips ---- */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
+    border-radius: 6px; font-size: 11px; font-weight: 500;
+  }
+  .chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+
+  /* ---- type ---- */
+  .t-row { display: flex; align-items: baseline; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--s-subtle); }
+  .t-row:last-child { border-bottom: 0; }
+  .t-spec { font-family: var(--mono); font-size: 10px; color: var(--text-3); width: 118px; flex: none; }
+  .t-sample { flex: 1; color: var(--text-1); }
+
+  /* ---- space / radius ---- */
+  .bars { display: flex; flex-direction: column; gap: 5px; }
+  .bar { display: flex; align-items: center; gap: 9px; }
+  .bar-k { font-family: var(--mono); font-size: 10px; color: var(--text-3); width: 92px; flex: none; }
+  .bar-v { height: 9px; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #4E3BC7); }
+
+  .radii { display: flex; align-items: flex-end; gap: 10px; }
+  .radii div { width: 58px; height: 46px; background: var(--raised); border: 1px solid var(--s-strong); }
+  .radii p { margin: 6px 0 0; font-family: var(--mono); font-size: 9px; color: var(--text-3); text-align: center; }
+
+  /* ---- controls ---- */
+  .ctl-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+  .ctl-k { font-family: var(--mono); font-size: 10px; color: var(--text-3); width: 78px; flex: none; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: #fff;
+    background: var(--accent-fill); border: 0; box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+  }
+  .btn.ghost { background: transparent; border: 1px solid var(--s-strong); color: var(--text-1); box-shadow: none; }
+  .btn.dang  { background: var(--danger-fill); }
+
+  /* ---- states ---- */
+  .st { display: flex; flex-direction: column; gap: 7px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px;
+    border-radius: 10px; font-size: 11px; font-weight: 500; width: max-content;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .recdot { box-shadow: 0 0 0 3px rgba(255,46,67,.22); }
+
+  /* ---- elevation ---- */
+  .elev { display: flex; gap: 12px; }
+  .elev div {
+    flex: 1; height: 62px; border-radius: 10px; display: grid; place-items: center;
+    font-family: var(--mono); font-size: 9px; color: var(--text-3);
+  }
+  .e1 { background: var(--surface);  border: 1px solid var(--s-subtle); }
+  .e2 { background: var(--raised);   border: 1px solid var(--s-default); box-shadow: 0 2px 6px rgba(0,0,0,.44), inset 0 1px 0 rgba(255,255,255,.05); }
+  .e3 { background: var(--overlay);  border: 1px solid var(--s-strong);  box-shadow: 0 8px 24px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08); }
+  .e4 { background: rgba(37,41,50,.72); backdrop-filter: blur(24px) saturate(1.6);
+        border: 1px solid var(--s-strong); box-shadow: 0 18px 48px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.10); }
+
+  /* ---- telemetry ---- */
+  .tele { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 10px; }
+  .tele div { background: var(--well); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 6px 8px; }
+  .tele b { display: block; font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: -.2px; }
+  .tele s { display: block; text-decoration: none; font-size: 9px; color: var(--text-3);
+            text-transform: uppercase; letter-spacing: .5px; font-weight: 600; margin-top: 1px; }
+
+  .note { color: var(--text-dis); font-size: 10px; line-height: 15px; margin-top: 18px; text-align: center; }
+</style>
+
+<div class="page">
+  <header>
+    <div class="brand">
+      <div class="mark"></div>
+      <div>
+        <h1>Vigil — Design Tokens</h1>
+        <div class="sub">Dark appearance · transcribed verbatim from docs/DESIGN.md §3–§5 · every value measured, not eyeballed</div>
+      </div>
+    </div>
+    <div class="meta">
+      accent <b>Iris #7B61FF</b> · hue 253°<br>
+      contrast <b>WCAG 2.1</b> · CVD <b>Viénot LMS</b><br>
+      grid <b>4 pt</b> · shapes <b>continuous</b>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- layers -->
+    <div class="card">
+      <div class="eyebrow">Layers <span>— six, canvas to overlay</span></div>
+      <div class="sw-row"><div class="sw" style="background:#0B0C0F"></div><div class="sw-name">layer.canvas</div><div class="sw-hex">#0B0C0F</div></div>
+      <div class="sw-row"><div class="sw" style="background:#101116"></div><div class="sw-name">layer.sidebar</div><div class="sw-hex">#101116</div></div>
+      <div class="sw-row"><div class="sw" style="background:#16181D"></div><div class="sw-name">layer.surface</div><div class="sw-hex">#16181D</div></div>
+      <div class="sw-row"><div class="sw" style="background:#1D2026"></div><div class="sw-name">layer.surfaceRaised</div><div class="sw-hex">#1D2026</div></div>
+      <div class="sw-row"><div class="sw" style="background:#252932"></div><div class="sw-name">layer.overlay</div><div class="sw-hex">#252932</div></div>
+      <div class="sw-row"><div class="sw" style="background:#000;border-color:rgba(255,255,255,.14)"></div><div class="sw-name">layer.videoWell</div><div class="sw-hex">#000000</div></div>
+      <div class="eyebrow" style="margin:14px 0 8px">Strokes <span>— alpha, never opaque</span></div>
+      <div class="sw-row"><div class="sw" style="background:var(--s-subtle)"></div><div class="sw-name">stroke.subtle</div><div class="sw-hex">α .06</div></div>
+      <div class="sw-row"><div class="sw" style="background:var(--s-default)"></div><div class="sw-name">stroke.default</div><div class="sw-hex">α .10</div></div>
+      <div class="sw-row"><div class="sw" style="background:var(--s-strong)"></div><div class="sw-name">stroke.strong</div><div class="sw-hex">α .18</div></div>
+      <div class="sw-row"><div class="sw" style="background:var(--s-contrast)"></div><div class="sw-name">stroke.contrast</div><div class="sw-hex">α .28</div></div>
+    </div>
+
+    <!-- text + semantic -->
+    <div class="card">
+      <div class="eyebrow">Text <span>— ratio vs canvas</span></div>
+      <div class="sw-row"><div class="sw" style="background:#F2F4F8"></div><div class="sw-name">text.primary</div><div class="sw-hex">#F2F4F8</div><div class="sw-cr">17.76</div></div>
+      <div class="sw-row"><div class="sw" style="background:#A7AEBC"></div><div class="sw-name">text.secondary</div><div class="sw-hex">#A7AEBC</div><div class="sw-cr">8.78</div></div>
+      <div class="sw-row"><div class="sw" style="background:#88909D"></div><div class="sw-name">text.tertiary</div><div class="sw-hex">#88909D</div><div class="sw-cr">6.08</div></div>
+      <div class="sw-row"><div class="sw" style="background:#4E5563"></div><div class="sw-name">text.disabled</div><div class="sw-hex">#4E5563</div><div class="sw-cr">2.61</div></div>
+      <div class="eyebrow" style="margin:14px 0 8px">Semantic <span>— status vocabulary</span></div>
+      <div class="sw-row"><div class="sw" style="background:#7B61FF"></div><div class="sw-name">accent · Iris</div><div class="sw-hex">#7B61FF</div><div class="sw-cr">4.65</div></div>
+      <div class="sw-row"><div class="sw" style="background:#FF2E43"></div><div class="sw-name">live · recording</div><div class="sw-hex">#FF2E43</div><div class="sw-cr">5.63</div></div>
+      <div class="sw-row"><div class="sw" style="background:#32D74B"></div><div class="sw-name">ok · healthy</div><div class="sw-hex">#32D74B</div><div class="sw-cr">—</div></div>
+      <div class="sw-row"><div class="sw" style="background:#FFD426"></div><div class="sw-name">warn · degraded</div><div class="sw-hex">#FFD426</div><div class="sw-cr">—</div></div>
+      <div class="sw-row"><div class="sw" style="background:#FF9F0A"></div><div class="sw-name">motion · event</div><div class="sw-hex">#FF9F0A</div><div class="sw-cr">—</div></div>
+      <div class="sw-row"><div class="sw" style="background:#FF5F52"></div><div class="sw-name">danger</div><div class="sw-hex">#FF5F52</div><div class="sw-cr">—</div></div>
+      <div class="sw-row"><div class="sw" style="background:#3B9CFF"></div><div class="sw-name">continuous · timeline</div><div class="sw-hex">#3B9CFF</div><div class="sw-cr">—</div></div>
+    </div>
+
+    <!-- identity + states -->
+    <div class="card">
+      <div class="eyebrow">Camera identity <span>— 6 categorical, CVD-verified</span></div>
+      <div class="chips">
+        <div class="chip" style="color:var(--id1);background:#08212A;border:1px solid rgba(47,184,232,.4)"><i></i>Front Door</div>
+        <div class="chip" style="color:var(--id2);background:#0A271D;border:1px solid rgba(55,214,160,.4)"><i></i>Driveway</div>
+        <div class="chip" style="color:var(--id3);background:#2B2811;border:1px solid rgba(240,222,92,.4)"><i></i>Garage</div>
+        <div class="chip" style="color:var(--id4);background:#2C130D;border:1px solid rgba(245,103,74,.4)"><i></i>Back Yard</div>
+        <div class="chip" style="color:var(--id5);background:#1E132C;border:1px solid rgba(168,103,245,.4)"><i></i>Hallway</div>
+        <div class="chip" style="color:var(--id6);background:#16191E;border:1px solid rgba(122,139,164,.4)"><i></i>Gate</div>
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text-3);margin-top:9px;line-height:15px">
+        min ΔE — normal <b style="color:var(--text-2)">29.8</b> · protan <b style="color:var(--text-2)">21.9</b><br>
+        deutan <b style="color:var(--text-2)">26.2</b> · tritan <b style="color:var(--text-2)">15.8</b>
+      </div>
+
+      <div class="eyebrow" style="margin:14px 0 8px">Stream states</div>
+      <div class="st">
+        <div class="pill" style="background:rgba(50,215,75,.14);color:var(--ok)"><span class="dot" style="background:var(--ok)"></span>Live · 25 fps</div>
+        <div class="pill" style="background:rgba(255,212,38,.14);color:var(--warn)"><span class="dot" style="background:var(--warn)"></span>Degraded · 2.1% loss</div>
+        <div class="pill" style="background:rgba(255,46,67,.14);color:var(--live)"><span class="dot recdot" style="background:var(--live)"></span>Recording</div>
+        <div class="pill" style="background:rgba(255,159,10,.14);color:var(--motion)"><span class="dot" style="background:var(--motion)"></span>Motion detected</div>
+        <div class="pill" style="background:rgba(78,85,99,.2);color:var(--text-3)"><span class="dot" style="background:var(--text-dis)"></span>Offline · retry in 8 s</div>
+      </div>
+
+      <div class="eyebrow" style="margin:14px 0 8px">Accent tints <span>— selected row ladder</span></div>
+      <div class="bars">
+        <div class="bar"><div class="bar-k">α .10 rest</div><div class="bar-v" style="width:100%;height:22px;border-radius:6px;background:#161427;border:1px solid var(--s-subtle)"></div></div>
+        <div class="bar"><div class="bar-k">α .16 hover</div><div class="bar-v" style="width:100%;height:22px;border-radius:6px;background:#1D1A35;border:1px solid var(--s-subtle)"></div></div>
+        <div class="bar"><div class="bar-k">α .24 pressed</div><div class="bar-v" style="width:100%;height:22px;border-radius:6px;background:#262049;border:1px solid var(--s-default)"></div></div>
+        <div class="bar"><div class="bar-k">α .32 drop</div><div class="bar-v" style="width:100%;height:22px;border-radius:6px;background:#2F275C;border:1px dashed rgba(149,129,255,.55)"></div></div>
+      </div>
+    </div>
+
+    <!-- typography -->
+    <div class="card span2">
+      <div class="eyebrow">Type scale <span>— SF Pro (shown in Inter) · 9 steps + Mono track</span></div>
+      <div class="t-row"><div class="t-spec">Display 28/34 bold</div><div class="t-sample" style="font-size:28px;line-height:34px;font-weight:700;letter-spacing:-.4px">No cameras yet</div></div>
+      <div class="t-row"><div class="t-spec">Title1 22/28 semi</div><div class="t-sample" style="font-size:22px;line-height:28px;font-weight:600;letter-spacing:-.3px">Discover cameras</div></div>
+      <div class="t-row"><div class="t-spec">Title2 17/22 semi</div><div class="t-sample" style="font-size:17px;line-height:22px;font-weight:600;letter-spacing:-.2px">Stream</div></div>
+      <div class="t-row"><div class="t-spec">Title3 15/20 semi</div><div class="t-sample" style="font-size:15px;line-height:20px;font-weight:600;letter-spacing:-.1px">Front Door</div></div>
+      <div class="t-row"><div class="t-spec">Headline 13/18 semi</div><div class="t-sample" style="font-size:13px;line-height:18px;font-weight:600">Continue</div></div>
+      <div class="t-row"><div class="t-spec">Body 13/18 reg</div><div class="t-sample">Vigil found 3 Hikvision cameras on your network.</div></div>
+      <div class="t-row"><div class="t-spec">Callout 12/16 med</div><div class="t-sample" style="font-size:12px;line-height:16px;font-weight:500;color:var(--text-2)">Transport</div></div>
+      <div class="t-row"><div class="t-spec">Caption1 11/14 med</div><div class="t-sample" style="font-size:11px;line-height:14px;font-weight:500;letter-spacing:.1px;color:var(--text-3)">Last seen 14:22:07</div></div>
+      <div class="t-row"><div class="t-spec">Caption2 10/13 caps</div><div class="t-sample" style="font-size:10px;line-height:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--text-3)">Live &nbsp;·&nbsp; Rec &nbsp;·&nbsp; H.265</div></div>
+      <div class="t-row"><div class="t-spec">Mono 11/16 med</div><div class="t-sample" style="font-family:var(--mono);font-size:11px;font-weight:500;color:var(--text-2)">rtsp://192.168.1.64:554/Streaming/Channels/101</div></div>
+
+      <div class="eyebrow" style="margin:16px 0 8px">Telemetry <span>— monospaced digits + reserved widths, so values never reflow</span></div>
+      <div class="tele">
+        <div><b>25 fps</b><s>framerate</s></div>
+        <div><b>4.2 Mb/s</b><s>bitrate</s></div>
+        <div><b>184 ms</b><s>latency</s></div>
+        <div><b>0.04%</b><s>packet loss</s></div>
+        <div><b>2.4 ms</b><s>jitter</s></div>
+        <div><b>1920×1080</b><s>resolution</s></div>
+        <div><b>14:22:07.48</b><s>timecode</s></div>
+        <div><b>H.265 · HW</b><s>codec / decode</s></div>
+      </div>
+    </div>
+
+    <!-- space, radius, controls, elevation -->
+    <div class="card">
+      <div class="eyebrow">Space <span>— 4 pt ladder</span></div>
+      <div class="bars">
+        <div class="bar"><div class="bar-k">hair · 2</div><div class="bar-v" style="width:2px"></div></div>
+        <div class="bar"><div class="bar-k">xxs · 4</div><div class="bar-v" style="width:4px"></div></div>
+        <div class="bar"><div class="bar-k">xs · 6</div><div class="bar-v" style="width:6px"></div></div>
+        <div class="bar"><div class="bar-k">sm · 8</div><div class="bar-v" style="width:8px"></div></div>
+        <div class="bar"><div class="bar-k">md · 12</div><div class="bar-v" style="width:12px"></div></div>
+        <div class="bar"><div class="bar-k">lg · 16</div><div class="bar-v" style="width:16px"></div></div>
+        <div class="bar"><div class="bar-k">xl · 20</div><div class="bar-v" style="width:20px"></div></div>
+        <div class="bar"><div class="bar-k">xxl · 24</div><div class="bar-v" style="width:24px"></div></div>
+        <div class="bar"><div class="bar-k">huge · 32</div><div class="bar-v" style="width:32px"></div></div>
+        <div class="bar"><div class="bar-k">jumbo · 48</div><div class="bar-v" style="width:48px"></div></div>
+      </div>
+
+      <div class="eyebrow" style="margin:14px 0 8px">Radius <span>— all continuous</span></div>
+      <div class="radii">
+        <div><div style="border-radius:4px;height:46px;background:var(--raised);border:1px solid var(--s-strong)"></div><p>xs 4</p></div>
+        <div><div style="border-radius:6px;height:46px;background:var(--raised);border:1px solid var(--s-strong)"></div><p>sm 6</p></div>
+        <div><div style="border-radius:8px;height:46px;background:var(--raised);border:1px solid var(--s-strong)"></div><p>md 8</p></div>
+        <div><div style="border-radius:10px;height:46px;background:var(--raised);border:1px solid var(--s-strong)"></div><p>lg 10</p></div>
+        <div><div style="border-radius:14px;height:46px;background:var(--raised);border:1px solid var(--s-strong)"></div><p>xl 14</p></div>
+        <div><div style="border-radius:20px;height:46px;background:var(--raised);border:1px solid var(--s-strong)"></div><p>xxl 20</p></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Control heights <span>— five, no others</span></div>
+      <div class="ctl-row"><div class="ctl-k">xs · 20</div><button class="btn" style="height:20px;padding:0 6px;border-radius:6px;font-size:11px">Snapshot</button><button class="btn ghost" style="height:20px;padding:0 6px;border-radius:6px;font-size:11px">Mute</button></div>
+      <div class="ctl-row"><div class="ctl-k">sm · 24</div><button class="btn" style="height:24px;padding:0 8px;border-radius:6px;font-size:12px">Apply</button><button class="btn ghost" style="height:24px;padding:0 8px;border-radius:6px;font-size:12px">Cancel</button></div>
+      <div class="ctl-row"><div class="ctl-k">md · 28 ★</div><button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px">Connect</button><button class="btn ghost" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px">Test</button><button class="btn dang" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px">Remove</button></div>
+      <div class="ctl-row"><div class="ctl-k">lg · 32</div><button class="btn" style="height:32px;padding:0 12px;border-radius:8px;font-size:13px">Add camera</button></div>
+      <div class="ctl-row"><div class="ctl-k">xl · 40</div><button class="btn" style="height:40px;padding:0 16px;border-radius:10px;font-size:15px;font-weight:600">Scan network</button></div>
+
+    </div>
+
+    <div class="card span2">
+      <div class="eyebrow">Elevation <span>— fill · stroke · inner highlight · shadow</span></div>
+      <div class="elev">
+        <div class="e1">E1 flat — surface</div>
+        <div class="e2">E2 raised — card, tile</div>
+        <div class="e3">E3 popover — menu, inspector pop</div>
+        <div class="e4">E4 glass — toolbar, ⌘K</div>
+      </div>
+
+      <div class="eyebrow" style="margin:16px 0 8px">Interaction states <span>— every control ships all six</span></div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
+        <div>
+          <button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px;width:100%">Connect</button>
+          <p style="margin:5px 0 0;font-family:var(--mono);font-size:9px;color:var(--text-3);text-align:center">rest</p>
+        </div>
+        <div>
+          <button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px;width:100%;background:var(--accent-hover)">Connect</button>
+          <p style="margin:5px 0 0;font-family:var(--mono);font-size:9px;color:var(--text-3);text-align:center">hover</p>
+        </div>
+        <div>
+          <button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px;width:100%;background:var(--accent-pressed);box-shadow:inset 0 2px 4px rgba(0,0,0,.32);transform:scale(.97)">Connect</button>
+          <p style="margin:5px 0 0;font-family:var(--mono);font-size:9px;color:var(--text-3);text-align:center">pressed 0.97</p>
+        </div>
+        <div>
+          <button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px;width:100%;outline:2px solid var(--focus);outline-offset:2px">Connect</button>
+          <p style="margin:5px 0 0;font-family:var(--mono);font-size:9px;color:var(--text-3);text-align:center">focused 2 pt</p>
+        </div>
+        <div>
+          <button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px;width:100%;background:#2A2740;color:var(--text-dis);box-shadow:none">Connect</button>
+          <p style="margin:5px 0 0;font-family:var(--mono);font-size:9px;color:var(--text-3);text-align:center">disabled</p>
+        </div>
+        <div>
+          <button class="btn" style="height:28px;padding:0 10px;border-radius:8px;font-size:13px;width:100%;background:var(--accent-fill);opacity:.9">
+            <span style="width:11px;height:11px;border-radius:50%;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;display:inline-block"></span>
+          </button>
+          <p style="margin:5px 0 0;font-family:var(--mono);font-size:9px;color:var(--text-3);text-align:center">loading</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    Rendered from design/mockups/00-tokens.html at 2× · every colour, size, radius and contrast figure is taken
+    from docs/DESIGN.md, so the SwiftUI implementation and this sheet cannot drift apart.
+  </div>
+</div>
