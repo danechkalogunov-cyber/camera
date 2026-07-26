@@ -453,21 +453,21 @@ package struct VElevation: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
 
     package func body(content: Content) -> some View {
-        content
-            .background { background }
-            .overlay { highlight }
-            .overlay { border }
+        let tight = resolvedShadow(0)
+        let ambient = resolvedShadow(1)
+        return content
+            .background { backgroundLayer }
+            .overlay { highlightLayer }
+            .overlay { borderLayer }
             .compositingGroup()
-            .shadow(color: shadow(0).color, radius: shadow(0).radius,
-                    x: shadow(0).x, y: shadow(0).y)
-            .shadow(color: shadow(1).color, radius: shadow(1).radius,
-                    x: shadow(1).x, y: shadow(1).y)
+            .shadow(color: tight.color, radius: tight.radius, x: tight.x, y: tight.y)
+            .shadow(color: ambient.color, radius: ambient.radius, x: ambient.x, y: ambient.y)
     }
 
     // MARK: - Private Helpers
 
     @ViewBuilder
-    private var background: some View {
+    private var backgroundLayer: some View {
         switch backdrop {
         case .video:
             // §2.3: solid scrim, never a material, whatever level the caller asked for.
@@ -482,7 +482,7 @@ package struct VElevation: ViewModifier {
     }
 
     @ViewBuilder
-    private var highlight: some View {
+    private var highlightLayer: some View {
         // Chrome only: an inner highlight over video is one more thing drawn on the frame (P1).
         if backdrop == .chrome, !level.usesGlass, level.highlight > 0 || level.innerShadow > 0 {
             VInnerHighlight(radius: radius,
@@ -493,7 +493,7 @@ package struct VElevation: ViewModifier {
     }
 
     @ViewBuilder
-    private var border: some View {
+    private var borderLayer: some View {
         // VGlass already draws its own hairline edge, so a chrome glass level does not double it.
         if backdrop == .video {
             VTheme.Radius.shape(radius)
@@ -510,7 +510,7 @@ package struct VElevation: ViewModifier {
     ///
     /// Returns the no-op over video (§6.3) and under `increaseContrast`, where shadows are removed
     /// and replaced by the thicker 1 pt borders the token set already produces (§10.4).
-    private func shadow(_ index: Int) -> VTheme.Elevation.Shadow {
+    private func resolvedShadow(_ index: Int) -> VTheme.Elevation.Shadow {
         let none = VTheme.Elevation.Shadow(alpha: 0, radius: 0, y: 0)
         guard backdrop == .chrome, contrast != .increased else { return none }
         return level.shadow(index, scheme) ?? none
