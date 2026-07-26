@@ -179,8 +179,11 @@ public struct ProfileTierLevel: Sendable, Hashable, Codable {
         for i in 0 ..< maxNumSubLayersMinus1 {
             // 2 + 1 + 5 + 32 + 48 = 88 bits: the general block without `general_level_idc`.
             if profilePresent[i] { try reader.skip(88) }
-            ptl.subLayerLevelIDC.append(
-                levelPresent[i] ? UInt8(truncatingIfNeeded: try reader.u(8)) : nil)
+            if levelPresent[i] {
+                ptl.subLayerLevelIDC.append(UInt8(truncatingIfNeeded: try reader.u(8)))
+            } else {
+                ptl.subLayerLevelIDC.append(nil)
+            }
         }
         return ptl
     }

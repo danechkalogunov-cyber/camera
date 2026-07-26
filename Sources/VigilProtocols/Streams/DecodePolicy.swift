@@ -45,8 +45,6 @@ public enum DecodeMode: Int, Sendable, Hashable, Codable, Comparable, CaseIterab
 public enum StreamPriority: Int, Sendable, Hashable, Codable, Comparable, CaseIterable {
     /// Fullscreen, or the single focused tile, or the audio-solo camera.
     case focused = 400
-    /// **Never demoted, never occlusion-paused.** A recording must not be sacrificed for a preview.
-    case recording = 350
     /// On-screen tile with a short edge ≥ 480 backing px.
     case visibleLarge = 300
     /// On-screen tile with a short edge < 480 backing px.
@@ -54,6 +52,9 @@ public enum StreamPriority: Int, Sendable, Hashable, Codable, Comparable, CaseIt
     /// Video-wall tile on a secondary display.
     case wall = 175
     case pictureInPicture = 150
+    /// **Never demoted, never occlusion-paused.** A recording must not be sacrificed for a preview.
+    /// Its raw value puts it above every visible tile but below the focused one.
+    case recording = 350
     /// In the layout but scrolled off, occluded, or pre-warming.
     case offscreen = 100
     case sidebarThumbnail = 50

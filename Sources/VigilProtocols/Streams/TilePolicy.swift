@@ -165,6 +165,10 @@ public enum TilePolicy {
     ///
     /// A device with no sub stream (some analog NVR inputs) gets `.main` wherever the table asks
     /// for `.sub`: a stream that does not exist cannot be pulled.
+    ///
+    /// The `.jpegPoll` interval it returns is the single-surface cadence. A caller that knows how
+    /// many surfaces are polling the same device must call `jpegInterval(for:pollingSurfaces:)`
+    /// itself, or the device sees one request per second per tile instead of one in total.
     public static func choice(for context: TileContext) -> StreamChoice {
         let tile = tileClass(for: context)
         switch tile {

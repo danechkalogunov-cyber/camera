@@ -86,8 +86,19 @@ public enum Limits {
     /// `max_num_reorder_frames` and `max_dec_frame_buffering` in the VUI bitstream restriction.
     public static let maxReorderFrames: UInt32 = 32
 
-    /// Smallest coded luma width or height either codec may declare, in samples.
-    public static let minCodedDimension = 8
+    /// Largest single cropping or conformance-window offset, in that standard's crop units.
+    ///
+    /// One offset can never legitimately exceed the coded dimension it is measured against, and
+    /// `maxCodedDimension` is the ceiling on that. The parser additionally checks the *sum* of each
+    /// axis against the actual coded size; this bound exists so a 4-billion offset is refused before
+    /// the arithmetic rather than after it.
+    public static let maxCropOffset: UInt32 = 16_384
+
+    /// Smallest coded luma width or height an H.264 stream may declare: one macroblock.
+    public static let minH264CodedDimension = 16
+
+    /// Smallest coded luma width or height an H.265 stream may declare: one minimum coding block.
+    public static let minH265CodedDimension = 8
 
     /// Largest coded luma width or height Vigil will accept, in samples.
     ///
