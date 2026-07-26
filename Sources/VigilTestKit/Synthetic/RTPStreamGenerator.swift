@@ -56,6 +56,13 @@ public struct RTPStreamGenerator: Sendable {
     /// Sequence numbers the loss injector discarded, in the order they were dropped.
     public private(set) var droppedSequenceNumbers: [UInt16] = []
 
+    /// Indices of access units that lost at least one packet.
+    public private(set) var damagedAccessUnits: Set<Int> = []
+
+    /// The first sequence number this generator will use. `RTP-Info` in the PLAY response has to
+    /// report this exact value, so the server reads it back rather than recomputing it.
+    public let startSequence: UInt16
+
     /// The MTU used when deciding between a single-NAL packet, an aggregate and a fragment.
     public var mtu: Int
 
@@ -69,7 +76,9 @@ public struct RTPStreamGenerator: Sendable {
         self.profile = profile
         self.ssrc = ssrc
         mtu = profile.mtu
-        sequenceNumber = profile.quirks.contains(.sequenceWrapSoon) ? 65_500 : startSequence
+        let first = profile.quirks.contains(.sequenceWrapSoon) ? 65_500 : startSequence
+        self.startSequence = first
+        sequenceNumber = first
         random = SplitMix64RandomSource(seed: profile.seed ^ 0x5DEE_CE66_D3E5_1AB3)
     }
 
@@ -265,6 +274,7 @@ public struct RTPStreamGenerator: Sendable {
     private mutating func shape(_ packet: RTPPacketBytes) -> [RTPPacketBytes] {
         if let rate = profile.quirks.packetLossRate, rate > 0, draw() < rate {
             droppedSequenceNumbers.append(packet.sequenceNumber)
+            damagedAccessUnits.insert(packet.accessUnitIndex)
             return []
         }
 

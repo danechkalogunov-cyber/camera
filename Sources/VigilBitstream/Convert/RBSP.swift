@@ -133,7 +133,7 @@ public enum RBSP {
         var result: T?
         var failure: BitstreamError?
         bytes.withUnsafeBytes { raw in
-            do {
+            do throws(BitstreamError) {
                 result = try body(raw)
             } catch {
                 failure = error

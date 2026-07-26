@@ -19,12 +19,13 @@ import VigilProtocols
 ///   adds pure latency for nothing, and that latency is charged directly against the under-250 ms
 ///   glass-to-glass target. Packets are forwarded on arrival; sequence discontinuities are still
 ///   counted and still reported as gaps, because there they mean the *camera* dropped packets.
-/// * `.adaptive` — UDP. Starts at 128 packets / 60 ms and escalates to 512 packets / 200 ms once
-///   measured loss passes 1 %. While packets arrive strictly in order the ring is bypassed
-///   entirely, so the common case still costs nothing.
+/// * `.adaptive` — UDP. 128 packets / 60 ms, escalating to 512 packets / 200 ms once measured loss
+///   passes 1 %. While packets arrive strictly in order the ring is bypassed entirely, so the
+///   common case costs one array write less than nothing.
 ///
-/// Every sequence comparison here is modulo-2^16 (`seqLess`, `seqDiff`). A `<` anywhere in this
-/// type would stall the buffer permanently the first time the sequence crossed 65535.
+/// Every sequence comparison here is modulo-2^16 (`seqLess`, `seqDiff`). A `<` anywhere in this type
+/// would stall the buffer permanently the first time the sequence crossed 65535 — every ~22 minutes
+/// at 50 packets per second.
 public struct ReorderBuffer: Sendable {
 
     // MARK: - Nested Types
@@ -46,38 +47,36 @@ public struct ReorderBuffer: Sendable {
         public var gaps: [ClosedRange<UInt16>] = []
         /// Packets that arrived after their slot had already been released.
         public var late = 0
-        /// Packets whose sequence number was already held or already released as itself.
+        /// Packets whose sequence number was already held, or was the one just released.
         public var duplicates = 0
         /// Packets that arrived with a hole below them, i.e. genuinely out of order.
         public var reordered = 0
-        /// Packets discarded because the ring had to be force-flushed to make room.
-        public var overflowDropped = 0
 
         /// Creates an empty output.
         public init() {}
 
         /// Total number of missing sequence numbers across `gaps`.
-        public var lostCount: Int { gaps.reduce(0) { $0 + Int($1.upperBound - $1.lowerBound) + 1 } }
+        public var lostCount: Int {
+            gaps.reduce(0) { $0 + Int($1.upperBound - $1.lowerBound) + 1 }
+        }
 
         /// True when nothing was released and nothing was counted.
         public var isEmpty: Bool {
-            packets.isEmpty && gaps.isEmpty && late == 0 && duplicates == 0
-                && reordered == 0 && overflowDropped == 0
+            packets.isEmpty && gaps.isEmpty && late == 0 && duplicates == 0 && reordered == 0
         }
     }
 
     /// The fast-path state machine of `.adaptive` (docs/spec-rtp.md §10.5).
     private enum RunState {
-        /// Packets are arriving in order; release immediately, touch nothing.
+        /// Packets are arriving in order; the ring is bypassed.
         case streaming
-        /// A reorder or a duplicate was seen; the ring is in use.
+        /// A reorder, a duplicate or a gap was seen; the ring is in use.
         case buffering
     }
 
-    /// One occupied ring slot: the packet and when it arrived.
+    /// One occupied ring slot.
     private struct Slot {
         var packet: RTPPacket
-        var arrival: MediaInstant
     }
 
     // MARK: - Stored Properties
@@ -85,10 +84,10 @@ public struct ReorderBuffer: Sendable {
     /// The discipline in force. Fixed for the life of the buffer; escalation changes depth, not mode.
     public let mode: Mode
 
-    /// Ring capacity in packets, rounded up to a power of two and capped at 4096.
+    /// Ring capacity in packets: a power of two in `1...4096`, or 0 in `.passthrough`.
     public private(set) var capacity: Int
 
-    /// Longest a packet may be held waiting for its predecessor.
+    /// Longest the buffer waits for a missing packet before declaring it lost.
     public private(set) var maxHold: Duration
 
     /// True once `escalate()` has widened the bounds and `relax()` has not undone it.
@@ -97,7 +96,7 @@ public struct ReorderBuffer: Sendable {
     /// `capacity - 1`, the index mask. Valid because `capacity` is a power of two.
     private var mask: Int
 
-    /// Fixed-size storage. Allocated once per depth change, never per packet.
+    /// Fixed-size storage, allocated once per depth change and never per packet.
     private var slots: [Slot?]
 
     /// The next sequence number to release. `nil` before the first packet.
@@ -106,16 +105,21 @@ public struct ReorderBuffer: Sendable {
     /// Number of occupied slots.
     private var held = 0
 
+    /// When the hole currently blocking `baseSequence` was first observed. The hold budget is
+    /// measured from here, and it restarts for each distinct hole — an O(1) anchor, where scanning
+    /// the ring for the oldest arrival would be O(capacity) on the per-packet path.
+    private var holeAnchor: MediaInstant?
+
     /// The fast-path state of `.adaptive`.
     private var runState: RunState = .streaming
 
     /// Consecutive in-order packets seen while `.buffering`, for the return to `.streaming`.
     private var inOrderRun = 0
 
-    /// The most recently released sequence number, for duplicate detection in `.passthrough`.
+    /// The most recently released sequence number, for duplicate detection.
     private var lastReleased: UInt16?
 
-    /// Number of consecutive in-order packets required to leave `.buffering`.
+    /// Consecutive in-order packets required to leave `.buffering` (docs/spec-rtp.md §10.5).
     private static let streamingResumeRun = 256
 
     /// Hard ceiling on the ring, so a pathological policy cannot allocate without bound.
@@ -128,21 +132,26 @@ public struct ReorderBuffer: Sendable {
     /// - Parameters:
     ///   - mode: `.passthrough` for TCP interleaved, `.adaptive` for UDP.
     ///   - capacity: ring size in packets. Rounded **up** to a power of two and clamped to
-    ///     `1...4096`; ignored entirely in `.passthrough`, which never stores a packet.
+    ///     `1...4096`; forced to 0 in `.passthrough`, which never stores a packet.
     ///   - maxHold: longest a packet waits for a missing predecessor before the hole is declared a
     ///     gap. Ignored in `.passthrough`.
     public init(mode: Mode, capacity: Int, maxHold: Duration) {
         self.mode = mode
         self.maxHold = maxHold
-        let rounded = mode == .passthrough ? 1 : Self.roundedCapacity(capacity)
-        self.capacity = rounded
-        self.mask = rounded - 1
-        self.slots = mode == .passthrough ? [] : Array(repeating: nil, count: rounded)
+        if mode == .passthrough {
+            self.capacity = 0
+            self.mask = 0
+            self.slots = []
+        } else {
+            let rounded = Self.roundedCapacity(capacity)
+            self.capacity = rounded
+            self.mask = rounded - 1
+            self.slots = Array(repeating: nil, count: rounded)
+        }
     }
 
-    /// TCP interleaved: no buffering, no added latency.
-    public static let tcpInterleaved = ReorderBuffer(mode: .passthrough, capacity: 0,
-                                                     maxHold: .zero)
+    /// TCP interleaved: no buffering, no added latency (API_CONTRACT §4.4).
+    public static let tcpInterleaved = ReorderBuffer(mode: .passthrough, capacity: 0, maxHold: .zero)
 
     /// UDP live: 128 packets / 60 ms, about 1.5 frame intervals at 25 fps.
     public static let udpLive = ReorderBuffer(mode: .adaptive, capacity: 128,
@@ -152,56 +161,28 @@ public struct ReorderBuffer: Sendable {
     public static let udpLossy = ReorderBuffer(mode: .adaptive, capacity: 512,
                                                maxHold: .milliseconds(200))
 
-    /// The buffer a `LatencyPreset` asks for on the given transport.
-    ///
-    /// `.passthrough` ignores the preset by design: on TCP the preset's depth would be latency spent
-    /// on a problem the transport has already solved.
-    public static func forPreset(_ preset: LatencyPreset, mode: Mode) -> ReorderBuffer {
-        guard mode == .adaptive else { return .tcpInterleaved }
-        return ReorderBuffer(mode: .adaptive,
-                             capacity: Swift.max(preset.jitterBufferPackets, 128),
-                             maxHold: preset.jitterBufferDepth)
-    }
-
     // MARK: - Computed Properties
 
     /// Packets currently held, waiting for a predecessor. Always 0 in `.passthrough`.
     public var depth: Int { held }
 
-    /// Arrival instant of the oldest held packet, or `nil` when nothing is held.
-    public var oldestArrival: MediaInstant? {
-        guard held > 0, let base = baseSequence else { return nil }
-        var oldest: MediaInstant?
-        for step in 0..<capacity {
-            let sequence = base &+ UInt16(truncatingIfNeeded: step)
-            guard let slot = slots[Int(sequence) & mask], slot.packet.sequenceNumber == sequence
-            else { continue }
-            if let current = oldest {
-                oldest = Swift.min(current, slot.arrival)
-            } else {
-                oldest = slot.arrival
-            }
-        }
-        return oldest
-    }
-
-    /// How long the oldest held packet has been waiting, in milliseconds. 0 when nothing is held.
+    /// How long the current hole has been open, in milliseconds. 0 when nothing is held.
     public func bufferedMilliseconds(at now: MediaInstant) -> Double {
-        guard let oldest = oldestArrival else { return 0 }
-        return Swift.max(0, now.milliseconds(since: oldest))
+        guard let holeAnchor else { return 0 }
+        return Swift.max(0, now.milliseconds(since: holeAnchor))
     }
 
-    /// When `drain` will next have work to do, or `nil` when the buffer is empty.
+    /// When `drain` will next have work to do, or `nil` when nothing is held.
     public var nextDeadline: MediaInstant? {
-        guard let oldest = oldestArrival else { return nil }
-        return oldest + maxHold
+        guard let holeAnchor else { return nil }
+        return holeAnchor + maxHold
     }
 
     // MARK: - Depth policy
 
-    /// Widens the bounds to 512 packets / 200 ms. Returns true if this changed anything.
+    /// Widens the bounds to 512 packets / 200 ms. Returns true when this changed anything.
     ///
-    /// Held packets are preserved: the ring is rebuilt in sequence order, not dropped.
+    /// Held packets survive: the ring is rebuilt in sequence order rather than dropped.
     @discardableResult
     public mutating func escalate() -> Bool {
         guard mode == .adaptive, !isEscalated else { return false }
@@ -223,9 +204,9 @@ public struct ReorderBuffer: Sendable {
 
     /// Offers one packet to the buffer.
     ///
-    /// In `.passthrough` the packet is returned immediately and unmodified — the buffer is a counter
-    /// there, never a filter, so nothing it does can add a frame of latency. In `.adaptive` the
-    /// packet is either released immediately (in-order fast path), held, or dropped as late or
+    /// In `.passthrough` the packet is returned immediately and unmodified — there the buffer is a
+    /// counter, never a filter, so nothing it does can add a frame of latency. In `.adaptive` the
+    /// packet is released immediately (the in-order fast path), held, or dropped as late or
     /// duplicate.
     ///
     /// - Parameter now: arrival instant, injected so the pure layer reads no clock.
@@ -236,32 +217,30 @@ public struct ReorderBuffer: Sendable {
         let sequence = packet.sequenceNumber
 
         guard let base = baseSequence else {
-            baseSequence = sequence
-            release(from: sequence, into: &out, insert: packet, at: now)
+            releaseOne(packet, into: &out)
+            baseSequence = sequence &+ 1
             return out
         }
 
         let distance = seqDiff(sequence, base)
 
         if distance < 0 {
-            // Its slot was released already: either a duplicate of a released packet or a straggler.
-            if lastReleased == sequence {
-                out.duplicates += 1
-            } else {
-                out.late += 1
-            }
+            // Its slot was released already: a duplicate of the last release, or a straggler.
+            if lastReleased == sequence { out.duplicates += 1 } else { out.late += 1 }
             noteDisorder()
             return out
         }
 
         if distance >= capacity {
-            // The hole below this packet is wider than the ring: give up on it now rather than
-            // dropping the packet that proves the stream moved on.
+            // The hole below this packet is wider than the ring. Give up on it now rather than drop
+            // the packet that proves the stream has moved on.
             flushAll(into: &out)
-            out.gaps += seqGapRanges(from: base, to: sequence)
-            baseSequence = sequence
+            let resumed = baseSequence ?? sequence
+            out.gaps += seqGapRanges(from: resumed, to: sequence)
+            releaseOne(packet, into: &out)
+            baseSequence = sequence &+ 1
+            holeAnchor = nil
             noteDisorder()
-            release(from: sequence, into: &out, insert: packet, at: now)
             return out
         }
 
@@ -283,32 +262,36 @@ public struct ReorderBuffer: Sendable {
             }
         }
 
-        // In-order fast path: nothing is held below it, so the ring is never touched.
         if distance == 0, held == 0 {
+            // In-order fast path: nothing is waiting below it, so the ring is never touched.
             releaseOne(packet, into: &out)
             baseSequence = sequence &+ 1
             return out
         }
 
-        slots[index] = Slot(packet: packet, arrival: now)
+        slots[index] = Slot(packet: packet)
         held += 1
         releaseContiguous(into: &out)
         applyHoldBound(at: now, into: &out)
+        anchorHole(at: now)
         return out
     }
 
     /// Time-driven release. Call from `RTPTrackReceiver.tick`.
     ///
-    /// - Parameter force: release everything held and report every hole. Used on PAUSE, TEARDOWN and
-    ///   an SSRC change, where waiting for a packet that will never come is pointless.
+    /// - Parameter force: release everything held and report every hole between the pieces. Used on
+    ///   PAUSE, TEARDOWN and an SSRC change, where waiting for a packet that will never come only
+    ///   delays the shutdown.
     public mutating func drain(at now: MediaInstant, force: Bool = false) -> Output {
         var out = Output()
         guard mode == .adaptive, held > 0 else { return out }
         if force {
             flushAll(into: &out)
+            holeAnchor = nil
             return out
         }
         applyHoldBound(at: now, into: &out)
+        anchorHole(at: now)
         return out
     }
 
@@ -318,6 +301,7 @@ public struct ReorderBuffer: Sendable {
         held = 0
         baseSequence = nil
         lastReleased = nil
+        holeAnchor = nil
         runState = .streaming
         inOrderRun = 0
     }
@@ -336,9 +320,9 @@ public struct ReorderBuffer: Sendable {
             } else if distance < 0 {
                 if lastReleased == sequence { out.duplicates += 1 } else { out.late += 1 }
             }
-        }
-        // Only advance the expectation forwards, so one late packet does not re-report the run.
-        if baseSequence == nil || seqGreater(sequence &+ 1, baseSequence ?? sequence) {
+            // Advance the expectation forwards only, so one late packet cannot re-report a run.
+            if seqGreater(sequence &+ 1, expected) { baseSequence = sequence &+ 1 }
+        } else {
             baseSequence = sequence &+ 1
         }
         lastReleased = sequence
@@ -357,18 +341,19 @@ public struct ReorderBuffer: Sendable {
         lastReleased = packet.sequenceNumber
     }
 
-    /// Seeds the base sequence and releases `insert` immediately, storing it only if it cannot go
-    /// straight out. Used for the very first packet and after a forced re-base.
-    private mutating func release(from sequence: UInt16, into out: inout Output,
-                                  insert packet: RTPPacket, at now: MediaInstant) {
-        releaseOne(packet, into: &out)
-        baseSequence = sequence &+ 1
-        releaseContiguous(into: &out)
+    /// Starts or clears the hold-budget anchor after a release.
+    private mutating func anchorHole(at now: MediaInstant) {
+        if held == 0 {
+            holeAnchor = nil
+        } else if holeAnchor == nil {
+            holeAnchor = now
+        }
     }
 
     /// Pops slots from `baseSequence` upwards for as long as they are occupied.
     private mutating func releaseContiguous(into out: inout Output) {
         guard var base = baseSequence else { return }
+        var advanced = false
         while held > 0 {
             let index = Int(base) & mask
             guard let slot = slots[index], slot.packet.sequenceNumber == base else { break }
@@ -376,12 +361,14 @@ public struct ReorderBuffer: Sendable {
             held -= 1
             releaseOne(slot.packet, into: &out)
             base = base &+ 1
+            advanced = true
         }
         baseSequence = base
+        if advanced { holeAnchor = nil }        // this hole is resolved; the next one re-anchors
     }
 
-    /// Declares the hole at `baseSequence` lost once the oldest held packet has waited longer than
-    /// `maxHold`, then releases everything that became contiguous.
+    /// Declares the hole at `baseSequence` lost once it has been open longer than `maxHold`, then
+    /// releases everything that thereby became contiguous.
     private mutating func applyHoldBound(at now: MediaInstant, into out: inout Output) {
         while held > 0, bufferedMilliseconds(at: now) > maxHold.milliseconds {
             guard releaseWithGap(into: &out) else { return }
@@ -389,16 +376,17 @@ public struct ReorderBuffer: Sendable {
     }
 
     /// Skips forward to the lowest occupied slot above `baseSequence`, reporting the skipped run as
-    /// a gap. Returns false when nothing is held, so the caller's loop terminates.
+    /// a gap. Returns false when nothing above the base is occupied.
     @discardableResult
     private mutating func releaseWithGap(into out: inout Output) -> Bool {
-        guard held > 0, let base = baseSequence else { return false }
+        guard held > 0, let base = baseSequence, capacity > 0 else { return false }
         for step in 1...capacity {
             let sequence = base &+ UInt16(truncatingIfNeeded: step)
             let index = Int(sequence) & mask
             guard let slot = slots[index], slot.packet.sequenceNumber == sequence else { continue }
             out.gaps += seqGapRanges(from: base, to: sequence)
             baseSequence = sequence
+            holeAnchor = nil
             releaseContiguous(into: &out)
             return true
         }
@@ -407,17 +395,17 @@ public struct ReorderBuffer: Sendable {
 
     /// Releases every held packet in sequence order, reporting every hole between them.
     private mutating func flushAll(into out: inout Output) {
+        releaseContiguous(into: &out)
         while held > 0 {
-            releaseContiguous(into: &out)
-            guard held > 0 else { break }
             guard releaseWithGap(into: &out) else { break }
         }
+        holeAnchor = nil
     }
 
     /// Rebuilds the ring at a new depth, preserving held packets in sequence order.
     private mutating func resize(capacity newCapacity: Int, maxHold newHold: Duration) {
-        let rounded = Self.roundedCapacity(newCapacity)
         maxHold = newHold
+        let rounded = Self.roundedCapacity(newCapacity)
         guard rounded != capacity else { return }
         var carried: [Slot] = []
         carried.reserveCapacity(held)
