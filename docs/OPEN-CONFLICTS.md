@@ -152,3 +152,23 @@ DESIGN.md §12.1 places them in `VTheme` and §9.20 gives their thresholds, the 
 sketch references them, and **no manifest row and no agent brief covers them**. They are literals and
 belong in `VTheme`. Assign them before the UI wave, or the health colouring will be reinvented inline
 in a view, which is exactly what the "literals only in VTheme" rule exists to prevent.
+
+## I6 — three types are unassigned and unwritten (M — open)
+
+Reported by `impl:types-b` after finishing its own rows:
+
+- **`Identity/DeviceQuirks.swift`** — `DeviceQuirk` is the single sanctioned channel for firmware
+  workarounds: a protocol module detects a quirk, `VigilCore` persists it on the camera record, and
+  it is injected back on the next connect. `spec-isapi.md` §2 and `spec-core.md` both depend on it,
+  and no manifest row creates it.
+- **`Identity/EventKind.swift`** — the event taxonomy the ISAPI alert stream decodes into and the
+  UI filters on. Same situation.
+- **`RateLimitedLogger`** — deliberately **not** written, and the reason is a real design problem
+  rather than an omission: it cannot be a `Sendable` struct with a non-`mutating` `log()`, because
+  rate limiting requires mutable state behind the call. It needs to be an actor, or hold an
+  `OSAllocatedUnfairLock` — which is macOS-only and therefore cannot live in the pure layer. Decide
+  before any module starts logging in a loop, because the first thing that needs it is the RTP
+  receiver, which can otherwise emit a log line per packet.
+
+`Identity/Identifiers.swift` was written by `impl:types-b` out of necessity — `StreamKey` needs
+`CameraID` — and is not a gap.

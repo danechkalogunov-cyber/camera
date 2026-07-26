@@ -69,3 +69,14 @@ Building for debugging...
 [79/105] Compiling VigilProtocolsTests IPv4AddressTests.swift
 [80/105] Compiling VigilProtocolsTests IPv4SubnetTests.swift
 [81/105] Compiling VigilProtocolsTests LoggingTests.swift
+[86/105] Compiling VigilProtocolsTests ByteWriterTests.swift
+[87/105] Compiling VigilProtocolsTests CodecsTests.swift
+[88/105] Compiling VigilProtocolsTests ConcurrencyUtilityTests.swift
+[89/105] Compiling VigilProtocolsTests CryptoTests.swift
+[90/105] Compiling VigilProtocolsTests RandomSourceTests.swift
+[91/105] Compiling VigilProtocolsTests RedactTests.swift
+[92/105] Compiling VigilProtocolsTests RingBufferTests.swift
+[93/105] Compiling VigilProtocolsTests StreamStatisticsTests.swift
+[94/105] Compiling VigilProtocolsTests TilePolicyTests.swift
+[95/105] Compiling VigilProtocolsTests VideoFormatInfoTests.swift
+[96/105] Compiling VigilProtocolsTests VigilErrorTests.swift
