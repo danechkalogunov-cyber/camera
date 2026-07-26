@@ -202,6 +202,78 @@ import VigilProtocols
         #expect(decoder.failure == nil)
     }
 
+    /// Corruption in the middle of a media run must cost one resynchronization, not the stream: the
+    /// frame after the damaged one has to arrive.
+    @Test func wireDecoderRecoversFromACorruptFrameHeaderAndDeliversTheNextFrame() throws {
+        let good = MessageLayerFixtures.rtpPacket(length: 24, sequence: 1)
+        let later = MessageLayerFixtures.rtpPacket(length: 24, sequence: 3)
+        var stream = MessageLayerFixtures.interleaved(channel: 0, payload: good)
+        // A damaged frame header: the magic survived, the channel byte did not.
+        stream += MessageLayerFixtures.interleaved(channel: 7,
+                                                   payload: MessageLayerFixtures.rtpPacket(length: 12))
+        // Chain depth is 2, so recovery needs two consecutive believable frames.
+        stream += MessageLayerFixtures.interleaved(channel: 0, payload: later)
+        stream += MessageLayerFixtures.interleaved(channel: 1,
+                                                   payload: MessageLayerFixtures.rtpPacket(length: 32))
+
+        var decoder = RTSPWireDecoder()
+        decoder.registerInterleavedChannels([0, 1])
+        let events = decoder.ingest(stream)
+
+        #expect(events.count == 4)
+        guard case .interleaved(_, let first) = events[0],
+              case .malformed(let fault) = events[1],
+              case .interleaved(let channel, let recovered) = events[2] else {
+            Issue.record("expected media, a fault, then recovered media: \(events)")
+            return
+        }
+        #expect(first == Data(good))
+        #expect(fault == .unknownInterleavedChannel(7))
+        #expect(channel == 0)
+        #expect(recovered == Data(later))
+        #expect(decoder.statistics.resyncEvents == 1)
+        #expect(decoder.failure == nil)
+        #expect(MessageLayerFixtures.decode(stream, chunk: 1, channels: [0, 1]) == events)
+    }
+
+    /// A `0x24` inside garbage is not a frame boundary. The second link of the chain here satisfies
+    /// the channel, length and RTP-version checks and fails only on its magic byte — which is the
+    /// regression this test exists for: without the magic check on links 2…n the decoder locks onto
+    /// the false candidate and hands the depacketizer garbage that looks like a codec fault.
+    @Test func wireDecoderRejectsAFalseFrameChainWhoseSecondLinkLacksTheMagicByte() throws {
+        let real = MessageLayerFixtures.rtpPacket(length: 24, sequence: 9)
+        var stream = MessageLayerFixtures.interleaved(channel: 9, payload: [0xEE, 0xEE])  // resync
+
+        // A convincing first link: magic, registered channel 0, length 8, RTP version 2.
+        let falseCandidate: [UInt8] = [0x24, 0x00, 0x00, 0x08] + [UInt8](repeating: 0x80, count: 8)
+        // What follows it is *not* a frame: only its magic byte is wrong. Channel 0 is registered,
+        // the length is 16, and the first payload byte has version bits 2.
+        let impostor: [UInt8] = [0xAA, 0x00, 0x00, 0x10] + [UInt8](repeating: 0x80, count: 16)
+        stream += falseCandidate + impostor
+
+        // The genuine run the decoder must find instead.
+        stream += MessageLayerFixtures.interleaved(channel: 0, payload: real)
+        stream += MessageLayerFixtures.interleaved(channel: 1,
+                                                   payload: MessageLayerFixtures.rtpPacket(length: 16))
+
+        var decoder = RTSPWireDecoder()
+        decoder.registerInterleavedChannels([0, 1])
+        let events = decoder.ingest(stream)
+
+        guard case .malformed = try #require(events.first) else {
+            Issue.record("expected the unknown channel to start a resync")
+            return
+        }
+        let media = events.compactMap { event -> Data? in
+            if case .interleaved(_, let payload) = event { return payload }
+            return nil
+        }
+        #expect(media.count == 2, "the false candidate must not be emitted as media")
+        #expect(media.first == Data(real))
+        #expect(decoder.statistics.bytesDiscardedByResync
+            == UInt64(6 + falseCandidate.count + impostor.count))
+    }
+
     // MARK: - Leniencies
 
     @Test func wireDecoderToleratesBareLineFeeds() throws {

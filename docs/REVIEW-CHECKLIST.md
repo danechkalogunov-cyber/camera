@@ -43,3 +43,24 @@ reader and yields a plausible but wrong resolution rather than an error.
 Before the macOS layer is reviewed in step 4, every row here gets either a second reader or an
 explicit "accepted, will find out on hardware". Items that survive to the first real camera test
 become the first things checked when something looks wrong.
+
+---
+
+## Specification vectors that turned out to be wrong (`impl:rtp-a`, `impl:rtp-b`)
+
+Found by implementing against them. In every case the implementation follows the RFC or the CCITT
+reference and the test records why it disagrees with the document.
+
+| Where | The document says | Reality |
+|---|---|---|
+| `spec-rtp.md` §15.1 | header extension `12 AB 00 00` is "id 1, value AB, then padding" | RFC 8285 — and the spec's own `dataLength = len + 1` rule — make `0x12` id 1 with a **three-byte** value |
+| `spec-rtp.md` §15.7 | NTP MSW `0xE9A43B21` is unix `1 710 671 009.5` | `1 710 865 569.5`. The test asserts the arithmetic identity rather than the printed decimal |
+| `spec-rtp.md` §15.5 | the ADTS vector is 291 bytes | it encodes 293 |
+| `spec-rtp.md` §15.5 | `config=1210` is mono | it is stereo |
+| `spec-rtp.md` §15.6 | a G.711 A-law column, and µ-law `0x2A`/`0xD5` | contradicts the CCITT reference; the implementation follows CCITT |
+
+## Unverified for want of reference vectors
+
+- **G.726 byte-exactness.** `spec-rtp.md` §15.6 has no ITU vectors for it, so the codec is
+  implemented from the standard's prose and its output is **not** checked against a known-good
+  encoder. It is out of the slice, but if two-way audio ever sounds wrong, start here.
