@@ -290,8 +290,7 @@ actor ProbeSession {
             let stream = await transport.bytes()
             do {
                 for try await chunk in stream {
-                    guard let self else { return }
-                    await self.ingest(chunk)
+                    await self?.ingest(chunk)
                 }
                 await self?.transportEnded(error: nil)
             } catch {

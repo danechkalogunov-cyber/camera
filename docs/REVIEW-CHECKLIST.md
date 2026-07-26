@@ -124,3 +124,49 @@ The Linux build proves only that the `#if os(macOS)` guards are correct.
     `VideoFrame`, `StreamEndReason` or `FrameDropReason` when this was written. The two members that
     exist already use the contract's exact spellings, so landing the conformance is a one-line
     extension — but it is an integration task, not a finished one.
+
+## VigilTransport (`impl:transport`)
+
+The agent's own framing of what the Linux build proves is the correct one and worth repeating:
+**Swift parses inactive `#if` branches, so the syntax is valid; no body was ever semantically
+checked, so every type error in these files is still present — framework-related or not.**
+
+**Would not compile if the assumption is wrong**
+
+1. **Is `NWConnection` `Sendable` in the macOS 14/15 SDK?** It is captured in two `@Sendable`
+   cancellation closures and in `stateUpdateHandler`. If it is not, this does not build — and the
+   fix must **not** be an `@unchecked Sendable` box, because ruling R-52 caps the census at three
+   and forbids generic wrappers. Route the cancellation through the actor instead.
+2. Framework spellings taken on faith: `NWEndpoint.Host(_:)` being non-failable,
+   `NWParameters(tls:tcp:)` with a nil TLS options, `NWProtocolTCP.Options.noDelay`, the `receive`
+   completion arity and the position of `isComplete` in it, `SendCompletion.contentProcessed`, four
+   `POSIXErrorCode` case spellings, whether `NWError` and `NWConnection.State` are frozen, and
+   `AsyncStream.makeStream(bufferingPolicy:)` on a macOS 14 floor.
+3. Assigning actor state inside a `withCheckedContinuation` body relies on that body running
+   synchronously in the caller's isolation.
+
+**Decisions the supervisor must make, not merely note**
+
+4. **`.waiting(error)` is treated as non-terminal** — logged, with only the five-second connect
+   watchdog ending it. `spec-discovery.md` §5.9 says `.waiting` *is* terminal. The consequence is
+   user-visible and touches a customer requirement: a powered-off camera reports
+   `.connectTimeout` rather than `.connectRefused` or `.hostUnreachable`, so Stream Doctor gives
+   the vaguer of two diagnoses where `REQUIREMENTS-CUSTOMER.md` §R1.5 promises a specific one.
+5. **`EgressGuard` carries its own host classifier because `VigilProtocols/Net/HostPolicy.swift`
+   (ruling R-71) was never written.** Its classifier refuses any multi-label DNS name that is not
+   `*.local`, so a camera at `nvr.example.internal` **cannot connect at all**. Either write
+   `HostPolicy` and forward to it, or relax the classifier — leaving it is a real bug for anyone
+   with an internal DNS domain.
+6. **`RTPTrackFormatAdapter` (manifest row §5.9) is unwritten**, so `VigilCore` has no
+   `SDPMediaDescription` → `RTPTrackFormat` path outside `PipelineHarness`'s private copy. Without
+   it the slice cannot get from a parsed SDP to a configured depacketizer. This blocks first light.
+
+**Invented constants, none measured**
+
+7. 64 KiB read chunk; a 64-frame / 1 MiB write queue whose overflow is deliberately **terminal**
+   rather than a silent drop; a 250 ms close-flush budget; a 256-consecutive zero-byte-receive
+   governor; `.bufferingNewest(512)` for events.
+8. `cancel()` is assumed to fire outstanding receive and send completions. If it does not, closing
+   could block on the write task, and the 250 ms watchdog is the only mitigation.
+9. Ruling R-27 requires every drop to be counted, but `AsyncStream` does not report drops, so
+   event-stream drops are **not** counted. Acknowledged rather than papered over.

@@ -42,7 +42,10 @@ enum WindowChrome {
         window.backgroundColor = NSColor(VTheme.Color.Layer.canvas)
         // Vigil's multi-window model is Playback / Wall / Settings; tabs would hide live video.
         window.tabbingMode = .disallowed
-        window.setFrameAutosaveName(autosaveName)
+        // `setFrameAutosaveName` returns a `Bool` and is not `@discardableResult`. It answers
+        // "false" only when another window already owns the name, which for a single-window app
+        // means the frame is being restored by that other window — nothing to do about it here.
+        _ = window.setFrameAutosaveName(autosaveName)
         applyTrafficLightInset(to: window)
     }
 

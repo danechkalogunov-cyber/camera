@@ -44,7 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A bundled app is already `.regular`, but a binary run straight from `swift build` output —
     /// which is exactly how this gets tested first — launches behind the terminal without this.
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        // `activate()`, not `activate(ignoringOtherApps:)`: the latter is deprecated on macOS 14,
+        // which is this app's floor.
+        NSApplication.shared.activate()
     }
 }
 
