@@ -1,0 +1,335 @@
+<title>Vigil — discover cameras</title>
+<meta name="shot-viewport" content="1180x860">
+<meta name="shot-fullpage" content="true">
+<style>
+  /* Built from docs/UX.md §8.1-8.2 (discovery wireframe and flow), docs/spec-discovery.md
+     (SADP / WS-Discovery / sweep, activation and reachability states) and docs/DESIGN.md tokens.
+     Substitutions: SF Pro -> Inter, SF Mono -> JetBrains Mono, SF Symbols -> inline SVG. */
+  :root{
+    --canvas:#0B0C0F; --surface:#16181D; --raised:#1D2026; --overlay:#252932;
+    --text-1:#F2F4F8; --text-2:#A7AEBC; --text-3:#88909D; --text-dis:#4E5563;
+    --accent:#7B61FF; --accent-fill:#6247E8; --accent-hover:#8B74FF; --focus:#9581FF;
+    --ok:#32D74B; --warn:#FFD426; --motion:#FF9F0A; --danger:#FF5F52; --continuous:#3B9CFF;
+    --s-sub:rgba(255,255,255,.06); --s-def:rgba(255,255,255,.10); --s-str:rgba(255,255,255,.18);
+    --ui:"Inter Variable",Inter,system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#07080A;font-family:var(--ui);font-size:13px;line-height:18px;color:var(--text-1);
+       -webkit-font-smoothing:antialiased;padding:30px}
+  svg{display:block}
+  .ic{width:15px;height:15px;stroke:currentColor;stroke-width:1.6;fill:none;
+      stroke-linecap:round;stroke-linejoin:round}
+  .ic.sm{width:12px;height:12px;stroke-width:1.8}
+
+  /* window: E4 glass sheet, radius.xxl 20 */
+  .sheet{width:1120px;border-radius:20px;overflow:hidden;background:var(--surface);
+         border:1px solid var(--s-str);
+         box-shadow:0 40px 90px rgba(0,0,0,.66),0 0 0 1px rgba(0,0,0,.5),
+                    inset 0 1px 0 rgba(255,255,255,.10)}
+
+  /* ── header with the four-step progress ── */
+  .hd{padding:18px 22px 16px;background:rgba(37,41,50,.5);border-bottom:1px solid var(--s-def)}
+  .hd h1{font-size:22px;line-height:28px;font-weight:600;letter-spacing:-.3px}
+  .hd .sub{color:var(--text-3);font-size:12px;margin-top:3px}
+  .close{float:right;width:24px;height:24px;border-radius:12px;border:1px solid var(--s-def);
+         background:rgba(255,255,255,.05);color:var(--text-3);display:grid;place-items:center}
+  .steps{display:flex;align-items:center;gap:0;margin-top:16px}
+  .step{display:flex;align-items:center;gap:8px}
+  .step .bead{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;flex:none;
+              font-family:var(--mono);font-size:9px;font-weight:600}
+  .step.done .bead{background:var(--accent-fill);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
+  .step.now  .bead{background:var(--accent-fill);color:#fff;
+                   box-shadow:0 0 0 4px rgba(123,97,255,.22),inset 0 1px 0 rgba(255,255,255,.2)}
+  .step.todo .bead{background:transparent;border:1.5px solid var(--s-str);color:var(--text-dis)}
+  .step .lbl{font-size:12px;font-weight:600}
+  .step.todo .lbl{color:var(--text-dis);font-weight:500}
+  .step.done .lbl,.step.now .lbl{color:var(--text-1)}
+  .bar{flex:1;height:1.5px;margin:0 12px;border-radius:1px;background:var(--s-def)}
+  .bar.filled{background:var(--accent-fill)}
+
+  /* ── scan strip ── */
+  .scan{padding:14px 22px 16px;border-bottom:1px solid var(--s-sub)}
+  .scan-top{display:flex;align-items:center;gap:9px}
+  .spin{width:15px;height:15px;border-radius:50%;border:1.8px solid rgba(255,255,255,.14);
+        border-top-color:var(--accent);flex:none}
+  .scan-top .t{font-size:13px;font-weight:500}
+  .scan-top .t code{font-family:var(--mono);font-size:12px;color:var(--text-2)}
+  .scan-top .found{color:var(--text-3);font-size:12px}
+  .btn{display:inline-flex;align-items:center;gap:6px;border:0;font-weight:600;color:#fff;
+       background:var(--accent-fill);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);
+       height:28px;padding:0 10px;border-radius:8px;font-size:13px}
+  .btn.ghost{background:transparent;border:1px solid var(--s-str);color:var(--text-1);box-shadow:none}
+  .btn.dis{background:#2A2740;color:var(--text-dis);box-shadow:none}
+  .btn.lg{height:32px;padding:0 12px}
+  .scan-top .sp{flex:1}
+  .track{height:6px;border-radius:3px;background:rgba(255,255,255,.07);margin-top:11px;overflow:hidden}
+  .track i{display:block;height:100%;width:78%;border-radius:3px;
+           background:linear-gradient(90deg,var(--accent),#4E3BC7)}
+  .narr{display:flex;align-items:center;gap:12px;margin-top:7px;font-family:var(--mono);
+        font-size:10px;color:var(--text-3)}
+  .narr b{color:var(--text-2);font-weight:500}
+  .narr .okg{color:var(--ok)}
+
+  /* ── device list ── */
+  .list{padding:14px 22px 0}
+  .dev{display:flex;gap:11px;padding:11px 12px;border-radius:10px;background:var(--raised);
+       border:1px solid var(--s-def);margin-bottom:6px;position:relative}
+  .dev.on{background:#1B1832;border-color:rgba(123,97,255,.42)}
+  .dev.muted{opacity:.72}
+  .cb{width:16px;height:16px;border-radius:4px;flex:none;margin-top:2px;
+      border:1.5px solid var(--s-str);background:transparent;display:grid;place-items:center}
+  .cb.on{background:var(--accent-fill);border-color:var(--accent-fill);color:#fff}
+  .dev .body{flex:1;min-width:0}
+  .dev .l1{display:flex;align-items:center;gap:9px}
+  .dev .model{font-size:13px;font-weight:600}
+  .dev .ip{font-family:var(--mono);font-size:11px;color:var(--text-2)}
+  .kind{font-size:10px;font-weight:600;letter-spacing:.3px;padding:1px 6px;border-radius:4px;
+        border:1px solid}
+  .kind.hik{color:#2FB8E8;border-color:rgba(47,184,232,.4);background:rgba(47,184,232,.12)}
+  .kind.nvr{color:#A867F5;border-color:rgba(168,103,245,.4);background:rgba(168,103,245,.12)}
+  .kind.onvif{color:var(--text-3);border-color:var(--s-str);background:rgba(255,255,255,.04)}
+  .dev .meta{margin-left:auto;display:flex;align-items:center;gap:12px;
+             font-family:var(--mono);font-size:10px;color:var(--text-3)}
+  .dev .l2{display:flex;align-items:center;gap:7px;margin-top:3px;font-size:11px;color:var(--text-3)}
+  .dev .l2.warnl{color:var(--warn)}
+  .dev .l2 .inline{margin-left:auto}
+  .btn.xs{height:20px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600}
+  .glyph{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;flex:none}
+  .badge-added{font-size:10px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;
+               color:var(--text-dis);border:1px solid var(--s-sub);border-radius:4px;padding:0 5px}
+  .listfoot{display:flex;align-items:center;gap:9px;padding:4px 12px 14px;font-size:12px;
+            color:var(--text-3)}
+  .listfoot .sp{flex:1}
+  .listfoot b{font-family:var(--mono);font-weight:500;color:var(--text-2)}
+
+  /* ── credentials ── */
+  .creds{padding:16px 22px;border-top:1px solid var(--s-def);background:rgba(29,32,38,.42)}
+  .creds h3{font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;
+            color:var(--text-3);margin-bottom:11px}
+  .frow{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:11px;font-weight:500;color:var(--text-3)}
+  .fld .in{height:28px;padding:0 9px;border-radius:8px;background:var(--canvas);
+           border:1px solid var(--s-def);display:flex;align-items:center;font-size:13px;
+           color:var(--text-1);min-width:96px}
+  .fld .in.focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(123,97,255,.22)}
+  .fld .in.mono{font-family:var(--mono);font-size:12px}
+  .fld .in .ph{color:var(--text-dis)}
+  .chk{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-2)}
+  .radio{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--s-str);flex:none;
+         display:grid;place-items:center}
+  .radio.on{border-color:var(--accent)}
+  .radio.on::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .tested{display:flex;align-items:center;gap:7px;margin-top:2px;font-size:11px;color:var(--ok)}
+
+  /* ── footer ── */
+  .ft{display:flex;align-items:center;gap:9px;padding:14px 22px;border-top:1px solid var(--s-def)}
+  .ft .sp{flex:1}
+  .hint{color:var(--text-dis);font-size:11px}
+  kbd{font-family:var(--mono);font-size:10px;color:var(--text-3);background:rgba(255,255,255,.06);
+      border:1px solid var(--s-sub);border-radius:4px;padding:1px 4px}
+  .cap{margin:16px auto 0;max-width:1120px;color:var(--text-dis);font-size:10px;line-height:15px;
+       text-align:center}
+</style>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="c-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-6.5" stroke-width="2.2"/></symbol>
+  <symbol id="c-x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></symbol>
+  <symbol id="c-warn" viewBox="0 0 16 16"><path d="M8 2.6 14.2 13H1.8z"/><path d="M8 6.4v3.1M8 11.3v.1"/></symbol>
+  <symbol id="c-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v4M8 5v.1"/></symbol>
+  <symbol id="c-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+  <symbol id="c-lock" viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.4" rx="1.6"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7"/></symbol>
+  <symbol id="c-doc" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></symbol>
+</defs></svg>
+
+<div class="sheet">
+  <!-- header -->
+  <div class="hd">
+    <div class="close"><svg class="ic sm"><use href="#c-x"/></svg></div>
+    <h1>Add Cameras</h1>
+    <div class="sub">Vigil looks for Hikvision devices on your network automatically. You should only need the password.</div>
+    <div class="steps">
+      <div class="step done"><span class="bead"><svg class="ic sm" style="width:10px;height:10px"><use href="#c-check"/></svg></span><span class="lbl">Scan</span></div>
+      <div class="bar filled"></div>
+      <div class="step now"><span class="bead">2</span><span class="lbl">Select</span></div>
+      <div class="bar"></div>
+      <div class="step todo"><span class="bead">3</span><span class="lbl">Sign in</span></div>
+      <div class="bar"></div>
+      <div class="step todo"><span class="bead">4</span><span class="lbl">Channels</span></div>
+    </div>
+  </div>
+
+  <!-- scan strip -->
+  <div class="scan">
+    <div class="scan-top">
+      <span class="spin"></span>
+      <span class="t">Scanning <code>192.168.1.0/24</code></span>
+      <span class="found">· found 7 devices</span>
+      <span class="sp"></span>
+      <button class="btn ghost">Stop</button>
+      <button class="btn ghost"><svg class="ic sm"><use href="#c-plus"/></svg>Add manually</button>
+    </div>
+    <div class="track"><i></i></div>
+    <div class="narr">
+      <span class="okg">SADP ✓</span>
+      <span class="okg">ONVIF ✓</span>
+      <span>sweeping <b>198</b> / <b>254</b> hosts</span>
+      <span>ports <b>554 · 80 · 8000</b></span>
+      <span>64-way</span>
+    </div>
+  </div>
+
+  <!-- device list -->
+  <div class="list">
+    <div class="dev on">
+      <span class="cb on"><svg class="ic sm" style="width:10px;height:10px"><use href="#c-check"/></svg></span>
+      <div class="body">
+        <div class="l1">
+          <span class="model">DS-2CD2143G2-I</span>
+          <span class="ip">192.168.1.64</span>
+          <span class="kind hik">HIKVISION</span>
+          <span class="meta"><span>1 ch</span><span>V5.7.3</span>
+            <span class="glyph" style="background:rgba(50,215,75,.16);color:var(--ok)">
+              <svg class="ic sm" style="width:9px;height:9px"><use href="#c-check"/></svg></span>
+          </span>
+        </div>
+        <div class="l2">Front hallway dome · MAC c4:2f:90:1a:e6:07 · activated · SADP</div>
+      </div>
+    </div>
+
+    <div class="dev on">
+      <span class="cb on"><svg class="ic sm" style="width:10px;height:10px"><use href="#c-check"/></svg></span>
+      <div class="body">
+        <div class="l1">
+          <span class="model">DS-7608NI-K2/8P</span>
+          <span class="ip">192.168.1.10</span>
+          <span class="kind nvr">NVR</span>
+          <span class="meta"><span>8 ch</span><span>V4.30.0</span>
+            <span class="glyph" style="background:rgba(50,215,75,.16);color:var(--ok)">
+              <svg class="ic sm" style="width:9px;height:9px"><use href="#c-check"/></svg></span>
+          </span>
+        </div>
+        <div class="l2">Recorder · 6 channels online, 2 empty · channels enumerated in step 4</div>
+      </div>
+    </div>
+
+    <div class="dev">
+      <span class="cb"></span>
+      <div class="body">
+        <div class="l1">
+          <span class="model">DS-2CD2043G0-I</span>
+          <span class="ip">192.168.1.71</span>
+          <span class="kind hik">HIKVISION</span>
+          <span class="meta"><span>1 ch</span><span>V5.5.8</span>
+            <span class="glyph" style="background:rgba(255,212,38,.16);color:var(--warn)">
+              <svg class="ic sm" style="width:10px;height:10px"><use href="#c-warn"/></svg></span>
+          </span>
+        </div>
+        <div class="l2 warnl">
+          Not activated — this camera has no password yet, so it cannot stream
+          <button class="btn xs inline">Activate…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="dev">
+      <span class="cb"></span>
+      <div class="body">
+        <div class="l1">
+          <span class="model">IPC-HFW2431</span>
+          <span class="ip">192.168.1.88</span>
+          <span class="kind onvif">ONVIF ONLY</span>
+          <span class="meta"><span>1 ch</span><span>—</span>
+            <span class="glyph" style="background:rgba(255,255,255,.07);color:var(--text-3)">
+              <svg class="ic sm" style="width:10px;height:10px"><use href="#c-info"/></svg></span>
+          </span>
+        </div>
+        <div class="l2">Not a Hikvision device (Dahua) — Vigil will use the ONVIF fallback, without PTZ presets or archive search</div>
+      </div>
+    </div>
+
+    <div class="dev muted">
+      <span class="cb" style="opacity:.4"></span>
+      <div class="body">
+        <div class="l1">
+          <span class="model" style="color:var(--text-3)">DS-2CD2385G1</span>
+          <span class="ip">192.168.1.65</span>
+          <span class="kind hik" style="opacity:.6">HIKVISION</span>
+          <span class="meta"><span class="badge-added">Already added</span></span>
+        </div>
+        <div class="l2">In your library as “Front Door”</div>
+      </div>
+    </div>
+
+    <div class="dev">
+      <span class="cb"></span>
+      <div class="body">
+        <div class="l1">
+          <span class="model">DS-2DE4425IW-DE</span>
+          <span class="ip">10.0.7.22</span>
+          <span class="kind hik">HIKVISION</span>
+          <span class="meta"><span>1 ch</span><span>V5.6.5</span>
+            <span class="glyph" style="background:rgba(255,159,10,.16);color:var(--motion)">
+              <svg class="ic sm" style="width:10px;height:10px"><use href="#c-warn"/></svg></span>
+          </span>
+        </div>
+        <div class="l2" style="color:var(--motion)">
+          On a different subnet than this Mac — reachable by SADP but not routable, so it cannot stream yet
+          <button class="btn xs inline ghost" style="color:var(--motion);border-color:rgba(255,159,10,.4)">How to fix</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="listfoot">
+    <span class="cb on" style="width:14px;height:14px"><svg class="ic sm" style="width:9px;height:9px"><use href="#c-check"/></svg></span>
+    Select all reachable
+    <span class="sp"></span>
+    <span><b>7</b> found · <b>2</b> selected · <b>1</b> needs activation · <b>1</b> off-subnet</span>
+  </div>
+
+  <!-- credentials -->
+  <div class="creds">
+    <h3>Credentials for the selected devices</h3>
+    <div class="frow">
+      <div class="fld"><label>User</label><div class="in mono" style="width:150px">admin</div></div>
+      <div class="fld"><label>Password</label><div class="in focus mono" style="width:190px">••••••••••</div></div>
+      <div class="chk" style="align-self:flex-end;height:28px">
+        <span class="cb on" style="width:14px;height:14px"><svg class="ic sm" style="width:9px;height:9px"><use href="#c-check"/></svg></span>
+        <svg class="ic sm" style="color:var(--text-3)"><use href="#c-lock"/></svg>Remember in Keychain
+      </div>
+      <div style="flex:1"></div>
+      <div class="fld"><label>Transport</label><div class="in" style="width:104px">Auto ▾</div></div>
+      <div class="fld"><label>RTSP</label><div class="in mono" style="width:66px">554</div></div>
+      <div class="fld"><label>HTTP</label><div class="in mono" style="width:66px">80</div></div>
+    </div>
+    <div class="frow" style="margin-bottom:0">
+      <div class="chk"><span class="radio on"></span>Use the same password for all selected</div>
+      <div class="chk"><span class="radio"></span>Ask per device</div>
+      <div style="flex:1"></div>
+      <div class="tested">
+        <svg class="ic sm"><use href="#c-check"/></svg>
+        Tested 192.168.1.64 — signed in, H.265 1920×1080, stream path
+        <span style="font-family:var(--mono);font-size:10px">/Streaming/Channels/101</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- footer -->
+  <div class="ft">
+    <button class="btn ghost"><svg class="ic sm"><use href="#c-doc"/></svg>Import CSV…</button>
+    <span class="hint">Nothing is sent anywhere — discovery is local, and it never tries your password on a device.</span>
+    <span class="sp"></span>
+    <button class="btn ghost lg">Back</button>
+    <button class="btn ghost lg">Test</button>
+    <button class="btn lg">Add 2 cameras <kbd style="color:rgba(255,255,255,.75);background:rgba(255,255,255,.14);border-color:transparent">⏎</kbd></button>
+  </div>
+</div>
+
+<div class="cap">
+  Step 2 of the first-run flow. The customer requirement is that launch to live picture takes under
+  10 seconds with the password as the only input — so the scan starts on its own, the stream path is
+  probed rather than asked for, and NVR channels are enumerated in step 4 instead of typed.
+  Every non-happy state is on screen: not activated, wrong vendor, already in the library, and
+  discovered-but-off-subnet.
+</div>
