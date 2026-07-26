@@ -99,6 +99,9 @@ public enum SADPXMLReader {
     /// The specification writes that test as `[A-Za-z#]{1,8};`, which would rewrite the numeric
     /// reference `&#38;` into `&amp;#38;`; digits are included here so numeric references survive.
     /// Since `&amp;` decodes back to `&`, escaping is idempotent in effect either way.
+    ///
+    /// `<![CDATA[…]]>` sections and comments are copied through untouched: their content is already
+    /// literal, so escaping there would insert an `&amp;` the reader would hand back verbatim.
     public static func escapingBareAmpersands(_ text: String) -> String {
         let bytes = Array(text.utf8)
         guard bytes.contains(UInt8(ascii: "&")) else { return text }
@@ -106,6 +109,11 @@ public enum SADPXMLReader {
         out.reserveCapacity(bytes.count + 8)
         var index = 0
         while index < bytes.count {
+            if let end = literalRegionEnd(bytes, at: index) {
+                out.append(contentsOf: bytes[index..<end])
+                index = end
+                continue
+            }
             guard bytes[index] == UInt8(ascii: "&") else {
                 out.append(bytes[index])
                 index += 1
@@ -119,6 +127,31 @@ public enum SADPXMLReader {
             index += 1
         }
         return String(decoding: out, as: UTF8.self)
+    }
+
+    /// End index of a CDATA section or comment starting at `index`, or `nil` when one does not.
+    /// An unterminated region extends to the end of input, which is what a truncated datagram gives.
+    private static func literalRegionEnd(_ bytes: [UInt8], at index: Int) -> Int? {
+        for (opening, closing) in [("<![CDATA[", "]]>"), ("<!--", "-->")] {
+            guard hasPrefix(bytes, at: index, opening) else { continue }
+            var cursor = index + opening.utf8.count
+            let pattern = Array(closing.utf8)
+            while cursor + pattern.count <= bytes.count {
+                if hasPrefix(bytes, at: cursor, closing) { return cursor + pattern.count }
+                cursor += 1
+            }
+            return bytes.count
+        }
+        return nil
+    }
+
+    private static func hasPrefix(_ bytes: [UInt8], at index: Int, _ literal: String) -> Bool {
+        let pattern = Array(literal.utf8)
+        guard index >= 0, index + pattern.count <= bytes.count else { return false }
+        for offset in pattern.indices where bytes[index + offset] != pattern[offset] {
+            return false
+        }
+        return true
     }
 
     /// True when `bytes[index]` is an `&` followed by 1…8 name characters and a `;`.

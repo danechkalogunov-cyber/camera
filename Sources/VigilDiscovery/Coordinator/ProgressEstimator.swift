@@ -226,6 +226,11 @@ public struct DiscoveryProgressEstimator: Sendable {
     /// The weighted, monotonic fraction. `nil` for the indeterminate opening window.
     private mutating func updatedFraction(at elapsed: Duration,
                                           multicastRemaining: Duration) -> Double? {
+        // A cancelled run's bar stops where it was. Recomputing would let it jump forward — the
+        // multicast window is "over", after all — which reads as the scan finishing, not stopping.
+        guard !isCancelled else {
+            return elapsed >= Self.indeterminateWindow ? lastFraction : nil
+        }
         let sweepFraction = portProbesPlanned == 0
             ? 1.0
             : min(1.0, Double(portProbesCompleted) / Double(portProbesPlanned))

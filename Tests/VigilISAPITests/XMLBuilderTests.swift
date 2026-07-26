@@ -29,15 +29,9 @@ import Testing
         builder.add("searchID", "A-1")
         builder.add("maxResults", 40)
         builder.add("searchResultPostion", 0)
-        let text = builder.stringValue
-        let searchID = try? #require(text.range(of: "<searchID>"))
-        let maxResults = try? #require(text.range(of: "<maxResults>"))
-        let position = try? #require(text.range(of: "<searchResultPostion>"))
-        #expect(searchID != nil && maxResults != nil && position != nil)
-        if let searchID, let maxResults, let position {
-            #expect(searchID.lowerBound < maxResults.lowerBound)
-            #expect(maxResults.lowerBound < position.lowerBound)
-        }
+        #expect(builder.stringValue.hasSuffix(
+            "<CMSearchDescription><searchID>A-1</searchID><maxResults>40</maxResults>"
+            + "<searchResultPostion>0</searchResultPostion></CMSearchDescription>"))
     }
 
     /// Exactly five escapes, and nothing else — no numeric character references.
@@ -67,8 +61,10 @@ import Testing
     @Test func xmlBuilderOmitsNamespaceUnlessEchoed() {
         var constructed = XMLBuilder("PTZData")
         constructed.add("pan", 30)
+        // The declaration carries `version="1.0"`; the *element* must carry no attribute at all.
         #expect(constructed.stringValue.contains("xmlns") == false)
-        #expect(constructed.stringValue.contains("version=") == false)
+        #expect(constructed.stringValue.contains("<PTZData>"))
+        #expect(constructed.elementString == "<PTZData><pan>30</pan></PTZData>")
 
         var echoed = XMLBuilder("Color", attributes: [
             ("version", "2.0"),

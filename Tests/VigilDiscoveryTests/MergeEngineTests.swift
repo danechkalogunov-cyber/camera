@@ -493,8 +493,12 @@ import VigilProtocols
                 }
             }
         }
-        #expect(events.count > 100)
+        // 300 observations, 15 events: five records found, then one update each for the round that
+        // first supplied a MAC and the round that first supplied a serial. A record that learns
+        // nothing new emits nothing at all, which is what keeps a 65 000-host sweep out of SwiftUI.
         #expect(Self.count(events, of: .found) == 5)
+        #expect(Self.count(events, of: .updated) == 10)
+        #expect(events.count == 15)
         #expect(engine.devices.count == 5)
         #expect(Self.count(events, of: .merged) == 0)
     }

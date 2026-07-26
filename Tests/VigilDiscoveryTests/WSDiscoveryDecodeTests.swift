@@ -297,13 +297,16 @@ extension WSDDecodeOutcome {
         var set = WSDDedupeSet()
         let first = try #require(decode(WSDFixtures.hikvisionProbeMatchXML).wsdMatches?.first)
         let again = try #require(decode(WSDFixtures.hikvisionProbeMatchXML).wsdMatches?.first)
-        #expect(set.insert(first))
-        #expect(!set.insert(again))
+        let firstInserted = set.insert(first)
+        let againInserted = set.insert(again)
+        #expect(firstInserted)
+        #expect(!againInserted)
         #expect(set.contains(again))
         #expect(set.count == 1)
 
         let dahua = try #require(decode(WSDFixtures.dahuaProbeMatchXML).wsdMatches?.first)
-        #expect(set.insert(dahua))
+        let dahuaInserted = set.insert(dahua)
+        #expect(dahuaInserted)
         #expect(set.count == 2)
     }
 

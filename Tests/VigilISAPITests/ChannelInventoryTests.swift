@@ -308,10 +308,10 @@ enum InventoryFixtures {
         #expect(ISAPIUnits.wireFrameRate(fromFPS: 30) == 3000)
     }
 
-    @Test func wireUnitsRoundTripEveryDocumentedFrameRate() {
+    @Test func wireUnitsRoundTripEveryDocumentedFrameRate() throws {
         for wire in [50, 100, 400, 1200, 1250, 2000, 2500, 3000, 6000] {
-            let fps = try? #require(ISAPIUnits.frameRate(fromWire: wire))
-            #expect(ISAPIUnits.wireFrameRate(fromFPS: fps ?? 0) == wire)
+            let fps = try #require(ISAPIUnits.frameRate(fromWire: wire))
+            #expect(ISAPIUnits.wireFrameRate(fromFPS: fps) == wire)
         }
     }
 

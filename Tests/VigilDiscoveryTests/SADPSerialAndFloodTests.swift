@@ -172,7 +172,10 @@ import VigilProtocols
         var limiter = SADPIngestLimiter()
         for host in 1...20 {
             let source = IPv4Address(192, 168, 1, UInt8(host))
-            for _ in 0..<3 { #expect(limiter.admit(from: source)) }
+            for _ in 0..<3 {
+                let admitted = limiter.admit(from: source)
+                #expect(admitted)
+            }
         }
         #expect(limiter.admittedCount == 60)
         #expect(limiter.floodedSources.isEmpty)
