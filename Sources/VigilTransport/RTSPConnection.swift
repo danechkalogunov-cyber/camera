@@ -61,6 +61,38 @@ public enum RTSPConnectionEvent: Sendable {
 
     /// Terminal failure. Nothing further is emitted except the stream's own completion.
     case failed(VigilError)
+
+    /// Whether this event is droppable media rather than session control.
+    ///
+    /// The distinction is not cosmetic: losing one RTP packet costs a slice the depacketizer
+    /// already knows how to survive, while losing the `.track` that configures it means every
+    /// later packet on that channel is discarded with no video and **no error** — the failure
+    /// class this project keeps trying to design out. `RTSPConnection.emit(_:)` counts the two
+    /// separately for that reason.
+    package var isMedia: Bool {
+        if case .media = self { return true }
+        return false
+    }
+}
+
+// MARK: - RTSPConnectionEventDrops
+
+/// How many events the connection could not hand to its consumer, by kind (API_CONTRACT §2 R-27).
+///
+/// `AsyncStream` **does** report drops — `Continuation.yield(_:)` returns `.dropped(_:)` carrying
+/// the element that did not make it — so a drop here is counted rather than silent. An earlier note
+/// on this file claimed the opposite and stood down R-27 for the event stream; it was wrong.
+public struct RTSPConnectionEventDrops: Sendable, Hashable {
+
+    /// Media events dropped because the consumer was too far behind. Recoverable.
+    public var media = 0
+
+    /// Control events dropped. **Never expected**: it means more than the whole buffer's worth of
+    /// events went unread, and the session's observable state is now a lie. Logged at `.error`.
+    public var control = 0
+
+    /// Builds an all-zero count.
+    public init() {}
 }
 
 // MARK: - InterleavedFraming
@@ -139,6 +171,22 @@ public actor RTSPConnection {
         var task: Task<Void, Never>
     }
 
+    /// What the pre-connect resolver concluded about a DNS name (R-71, stage one).
+    private enum ResolveOutcome: Sendable {
+        /// The name resolved, and **every** address it returned is on the local network. This is
+        /// the literal to connect to — never the name, so that the address which was classified is
+        /// the address the socket actually goes to.
+        case permitted(literal: String)
+        /// At least one address the name resolved to is outside the local network. Fail closed.
+        case blocked
+        /// The name did not resolve, or produced no address this code can read.
+        case unresolvable
+        /// The system resolver did not answer inside the connect budget.
+        case timedOut
+        /// The connection was closed while the resolver was still working.
+        case cancelled
+    }
+
     /// The result of one `receive` call, already reduced to the four cases the loop cares about.
     private enum ReceiveOutcome: Sendable {
         /// Bytes arrived. **May be empty**, which is not end of stream — see `runReadLoop`.
@@ -174,6 +222,9 @@ public actor RTSPConnection {
     /// for; a wedged socket must not hold the close open, so it is bounded.
     private static let closeFlushBudget = Duration.milliseconds(250)
 
+    /// Events the consumer may fall behind by. R-27's standing capacity for RTP packets.
+    private static let eventBufferCapacity = 512
+
     // MARK: - Injected
 
     private let config: RTSPSessionConfig
@@ -204,6 +255,10 @@ public actor RTSPConnection {
     private var socket: NWConnection?
     private var lifecycle: Lifecycle = .idle
     private var connectContinuation: CheckedContinuation<VigilError?, Never>?
+    private var resolveContinuation: CheckedContinuation<ResolveOutcome, Never>?
+
+    /// Whether the socket ever reached `.ready`. Decides whether `.waiting` is terminal.
+    private var hasBecomeReady = false
 
     // MARK: - Reading
 

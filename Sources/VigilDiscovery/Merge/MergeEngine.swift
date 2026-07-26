@@ -144,10 +144,13 @@ public struct MergeEngine: Sendable {
         // 4. Bind keys. A key already owned by a contradicting record keeps its owner: that is the
         //    within-run form of address reuse, and re-pointing it would merge two devices.
         let blocked = Set(conflicting)
-        let bindable = identities.filter { identity in
-            guard let node = nodeOfKey[identity.key] else { return true }
-            guard let owner = recordOfRoot[find(node)], entries[owner].isAlive else { return true }
-            return !blocked.contains(owner)
+        var bindable: [DeviceIdentity] = []
+        for identity in identities {
+            if let node = nodeOfKey[identity.key], let owner = recordOfRoot[find(node)],
+               entries[owner].isAlive, blocked.contains(owner) {
+                continue
+            }
+            bindable.append(identity)
         }
         bind(bindable, to: target)
 
@@ -225,17 +228,31 @@ public struct MergeEngine: Sendable {
         return a
     }
 
-    /// Binds an identity key to a record, merging the key's existing set into it.
-    private mutating func bind(_ identity: DeviceIdentity, to record: Int) {
-        guard let node = node(for: identity.key) else { return }
-        let root = find(node)
-        if let existing = recordOfRoot[root], existing != record, entries[existing].isAlive {
-            // The key already stood for a different live record; the caller has decided they are the
-            // same device, so fold the forests together.
-            recordOfRoot[root] = record
+    /// Binds identity keys to a record, unioning them into one set.
+    ///
+    /// Every key that reaches here has been cleared for this record: a key still owned by a
+    /// contradicting record is filtered out by the caller, which is what stops a new MAC at an old
+    /// IP from dragging the old record along with it.
+    private mutating func bind(_ identities: [DeviceIdentity], to record: Int) {
+        var nodes: [Int] = []
+        for identity in identities {
+            guard let node = node(for: identity.key) else { continue }
+            nodes.append(node)
+            entries[record].device.alternateIdentities.insert(identity)
+        }
+        guard let first = nodes.first else { return }
+        var root = find(first)
+        for node in nodes.dropFirst() {
+            let other = find(node)
+            guard other != root else { continue }
+            let merged = union(other, root)
+            // The losing root no longer stands for anything; drop its mapping so a stale entry can
+            // never resurrect a record that has been folded away.
+            if merged != other { recordOfRoot[other] = nil }
+            if merged != root { recordOfRoot[root] = nil }
+            root = merged
         }
         recordOfRoot[root] = record
-        entries[record].device.alternateIdentities.insert(identity)
     }
 
     // MARK: - Records

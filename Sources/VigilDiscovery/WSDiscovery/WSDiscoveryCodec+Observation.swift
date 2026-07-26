@@ -32,7 +32,7 @@ extension WSDiscoveryCodec {
         fields[.vendor] = .vendor(match.inferredVendor)
         if match.deviceClass != .unknown { fields[.deviceClass] = .deviceClass(match.deviceClass) }
         if !match.xAddrs.isEmpty { fields[.onvifServiceURLs] = .strings(match.xAddrs) }
-        if !match.scopes.isEmpty { fields[.onvifScopes] = .scopes(match.scopes) }
+        if !match.scopes.raw.isEmpty { fields[.onvifScopes] = .scopes(match.scopes) }
         if let name = match.scopes.name, !name.isEmpty { fields[.displayName] = .string(name) }
         if let hardware = match.scopes.hardware, !hardware.isEmpty {
             fields[.model] = .string(hardware)
