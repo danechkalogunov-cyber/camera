@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Resources/Vigil-Dev.entitlements — local development only. NEVER DISTRIBUTED.
+
+    Implements docs/ARCHITECTURE.md §13.4. Selected by `Scripts/build-app.sh --sandbox off`, which
+    prints a loud warning and stamps VigilDevBuild=true into the bundle's Info.plist so the About
+    window can show it.
+
+    Why it exists: turning the sandbox off removes the provisioning-profile requirement around the
+    managed multicast entitlement, which is what unblocks day-to-day SADP work on a laptop that has
+    no Apple grant.
+
+    What it does NOT do: unsandboxed is still subject to the macOS 15 local-network prompt, so a
+    denied prompt still makes discovery silently find nothing.
+
+    com.apple.security.get-task-allow permits a debugger to attach. It must be absent from anything
+    that leaves the build machine; a notarisation submission carrying it is rejected.
+-->
+<plist version="1.0">
+<dict>
+
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- Debugger attach. Development only. -->
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+
+</dict>
+</plist>

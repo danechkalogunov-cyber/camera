@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Resources/Vigil.entitlements — the shipping, sandboxed entitlement set.
+
+    Implements docs/ARCHITECTURE.md §13.3 and docs/spec-discovery.md §9.1.
+
+    Used by Scripts/build-app.sh unless --sandbox off or --entitlements PATH is given. If codesign
+    rejects the multicast key (no provisioning profile), the script automatically retries with
+    Resources/Vigil-nomulticast.entitlements and says so loudly; the app then detects the situation
+    at runtime and degrades to a unicast sweep. There is one binary and no compile-time flag.
+-->
+<plist version="1.0">
+<dict>
+
+    <!-- Containment. Vigil parses attacker-controllable bytes (RTSP headers, SDP, RTP payloads,
+         SPS/PPS bitstreams, ISAPI XML) with code we wrote ourselves, so a parsing bug is the most
+         likely serious vulnerability in the app. The sandbox is the highest-leverage mitigation
+         available: it turns "code execution reads your documents" into "code execution inside a
+         container with network access and no file access beyond what the user picked". -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Outbound TCP and UDP: RTSP on 554, ISAPI on 80/443, the discovery sweep, ONVIF. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- REQUIRED FOR DISCOVERY, and the line most often forgotten. It is about *binding a
+         listening port*, not about being a server in any product sense.
+
+         Vigil binds UDP 37020 (SADP) and UDP 3702 (WS-Discovery) and receives unsolicited inbound
+         datagrams, because devices reply to the group rather than to our source port. It also
+         binds the RTP/RTCP port pair when the transport is UDP. Without this key the bind fails
+         with EPERM inside the sandbox and both SADP and WS-Discovery return nothing — with no
+         error the user can see. -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- Multicast and broadcast: SADP to 239.255.255.250:37020 and ONVIF WS-Discovery to
+         239.255.255.250:3702.
+
+         MANAGED ENTITLEMENT. Apple grants it per-team on request and it needs a provisioning
+         profile embedded in the app; an ad-hoc-signed local build cannot really use it. Keep the
+         key here anyway: docs/spec-discovery.md §9.5 makes running without it a first-class
+         supported configuration, detected at runtime via SecCodeCopySigningInformation plus an
+         empirical multicast send, never by branching on the OS version. -->
+    <key>com.apple.developer.networking.multicast</key>
+    <true/>
+
+    <!-- Snapshot and recording destinations, and configuration import/export. Access is acquired
+         through NSOpenPanel/NSSavePanel and persisted as security-scoped bookmarks. This is the
+         only file-system entitlement Vigil takes. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Two-way audio push-to-talk. Paired with NSMicrophoneUsageDescription in Info.plist. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!--
+        Deliberately NOT taken, and why (docs/ARCHITECTURE.md §13.3):
+
+          files.downloads.read-write            no reason to touch Downloads
+          files.all                             defeats the point of sandboxing
+          cs.allow-jit                          we run no JIT
+          cs.disable-library-validation         we load no third-party code
+          cs.allow-unsigned-executable-memory   see above
+          cs.debugger                           never in a shipping build
+          get-task-allow                        development only; see Vigil-Dev.entitlements
+          automation.apple-events               we EXPOSE AppleScript, we do not send events
+          print, camera, location, contacts, calendars, photos, bluetooth, usb   unused
+
+        The hardened runtime is enabled with no exceptions at all. If a future change appears to
+        need one, that is a design smell and must be argued in ARCHITECTURE.md §13.5 first.
+    -->
+
+</dict>
+</plist>

@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Resources/Info.plist — the Vigil.app bundle Info.plist.
+
+    Implements docs/ARCHITECTURE.md §12.3 and docs/API_CONTRACT.md §2 R-39, with the discovery
+    requirements from docs/spec-discovery.md §9.2.
+
+    Scripts/build-app.sh copies this file to Vigil.app/Contents/Info.plist and then overwrites
+    CFBundleShortVersionString / CFBundleVersion with PlistBuddy. PlistBuddy drops XML comments when
+    it saves, so the comments below survive here but not in the built bundle — that is expected.
+
+    The version keys carry real values (not $(VIGIL_VERSION) placeholders) so that the Xcode path
+    via project.yml, which does no substitution, still produces a bundle with a valid version.
+
+    Three keys in here are load-bearing and silently break a feature when wrong:
+      * NSLocalNetworkUsageDescription + NSBonjourServices — discovery finds nothing.
+      * NSAppTransportSecurity/NSAllowsLocalNetworking     — every ISAPI call over plain HTTP fails.
+      * UTExportedTypeDeclarations                         — drag-and-drop of cameras does nothing.
+-->
+<plist version="1.0">
+<dict>
+
+    <!-- ==================================================================================== -->
+    <!-- Identity                                                                             -->
+    <!-- ==================================================================================== -->
+
+    <!-- Must stay in step with the OSLog subsystem (docs/ARCHITECTURE.md §8.1), the UserDefaults
+         suite, and the caches directory ~/Library/Caches/com.vigil.app. -->
+    <key>CFBundleIdentifier</key>
+    <string>com.vigil.app</string>
+
+    <key>CFBundleName</key>
+    <string>Vigil</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Vigil</string>
+
+    <!-- Must match the file name written to Contents/MacOS by Scripts/build-app.sh. -->
+    <key>CFBundleExecutable</key>
+    <string>Vigil</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <!-- Marketing version. Overwritten by Scripts/build-app.sh --version. -->
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <!-- Build number. Overwritten by Scripts/build-app.sh with `git rev-list --count HEAD`. -->
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Vigil. All rights reserved.</string>
+
+    <!-- ==================================================================================== -->
+    <!-- Icon                                                                                 -->
+    <!-- ==================================================================================== -->
+
+    <!-- CFBundleIconFile names a real .icns in Contents/Resources; the Dock needs it on the very
+         first launch, before the asset catalog has been registered. Scripts/build-app.sh produces
+         it with iconutil from Sources/VigilUI/Resources/AppIcon.iconset when that directory
+         exists, and warns when it does not. A missing icon file is harmless — macOS falls back to
+         the generic application icon. -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
+    <!-- Asset-catalog name, for everything after first launch. -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+
+    <!-- ==================================================================================== -->
+    <!-- Platform and launch behaviour                                                        -->
+    <!-- ==================================================================================== -->
+
+    <!-- Must match `platforms: [.macOS(.v14)]` in Package.swift. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.video</string>
+
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- Retina. Without it a Metal or AVSampleBufferDisplayLayer surface is composited at 1x and
+         the video looks soft on every Mac shipped in the last decade. -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- We hold live RTSP sessions and may be recording; the system must not decide we are idle
+         and terminate us. -->
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+
+    <!-- Recordings must be finalised (moov atom written) before the process goes away. -->
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+
+    <!-- Used by App Intents and Spotlight; see docs/spec-core.md §14. -->
+    <key>NSUserActivityTypes</key>
+    <array>
+        <string>com.vigil.app.viewCamera</string>
+    </array>
+
+    <!-- MD5 for RTSP/ISAPI Digest and TLS supplied by the OS. No custom or non-exempt crypto. -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+
+    <!-- ==================================================================================== -->
+    <!-- Local network — the discovery-critical block (docs/spec-discovery.md §9.2)           -->
+    <!-- ==================================================================================== -->
+
+    <!-- Shown verbatim inside the macOS 15+ "would like to find and connect to devices on your
+         local network" alert. If the user reads a vague sentence here they press Don't Allow, and
+         then every local connection is dropped *silently* — no error, just timeouts. So this is
+         written for a person deciding whether to trust us, and it states the limit as well as the
+         purpose. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Vigil searches the network you are connected to for Hikvision cameras and recorders, and opens their video streams directly. Video, passwords and camera details stay on your network — Vigil never uploads them anywhere.</string>
+
+    <!-- Required for NWBrowser. A browse for a service type that is not declared here returns
+         nothing at all on recent macOS — no results, no error. _rtsp._tcp and _http._tcp are what
+         cameras advertise when they advertise anything; _axis-video._tcp and _onvif._tcp let us
+         say "found a camera, but it is not a Hikvision" instead of showing an empty list.
+         docs/spec-discovery.md §6.4 browses the first three; §2 R-39 of the API contract also
+         names _onvif._tcp. Declaring a superset is free — the key only grants permission to
+         browse, it does not cause any traffic. -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_rtsp._tcp</string>
+        <string>_http._tcp</string>
+        <string>_axis-video._tcp</string>
+        <string>_onvif._tcp</string>
+    </array>
+
+    <!-- Hikvision ISAPI is plain HTTP on port 80 by default, and the HTTPS variant ships a
+         self-signed certificate. App Transport Security blocks both out of the box, so every
+         ISAPI call would fail with NSURLErrorAppTransportSecurityRequiresSecureConnection before
+         a packet left the machine.
+
+         NSAllowsLocalNetworking relaxes ATS for local hostnames and private address ranges only.
+         We deliberately do NOT set NSAllowsArbitraryLoads: cleartext to a *public* host stays
+         blocked, so a mistyped address cannot quietly ship Digest credentials over the internet.
+
+         ATS governs the URLSession traffic in VigilISAPI only; the raw NWConnection probes in
+         VigilDiscovery are outside ATS entirely. Both are still needed, because discovery's
+         findings are consumed by ISAPI calls. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+
+    <!-- ==================================================================================== -->
+    <!-- Device access                                                                        -->
+    <!-- ==================================================================================== -->
+
+    <!-- Two-way audio (push to talk). Same rule as the local-network string: explain the purpose
+         and the limit, because this prompt is the only thing the user sees. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Vigil sends your voice to cameras that have a built-in speaker, so you can talk to whoever is in front of the camera. The microphone is only live while you hold the talk button, and audio is never recorded or sent off your network.</string>
+
+    <!-- NSCameraUsageDescription is deliberately absent: Vigil views IP cameras and never opens a
+         camera attached to this Mac. Declaring it would put a misleading entry in Privacy
+         settings and would fail App Review. -->
+
+    <!-- ==================================================================================== -->
+    <!-- URL scheme (docs/spec-core.md §14.3)                                                 -->
+    <!-- ==================================================================================== -->
+
+    <!-- Deep links: vigil://camera/<ref>, vigil://layout/2x2, vigil://doctor/<ref>, and so on.
+         rtsp:// is deliberately NOT claimed — registering it system-wide would hijack links
+         belonging to other apps. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.vigil.app.deeplink</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>vigil</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- ==================================================================================== -->
+    <!-- Documents                                                                            -->
+    <!-- ==================================================================================== -->
+
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Vigil Configuration</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.vigil.config</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video Clip</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.mpeg-4</string>
+                <string>com.apple.quicktime-movie</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- ==================================================================================== -->
+    <!-- Exported uniform type identifiers                                                    -->
+    <!-- ==================================================================================== -->
+
+    <!--
+        Three declarations, and two of them exist purely so drag-and-drop works.
+
+        UTType(exportedAs:) in VigilRender (docs/spec-render.md §19 item 11) resolves against these
+        entries. If an identifier used by a drag item is not declared here, macOS does not raise an
+        error: the drag simply never produces a drop, so dragging a camera onto a layout cell
+        appears to do nothing at all. That failure mode is invisible in code review, which is why
+        API_CONTRACT.md §2 R-39 pins it.
+    -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.vigil.config</string>
+            <key>UTTypeDescription</key>
+            <string>Vigil Configuration</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+            </array>
+            <key>UTTypeIconFile</key>
+            <string>AppIcon</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>vigilconfig</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/json</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <!-- Dragging a camera onto a layout cell, and moving or swapping tiles. -->
+            <key>UTTypeIdentifier</key>
+            <string>com.vigil.tile-assignment</string>
+            <key>UTTypeDescription</key>
+            <string>Vigil Tile Assignment</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+        <dict>
+            <!-- Dragging a camera between the sidebar, the stage and the video wall. -->
+            <key>UTTypeIdentifier</key>
+            <string>com.vigil.camera-ref</string>
+            <key>UTTypeDescription</key>
+            <string>Vigil Camera Reference</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
+
+</dict>
+</plist>

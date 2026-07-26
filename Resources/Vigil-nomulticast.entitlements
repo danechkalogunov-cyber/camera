@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Resources/Vigil-nomulticast.entitlements — the fallback set.
+
+    Byte-for-byte Resources/Vigil.entitlements minus com.apple.developer.networking.multicast.
+    Required by docs/spec-discovery.md §9.5 ("Build-script contract") and named in the file
+    manifest at docs/API_CONTRACT.md §5.1.
+
+    WHEN THIS FILE IS USED
+    com.apple.developer.networking.multicast is a *managed* entitlement: Apple grants it per
+    developer team on request, and using it requires a matching provisioning profile embedded in
+    the app. Anyone building Vigil from source without that grant — which is everyone, at first —
+    will have codesign refuse the shipping entitlements. Scripts/build-app.sh catches that failure,
+    prints a loud warning, and re-signs with this file, so the build still produces an app that
+    launches.
+
+    WHAT THE APP LOSES, AND WHY THAT IS STILL USABLE
+    Discovery degrades to a unicast sweep (docs/spec-discovery.md §9.5). Concretely:
+
+      lost   SADP multicast probe to 239.255.255.250:37020
+      lost   WS-Discovery multicast probe to 239.255.255.250:3702
+      lost   directed and limited broadcast — Apple's entitlement covers broadcast too, so the
+             fallback must NOT be designed around it
+      kept   unicast SADP to host:37020 and unicast WS-Discovery to host:3702
+      kept   the TCP connect sweep, promoted to start at t=0 with more connections in flight
+      kept   Bonjour browsing, which goes through the system mDNS daemon rather than our socket
+
+    The one real loss is off-subnet devices: a factory-fresh camera sitting on 192.168.1.64 while
+    the Mac is on 10.0.20.0/24 is only reachable via link-local multicast, and that is exactly the
+    unboxing case. VigilUI must say so in the discovery sheet rather than showing an empty list.
+
+    The app does not know at compile time which file was used. It reads its own code signature at
+    runtime (docs/spec-discovery.md §9.3) and also verifies empirically, because entitlement
+    enforcement differs between macOS 14 and macOS 15. One binary, no compile-time flag.
+-->
+<plist version="1.0">
+<dict>
+
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Still required, and still the easiest line to lose: without it the unicast SADP and
+         WS-Discovery sockets cannot bind either, and the fallback path finds nothing at all. -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- com.apple.developer.networking.multicast is intentionally absent. That is the entire
+         difference between this file and Resources/Vigil.entitlements. -->
+
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+</dict>
+</plist>
