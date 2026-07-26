@@ -73,3 +73,31 @@ allowed to become the real thing.
 `RateLimitedLogger` in particular needs a design ruling, not just an author: it cannot be a
 `Sendable` struct with a non-`mutating` `log()`, and the two escapes are an actor (which makes
 logging async and reorders lines) or a lock (macOS-only, so not available in the pure layer).
+
+---
+
+## Found by the step-4 review
+
+### 7. Nothing calls `DecodePipeline.reset()` or `stop()`
+
+`review:video` grepped the app and found only `submit`. On a reconnect the sink therefore never
+receives `streamDidReset()`, so `VideoTileView` never flushes its pending queue. It is latent rather
+than active only because the RTP layer waits for a keyframe on start — remove that and it becomes
+visible corruption. Wire the lifecycle properly.
+
+### 8. `.noFormat` is the last "no video, no error" shape
+
+If parameter sets never arrive, the pipeline drops every frame and reports
+`didDropFrames(_:reason: .noFormat)` — and `TileVideoSink` takes the protocol's **no-op default** for
+that callback. The result is a black tile with nothing in the log, which is precisely the failure
+mode this project has spent its whole design budget trying to eliminate.
+
+Surface the counter somewhere before the first hardware test. A tile that says "waiting for the
+camera to send its format" is worth more than a black rectangle.
+
+### 9. Two contract deviations to record rather than fix
+
+`requestKeyframe` is `() -> Void` in the implementation against `() async -> Void` in the contract;
+and `VideoSink`'s extension adds no-op defaults for `streamDidReset`/`streamDidEnd` that
+API_CONTRACT §4.9 does not, which is what allows finding 8 to be silent. Consider making
+`streamDidReset` a requirement without a default.
