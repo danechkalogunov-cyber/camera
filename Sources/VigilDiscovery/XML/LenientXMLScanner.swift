@@ -385,6 +385,25 @@ public enum LenientXMLScanner {
 
     // MARK: - Text helpers
 
+    /// Decodes datagram bytes to text, falling back to a byte-for-scalar ISO-8859-1 reading when
+    /// they are not valid UTF-8 (§4.5.2).
+    ///
+    /// This never fails: every byte sequence has a Latin-1 reading, so a Chinese `DeviceDescription`
+    /// in GB18030 — an encoding Linux Foundation does not carry — degrades to mojibake in that one
+    /// field while the model, serial, MAC and ports, all ASCII, survive intact. Validity is checked
+    /// by re-encoding rather than by a Foundation encoding table, so the answer is identical on
+    /// every platform.
+    ///
+    /// - Returns: the text, and whether the payload was valid UTF-8.
+    static func decodedText(_ bytes: [UInt8]) -> (text: String, isUTF8: Bool) {
+        let candidate = String(decoding: bytes, as: UTF8.self)
+        if Array(candidate.utf8) == bytes { return (candidate, true) }
+        var scalars = String.UnicodeScalarView()
+        scalars.reserveCapacity(bytes.count)
+        for byte in bytes { scalars.append(Unicode.Scalar(byte)) }
+        return (String(scalars), false)
+    }
+
     /// Trims ASCII spaces, tabs, carriage returns and newlines from both ends of `text`.
     ///
     /// Deliberately not `trimmingCharacters(in: .whitespacesAndNewlines)`: datagram text may be a

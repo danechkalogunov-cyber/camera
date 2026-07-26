@@ -7,6 +7,8 @@
 //  Implements docs/spec-discovery.md §7.1.
 //
 
+import VigilProtocols
+
 /// Turns raw serials and UUIDs into comparison keys.
 ///
 /// Both functions return `nil` rather than a bad key. That asymmetry is deliberate: a missing key

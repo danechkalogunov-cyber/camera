@@ -334,15 +334,11 @@ public enum SADPCodec {
         return bytes[0] == 0x78 && (bytes[1] == 0x01 || bytes[1] == 0x9C || bytes[1] == 0xDA)
     }
 
-    /// Decodes bytes to text, falling back to a byte-for-scalar ISO-8859-1 reading when the payload
-    /// is not valid UTF-8 (§4.5.2). Never fails: every byte sequence has a Latin-1 reading.
+    /// Decodes bytes to text, falling back to ISO-8859-1 when the payload is not valid UTF-8, and
+    /// reports which reading was used so the caller can raise `nonUTF8SADPPayload` (§4.5.2).
     private static func decodedText(_ bytes: [UInt8]) -> (String, SADPPayloadEncoding) {
-        let candidate = String(decoding: bytes, as: UTF8.self)
-        if Array(candidate.utf8) == bytes { return (candidate, .utf8) }
-        var scalars = String.UnicodeScalarView()
-        scalars.reserveCapacity(bytes.count)
-        for byte in bytes { scalars.append(Unicode.Scalar(byte)) }
-        return (String(scalars), .isoLatin1Fallback)
+        let (text, isUTF8) = LenientXMLScanner.decodedText(bytes)
+        return (text, isUTF8 ? .utf8 : .isoLatin1Fallback)
     }
 
     /// True when the eight bytes at `index` are digits forming a plausible manufacturing date.
