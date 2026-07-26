@@ -1,0 +1,380 @@
+<title>Vigil — playback</title>
+<meta name="shot-viewport" content="1440x900">
+<style>
+  /* Built from docs/UX.md §7 (playback wireframe, timeline encoding, zoom stops, transport bar)
+     and docs/DESIGN.md tokens. The heatmap is drawn on a canvas with a seeded PRNG so the picture
+     is deterministic and reproduces exactly on every render.
+     Substitutions: SF Pro -> Inter, SF Mono -> JetBrains Mono, SF Symbols -> inline SVG. */
+  :root{
+    --canvas:#0B0C0F; --sidebar:#101116; --surface:#16181D; --raised:#1D2026; --overlay:#252932;
+    --text-1:#F2F4F8; --text-2:#A7AEBC; --text-3:#88909D; --text-dis:#4E5563;
+    --accent:#7B61FF; --accent-fill:#6247E8; --focus:#9581FF;
+    --live:#FF2E43; --ok:#32D74B; --warn:#FFD426; --motion:#FF9F0A; --continuous:#3B9CFF;
+    --id1:#2FB8E8; --id4:#F5674A;
+    --s-sub:rgba(255,255,255,.06); --s-def:rgba(255,255,255,.10); --s-str:rgba(255,255,255,.18);
+    --s-vid:rgba(255,255,255,.14);
+    --ui:"Inter Variable",Inter,system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#000;font-family:var(--ui);font-size:13px;line-height:18px;color:var(--text-1);
+       -webkit-font-smoothing:antialiased}
+  svg{display:block}
+  .ic{width:15px;height:15px;stroke:currentColor;stroke-width:1.6;fill:none;
+      stroke-linecap:round;stroke-linejoin:round}
+  .ic.sm{width:12px;height:12px;stroke-width:1.8}
+  .win{width:1440px;height:900px;display:grid;grid-template-rows:44px 1fr 48px 200px;
+       background:var(--canvas);overflow:hidden}
+
+  /* ── toolbar ── */
+  .tb{display:flex;align-items:center;gap:10px;padding:0 14px;
+      background:rgba(22,24,29,.72);backdrop-filter:blur(30px) saturate(1.7);
+      border-bottom:1px solid var(--s-def)}
+  .lights{display:flex;gap:8px;margin-right:6px}
+  .lights i{width:12px;height:12px;border-radius:50%;display:block}
+  .day{display:flex;align-items:center;gap:2px;height:28px;padding:0 4px;border-radius:8px;
+       background:var(--raised);border:1px solid var(--s-def)}
+  .day button{width:22px;height:22px;border:0;background:transparent;color:var(--text-2);
+              border-radius:6px;display:grid;place-items:center}
+  .day .d{font-family:var(--mono);font-size:12px;font-weight:500;padding:0 8px;color:var(--text-1)}
+  .camchip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;
+           background:var(--raised);border:1px solid var(--s-def);font-size:12px;font-weight:500}
+  .camchip i{width:6px;height:6px;border-radius:50%}
+  .camchip.add{color:var(--text-3);border-style:dashed}
+  .tbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;
+        background:transparent;border:1px solid transparent;color:var(--text-2);font-size:13px}
+  .tbtn.on{background:#161427;border-color:rgba(123,97,255,.4);color:var(--text-1)}
+  .tbtn.bordered{border-color:var(--s-def);background:var(--raised)}
+  kbd{font-family:var(--mono);font-size:10px;color:var(--text-3);background:rgba(255,255,255,.06);
+      border:1px solid var(--s-sub);border-radius:4px;padding:1px 4px}
+  .sp{flex:1}
+
+  /* ── canvas ── */
+  .stage{padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:2px}
+  .pane{position:relative;background:#000;border-radius:14px;overflow:hidden;
+        border:1px solid var(--s-sub)}
+  .pane.focus{border:2px solid var(--accent);
+              box-shadow:0 0 0 1px rgba(149,129,255,.3),0 0 14px rgba(123,97,255,.24)}
+  .scene{position:absolute;inset:0;overflow:hidden}
+  .scene .sky{position:absolute;inset:0 0 44% 0;background:linear-gradient(180deg,#0A0C10,#151B23 70%,#1C2028)}
+  .scene .ground{position:absolute;left:-20%;right:-20%;bottom:-10%;height:60%;
+    background:linear-gradient(180deg,#0D0E11,#1B1813 38%,#2C2519 74%,#352C1E)}
+  .scene .pool{position:absolute;left:50%;bottom:-16%;width:74%;height:54%;transform:translateX(-50%);
+    background:radial-gradient(50% 50% at 50% 50%,rgba(255,206,140,.30),rgba(255,196,120,.06) 56%,transparent 78%)}
+  .scene .wallL{position:absolute;left:0;top:8%;width:24%;bottom:34%;
+    background:linear-gradient(90deg,#23262C,#181B20 70%,#121418);clip-path:polygon(0 0,100% 16%,100% 84%,0 100%)}
+  .scene .wallR{position:absolute;right:0;top:6%;width:20%;bottom:30%;
+    background:linear-gradient(270deg,#1F2228,#16181D 70%,#111317);clip-path:polygon(100% 0,0 14%,0 86%,100% 100%)}
+  .scene .door{position:absolute;left:37%;top:20%;width:26%;bottom:32%;border-radius:3px 3px 0 0;
+    background:linear-gradient(180deg,#2C2722,#1E1B17);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+  .scene .vig{position:absolute;inset:0;
+    background:radial-gradient(78% 68% at 50% 46%,transparent 42%,rgba(0,0,0,.62) 100%)}
+  .grain{position:absolute;inset:0;opacity:.12;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/></filter><rect width='120' height='120' filter='url(%23n)'/></svg>")}
+  .chrome-t{position:absolute;left:0;right:0;top:0;display:flex;gap:6px;padding:8px}
+  .chip{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:6px;
+        background:rgba(0,0,0,.62);border:1px solid var(--s-vid);font-size:11px;font-weight:600;color:#fff}
+  .chip i{width:6px;height:6px;border-radius:50%}
+  .osd{position:absolute;left:8px;bottom:8px;font-family:var(--mono);font-size:11px;font-weight:600;
+       color:#fff;background:rgba(0,0,0,.62);border:1px solid var(--s-vid);border-radius:6px;
+       padding:3px 8px}
+  .motionbox{position:absolute;border:1.5px solid var(--motion);border-radius:3px;
+             box-shadow:0 0 0 1px rgba(0,0,0,.5)}
+  .motionbox span{position:absolute;top:-15px;left:-1px;font-family:var(--mono);font-size:9px;
+                  font-weight:600;color:#0B0C0F;background:var(--motion);border-radius:3px;padding:0 3px}
+
+  /* ── transport ── */
+  .tr{display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface);
+      border-top:1px solid var(--s-def);border-bottom:1px solid var(--s-def)}
+  .tr button{height:28px;min-width:28px;padding:0 8px;border-radius:8px;border:1px solid var(--s-def);
+             background:var(--raised);color:var(--text-1);display:inline-flex;align-items:center;
+             gap:5px;justify-content:center;font-size:12px;font-weight:500}
+  .tr button.pri{background:var(--accent-fill);border-color:transparent;color:#fff;width:34px;
+                 box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
+  .tr .grp{display:flex;gap:4px}
+  .tr .lbl{font-size:11px;color:var(--text-3);font-weight:500}
+  .slider{width:104px;height:4px;border-radius:2px;background:rgba(255,255,255,.10);position:relative}
+  .slider i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--accent)}
+  .slider b{position:absolute;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
+            background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.6)}
+  .speed{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text-1);width:30px}
+  .inout{display:inline-flex;align-items:center;gap:0;height:28px;border-radius:8px;overflow:hidden;
+         border:1px solid rgba(123,97,255,.45);background:#161427}
+  .inout span{padding:0 9px;font-family:var(--mono);font-size:11px;color:var(--focus);line-height:26px}
+  .inout em{font-style:normal;color:var(--text-dis)}
+
+  /* ── timeline ── */
+  .tl{padding:10px 14px 12px;position:relative;overflow:hidden}
+  .tl-hd{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+  .tl-hd .nm{font-size:12px;font-weight:600}
+  .tl-hd .legend{display:flex;gap:12px;margin-left:auto;align-items:center}
+  .lg{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--text-3)}
+  .lg i{width:9px;height:9px;border-radius:2px}
+  .zoom{display:inline-flex;align-items:center;gap:7px;margin-left:14px}
+  .zoom .sl{width:74px;height:4px;border-radius:2px;background:rgba(255,255,255,.10);position:relative}
+  .zoom .sl i{position:absolute;left:0;top:0;bottom:0;width:56%;border-radius:2px;background:var(--accent)}
+  .zoom .sl b{position:absolute;left:56%;top:50%;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;
+              border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.6)}
+  .zoom .stop{font-family:var(--mono);font-size:11px;color:var(--text-2);
+              border:1px solid var(--s-def);border-radius:6px;padding:1px 6px}
+  .ruler{position:relative;height:14px;margin-bottom:3px}
+  .ruler span{position:absolute;top:0;transform:translateX(-50%);font-family:var(--mono);font-size:10px;
+              color:var(--text-3)}
+  .ruler span.now{color:var(--text-1);font-weight:600}
+  .lane{position:relative;margin-bottom:9px}
+  .lane canvas{display:block;width:1412px;border-radius:4px}
+  .clips{position:relative;height:6px;margin-top:2px;border-radius:3px;background:rgba(255,255,255,.04)}
+  .clips i{position:absolute;top:0;bottom:0;border-radius:3px;background:var(--accent)}
+  .markers{position:relative;height:13px;margin-top:2px}
+  .mk{position:absolute;top:3px;width:7px;height:7px;transform:rotate(45deg) translateX(-50%);
+      border-radius:1px}
+  .pennant{position:absolute;top:1px;width:2px;height:11px;background:var(--focus)}
+  .pennant::after{content:"";position:absolute;left:2px;top:0;width:7px;height:5px;
+                  background:var(--focus);clip-path:polygon(0 0,100% 50%,0 100%)}
+  .cluster{position:absolute;top:1px;transform:translateX(-50%);width:14px;height:11px;border-radius:6px;
+           background:var(--motion);color:#0B0C0F;font-family:var(--mono);font-size:8px;font-weight:700;
+           display:grid;place-items:center}
+  .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);z-index:5;
+            box-shadow:0 0 8px rgba(123,97,255,.7)}
+  .ph-lbl{position:absolute;top:-20px;transform:translateX(-50%);height:20px;padding:0 8px;
+          border-radius:10px;background:var(--accent-fill);color:#fff;font-family:var(--mono);
+          font-size:11px;font-weight:600;line-height:20px;z-index:6;
+          box-shadow:0 4px 12px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.2)}
+  .preview{position:absolute;width:176px;border-radius:10px;background:var(--overlay);
+           border:1px solid var(--s-str);padding:6px;z-index:7;
+           box-shadow:0 18px 44px rgba(0,0,0,.66),inset 0 1px 0 rgba(255,255,255,.09)}
+  .preview .th{height:90px;border-radius:6px;background:#000;overflow:hidden;position:relative}
+  .preview .tt{font-family:var(--mono);font-size:10px;color:var(--text-2);text-align:center;
+               margin-top:5px}
+  .lane2 .nm2{position:absolute;left:7px;top:2px;font-size:11px;font-weight:600;color:#fff;z-index:3;
+              text-shadow:0 1px 3px rgba(0,0,0,.9)}
+</style>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="p-prev" viewBox="0 0 16 16"><path d="M11.5 3.5v9L5 8z" fill="currentColor" stroke="none"/><path d="M4 3.5v9" stroke-width="2"/></symbol>
+  <symbol id="p-next" viewBox="0 0 16 16"><path d="M4.5 3.5v9L11 8z" fill="currentColor" stroke="none"/><path d="M12 3.5v9" stroke-width="2"/></symbol>
+  <symbol id="p-rw" viewBox="0 0 16 16"><path d="M8 4v8L3 8zM14 4v8L9 8z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="p-ff" viewBox="0 0 16 16"><path d="M8 4v8l5-4zM2 4v8l5-4z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="p-pause" viewBox="0 0 16 16"><rect x="4.6" y="3.6" width="2.6" height="8.8" rx=".8" fill="currentColor" stroke="none"/><rect x="8.8" y="3.6" width="2.6" height="8.8" rx=".8" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="p-cal" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="10" rx="1.8"/><path d="M2.5 6.5h11M5.5 2v2.6M10.5 2v2.6"/></symbol>
+  <symbol id="p-l" viewBox="0 0 16 16"><path d="M9.8 3.5 5.4 8l4.4 4.5"/></symbol>
+  <symbol id="p-r" viewBox="0 0 16 16"><path d="M6.2 3.5 10.6 8l-4.4 4.5"/></symbol>
+  <symbol id="p-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+  <symbol id="p-sync" viewBox="0 0 16 16"><path d="M2.5 6.5A5.5 5.5 0 0 1 13 5M13.5 9.5A5.5 5.5 0 0 1 3 11M11 2.5 13.3 4.8 11 7M5 13.5 2.7 11.2 5 9"/></symbol>
+  <symbol id="p-exp" viewBox="0 0 16 16"><path d="M8 10.5V2.6M5.2 5.4 8 2.6l2.8 2.8M2.8 10v2.6a1 1 0 0 0 1 1h8.4a1 1 0 0 0 1-1V10"/></symbol>
+  <symbol id="p-more" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="5.2" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="10.8" cy="8" r=".7" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="p-spk" viewBox="0 0 16 16"><path d="M3 6h2l3-2.5v9L5 10H3z"/><path d="M10.4 6.2a2.6 2.6 0 0 1 0 3.6"/></symbol>
+  <symbol id="p-full" viewBox="0 0 16 16"><path d="M3 6V3h3M13 10v3h-3M10 3h3v3M6 13H3v-3"/></symbol>
+  <symbol id="p-step" viewBox="0 0 16 16"><path d="M5.5 3.5 10 8l-4.5 4.5"/></symbol>
+</defs></svg>
+
+<div class="win">
+  <!-- toolbar -->
+  <div class="tb">
+    <div class="lights"><i style="background:#FF5F57"></i><i style="background:#FEBC2E"></i><i style="background:#28C840"></i></div>
+    <div class="day">
+      <button><svg class="ic sm"><use href="#p-l"/></svg></button>
+      <span class="d">26 Jul 2026</span>
+      <button><svg class="ic sm"><use href="#p-r"/></svg></button>
+    </div>
+    <button class="tbtn bordered" style="padding:0 8px"><svg class="ic"><use href="#p-cal"/></svg></button>
+    <span class="camchip"><i style="background:var(--id1)"></i>Front Door</span>
+    <span class="camchip"><i style="background:var(--id4)"></i>Back Yard</span>
+    <span class="camchip add"><svg class="ic sm"><use href="#p-plus"/></svg>Add camera</span>
+    <div class="sp"></div>
+    <button class="tbtn on"><svg class="ic"><use href="#p-sync"/></svg>Synchronized<kbd>⇧⌘Y</kbd></button>
+    <button class="tbtn bordered"><svg class="ic"><use href="#p-exp"/></svg>Export<kbd>⌘E</kbd></button>
+    <button class="tbtn" style="padding:0 7px"><svg class="ic"><use href="#p-more"/></svg></button>
+  </div>
+
+  <!-- canvas: two synchronized cameras -->
+  <div class="stage">
+    <div class="pane focus">
+      <div class="scene">
+        <div class="sky"></div><div class="ground"></div><div class="wallL"></div><div class="wallR"></div>
+        <div class="door"></div><div class="pool"></div><div class="vig"></div>
+      </div>
+      <div class="grain"></div>
+      <div class="motionbox" style="left:46%;top:34%;width:13%;height:40%"><span>person 0.94</span></div>
+      <div class="chrome-t"><span class="chip"><i style="background:var(--id1)"></i>Front Door</span></div>
+      <div class="osd">26 Jul 2026 &nbsp;10:14:38.20</div>
+    </div>
+    <div class="pane">
+      <div class="scene" style="filter:grayscale(1) brightness(1.55) contrast(.92)">
+        <div class="sky"></div><div class="ground"></div><div class="wallR"></div>
+        <div class="door" style="left:52%;width:22%;top:26%"></div>
+        <div class="pool" style="opacity:.4"></div><div class="vig"></div>
+      </div>
+      <div class="grain" style="opacity:.17"></div>
+      <div class="chrome-t"><span class="chip"><i style="background:var(--id4)"></i>Back Yard</span>
+        <span class="chip" style="font-family:var(--mono);font-size:10px;font-weight:500">IR</span></div>
+      <div class="osd">26 Jul 2026 &nbsp;10:14:38.20</div>
+    </div>
+  </div>
+
+  <!-- transport -->
+  <div class="tr">
+    <div class="grp">
+      <button><svg class="ic"><use href="#p-prev"/></svg></button>
+      <button><svg class="ic"><use href="#p-rw"/></svg></button>
+      <button class="pri"><svg class="ic"><use href="#p-pause"/></svg></button>
+      <button><svg class="ic"><use href="#p-ff"/></svg></button>
+      <button><svg class="ic"><use href="#p-next"/></svg></button>
+    </div>
+    <div class="grp" style="margin-left:6px">
+      <button>−10 s</button><button>+10 s</button>
+      <button><svg class="ic" style="transform:scaleX(-1)"><use href="#p-step"/></svg></button>
+      <button><svg class="ic"><use href="#p-step"/></svg></button>
+    </div>
+    <span class="lbl" style="margin-left:10px">Speed</span>
+    <div class="slider"><i style="width:42%"></i><b style="left:42%"></b></div>
+    <span class="speed">2×</span>
+    <span class="lbl" style="margin-left:10px"><svg class="ic sm"><use href="#p-spk"/></svg></span>
+    <div class="slider" style="width:72px"><i style="width:64%"></i><b style="left:64%"></b></div>
+    <div class="sp"></div>
+    <div class="inout"><span>IN 10:12:04</span><em>│</em><span>OUT 10:16:41</span><em>│</em><span style="color:var(--text-2)">4 m 37 s</span></div>
+    <button style="background:var(--accent-fill);border-color:transparent;color:#fff;font-weight:600">
+      <svg class="ic sm"><use href="#p-exp"/></svg>Export clip<kbd style="color:rgba(255,255,255,.8);background:rgba(255,255,255,.16);border-color:transparent">⌘E</kbd></button>
+    <button style="padding:0 8px"><svg class="ic"><use href="#p-full"/></svg></button>
+  </div>
+
+  <!-- timeline -->
+  <div class="tl">
+    <div class="tl-hd">
+      <span class="nm">Front Door</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text-3)">09:00 – 11:00</span>
+      <div class="legend">
+        <span class="lg"><i style="background:#3B9CFF"></i>continuous</span>
+        <span class="lg"><i style="background:#FF9F0A"></i>motion</span>
+        <span class="lg"><i style="background:#FF2E43"></i>alarm</span>
+        <span class="lg"><i style="background:#1D2026;border:1px solid var(--s-def)"></i>no recording</span>
+        <span class="lg"><i style="background:#7B61FF"></i>local clip</span>
+        <div class="zoom">
+          <span style="color:var(--text-3);font-size:11px">⊖</span>
+          <span class="sl"><i></i><b></b></span>
+          <span style="color:var(--text-3);font-size:11px">⊕</span>
+          <span class="stop">2 h</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ruler" id="ruler"></div>
+
+    <div class="lane" id="lane1">
+      <canvas id="hm1" width="2824" height="56" style="height:28px"></canvas>
+      <div class="clips">
+        <i style="left:31.5%;width:3.1%"></i><i style="left:58.2%;width:1.4%"></i>
+      </div>
+      <div class="markers" id="mk1"></div>
+      <div class="playhead" style="left:57.3%;top:0;height:70px"></div>
+      <div class="ph-lbl" style="left:57.3%">10:14:38.20</div>
+      <div class="preview" style="left:calc(57.3% - 196px);top:-92px">
+        <div class="th">
+          <div class="scene" style="position:absolute;inset:0;transform:scale(1)">
+            <div class="sky"></div><div class="ground"></div><div class="door"></div>
+            <div class="pool"></div><div class="vig"></div>
+          </div>
+        </div>
+        <div class="tt">10:14:38 · motion</div>
+      </div>
+    </div>
+
+    <div class="lane lane2" style="margin-top:14px">
+      <span class="nm2">Back Yard</span>
+      <canvas id="hm2" width="2824" height="40" style="height:20px"></canvas>
+      <div class="clips"><i style="left:12.4%;width:0.9%"></i></div>
+      <div class="playhead" style="left:57.3%;top:0;height:28px"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Deterministic pseudo-random so the rendered picture is identical on every run.
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+// Heatmap encoding per docs/UX.md §7.3: one colour per pixel column, priority alarm > motion >
+// continuous, opacity 0.55 + 0.45 * coverage, gaps are canvas with a dotted baseline.
+const COL = {continuous:'59,156,255', motion:'255,159,10', alarm:'255,46,67'};
+
+function paint(id, seed, alarms){
+  const c = document.getElementById(id), g = c.getContext('2d');
+  const W = c.width, H = c.height, rnd = mulberry32(seed);
+  g.fillStyle = '#0B0C0F'; g.fillRect(0,0,W,H);
+
+  // Build a per-column state for a two-hour window.
+  const state = new Array(W).fill('continuous');
+  // Gaps — the camera was not recording.
+  let x = 0;
+  while (x < W) {
+    x += 140 + Math.floor(rnd()*420);
+    const len = 40 + Math.floor(rnd()*150);
+    for (let i = x; i < Math.min(W, x+len); i++) state[i] = 'none';
+    x += len;
+  }
+  // Motion runs.
+  x = 0;
+  while (x < W) {
+    x += 150 + Math.floor(rnd()*430);
+    const len = 90 + Math.floor(rnd()*300);
+    for (let i = x; i < Math.min(W, x+len); i++) if (state[i] !== 'none') state[i] = 'motion';
+    x += len;
+  }
+  // Alarms — narrow, high priority, and never allowed to fall below the 2 pt minimum width.
+  for (const a of alarms) {
+    const s = Math.floor(a*W);
+    for (let i = s; i < Math.min(W, s + 10); i++) state[i] = 'alarm';
+  }
+
+  // Coverage is the fraction of a column's time span that is recorded, and it varies slowly —
+  // sampling it independently per pixel would render as barcode noise rather than density.
+  const ctrl = Array.from({length: 40}, () => 0.45 + 0.55*rnd());
+  const smooth = (i) => {
+    const t = i / W * (ctrl.length - 1), k = Math.floor(t), f = t - k;
+    const e = f*f*(3 - 2*f);                       // smoothstep between control points
+    return ctrl[k]*(1 - e) + ctrl[Math.min(k+1, ctrl.length-1)]*e;
+  };
+  for (let i = 0; i < W; i++) {
+    const s = state[i];
+    if (s === 'none') continue;
+    const coverage = s === 'alarm' ? 1 : 0.55 + 0.45*smooth(i);
+    g.fillStyle = `rgba(${COL[s]},${coverage.toFixed(3)})`;
+    g.fillRect(i, 0, 1, H);
+  }
+  // Dotted baseline so "no recording" is visibly different from "not loaded".
+  g.fillStyle = 'rgba(255,255,255,.16)';
+  for (let i = 0; i < W; i += 6) if (state[i] === 'none') g.fillRect(i, H-2, 3, 2);
+}
+
+paint('hm1', 20260726, [0.213, 0.574, 0.881]);
+paint('hm2', 77712, [0.402]);
+
+// Ruler: zoom stop "2 h" -> a label every 15 minutes.
+const ruler = document.getElementById('ruler');
+for (let m = 0; m <= 120; m += 15) {
+  const el = document.createElement('span');
+  const t = new Date(2026, 6, 26, 9, m);
+  el.textContent = String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
+  el.style.left = (m/120*100) + '%';
+  if (m === 75) el.className = 'now';
+  ruler.appendChild(el);
+}
+
+// Event markers and bookmarks on the marker row.
+const mk = document.getElementById('mk1');
+const events = [[0.213,'#FF2E43'],[0.318,'#FF9F0A'],[0.402,'#FF9F0A'],[0.574,'#FF2E43'],
+                [0.629,'#FF9F0A'],[0.717,'#FF9F0A'],[0.881,'#FF2E43'],[0.934,'#FF9F0A']];
+for (const [p,c] of events) {
+  const d = document.createElement('span');
+  d.className = 'mk'; d.style.left = (p*100)+'%'; d.style.background = c;
+  mk.appendChild(d);
+}
+for (const p of [0.152, 0.688]) {
+  const b = document.createElement('span');
+  b.className = 'pennant'; b.style.left = (p*100)+'%';
+  mk.appendChild(b);
+}
+// Overlapping markers within 8 pt collapse into a numbered cluster.
+const cl = document.createElement('span');
+cl.className = 'cluster'; cl.style.left = '46.2%'; cl.textContent = '4';
+mk.appendChild(cl);
+</script>
