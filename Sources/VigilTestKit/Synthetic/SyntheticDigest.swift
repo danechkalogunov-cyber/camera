@@ -159,14 +159,14 @@ public enum SyntheticDigest: Sendable {
 
 // MARK: - Small string helper
 
-extension String {
+extension StringProtocol {
 
     /// Drops leading and trailing spaces, tabs, CR and LF.
     ///
     /// Written here rather than reached for from Foundation so the trimming set is exactly the
     /// linear-whitespace of RFC 2616 and does not vary with Unicode definitions.
     func trimmingASCIIWhitespace() -> String {
-        var view = Substring(self)
+        var view = self[startIndex..<endIndex]
         while let first = view.first, first == " " || first == "\t" || first == "\r" || first == "\n" {
             view = view.dropFirst()
         }

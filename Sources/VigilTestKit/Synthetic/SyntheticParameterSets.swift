@@ -8,6 +8,7 @@
 //  Implements docs/ARCHITECTURE.md §10.2 (`SyntheticSPSBuilder`).
 //
 
+import Foundation
 import VigilProtocols
 
 // MARK: - Geometry

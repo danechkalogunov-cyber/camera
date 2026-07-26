@@ -472,34 +472,32 @@ public struct RTSPWireDecoder: Sendable {
     /// is a far more useful diagnosis than "malformed".
     private mutating func parseStartLine(_ text: String,
                                          into events: inout [RTSPIncoming]) -> Pending.Start? {
-        let fields = text.split(whereSeparator: { $0 == " " || $0 == "\t" })
-        guard let head = fields.first else {
+        var cursor = text.startIndex
+        let head = RTSPWireDecoder.takeField(text, from: &cursor)
+        guard !head.isEmpty else {
             recover(.malformedStartLine(text), into: &events)
             return nil
         }
-        if ASCII.hasPrefixIgnoringCase(Array(head.utf8), prefix: Array("http/".utf8)) {
+        if ASCII.hasPrefixIgnoringCase(head.utf8, "http/") {
             fail(.notRTSP(startLine: text), into: &events)
             return nil
         }
-        if ASCII.hasPrefixIgnoringCase(Array(head.utf8), prefix: Array("rtsp/".utf8)) {
-            guard head.hasPrefix("RTSP/1."), fields.count >= 2 else {
+        if ASCII.hasPrefixIgnoringCase(head.utf8, "rtsp/") {
+            let code = RTSPWireDecoder.takeField(text, from: &cursor)
+            guard head.hasPrefix("RTSP/1."), code.count == 3,
+                  code.utf8.allSatisfy(ASCII.isDigit), let value = Int(code) else {
                 recover(.malformedStartLine(text), into: &events)
                 return nil
             }
-            let code = fields[1]
-            guard code.count == 3, code.utf8.allSatisfy(ASCII.isDigit), let value = Int(code) else {
-                recover(.malformedStartLine(text), into: &events)
-                return nil
-            }
-            // The reason phrase is free text and may contain runs of spaces, so take it from the
-            // original line rather than from the split fields.
-            var reason = ""
-            if let codeRange = text.range(of: String(code)) {
-                reason = RTSPHeaderScanner.trimmingOWS(text[codeRange.upperBound...]).description
-            }
+            // The reason phrase is free text that may itself contain runs of spaces, so it is the
+            // rest of the line rather than the third whitespace-delimited field.
+            let reason = String(RTSPHeaderScanner.trimmingOWS(text[cursor...]))
             return .response(RTSPStatus(rawValue: value), reason: reason)
         }
-        guard fields.count == 3, fields[2].hasPrefix("RTSP/1.") else {
+        let uri = RTSPWireDecoder.takeField(text, from: &cursor)
+        let version = RTSPWireDecoder.takeField(text, from: &cursor)
+        let trailing = RTSPHeaderScanner.trimmingOWS(text[cursor...])
+        guard !uri.isEmpty, version.hasPrefix("RTSP/1."), trailing.isEmpty else {
             recover(.malformedStartLine(text), into: &events)
             return nil
         }
@@ -507,7 +505,22 @@ public struct RTSPWireDecoder: Sendable {
             recover(.unknownMethod(String(head)), into: &events)
             return nil
         }
-        return .request(method, uri: String(fields[1]))
+        return .request(method, uri: String(uri))
+    }
+
+    /// Takes the next whitespace-delimited field, leaving `cursor` just past it.
+    ///
+    /// Several spaces or tabs between start-line tokens are tolerated (docs/spec-rtsp.md §3.1), so
+    /// leading whitespace is skipped before the field is read.
+    private static func takeField(_ text: String, from cursor: inout String.Index) -> Substring {
+        while cursor < text.endIndex, text[cursor] == " " || text[cursor] == "\t" {
+            cursor = text.index(after: cursor)
+        }
+        let start = cursor
+        while cursor < text.endIndex, text[cursor] != " ", text[cursor] != "\t" {
+            cursor = text.index(after: cursor)
+        }
+        return text[start ..< cursor]
     }
 
     // MARK: - Interleaved gate
