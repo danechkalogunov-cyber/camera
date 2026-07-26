@@ -11,9 +11,27 @@
     com.apple.developer.networking.multicast is a *managed* entitlement: Apple grants it per
     developer team on request, and using it requires a matching provisioning profile embedded in
     the app. Anyone building Vigil from source without that grant — which is everyone, at first —
-    will have codesign refuse the shipping entitlements. Scripts/build-app.sh catches that failure,
-    prints a loud warning, and re-signs with this file, so the build still produces an app that
-    launches.
+    needs this file instead. Scripts/build-app.sh selects it automatically whenever
+    PROVISIONING_PROFILE is unset, BEFORE signing.
+
+    ⛔ CORRECTED. This paragraph used to say that codesign would "refuse the shipping entitlements"
+    and that the build script catches that failure and re-signs. Both halves were wrong, and the
+    error was load-bearing: it put the fallback on a code path that never executes.
+
+    codesign does NOT refuse a managed entitlement under an ad-hoc signature. It signs happily, and
+    a deep strict verify then reports "valid on disk" and "satisfies its Designated Requirement".
+    (Flag names are spelled out in words here on purpose: XML forbids a double hyphen anywhere inside
+    a comment, so writing the flags literally makes this file unparseable. Scripts/lint.py enforces
+    that, and caught this very paragraph.) The refusal comes later, from **launchd**, which is what
+    actually checks an entitlement against a provisioning profile:
+
+        Error Domain=RBSRequestErrorDomain Code=5 "Launch failed."
+        NSUnderlyingError=... NSPOSIXErrorDomain Code=163
+        NSLocalizedDescription=Launchd job spawn failed
+
+    So the app built, signed and verified — and could not start. The selection is now made up front
+    from the presence of a provisioning profile, and the reactive fallback is kept only for a real
+    signing identity, where codesign genuinely does refuse.
 
     WHAT THE APP LOSES, AND WHY THAT IS STILL USABLE
     Discovery degrades to a unicast sweep (docs/spec-discovery.md §9.5). Concretely:

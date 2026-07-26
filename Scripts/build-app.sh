@@ -401,6 +401,34 @@ if [ -n "${PROVISIONING_PROFILE:-}" ]; then
     note "embedded.provisionprofile"
 fi
 
+# A managed entitlement with nothing to justify it makes the app UNLAUNCHABLE, not unsignable —
+# which is the opposite of what this script used to assume, and the assumption cost a whole build
+# cycle. `codesign` accepts com.apple.developer.networking.multicast under an ad-hoc signature
+# without complaint; the app then signs cleanly, verifies cleanly, reports "valid on disk" and
+# "satisfies its Designated Requirement", and dies at launch:
+#
+#   Error Domain=RBSRequestErrorDomain Code=5 "Launch failed."
+#   NSUnderlyingError=... NSPOSIXErrorDomain Code=163
+#   NSLocalizedDescription=Launchd job spawn failed
+#
+# launchd, not codesign, is what checks an entitlement against a provisioning profile. So the
+# decision has to be made HERE, before signing, and cannot be a reactive fallback on a codesign
+# failure that never comes. The reactive path below is kept for a real identity, where codesign
+# does refuse.
+if [ -z "${PROVISIONING_PROFILE:-}" ] \
+   && grep -q "^[^<]*<key>com.apple.developer.networking.multicast</key>" "$ENTITLEMENTS" 2>/dev/null
+then
+    if [ -f "Resources/Vigil-nomulticast.entitlements" ]; then
+        note "no provisioning profile, so the managed multicast entitlement cannot be honoured"
+        note "using Resources/Vigil-nomulticast.entitlements — discovery degrades to a unicast sweep"
+        note "(spec-discovery.md §9.5; cameras on a DIFFERENT subnet become invisible)"
+        ENTITLEMENTS="Resources/Vigil-nomulticast.entitlements"
+    else
+        warn "multicast entitlement requested with no provisioning profile and no fallback file."
+        warn "The app will sign but launchd will refuse to spawn it (POSIX 163)."
+    fi
+fi
+
 # MARK: - Steps 11-12 — sign, with graceful degradation
 
 step "Signing"

@@ -151,8 +151,19 @@ if [ "$DO_LAUNCH" = "yes" ]; then
     # exported UTIs. Running Contents/MacOS/Vigil directly skips that registration, so deep links
     # and drag-and-drop between apps would not work.
     open "$APP" || die "open refused to launch $APP." \
+        "" \
+        "If the error says 'Launchd job spawn failed' (NSPOSIXErrorDomain 163), the signature is" \
+        "fine and the ENTITLEMENTS are the problem: the app claims a managed entitlement that no" \
+        "provisioning profile justifies, and launchd — not codesign — is what enforces that. Check" \
+        "what is actually embedded, then rebuild without it:" \
+        "    codesign -d --entitlements - \"$APP\"" \
+        "    Scripts/build-app.sh --entitlements Resources/Vigil-nomulticast.entitlements" \
+        "" \
         "If macOS reports the app is damaged, it is Gatekeeper rejecting the ad-hoc signature." \
-        "Clear the quarantine flag:  xattr -dr com.apple.quarantine \"$APP\""
+        "Clear the quarantine flag:  xattr -dr com.apple.quarantine \"$APP\"" \
+        "" \
+        "If neither fits, the sandbox is the next suspect:" \
+        "    Scripts/build-app.sh --sandbox off && open \"$APP\""
     step "Running. Ctrl-C stops this log stream; the app keeps running (quit it with Cmd-Q)."
     echo
 fi
