@@ -37,7 +37,7 @@ public struct SyntheticAccessUnit: Sendable {
     public var sliceTypeCodes: [UInt8] {
         nals.compactMap { nal in
             guard let first = nal.first else { return nil }
-            return isParameterSet(nal) ? nil : typeCode(first, second: nal.count > 1 ? nal[1] : 0)
+            return isParameterSet(nal) ? nil : typeCode(first)
         }
     }
 
@@ -45,19 +45,21 @@ public struct SyntheticAccessUnit: Sendable {
     public var nalTypeCodes: [UInt8] {
         nals.compactMap { nal in
             guard let first = nal.first else { return nil }
-            return typeCode(first, second: nal.count > 1 ? nal[1] : 0)
+            return typeCode(first)
         }
     }
 
     private var isHEVC: Bool { parameterSets.codec == .h265 }
 
-    private func typeCode(_ first: UInt8, second: UInt8) -> UInt8 {
+    /// The NAL type field. It lives in different bits in each codec: bits 1–6 of the first byte in
+    /// H.265, bits 0–4 in H.264, so only the first byte is ever needed.
+    private func typeCode(_ first: UInt8) -> UInt8 {
         isHEVC ? (first >> 1) & 0x3F : first & 0x1F
     }
 
     private func isParameterSet(_ nal: [UInt8]) -> Bool {
         guard let first = nal.first else { return false }
-        let code = typeCode(first, second: nal.count > 1 ? nal[1] : 0)
+        let code = typeCode(first)
         return isHEVC ? (code >= 32 && code <= 34) : (code == 7 || code == 8)
     }
 }
