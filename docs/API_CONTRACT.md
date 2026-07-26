@@ -4816,6 +4816,18 @@ manifest* a row needs, not the module dependency (which §1 fixes).
 
 ### 5.1 Repository root — W1 (scaffolding) and W6 (build)
 
+> **Supervisor ruling, after implementation.** `Info.plist`, the three entitlements files and the
+> app icon live in **`Resources/`**, not at the repository root as the rows below say. Keeping six
+> Apple packaging files out of the root is worth the stale paths, and `Scripts/build-app.sh` and
+> `project.yml` both reference `Resources/` consistently. Treat the directory in the rows below as
+> `Resources/` wherever a `.plist`, `.entitlements` or `.icns` is named.
+>
+> **Do not use XcodeGen's `info:` or `entitlements:` blocks in `project.yml`.** They *generate*
+> those files, overwriting the handwritten ones and silently dropping `NSBonjourServices`, the ATS
+> local-networking exception and the exported UTIs — each of which is a feature that then fails
+> without an error message. `INFOPLIST_FILE` and `CODE_SIGN_ENTITLEMENTS` point at the real files
+> instead.
+
 | Path | Responsibility | LoC | Deps | Wave |
 |---|---|---|---|---|
 | `Package.swift` | **Exists and is green. §6 reproduces it. Do not modify** without amending §6 in the same commit | 265 | — | W1 ✅ |
