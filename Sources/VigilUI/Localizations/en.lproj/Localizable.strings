@@ -1,0 +1,47 @@
+/*
+  Localizable.strings (en)
+  VigilUI — base localisation.
+
+  Keys ARE the English text, which is the SwiftUI convention for a base localisation: a
+  missing key falls back to the key itself, so English renders correctly whether or not this
+  file is present. It exists for two reasons.
+
+  1. It is the file a translator starts from. ru.lproj is a copy of this with the values
+     replaced.
+  2. Without at least one real (non-dotfile) resource, SwiftPM emits an EMPTY resource bundle
+     with no Info.plist, and codesign then refuses it outright:
+       Vigil_VigilUI.bundle: bundle format unrecognized, invalid, or unsuitable
+     That failure stopped the very first Mac build at the signing step. A directory holding
+     only .placeholder is invisible to SwiftPM, because it skips dotfiles.
+
+  27 keys. Strings built with interpolation are not listed: their key form carries
+  format specifiers, and they fall back to the literal exactly as they do today.
+*/
+
+"Camera isn't activated." = "Camera isn't activated.";
+"Can't reach this camera." = "Can't reach this camera.";
+"Connect to a camera" = "Connect to a camera";
+"Connecting…" = "Connecting…";
+"Connection lost." = "Connection lost.";
+"Details" = "Details";
+"Device is locked." = "Device is locked.";
+"Hide password" = "Hide password";
+"Live" = "Live";
+"Loading" = "Loading";
+"Negotiating stream…" = "Negotiating stream…";
+"No video is arriving." = "No video is arriving.";
+"Not a Hikvision device." = "Not a Hikvision device.";
+"Opening video channel…" = "Opening video channel…";
+"Show password" = "Show password";
+"Signing in…" = "Signing in…";
+"Still can't reach this camera." = "Still can't reach this camera.";
+"Switched to TCP for stability." = "Switched to TCP for stability.";
+"The picture has stalled." = "The picture has stalled.";
+"This is taking longer than usual." = "This is taking longer than usual.";
+"Unsupported video format." = "Unsupported video format.";
+"Video port is closed." = "Video port is closed.";
+"Vigil couldn't finish signing in." = "Vigil couldn't finish signing in.";
+"Waiting for a keyframe…" = "Waiting for a keyframe…";
+"Waiting for the network." = "Waiting for the network.";
+"Waiting for video…" = "Waiting for video…";
+"Wrong password." = "Wrong password.";

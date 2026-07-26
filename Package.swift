@@ -40,6 +40,10 @@ let apple: [SwiftSetting] = common + [
 
 let package = Package(
     name: "Vigil",
+    // Required as soon as any target ships a `.lproj` directory — SwiftPM refuses the manifest
+    // otherwise: "manifest property 'defaultLocalization' not set; it is required in the presence of
+    // localized resources". English is the development language; `ru.lproj` is a translation of it.
+    defaultLocalization: "en",
     platforms: [
         // Ignored on Linux; constrains the Apple deployment target only.
         .macOS(.v14),
@@ -150,10 +154,13 @@ let package = Package(
             name: "VigilRender",
             dependencies: ["VigilProtocols", "VigilVideo"],
             path: "Sources/VigilRender",
-            resources: [
-                // Metal shaders are compiled by SwiftPM into default.metallib inside the bundle.
-                .process("Shaders"),
-            ],
+            // NO `resources:`. There is nothing to put in a bundle yet — `Shaders/` holds only a
+            // `.placeholder`, and SwiftPM skips dotfiles, so declaring it produced an EMPTY bundle
+            // with no Info.plist. `codesign` then refused it outright and stopped the first Mac build:
+            //   Vigil_VigilRender.bundle: bundle format unrecognized, invalid, or unsuitable
+            // Nothing in this target calls `Bundle.module`, so the bundle bought nothing and cost the
+            // build. Restore `.process("Shaders")` in the same commit that adds the first .metal file,
+            // not before.
             swiftSettings: apple
         ),
         .target(
@@ -175,8 +182,15 @@ let package = Package(
             name: "VigilUI",
             dependencies: ["VigilProtocols", "VigilCore", "VigilRender"],
             path: "Sources/VigilUI",
+            // `Localizations` only. This target DOES call `Bundle.module` (every `Text(_, bundle:)`),
+            // and SwiftPM's generated accessor `fatalError`s when the bundle is absent, so unlike
+            // VigilRender above this one must keep a resource — and that resource has to be real. It
+            // now is: `Localizations/en.lproj/Localizable.strings`, the base localisation.
+            //
+            // `Resources` is dropped until there is something in it. It held only a `.placeholder`,
+            // which SwiftPM skips, and an empty directory is not a resource — Assets.xcassets and the
+            // app icon do not exist yet, which the build script already warns about by name.
             resources: [
-                .process("Resources"),        // Assets.xcassets, custom SF Symbols
                 .process("Localizations"),    // en.lproj / ru.lproj .strings + .stringsdict
             ],
             swiftSettings: apple

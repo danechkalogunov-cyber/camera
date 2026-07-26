@@ -422,12 +422,27 @@ sign_with() {
     ent="$1"
 
     # Nested bundles first: a signature over the app covers its contents, so anything inside must
-    # already be sealed. SwiftPM resource bundles hold no executable code, but codesign --deep
-    # --strict still expects them to be signed.
+    # already be sealed.
+    #
+    # But only bundles that actually CONTAIN CODE get their own signature. A resource bundle holding
+    # no Mach-O is sealed as ordinary data by the app's own signature, through the
+    # Contents/_CodeSignature/CodeResources manifest — signing it separately is unnecessary, and when
+    # the bundle is malformed it is impossible:
+    #   Vigil_VigilRender.bundle: bundle format unrecognized, invalid, or unsuitable
+    # which is what stopped the first Mac build, twice, including the entitlement fallback path. The
+    # earlier comment here asserted that `--deep --strict` "still expects them to be signed"; that was
+    # a guess written without a Mac and it was wrong in the direction that costs a build.
+    #
     # shellcheck disable=SC2086  # TIMESTAMP_FLAG is one deliberate, space-free word.
     for nested in "$APP/Contents/Resources"/*.bundle; do
         [ -d "$nested" ] || continue
-        codesign --force --sign "$SIGN_IDENTITY" $TIMESTAMP_FLAG "$nested" || return $?
+        if find "$nested" -type f -print0 2>/dev/null \
+             | xargs -0 file 2>/dev/null | grep -q 'Mach-O'; then
+            codesign --force --sign "$SIGN_IDENTITY" $TIMESTAMP_FLAG "$nested" || return $?
+            note "signed $(basename "$nested") (contains code)"
+        else
+            note "$(basename "$nested"): no Mach-O inside — sealed by the app signature, not signed separately"
+        fi
     done
 
     # --options runtime      hardened runtime, no exceptions (docs/ARCHITECTURE.md §13.5)
