@@ -327,18 +327,20 @@ package enum ConnectRemedy: Sendable, Hashable, CaseIterable {
     case runStreamDoctor
 
     /// The button label — a verb naming the outcome (UX.md §14.1 rule 6).
-    @MainActor
-    package var title: Text {
+    ///
+    /// A `LocalizedStringKey` rather than a `Text` so that ``VButton`` can take it directly and
+    /// this copy exists exactly once.
+    package var title: LocalizedStringKey {
         switch self {
-        case .retry: return Text("Try Again", bundle: .module)
-        case .checkAddress: return Text("Check the Address", bundle: .module)
-        case .updatePassword: return Text("Update Password", bundle: .module)
-        case .activateCamera: return Text("Set Password", bundle: .module)
-        case .tryAlternateRTSPPort: return Text("Try Port 8554", bundle: .module)
-        case .switchToTCP: return Text("Switch to TCP", bundle: .module)
-        case .useONVIF: return Text("Use ONVIF", bundle: .module)
-        case .openCameraWebPage: return Text("Open Camera Web Page", bundle: .module)
-        case .runStreamDoctor: return Text("Diagnose", bundle: .module)
+        case .retry: return "Try Again"
+        case .checkAddress: return "Check the Address"
+        case .updatePassword: return "Update Password"
+        case .activateCamera: return "Set Password"
+        case .tryAlternateRTSPPort: return "Try Port 8554"
+        case .switchToTCP: return "Switch to TCP"
+        case .useONVIF: return "Use ONVIF"
+        case .openCameraWebPage: return "Open Camera Web Page"
+        case .runStreamDoctor: return "Diagnose"
         }
     }
 }

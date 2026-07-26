@@ -2,9 +2,8 @@
 //  StreamController.swift
 //  VigilCore
 //
-//  One actor per camera: it owns the credential, the path, the socket, the RTSP session machine and
-//  the RTP receivers for exactly one live stream, and it is the only thing that decides when to try
-//  again.
+//  One actor per camera: it owns the credential, the path, the RTSP session and the RTP receivers
+//  for exactly one live stream, and it is the only thing that decides whether to try again.
 //  Implements docs/spec-core.md §7 and docs/API_CONTRACT.md §4.8 / §5.12
 //  (`Streaming/StreamController*.swift`).
 //
@@ -12,11 +11,12 @@
 //
 //      **Authentication failure is terminal, and the counter survives the reconnect.**
 //
-//  `RTSPAuthenticator` counts credentialed 401s inside one connection and stops at two. A new
-//  connection builds a new authenticator, so a controller that reconnected on a 401 would spend two
-//  more attempts per reconnect, forever, and Hikvision firmware locks an account for thirty minutes
-//  after roughly five. The counter therefore lives in `LockoutGovernor`, outside the connection,
-//  and is consulted **before** a socket is opened; only a new password clears it.
+//  `RTSPAuthenticator` counts credentialed 401s inside one connection and stops at two. Every
+//  reconnect builds a new connection and therefore a new authenticator, so a controller that
+//  reconnected after a 401 would spend two fresh attempts per reconnect, forever — and Hikvision
+//  firmware locks an account for about thirty minutes after roughly five failures, including from
+//  the camera's own web UI. The counter therefore lives in `LockoutGovernor`, outside the
+//  connection, and is consulted **before** a session is built. Only a new password clears it.
 //
 
 #if os(macOS)
@@ -25,18 +25,43 @@ import Foundation
 import VigilProtocols
 import VigilRTP
 import VigilRTSP
+import VigilTransport
+
+// MARK: - StreamPriority
+
+/// How much this stream matters when something has to give.
+///
+/// Declared for the controller's initialiser and carried verbatim; nothing in the first-light slice
+/// arbitrates on it, because arbitration is `StreamCoordinator`'s and that is W4 (spec-core §8).
+public enum StreamPriority: Int, Sendable, Hashable, Comparable, CaseIterable {
+    /// Fullscreen, or the single focused tile.
+    case focused = 400
+    /// An on-screen tile of at least 0.35 Mpx.
+    case visibleLarge = 300
+    /// A smaller on-screen tile.
+    case visibleSmall = 200
+    /// In the layout but scrolled away or occluded.
+    case offscreen = 100
+    /// A sidebar micro-preview.
+    case thumbnail = 50
+    /// Pinned live but not shown anywhere.
+    case background = 10
+
+    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+}
 
 // MARK: - StreamController
 
 /// The live path for one camera.
 ///
-/// Composition, not reimplementation (spec-core §7.1): `RTSPSessionMachine` decides protocol,
-/// `RTSPTransport` moves bytes, `RTPTrackReceiver` assembles access units. This actor adds
-/// lifecycle, timeouts, the R1.2 path ladder, reconnection and the decision of when to stop trying.
+/// Composition, not reimplementation (spec-core §7.1): `RTSPSessionDriving` owns the socket and the
+/// RTSP session machine, `RTPTrackReceiver` assembles access units, and this actor adds the things
+/// that need one serialized owner — the credential, the R1.2 path ladder, the lockout gate,
+/// timeouts, reconnection and the decision to stop trying.
 ///
 /// Everything crossing out of it is `Sendable`: state changes and telemetry on a bounded
-/// broadcaster, and assembled frames through the injected sink — frames do **not** travel through
-/// the broadcaster, because a slow observer must never be able to hold up the media path
+/// broadcaster, assembled frames through the injected sink. Frames deliberately do **not** travel
+/// through the broadcaster — a slow observer must never be able to hold up the media path
 /// (API_CONTRACT §2 R-27).
 public actor StreamController: Identifiable {
 
@@ -50,11 +75,10 @@ public actor StreamController: Identifiable {
 
     // MARK: Injected collaborators
 
+    nonisolated let dependencies: CoreDependencies
     nonisolated let clock: any MonotonicClock
     nonisolated let logger: any LoggerProtocol
-    nonisolated let makeTransport: RTSPTransportFactory
     nonisolated let credentialProvider: @Sendable () async throws -> Credential?
-    nonisolated let frameSink: @Sendable (EncodedFrame) -> Void
     nonisolated let broadcaster: Broadcaster<StreamEvent>
     nonisolated let governor: LockoutGovernor
     nonisolated let probe: StreamProbe
@@ -65,6 +89,12 @@ public actor StreamController: Identifiable {
     var random: any RandomSource
     var camera: Camera
     var quality: StreamQuality
+    var priority: StreamPriority
+
+    /// Where assembled access units go. Replaceable after construction, because `VigilUI` is the
+    /// only module that can see both this and the render layer, so it attaches the decode pipeline
+    /// once the view exists.
+    var frameSink: (@Sendable (EncodedFrame) -> Void)?
 
     // MARK: Lifecycle state
 
@@ -80,66 +110,79 @@ public actor StreamController: Identifiable {
     var resolvedCandidate: RTSPPathCandidate?
     var pendingRedirect: RTSPURL?
 
-    // MARK: Per-attempt session state
+    // MARK: Per-attempt state
 
-    var machine: RTSPSessionMachine?
-    var transport: (any RTSPTransport)?
-    var readTask: Task<Void, Never>?
-    var signal: SessionSignal<AttemptOutcome>?
-    var pendingWrites: [Data] = []
-    var isDraining = false
+    var session: (any RTSPSessionDriving)?
+    var pendingOutcome: AttemptOutcome?
     var receivers: [Int: RTPTrackReceiver] = [:]
     var trackForRTPChannel: [UInt8: Int] = [:]
     var rtcpChannelForTrack: [Int: UInt8] = [:]
-    var machineTimers: [RTSPTimerID: Task<Void, Never>] = [:]
     var controllerTimers: [ControllerTimer: Task<Void, Never>] = [:]
     var attemptStart: MediaInstant = .zero
     var sawFirstPacket = false
     var sawFirstFrame = false
     var keyframeRequests: [MediaInstant] = []
 
+    /// The account this attempt is using, so a `401` is booked against the right key. Never logged
+    /// next to a realm.
+    var currentAccount: String?
+
+    /// True once a request was re-sent carrying credentials, which is what makes a later success an
+    /// authenticated one.
+    var didAuthenticate = false
+
+    /// True when a **learned** path stopped answering during this attempt. Turns what would be a
+    /// terminal `rtspPathNotFound` into a transient failure, so the ladder runs again instead of
+    /// the camera going dark until someone presses a button.
+    var pathInvalidated = false
+
+    /// How many times this attempt has nudged the camera for a keyframe before giving up.
+    var firstFrameNudges = 0
+
     // MARK: Initialisation
 
     /// Builds a controller. Nothing happens until `start()`.
     ///
     /// - Parameters:
-    ///   - camera: the record to stream. Its `capabilities` are read for a learned path and
-    ///     written back when the ladder resolves one — read `cameraRecord()` after
-    ///     `StreamEvent.pathResolved` and persist it.
-    ///   - credentialProvider: how to obtain the password. A closure rather than a `CredentialStore`
-    ///     reference so the credential is fetched per attempt, never captured, and so a test can
-    ///     supply one without a Keychain. Returning `nil` is terminal `.credentialsMissing`.
-    ///   - quality: which encoder to ask for. `nil` takes the camera's preference, then `.main`.
-    ///   - makeTransport: how to obtain a socket for a URL.
-    ///   - frameSink: where assembled access units go — `VigilVideo`'s decode pipeline in the app.
-    ///     Called from the controller's executor; it must return immediately and must not block.
+    ///   - camera: the record to stream. Its `capabilities` are read for a learned path and written
+    ///     back when the ladder resolves one — read `cameraRecord()` after
+    ///     `StreamEvent.pathResolved` and persist it, which is what makes R1.2's "the probe happens
+    ///     exactly once per device, ever" true across launches.
+    ///   - credentialProvider: how to obtain the password. A closure, not a `CredentialStore`
+    ///     reference, so the credential is fetched per attempt and never captured — a password
+    ///     change takes effect on the next reconnect with nothing to invalidate. Returning `nil` is
+    ///     terminal `.credentialsMissing`.
+    ///   - initialQuality: which encoder to ask for.
+    ///   - initialPriority: carried for the coordinator that lands in W4; unused here.
+    ///   - dependencies: clock, logger, randomness and the session factory.
+    ///   - frameSink: where assembled access units go. May be attached later with
+    ///     `attachFrameSink(_:)`.
     ///   - governor: the per-device authentication counter. **Share one instance across every lane
     ///     that touches a device** (API_CONTRACT §2 R-25 rule 4); the default builds a private one,
     ///     which is correct only while this controller is the device's only lane.
     ///   - policy: the backoff ladder.
-    ///   - random: injected randomness for jitter and for the Digest `cnonce`. Seed it in tests.
     public init(camera: Camera,
                 credentialProvider: @escaping @Sendable () async throws -> Credential?,
-                quality: StreamQuality? = nil,
-                makeTransport: @escaping RTSPTransportFactory,
-                frameSink: @escaping @Sendable (EncodedFrame) -> Void,
-                clock: any MonotonicClock,
+                initialQuality: StreamQuality? = nil,
+                initialPriority: StreamPriority = .focused,
+                dependencies: CoreDependencies,
+                frameSink: (@Sendable (EncodedFrame) -> Void)? = nil,
                 governor: LockoutGovernor? = nil,
-                policy: ReconnectPolicy = .default,
-                random: any RandomSource = SystemRandomSource(),
-                logger: any LoggerProtocol = NullLogger()) {
+                policy: ReconnectPolicy = .default) {
         self.id = camera.id
         self.cameraName = camera.displayName
         self.camera = camera
         self.credentialProvider = credentialProvider
-        self.quality = quality ?? camera.preferredQuality ?? .main
-        self.makeTransport = makeTransport
+        self.quality = initialQuality ?? camera.preferredQuality ?? .main
+        self.priority = initialPriority
+        self.dependencies = dependencies
+        self.clock = dependencies.clock
+        self.logger = dependencies.logger
+        self.random = dependencies.random
         self.frameSink = frameSink
-        self.clock = clock
-        self.governor = governor ?? LockoutGovernor(clock: clock, logger: logger)
+        self.governor = governor ?? LockoutGovernor(clock: dependencies.clock,
+                                                    logger: dependencies.logger)
         self.policy = policy
-        self.random = random
-        self.logger = logger
         self.resolvedCandidate = camera.capabilities.flatMap { capabilities in
             capabilities.resolvedRTSPPath.map { path in
                 RTSPPathCandidate(template: capabilities.rtspPathTemplate, path: path, order: 0)
@@ -147,10 +190,7 @@ public actor StreamController: Identifiable {
         }
         self.broadcaster = Broadcaster<StreamEvent>(replaysLatest: false,
                                                     bufferingPolicy: .bufferingNewest(64))
-        self.probe = StreamProbe(makeTransport: makeTransport,
-                                 clock: clock,
-                                 random: random,
-                                 logger: logger)
+        self.probe = StreamProbe(dependencies: dependencies)
     }
 
     // MARK: Observation
@@ -175,10 +215,21 @@ public actor StreamController: Identifiable {
     public func format() -> StreamFormat? { resolvedFormat }
 
     /// The camera record, including any capabilities the path ladder learned.
-    ///
-    /// Persist this after `StreamEvent.pathResolved`: it is what makes R1.2's "the probe happens
-    /// exactly once per device, ever" true across launches.
     public func cameraRecord() -> Camera { camera }
+
+    /// Sends assembled access units to `sink` from now on, replacing any previous one.
+    ///
+    /// The sink is called on the controller's executor and must return immediately: it is the
+    /// decode pipeline's `submit`, which applies its own drop policy and never blocks. Blocking
+    /// here stalls RTP ingest for this camera.
+    public func attachFrameSink(_ sink: @escaping @Sendable (EncodedFrame) -> Void) {
+        frameSink = sink
+    }
+
+    /// Stops delivering frames. Media keeps flowing and statistics keep updating.
+    public func detachFrameSink() {
+        frameSink = nil
+    }
 
     // MARK: Lifecycle
 
@@ -196,16 +247,15 @@ public actor StreamController: Identifiable {
         }
     }
 
-    /// Stops, gracefully.
+    /// Stops, gracefully: `TEARDOWN` within a bounded flush, then the socket closes.
     ///
-    /// Cancels the run loop, sends `TEARDOWN` with a 1.5 s budget, and closes the socket. Never
-    /// throws and is safe to call from a task that is being cancelled, so call sites need no
+    /// Never throws and is safe to call from a task that is being cancelled, so call sites need no
     /// `Task.isCancelled` dance.
     public func stop(reason: EndReason = .userRequested) async {
         isStopping = true
         runTask?.cancel()
         runTask = nil
-        await signal?.send(.stopped)
+        pendingOutcome = .stopped
         await teardown()
         transition(to: .stopped, detail: .plain(.stopped, attempt: attempt))
         emit(.ended(reason: reason))
@@ -220,15 +270,20 @@ public actor StreamController: Identifiable {
         start()
     }
 
-    /// Stops decoding without dropping the session: the RTSP session and its keepalives stay up,
-    /// and assembled frames are discarded instead of being handed to the sink.
+    /// Stops handing frames to the sink without dropping the session: RTSP and its keepalives stay
+    /// up, and frames are discarded rather than queued.
     ///
-    /// Used by occlusion (spec-core §8.6). Frames are dropped rather than buffered because a
-    /// paused tile has no use for a two-minute backlog when it comes back.
+    /// Used by occlusion (spec-core §8.6). Discarded, not buffered: a tile that comes back has no
+    /// use for a two-minute backlog.
     public func setPaused(_ paused: Bool) {
         guard paused != isPaused else { return }
         isPaused = paused
         logger.info(.core, "stream \(paused ? "paused" : "resumed")", ["camera": id.short])
+    }
+
+    /// Sets the priority the coordinator will arbitrate on in W4.
+    public func setPriority(_ newPriority: StreamPriority) {
+        priority = newPriority
     }
 
     /// Applies an edited camera record.
@@ -249,14 +304,14 @@ public actor StreamController: Identifiable {
         if credentialChanged { resolvedCandidate = nil }
 
         guard needsRestart else { return }
-        if currentState == .stopped || currentState == .idle { return }
+        guard currentState != .stopped, currentState != .idle else { return }
         await restart()
     }
 
     /// The user supplied a new password.
     ///
-    /// Clears the authentication counters for this device — **the only thing that may** — and
-    /// reconnects immediately, from `.failed` as well as from anywhere else.
+    /// Clears this device's authentication counters — **the only thing that may** — and reconnects
+    /// immediately, from `.failed` as readily as from anywhere else (spec-core §7.5 row 52).
     public func credentialsUpdated(account: String) async {
         await governor.clear(host: camera.host, account: account)
         attempt = 0
@@ -280,18 +335,17 @@ public actor StreamController: Identifiable {
 
             switch outcome {
             case .stopped:
-                break
+                runTask = nil
+                return
 
             case let .redirect(url):
-                // A redirect and a ladder advance are not failures: reconnect at once, and do not
-                // spend an attempt on them (spec-core §7.6).
+                // A redirect is not a failure: reconnect at once, and do not spend an attempt on it
+                // (spec-core §7.6).
                 pendingRedirect = url
-                continue
 
             case let .failed(error):
                 emit(.error(error, isFatal: true))
-                transition(to: .failed,
-                           detail: .failure(error, state: .failed, attempt: attempt))
+                transition(to: .failed, detail: .failure(error, state: .failed, attempt: attempt))
                 if error.code.forbidsColdRetry {
                     logger.error(.core, "stream failed terminally",
                                  ["camera": id.short, "code": error.code.rawValue])
@@ -333,8 +387,8 @@ public actor StreamController: Identifiable {
 
     // MARK: State plumbing
 
-    /// Moves to `state` and publishes the change. A transition to the state we are already in with
-    /// the same detail is dropped, so the UI is not woken for nothing.
+    /// Moves to `state` and publishes the change. A transition to the state we are already in, with
+    /// the same detail, is dropped so the UI is not woken for nothing.
     func transition(to state: StreamState, detail: StateDetail) {
         guard state != currentState || detail != currentDetail else { return }
         let previous = currentState
@@ -347,8 +401,8 @@ public actor StreamController: Identifiable {
 
     /// Publishes an event to every observer.
     ///
-    /// Fire-and-forget: the broadcaster is an actor and its buffering policy is bounded, so this
-    /// cannot apply back-pressure to the media path.
+    /// Fire-and-forget: the broadcaster is an actor with a bounded buffering policy, so this cannot
+    /// apply back-pressure to the media path.
     func emit(_ event: StreamEvent) {
         let broadcaster = broadcaster
         Task { await broadcaster.yield(event) }
@@ -361,8 +415,8 @@ public actor StreamController: Identifiable {
 enum AttemptOutcome: Sendable {
     /// The user or the coordinator stopped us.
     case stopped
-    /// Terminal: nothing will be retried until the user acts (or, for non-auth causes, until the
-    /// five-minute cold retry).
+    /// Terminal: nothing is retried until the user acts — or, for non-auth causes, until the
+    /// five-minute cold retry.
     case failed(StreamError)
     /// Transient: the backoff ladder applies.
     case retry(StreamError)

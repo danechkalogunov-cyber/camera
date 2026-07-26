@@ -65,6 +65,10 @@ struct VigilApp: App {
 
     // MARK: - Initialisation
 
+    // Explicit, though `App` is a `@MainActor` protocol and `VigilApp` therefore infers that
+    // isolation for every member: the annotation is what makes it obvious that building a
+    // `@MainActor` model here is legal, without the reader having to recall the inference rule.
+    @MainActor
     init() {
         // `App.init()` runs on the main actor, which is what lets a `@MainActor` model be built
         // here. Bootstrapping in the initialiser rather than in a `.task` means the Keychain read

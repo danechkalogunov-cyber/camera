@@ -2,8 +2,8 @@
 //  StreamProbe.swift
 //  VigilCore
 //
-//  The R1.2 path ladder: probe the known Hikvision RTSP paths, three at a time, and keep the
-//  winner. The user is never asked for a stream URL.
+//  The R1.2 path ladder: probe the known Hikvision RTSP paths and keep the winner. The user is
+//  never asked for a stream URL.
 //  Implements docs/REQUIREMENTS-CUSTOMER.md §R1.2 and docs/API_CONTRACT.md §4.8 (`StreamProbe`).
 //
 //  Three rules decide everything in this file:
@@ -11,7 +11,7 @@
 //  * `200` with a parseable SDP carrying a video codec Vigil can decode **wins**.
 //  * `404`/`451`/`455`/`460` **advance** to the next candidate.
 //  * `401` does **not** advance. The path is right and the credentials need applying — and, because
-//    two credentialed 401s per device are terminal (API_CONTRACT §2 R-25), a 401 stops the entire
+//    two credentialed 401s per device are terminal (API_CONTRACT §2 R-25), a `401` stops the entire
 //    ladder rather than repeating itself against four more paths. Walking the ladder after a
 //    rejected password is how an app locks its user out of their own camera.
 //
@@ -21,6 +21,7 @@
 import Foundation
 import VigilProtocols
 import VigilRTSP
+import VigilTransport
 
 // MARK: - Outcome
 
@@ -31,7 +32,7 @@ public enum StreamProbeOutcome: Sendable {
     case resolved(RTSPPathCandidate, videoCodec: VideoCodec?)
 
     /// A candidate answered `401`. The path is right; the credentials are missing or wrong. The
-    /// ladder stopped here on purpose — no further candidate was tried.
+    /// ladder stopped there on purpose — no further candidate was tried.
     case authenticationRequired(RTSPPathCandidate, StreamError)
 
     /// Every candidate was tried and none answered. Carries the most diagnostic failure seen.
@@ -42,42 +43,24 @@ public enum StreamProbeOutcome: Sendable {
 
 /// Finds the RTSP path a device actually answers on.
 ///
-/// One instance can serve many cameras; it holds no per-camera state. Candidates run **three in
-/// flight** so first-frame latency is not the sum of the failures, and within a window the
-/// lowest-numbered rung that succeeds wins regardless of which answered first — the ladder's order
-/// encodes which form is most likely to be canonical for the firmware.
+/// One instance can serve many cameras; it holds no per-camera state.
 public actor StreamProbe {
 
-    // MARK: Configuration
-
-    /// Candidates in flight at once. Three, from R1.2.
+    /// Candidates in flight at once, once authentication is known good. Three, from R1.2.
     public static let maxInFlight = 3
 
-    private let makeTransport: RTSPTransportFactory
-    private let clock: any MonotonicClock
-    private let random: any RandomSource
-    private let logger: any LoggerProtocol
+    private let dependencies: CoreDependencies
     private let candidateTimeout: Duration
 
     /// Builds a probe.
     ///
     /// - Parameters:
-    ///   - makeTransport: how to obtain a socket for one candidate URL.
-    ///   - clock: drives the per-candidate deadline.
-    ///   - random: the Digest `cnonce` source, seeded in tests.
-    ///   - logger: structured log sink.
+    ///   - dependencies: clock, logger, randomness and the session factory.
     ///   - candidateTimeout: how long one candidate may take from connect to SDP. Four seconds:
-    ///     long enough for a busy NVR on Wi-Fi, short enough that five rungs cannot exceed the
-    ///     ten-second first-frame budget of R1.7 when they run three at a time.
-    public init(makeTransport: @escaping RTSPTransportFactory,
-                clock: any MonotonicClock,
-                random: any RandomSource = SystemRandomSource(),
-                logger: any LoggerProtocol = NullLogger(),
-                candidateTimeout: Duration = .seconds(4)) {
-        self.makeTransport = makeTransport
-        self.clock = clock
-        self.random = random
-        self.logger = logger
+    ///     long enough for a busy NVR over Wi-Fi, short enough that the ladder cannot eat R1.7's
+    ///     ten-second budget to first picture.
+    public init(dependencies: CoreDependencies, candidateTimeout: Duration = .seconds(4)) {
+        self.dependencies = dependencies
         self.candidateTimeout = candidateTimeout
     }
 
@@ -85,9 +68,9 @@ public actor StreamProbe {
 
     /// The contract's entry point: the winning candidate, or `nil` when the ladder found nothing.
     ///
-    /// Prefer `probe(camera:credential:quality:)`, which distinguishes "no path answered" from
-    /// "the path is right and the password is wrong" — a distinction the UI must make, because one
-    /// leads to Stream Doctor and the other to a password field.
+    /// Prefer `probe(camera:credential:quality:)`, which distinguishes "no path answered" from "the
+    /// path is right and the password is wrong" — a distinction the UI must make, because one leads
+    /// to Stream Doctor and the other to a password field.
     public func findWorkingPath(camera: Camera,
                                 credential: Credential?,
                                 quality: StreamQuality) async -> RTSPPathCandidate? {
@@ -107,120 +90,80 @@ public actor StreamProbe {
                       quality: StreamQuality) async -> StreamProbeOutcome {
         if let override = camera.rtspPathOverride, !override.isEmpty {
             let candidate = RTSPPathCandidate.override(override)
-            logger.info(.core, "path override in force; ladder skipped",
-                        ["path": Redact.path(candidate.path)])
+            dependencies.logger.info(.core, "path override in force; ladder skipped",
+                                     ["path": Redact.path(candidate.path)])
             return .resolved(candidate, videoCodec: camera.capabilities?.videoCodec)
         }
 
-        let candidates = RTSPPathCandidate.ladder(channel: camera.channel,
-                                                  quality: quality,
-                                                  preferring: camera.capabilities?
-                                                      .rtspPathTemplate)
-        guard !candidates.isEmpty else {
-            return .exhausted(StreamError(code: .rtspPathNotFound))
-        }
-
+        let candidates = RTSPPathCandidate.ladder(
+            channel: camera.channel,
+            quality: quality,
+            preferring: camera.capabilities?.rtspPathTemplate)
         var lastFailure = StreamError(code: .rtspPathNotFound)
+        guard let first = candidates.first else { return .exhausted(lastFailure) }
 
-        // Phase 1 — the first rung runs **alone**, however many are in flight afterwards.
+        // Phase 1 — the first rung runs **alone**, however many run afterwards.
         //
         // This is an authentication-safety rule, not a performance one. Hikvision firmware
         // authenticates before it decides whether a path exists, so telling `404` from `401`
         // requires sending credentials; three concurrent candidates would therefore be three
-        // concurrent logins, and a wrong password would spend up to six failed attempts in one
+        // concurrent logins, and a wrong password would spend up to six failed sign-ins in one
         // burst against a device that locks an account at about five (API_CONTRACT §2 R-25). One
-        // candidate at a time until the device has answered something other than a `401` keeps the
-        // worst case at exactly the two attempts the contract budgets. Rung 1 is also the right
-        // answer for almost every current camera, so the common case is one round trip either way.
-        guard let first = candidates.first else { return .exhausted(lastFailure) }
+        // at a time until the device has answered something other than a `401` keeps the worst
+        // case at exactly the two attempts the contract budgets. Rung 1 is also the right answer
+        // for almost every current camera, so the common case is one round trip either way.
         switch await evaluate([first], camera: camera, credential: credential) {
         case let .decided(outcome): return outcome
-        case let .continue(failure): lastFailure = failure
+        case let .keepGoing(failure): lastFailure = failure
         }
 
-        // Phase 2 — the credentials are known good (the device answered a path question, not an
-        // authentication one), so the remaining rungs run three in flight per R1.2.
+        // Phase 2 — the credentials are known good, because the device answered a question about
+        // the path rather than about the password. The rest of the ladder runs three in flight per
+        // R1.2, so first-frame latency is not the sum of the failures.
         var index = 1
         while index < candidates.count {
             let end = min(index + Self.maxInFlight, candidates.count)
-            let batch = Array(candidates[index..<end])
-            switch await evaluate(batch, camera: camera, credential: credential) {
+            switch await evaluate(Array(candidates[index..<end]),
+                                  camera: camera,
+                                  credential: credential) {
             case let .decided(outcome): return outcome
-            case let .continue(failure): lastFailure = failure
+            case let .keepGoing(failure): lastFailure = failure
             }
             index = end
         }
         return .exhausted(lastFailure)
     }
 
-    // MARK: Window evaluation
+    // MARK: Windows
 
     /// What one window of candidates concluded.
     private enum WindowVerdict {
         /// The ladder is over, for better or worse.
         case decided(StreamProbeOutcome)
         /// Nothing in this window answered; carry on with the most diagnostic failure seen.
-        case `continue`(StreamError)
+        case keepGoing(StreamError)
     }
 
-    /// Runs one window and folds its results into a verdict.
+    /// Runs one window concurrently and folds its results into a verdict.
     private func evaluate(_ batch: [RTSPPathCandidate],
                           camera: Camera,
                           credential: Credential?) async -> WindowVerdict {
-        let results = await run(batch, camera: camera, credential: credential)
-        var lastFailure = StreamError(code: .rtspPathNotFound)
-
-        // Lowest rung first, so a device that answers on two forms is remembered by the one the
-        // ladder trusts more — not by whichever socket happened to be quicker.
-        for (candidate, result) in results.sorted(by: { $0.0.order < $1.0.order }) {
-            switch result {
-            case let .success(codec):
-                logger.info(.core, "rtsp path resolved",
-                            ["path": Redact.path(candidate.path),
-                             "codec": codec?.rawValue ?? "unknown"])
-                return .decided(.resolved(candidate, videoCodec: codec))
-            case let .authenticationRequired(error):
-                logger.notice(.core, "rtsp path answered 401; ladder stopped",
-                              ["path": Redact.path(candidate.path)])
-                return .decided(.authenticationRequired(candidate, error))
-            case let .advance(error):
-                lastFailure = error
-            case let .abort(error):
-                // A refused port or an unreachable host fails identically for every candidate;
-                // spending four more connects on it only delays the real diagnosis.
-                logger.notice(.core, "ladder aborted; the failure is not path-shaped",
-                              ["code": error.code.rawValue])
-                return .decided(.exhausted(error))
-            }
-        }
-        return .continue(lastFailure)
-    }
-
-    // MARK: Batch execution
-
-    /// Runs one window of candidates concurrently and collects every result.
-    private func run(_ batch: [RTSPPathCandidate],
-                     camera: Camera,
-                     credential: Credential?) async
-        -> [(RTSPPathCandidate, ProbeResult)] {
-        let makeTransport = makeTransport
-        let clock = clock
-        let random = random
-        let logger = logger
+        let dependencies = dependencies
         let timeout = candidateTimeout
 
-        return await withTaskGroup(of: (RTSPPathCandidate, ProbeResult).self) { group in
+        let results = await withTaskGroup(of: (RTSPPathCandidate, ProbeResult).self) { group in
             for candidate in batch {
                 group.addTask {
                     let url = camera.rtspURL(path: candidate.path)
-                    let session = ProbeSession(url: url,
-                                               credential: credential,
-                                               transport: makeTransport(url),
-                                               clock: clock,
-                                               random: random,
-                                               logger: logger)
-                    let result = await withDeadline(timeout, clock: clock) {
-                        await session.run()
+                    var config = RTSPSessionConfig(url: url)
+                    config.transport = .tcpInterleaved
+                    config.setupAudio = false
+                    config.setupMetadataTrack = false
+                    let session = dependencies.makeRTSPSession(config, credential,
+                                                               "\(camera.id.short)-probe")
+                    let probeRun = ProbeRun(session: session, logger: dependencies.logger)
+                    let result = await withDeadline(timeout, clock: dependencies.clock) {
+                        await probeRun.run()
                     }
                     await session.close()
                     return (candidate, result ?? .advance(StreamError(code: .describeTimeout)))
@@ -230,6 +173,32 @@ public actor StreamProbe {
             for await result in group { out.append(result) }
             return out
         }
+
+        var lastFailure = StreamError(code: .rtspPathNotFound)
+        // Lowest rung first, so a device that answers on two forms is remembered by the one the
+        // ladder trusts more — not by whichever socket happened to be quicker.
+        for (candidate, result) in results.sorted(by: { $0.0.order < $1.0.order }) {
+            switch result {
+            case let .success(codec):
+                dependencies.logger.info(.core, "rtsp path resolved",
+                                         ["path": Redact.path(candidate.path),
+                                          "codec": codec?.rawValue ?? "unknown"])
+                return .decided(.resolved(candidate, videoCodec: codec))
+            case let .authenticationRequired(error):
+                dependencies.logger.notice(.core, "rtsp path answered 401; ladder stopped",
+                                           ["path": Redact.path(candidate.path)])
+                return .decided(.authenticationRequired(candidate, error))
+            case let .advance(error):
+                lastFailure = error
+            case let .abort(error):
+                // A refused port or an unreachable host fails identically for every candidate;
+                // spending four more connects on it only delays the real diagnosis.
+                dependencies.logger.notice(.core, "ladder aborted; failure is not path-shaped",
+                                           ["code": error.code.rawValue])
+                return .decided(.exhausted(error))
+            }
+        }
+        return .keepGoing(lastFailure)
     }
 }
 
@@ -248,202 +217,90 @@ enum ProbeResult: Sendable {
     case abort(StreamError)
 }
 
-// MARK: - ProbeSession
+// MARK: - ProbeRun
 
-/// Drives one `DESCRIBE`-only session against one candidate URL.
+/// One `DESCRIBE`-only session against one candidate URL.
 ///
-/// A deliberately reduced driver: it executes `.send`, watches for tracks, and classifies the
-/// terminal action. It ignores `.setTimer`, because the caller's deadline already bounds the whole
-/// candidate and a probe has no keepalive, no media and no session to expire.
-actor ProbeSession {
+/// `RTSPCommand.describeOnly` is the machine's probe primitive: no `OPTIONS`, no `SETUP`, no
+/// `PLAY`, and a clean close as soon as the SDP has been parsed. A path-shaped rejection closes
+/// with `.ladderAdvance`, which is exactly the signal this run turns into "try the next rung".
+actor ProbeRun {
 
-    private let url: RTSPURL
-    private let credential: Credential?
-    private let transport: any RTSPTransport
-    private let clock: any MonotonicClock
-    private let random: any RandomSource
+    private let session: any RTSPSessionDriving
     private let logger: any LoggerProtocol
 
-    private var machine: RTSPSessionMachine?
-    private var readTask: Task<Void, Never>?
-    private let signal = SessionSignal<ProbeResult>()
-    private var videoCodec: VideoCodec?
-    private var sawVideoTrack = false
-    private var isClosed = false
-
-    init(url: RTSPURL,
-         credential: Credential?,
-         transport: any RTSPTransport,
-         clock: any MonotonicClock,
-         random: any RandomSource,
-         logger: any LoggerProtocol) {
-        self.url = url
-        self.credential = credential
-        self.transport = transport
-        self.clock = clock
-        self.random = random
+    init(session: any RTSPSessionDriving, logger: any LoggerProtocol) {
+        self.session = session
         self.logger = logger
     }
 
-    /// Connects, sends `DESCRIBE`, and reports what came back.
+    /// Connects, asks for the SDP, and reports what came back.
     func run() async -> ProbeResult {
+        let stream = await session.events()
         do {
-            try await transport.connect()
+            try await session.connect()
         } catch {
-            return .abort(Self.mapTransportFailure(error))
+            return .abort(StreamError.from(anyError: error))
         }
+        await session.perform(.describeOnly)
 
-        var config = RTSPSessionConfig(url: url)
-        config.setupAudio = false
-        config.setupMetadataTrack = false
-        let isTLS = await transport.isTLS
-        var built = RTSPSessionMachine(config: config, credential: credential,
-                                       random: random, now: clock.now())
+        var videoCodec: VideoCodec?
+        var sawVideoTrack = false
 
-        // `transportReady` only resets nonce state and returns **no actions**: nothing reaches the
-        // wire until a command is handled. A driver that connects and then waits stalls forever
-        // with no error at all (.vigil/STEP3.md §3.1, finding 1).
-        var actions = built.transportReady(isTLS: isTLS, now: clock.now())
-        actions += built.handle(.describeOnly, now: clock.now())
-        machine = built
-
-        startReading()
-        await execute(actions)
-
-        return await signal.wait { ProbeResult.advance(StreamError(code: .describeTimeout)) }
-    }
-
-    /// Closes the socket and stops the read pump. Idempotent.
-    func close() async {
-        guard !isClosed else { return }
-        isClosed = true
-        readTask?.cancel()
-        readTask = nil
-        await transport.close()
-    }
-
-    // MARK: Pumping
-
-    private func startReading() {
-        let transport = transport
-        readTask = Task { [weak self] in
-            let stream = await transport.bytes()
-            do {
-                for try await chunk in stream {
-                    await self?.ingest(chunk)
-                }
-                await self?.transportEnded(error: nil)
-            } catch {
-                await self?.transportEnded(error: error)
-            }
-        }
-    }
-
-    private func ingest(_ bytes: Data) async {
-        guard var machine else { return }
-        let actions = machine.ingest(bytes, now: clock.now())
-        self.machine = machine
-        await execute(actions)
-    }
-
-    private func transportEnded(error: (any Error)?) async {
-        guard var machine else {
-            await signal.send(.advance(StreamError(code: .connectionClosed)))
-            return
-        }
-        let actions = machine.connectionClosed(error: error?.localizedDescription,
-                                               now: clock.now())
-        self.machine = machine
-        await execute(actions)
-        // A close with no terminal action — a peer that hung up mid-DESCRIBE — still has to end
-        // the probe, or the caller waits out its whole deadline for nothing.
-        await signal.send(.advance(StreamError(code: .connectionClosed)))
-    }
-
-    // MARK: Actions
-
-    private func execute(_ actions: [RTSPAction]) async {
-        for action in actions {
-            switch action {
-            case let .send(data):
-                do {
-                    try await transport.write(data)
-                } catch {
-                    await signal.send(.abort(Self.mapTransportFailure(error)))
-                }
-
-            case let .emitTrack(track):
+        for await event in stream {
+            switch event {
+            case let .track(track):
                 if track.kind == .video, let codec = track.codec?.video {
                     sawVideoTrack = true
                     videoCodec = codec
                 }
-
-            case let .closeTransport(reason):
+            case let .closed(reason):
                 switch reason {
                 case .normal:
-                    await signal.send(sawVideoTrack
+                    return sawVideoTrack
                         ? .success(videoCodec)
-                        : .advance(StreamError(code: .unsupportedMedia)))
+                        : .advance(StreamError(code: .unsupportedMedia))
                 case .ladderAdvance:
-                    await signal.send(.advance(StreamError(code: .rtspPathNotFound,
-                                                           rtspStatus: 404)))
+                    return .advance(StreamError(code: .rtspPathNotFound, rtspStatus: 404))
                 case .redirect:
-                    // Following a redirect inside the probe would need a second connection for a
-                    // path we are only testing; treat it as "this rung did not answer".
-                    await signal.send(.advance(StreamError(code: .rtspPathNotFound)))
+                    // Following a redirect would need a second connection for a path we are only
+                    // testing; treat it as "this rung did not answer".
+                    return .advance(StreamError(code: .rtspPathNotFound))
                 case .error:
-                    break
+                    continue
                 }
-
-            case let .fail(error):
-                await signal.send(Self.classify(error))
-
-            case let .log(event):
-                logger.debug(.rtsp, "probe \(event)")
-
-            case .setTimer, .cancelTimer, .emitTiming, .emitMedia, .ready, .stateChanged,
-                 .setReadBackpressure, .sendInterleaved, .reconnect:
+            case let .failed(error):
+                return Self.classify(error)
+            case .state, .timing, .media, .ready, .reconnect:
                 continue
             }
         }
+        return .advance(StreamError(code: .connectionClosed))
     }
 
-    // MARK: Classification
-
-    /// Maps the machine's terminal error onto a ladder decision.
+    /// Maps a terminal failure onto a ladder decision.
     ///
     /// The `401` family is the one that must not advance: `.authRejected` and `.unauthorized` mean
     /// the device answered our credentials with another challenge, and `.credentialsMissing` means
     /// it challenged us and we had nothing to answer with. Both say the path is right.
-    static func classify(_ error: RTSPError) -> ProbeResult {
-        switch error {
+    static func classify(_ error: VigilError) -> ProbeResult {
+        guard case let .rtsp(rtsp) = error else {
+            return .abort(StreamError.from(vigil: error))
+        }
+        switch rtsp {
         case .authRejected, .unauthorized, .credentialsMissing:
-            .authenticationRequired(StreamError.from(error))
+            return .authenticationRequired(StreamError.from(rtsp))
         case .pathNotFound, .noSuitableTrack, .sdpParse:
-            .advance(StreamError.from(error))
+            return .advance(StreamError.from(rtsp))
         case .timeout:
-            .advance(StreamError(code: .describeTimeout))
+            return .advance(StreamError(code: .describeTimeout))
         case .accessForbidden:
-            // 403 is about the account, not the path. Trying four more paths would spend nothing
-            // but time and would tell the user nothing new.
-            .abort(StreamError.from(error))
+            // 403 is about the account, not the path. Four more paths would spend time and tell
+            // the user nothing new.
+            return .abort(StreamError.from(rtsp))
         default:
-            .advance(StreamError.from(error))
+            return .advance(StreamError.from(rtsp))
         }
-    }
-
-    /// Maps a thrown transport failure. The protocol's `throws` is untyped so that a test double
-    /// can throw anything; a `TransportError` keeps its meaning and everything else becomes a
-    /// generic transport failure rather than being swallowed.
-    static func mapTransportFailure(_ error: any Error) -> StreamError {
-        if let transport = error as? TransportError {
-            return StreamError.from(transport)
-        }
-        if error is CancellationError {
-            return StreamError(code: .connectTimeout)
-        }
-        return StreamError(code: .transportError,
-                           underlyingDescription: String(describing: type(of: error)))
     }
 }
 

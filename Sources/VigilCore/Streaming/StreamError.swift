@@ -290,6 +290,43 @@ public extension StreamError {
                            context: context)
     }
 
+    /// Maps the root error the transport layer throws and reports.
+    ///
+    /// `VigilError` is the wider type `RTSPConnection` surfaces (its own deviation note): a
+    /// transport failure, an RTSP failure, cancellation, or a broken invariant. Cancellation is
+    /// mapped to `connectionClosed` rather than to a failure code, because the only thing that
+    /// cancels a session here is Vigil itself.
+    static func from(vigil error: VigilError, context: [String: String] = [:]) -> StreamError {
+        switch error {
+        case let .transport(transport): from(transport, context: context)
+        case let .rtsp(rtsp): from(rtsp, context: context)
+        case let .credential(credential): from(credential, context: context)
+        case .cancelled: StreamError(code: .connectionClosed, context: context)
+        case .rtp, .bitstream:
+            StreamError(code: .protocolViolation,
+                        underlyingDescription: error.diagnosticCode, context: context)
+        default:
+            StreamError(code: .transportError,
+                        underlyingDescription: error.diagnosticCode, context: context)
+        }
+    }
+
+    /// Maps whatever an untyped `throws` produced.
+    ///
+    /// The session seam is untyped so a test double can throw anything; a `VigilError` or a
+    /// `TransportError` keeps its meaning, cancellation is not a failure, and everything else
+    /// becomes a generic transport failure that names its own type rather than being swallowed.
+    static func from(anyError error: any Error, context: [String: String] = [:]) -> StreamError {
+        if let vigil = error as? VigilError { return from(vigil: vigil, context: context) }
+        if let transport = error as? TransportError { return from(transport, context: context) }
+        if error is CancellationError {
+            return StreamError(code: .connectionClosed, context: context)
+        }
+        return StreamError(code: .transportError,
+                           underlyingDescription: String(describing: type(of: error)),
+                           context: context)
+    }
+
     /// Maps a Keychain failure. Everything here is user-fixable and none of it is retried.
     static func from(_ error: CredentialError, context: [String: String] = [:]) -> StreamError {
         let code: Code = switch error {

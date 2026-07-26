@@ -200,10 +200,14 @@ final class AppSessionModel {
         host = trimmedHost
         account = trimmedAccount
         let secret = password
+        // Reuse the Keychain handle when this is the same camera and account as last time: `save`
+        // updates an existing item in place, whereas a fresh `CredentialRef` would leave the old
+        // item behind as an orphan on every retry.
+        let ref = rememberedRef(host: trimmedHost, account: trimmedAccount) ?? CredentialRef()
         beginConnecting()
         sessionTask = Task { [weak self] in
             await self?.connect(host: trimmedHost, account: trimmedAccount, secret: secret,
-                                ref: CredentialRef())
+                                ref: ref)
         }
     }
 
@@ -389,11 +393,18 @@ final class AppSessionModel {
             resolvedPath = candidate.path
         case .error(let error, let isFatal):
             report(streamError: error)
+            // A rejected password is worth deleting; a locked or unauthorised account is not, since
+            // the password itself may well be right and the user would have to type it again for
+            // nothing.
+            let rejected = error.code == .authenticationFailed ? activeRef : nil
             if error.code.forbidsColdRetry {
                 // Terminal, and only the user can fix it. Back to the form, and stop remembering a
                 // password the camera rejects: retrying it on every launch is precisely how a
                 // Hikvision account gets locked out (R-25, R1.5 "Account locked").
                 disconnect(forget: true)
+                if let rejected {
+                    deleteRejectedCredential(rejected)
+                }
             } else if isFatal {
                 isConnecting = false
                 statusLine = error.message
@@ -415,6 +426,33 @@ final class AppSessionModel {
 
     private func report(streamError: StreamError) {
         report(failure: streamError.message, remedy: streamError.fix)
+    }
+
+    /// The Keychain handle for this host and account, when it is the one we already have.
+    private func rememberedRef(host: String, account: String) -> CredentialRef? {
+        guard let remembered = LastConnection.load(from: defaults),
+              remembered.host.caseInsensitiveCompare(host) == .orderedSame,
+              remembered.account == account
+        else {
+            return nil
+        }
+        return remembered.credentialRef
+    }
+
+    /// Removes a password the camera has rejected.
+    ///
+    /// Fire-and-forget, on purpose: the user is already looking at the form, and a Keychain that
+    /// refuses the delete changes nothing they can act on. The failure is logged, not shown.
+    private func deleteRejectedCredential(_ ref: CredentialRef) {
+        let store = credentials
+        let logger = dependencies.logger
+        Task {
+            do {
+                try await store.delete(ref)
+            } catch {
+                logger.warning(.app, "could not remove the rejected credential: \(error)")
+            }
+        }
     }
 
     private func report(failure message: String, remedy: String?) {
