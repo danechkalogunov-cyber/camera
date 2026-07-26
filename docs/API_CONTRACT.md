@@ -506,23 +506,37 @@ camera list. Recording/snapshot folders are reached through **security-scoped bo
 
 #### R-21 — one policy table, keyed on **tile short edge in backing pixels** **[SEMANTIC]**
 
-*Said:* three different tables.
+*Said:* three different tables **and three different units**.
 
 * `FEATURES.md` F-STR-06: **short edge in physical px** = `min(width, height) × backingScaleFactor`.
   Buckets `1–95` JPEG poll @ 1 Hz, `96–479` sub, `480–1079` sub-with-promotion, `≥1080` main; plus
   hidden/occluded → paused. 750 ms dwell + 15 % dead-band; switch gated on the new stream's first
   keyframe with a 150 ms crossfade, never a black frame.
-* `spec-video-pipeline.md` §12: **backing px**, buckets `≥960` main, `640–959` sub, `384–639`
-  fps-capped 15, `224–383` keyframes-only, `<224` JPEG poll 2 s, sidebar 5 s, offscreen 15 s,
-  occluded paused.
-* `spec-core.md` §8: "tile classes **A–F** on backing px", 15 % + 750 ms hysteresis.
+* `spec-video-pipeline.md` §12.5: **backing *width***, buckets `≥1600` main/full, `960–1599`
+  main-if-≤4-tiles-else-sub, `640–959` sub, `384–639` sub fps-capped 15, `224–383` sub
+  keyframes-only, `<224` JPEG poll 2 s; sidebar 5 s, offscreen 15 s, occluded paused.
+* `spec-core.md` §8.5: **total backing pixels**, classes **A–F**: `≥1_500_000` main,
+  `350_000–1_499_999` sub-or-main, `60_000–349_999` sub fps-capped 15, `12_000–59_999`
+  keyframe-only, `<12_000` JPEG poll 2 s, hidden → paused. 15 % + 750 ms hysteresis.
 
-*Ruling:* the unit is settled first, because all three actually agree: **the tile's short edge in
-backing (device) pixels**, taken from `TileRenderState.pixelSize` — `bounds × backingScaleFactor`,
-rounded to integers — which `spec-render.md` already declares the authoritative input, delivered via
-`didChangePixelSize(_:isVisible:)`. "Short edge in physical px" and "backing px" are the same number.
+*Ruling — the unit:* **the tile's short edge in backing (device) pixels**, i.e.
+`min(pixelSize.width, pixelSize.height)` where `pixelSize = bounds × backingScaleFactor` rounded to
+integers. `spec-render.md` already declares `TileRenderState.pixelSize` the authoritative input,
+published through `tile(_:didChangePixelSize:isVisible:)`, and it carries **both** dimensions, so
+every candidate unit is derivable from it — this is a naming problem, not a measurement problem.
 
-Then the two axes are separated, which is what the three tables were actually confusing:
+Short edge beats backing *width* because a 1-up tile on a portrait display and a `1+5` hero cell are
+both wider than they are tall, and it is the *shorter* dimension that decides whether a 720-line
+sub-stream has enough lines to look sharp. Short edge beats *total pixels* — despite
+`spec-core.md`'s argument that non-square cells break width — because total pixels conflates a
+1920×135 letterbox strip (259 k px) with a 480×540 cell (259 k px), and those two need opposite
+decisions. `spec-core.md`'s own §17.6 test 2 contradicts its own §8.5 table by one class in **both**
+directions (it calls 960×540 class C where the table's own example calls it class B, and 480×270
+class D where the table's own example calls it class C), which is evidence those boundaries were not
+settled. Class letters are kept, because `StreamCoordinator`'s plan is a pure function and
+`classB_promotesWhenSubIsSofterThanTile` is a far better test name than `p480to1079_...`.
+
+Then the two axes are separated, which is what the three tables were really conflating:
 
 **Axis 1 — tile size decides which stream to pull.** One table, `FEATURES.md`'s thresholds, with
 `spec-core.md`'s class letters attached so the code and the specs can name the buckets:
@@ -569,9 +583,13 @@ mechanism all three authors wanted and removes the contradiction. `spec-core.md`
 kept because `StreamCoordinator`'s plan is a pure function whose test names read much better as
 "classB_promotesWhenSubIsSofterThanTile" than as "480to1079_...".
 
-*Amend:* `spec-video-pipeline.md` §12 (replace the size table with Axis 2 and a pointer here);
-`spec-core.md` §8 (classes A–F → A–E with these thresholds); `FEATURES.md` F-STR-06 (add the class
-letters, the JPEG-cadence sub-table, and a pointer to Axis 2).
+There is **no class F**: `spec-core.md`'s six-way split collapses to five because its "fps-capped 15"
+and "keyframe-only" rungs move to Axis 2, where they belong.
+
+*Amend:* `spec-video-pipeline.md` §12.5 (replace the size table with Axis 2 and a pointer here);
+`spec-core.md` §8.5 (classes A–F on total pixels → A–E on short edge) and §17.6 test 2 (fix the two
+shifted class letters); `FEATURES.md` F-STR-06 (add the class letters, the JPEG-cadence sub-table,
+and a pointer to Axis 2).
 
 #### R-22 — decode budget: **24 DU** Apple silicon, **10 DU** Intel; `DecodeBudget` is in `VigilVideo` **[SEMANTIC]**
 
