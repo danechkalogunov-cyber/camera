@@ -144,15 +144,12 @@ public struct MergeEngine: Sendable {
         // 4. Bind keys. A key already owned by a contradicting record keeps its owner: that is the
         //    within-run form of address reuse, and re-pointing it would merge two devices.
         let blocked = Set(conflicting)
-        for identity in identities {
-            if let node = nodeOfKey[identity.key] {
-                let root = find(node)
-                if let owner = recordOfRoot[root], entries[owner].isAlive, blocked.contains(owner) {
-                    continue
-                }
-            }
-            bind(identity, to: target)
+        let bindable = identities.filter { identity in
+            guard let node = nodeOfKey[identity.key] else { return true }
+            guard let owner = recordOfRoot[find(node)], entries[owner].isAlive else { return true }
+            return !blocked.contains(owner)
         }
+        bind(bindable, to: target)
 
         // 5. Fold the fields.
         var changed = apply(observation, to: target)
