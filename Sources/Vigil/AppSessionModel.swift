@@ -303,6 +303,41 @@ final class AppSessionModel {
 
     // MARK: - Private Helpers
 
+    /// Tears the current session down: tasks, decode chain, controller.
+    ///
+    /// Leaves `phase` and the form alone, because both callers want something different afterwards
+    /// — `disconnect` goes back to the form, `connect` starts another session immediately.
+    private func stopSession() {
+        eventTask?.cancel()
+        eventTask = nil
+        sessionTask?.cancel()
+        sessionTask = nil
+        // Finishing the continuation ends the decode task's loop after the frames already queued,
+        // so nothing is torn down under the pipeline mid-frame.
+        frameContinuation?.finish()
+        frameContinuation = nil
+        decodeTask = nil
+        let outgoing = controller
+        let outgoingPipeline = pipeline
+        controller = nil
+        pipeline = nil
+        activeRef = nil
+        isReceivingMedia = false
+        hasFirstPacket = false
+        streamState = .idle
+        retryInSeconds = nil
+        firstFrameLatency = nil
+        attemptStartedAt = nil
+        guard outgoing != nil || outgoingPipeline != nil else { return }
+        // The tile keeps its last picture on purpose — no flush, no blanking (R-36, §4.9).
+        Task {
+            await outgoingPipeline?.stop(reason: .stopped)
+            // Graceful TEARDOWN, off the caller's path: `stop` is safe to await from a cancelled
+            // task, and the UI must not wait 1.5 s for a socket to close politely.
+            await outgoing?.stop(reason: .userRequested)
+        }
+    }
+
     private func beginConnecting() {
         phase = .live
         streamState = .resolving
@@ -313,16 +348,28 @@ final class AppSessionModel {
         attempt = 1
     }
 
-    /// The first-connect path: write the password to the Keychain, then stream.
-    private func connect(_ request: ConnectRequest, ref: CredentialRef) async {
+    /// The form path: write the password to the Keychain, then stream.
+    private func connect(_ request: ConnectRequest, ref: CredentialRef, rtspPath: String?) async {
         do {
-            let camera = try makeCamera(host: request.host, ref: ref)
-            let credential = Credential(ref: ref, account: request.username, secret: request.password)
-            // `CredentialDescriptor(camera:account:)` derives server, port, protocol and the
-            // Keychain Access label from the record; `save` preconditions that the credential's ref
-            // matches the descriptor's, which it does because both come from `ref`.
-            let descriptor = CredentialDescriptor(camera: camera, account: request.username)
-            try await credentials.save(credential, descriptor: descriptor)
+            let camera = try makeCamera(host: request.host, ref: ref, rtspPath: rtspPath)
+            if request.password.isEmpty {
+                // A retry after the password already reached the Keychain: the form clears its
+                // secure field once a frame arrives, so the empty string it now holds must never be
+                // written over a credential that works.
+                guard try await credentials.hasCredential(for: ref) else {
+                    fail(with: CredentialError.notFound, host: request.host)
+                    return
+                }
+            } else {
+                let credential = Credential(ref: ref,
+                                            account: request.username,
+                                            secret: request.password)
+                // `CredentialDescriptor(camera:account:)` derives server, port, protocol and the
+                // Keychain Access label from the record; `save` preconditions that the credential's
+                // ref matches the descriptor's, which it does because both come from `ref`.
+                let descriptor = CredentialDescriptor(camera: camera, account: request.username)
+                try await credentials.save(credential, descriptor: descriptor)
+            }
             await stream(camera: camera, ref: ref)
         } catch {
             fail(with: error, host: request.host)
