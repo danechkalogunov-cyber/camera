@@ -1,0 +1,16 @@
+Another instance of SwiftPM is already running using '/home/user/camera/.build-rtp-b', waiting until that process has finished execution...Building for debugging...
+[0/38] Write sources
+[4/39] Write swift-version--67B1AD778A6B9081.txt
+[6/35] Emitting module VigilBitstream
+[7/37] Wrapping AST for VigilBitstream for debugging
+[9/38] Emitting module VigilVideo
+[11/39] Compiling VigilRTP RTPTrackReceiver.swift
+[12/39] Emitting module VigilRTP
+[13/39] Write Objects.LinkFileList
+[14/39] Archiving libVigilPure.a
+[16/41] Emitting module VigilCore
+[17/41] Write Objects.LinkFileList
+[19/41] Emitting module VigilTestKit
+[20/39] Wrapping AST for VigilDiscoveryTests for debugging
+[21/39] Wrapping AST for VigilISAPITests for debugging
+[22/71] Linking Vigil

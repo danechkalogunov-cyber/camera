@@ -186,13 +186,18 @@ public enum H265Parser {
         if sps.vuiPresent {
             do {
                 try parseVUI(&r, into: &sps, maxSubLayersMinus1: maxSub)
-                _ = try r.flag()                            // sps_extension_present_flag
             } catch {
                 // Lenient by design (§13.6): keep the partial VUI, never fail the SPS.
                 sps.vuiParseFailed = true
             }
-        } else {
-            _ = try r.flag()                                // sps_extension_present_flag
+        }
+        if !sps.vuiParseFailed {
+            // `sps_extension_present_flag`, read for the bit count and then discarded — everything
+            // past it is an extension Vigil does not parse. A NAL truncated at exactly this bit is
+            // nonconformant but harmless, so the failure is swallowed rather than discarding a
+            // picture size we have already recovered in full. Skipped after a VUI failure, where
+            // the reader is at an unknown position and the bit would be meaningless.
+            _ = try? r.flag()
         }
 
         sps.debugBitsConsumed = r.bitOffset
