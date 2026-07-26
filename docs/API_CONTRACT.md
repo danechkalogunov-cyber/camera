@@ -1130,6 +1130,28 @@ before the render spec existed and did not foresee the latest-frame slot.
 | 2 | `VideoFrame` | `VigilVideo` | Wraps a `CVPixelBuffer` produced by VideoToolbox, never mutated after delivery; consumers only lock the base address for reading or wrap it via `CVMetalTextureCache`. Never handed to two writers. |
 | 3 | `LatestFrameBox` | `VigilRender` | A single `VideoFrame` slot plus a ≤3-deep pending array, both guarded by one `NSLock` held for < 200 ns. `NSLock`, not `OSAllocatedUnfairLock`, because `put` is called from VideoToolbox's thread and the lock must be re-entrant-safe across the C boundary; `Mutex` needs macOS 15 and the floor is 14. |
 
+##### The census as actually built
+
+The table above is the design. What is in `Sources/` today is **one** conformance, and it is not any of
+the three, so the difference is recorded here rather than left for a reader to discover by grepping:
+
+| Slot | Designed | In the tree now |
+|---|---|---|
+| 1 | `DecodeSinkBox` (`VigilVideo`) | **absent.** `DecodePipeline` holds its sink as `any VideoSink` behind the actor and yields nothing across a boundary, so no box was needed. |
+| 2 | `VideoFrame` (`VigilVideo`) | **absent.** The `AVSampleBufferDisplayLayer` path enqueues `CMSampleBuffer` directly; no `CVPixelBuffer` is ever surfaced to a consumer. The type is still owed by the Metal path. |
+| 3 | `LatestFrameBox` (`VigilRender`) | **replaced, in the same slot,** by `SampleBufferBackend` (`VigilRender`). |
+
+`SampleBufferBackend` occupies slot 3 by supervisor ruling. Its justification is the same shape as
+`LatestFrameBox`'s and is spelled out in the file: every stored property is guarded by one `NSLock`,
+held for a bounded span, because the type is written from both the main actor (layer attachment,
+geometry) and VideoToolbox's callback thread (enqueue). `NSLock` for the same reason slot 3 always
+gave — `Mutex` needs macOS 15 and the floor is 14.
+
+The two paths are mutually exclusive, so the count stays at one until Metal lands. When it does,
+whichever of the two is not the shipping renderer must be deleted rather than kept alongside: the cap
+is three *live* conformances, and two latest-frame slots for one tile would mean the picture has two
+owners.
+
 **Forbidden:** the generic escape hatches `Unsafe<T>` and `UncheckedSendable<T>`. A generic
 `@unchecked Sendable` box is not a justification, it is a way to stop writing one, and it makes the
 lint rule that counts these unenforceable. `FormatBox` is unnecessary — `CMFormatDescription` is
@@ -1138,8 +1160,11 @@ confined to the `DecodePipeline` actor and never crosses. `MulticastDatagramChan
 `URLSessionTransport` becomes an `actor` holding the delegate state, with the `URLSession` delegate
 methods hopping in via `Task`.
 
-`VigilTestKit.ManualClock` does not count: the cap is on `Sources/` excluding `VigilTestKit`, which
-ships to no product the app links.
+`VigilTestKit` does not count: the cap is on `Sources/` excluding `VigilTestKit`, which ships to no
+product the app links. Two conformances live there today — `ManualClock` and
+`RecordingLogger.Storage`, the latter a private lock-guarded box that lets a `Sendable` logger
+accumulate lines. Both are inside the exemption, and both are named here so the exemption stays a
+short list rather than an open door.
 
 *Amend:* `ARCHITECTURE.md` §5.9; `spec-render.md` §1.3; `spec-video-pipeline.md` §2.3;
 `spec-discovery.md` §11; `spec-isapi.md` §4.6.

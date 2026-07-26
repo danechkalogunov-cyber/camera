@@ -163,3 +163,45 @@ be unique across its whole test target, so every test function is prefixed with 
 **Second rule:** an agent's green test run is evidence about the tree at that instant, not about the
 merged result. Every wave ends with a supervisor build and test from a clean scratch path, and only
 that result is reported as the wave's status.
+
+---
+
+## Verification of code Linux cannot compile: three techniques, in order of what they prove
+
+`Sources/Vigil`, `VigilUI`, `VigilRender`, `VigilVideo`, `VigilTransport` and `VigilCore` preprocess
+to **nothing** on Linux. `swift build` going green over them proves the module graph and the guards,
+and nothing about the code inside. Three substitutes were used, and it is worth being precise about
+what each is worth, because they are not interchangeable.
+
+**1. Shadow compilation — proves the code type-checks.** Copy the target's files into a scratch
+package, strip the `#if os(macOS)` guards, stub the Apple frameworks with the signatures the author
+believes are right, and compile against the *real* pure modules. This is the strongest of the three
+and it found real build breaks. Its blind spot is exactly the stubs: if the believed signature is
+wrong, the shadow agrees with the mistake. That is why `.vigil/STEP3.md` rule 1 requires the framework
+signature quoted above every non-obvious call — the quote is what a reviewer checks the *stub*
+against.
+
+**2. Isolated-shape probes — proves the language rule, not the framework.** Where the risk is a Swift
+6 concurrency rule rather than an API, the question can be extracted into a file with no frameworks in
+it at all and compiled for real. Verified this way:
+
+| Question | Answer | Probe |
+|---|---|---|
+| Does a non-`Sendable` closure literal formed in a `@MainActor` context inherit that isolation, so it may call a `@MainActor` method while stored in a **non-isolated** `((String) -> Void)?` property? | **Yes.** `RootView`'s `onDecodeFailure` / `onFramesDropped` wiring compiles. | `scratchpad/closureiso` — compiled *and run* under `-swift-version 6 -enable-upcoming-feature ExistentialAny`, exit 0. |
+| Does `AsyncStream.Continuation.yield` report drops? | **Yes** — `.enqueued(remaining:)` / `.dropped(element)`. The author's uncertainty list said it did not, and was wrong; R-27's counting gap for the event stream is closed rather than acknowledged. | executed, `yield 4: DROPPED 0`. |
+| Does `EgressGuard` classify correctly across 20 literals, and does the new resolver path behave? | **Yes**, 20/20, including `nvr.example.internal` → `.unresolvedName` and a public answer → refused. | linked against the real `VigilProtocols` and executed. |
+
+A probe that is *run* rather than only compiled is worth more again: two of the three above corrected
+a belief that a compile alone would have left standing.
+
+**3. Reading against a quoted signature — proves nothing, and is still necessary.** For AppKit and
+SwiftUI, stubbing is out of proportion to the risk. This is the residual, and `ЗАПУСК.md` says so to
+the customer in plain words rather than pretending the first build is certain to succeed.
+
+### A defect this found that neither a compiler nor a review would have
+
+`RootView` built its `VideoTile` with `logger:` omitted and both report callbacks left at `nil`. Every
+one of those parameters has a default that compiles and says nothing — `NullLogger`, `nil`, `nil` — so
+a decode failure or a drop storm reached neither the screen nor the log. The code was *correct* at
+every individual site and the composition was silent. Defaults that make a diagnostic disappear are
+worse than no defaults, and the fix was to name all three explicitly at the call site.

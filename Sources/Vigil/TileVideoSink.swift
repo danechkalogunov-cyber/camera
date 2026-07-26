@@ -107,9 +107,23 @@ final class TileVideoSink: VideoSink {
         view?.streamDidReset()
     }
 
-    // Every other `VideoSink` member takes the protocol's no-op default: the slice's display path
-    // has nothing to do on a format change or a dropped-frame report, and the tile discovers a
-    // stall from its own layer.
+    /// Forwards an **upstream** drop — one the decode pipeline made, before the tile ever saw the
+    /// frame — to the tile, which counts it and republishes its render state.
+    ///
+    /// This forward is the difference between a diagnosable failure and a black rectangle. The
+    /// pipeline's `.noFormat` reason means parameter sets never arrived, so every frame is being
+    /// dropped; `VigilRender` witnesses `didDropFrames` properly, but `DecodePipeline` holds *this*
+    /// object as its `any VideoSink`, not the tile. Without these three lines the report stops here
+    /// on the protocol's no-op default and the user is shown nothing, told nothing, and finds
+    /// nothing in the log — the exact failure mode docs/INTEGRATION-TODO.md item 8 exists to kill.
+    nonisolated func didDropFrames(_ count: Int, reason: FrameDropReason) {
+        let view = attached.withLock { $0 }
+        view?.didDropFrames(count, reason: reason)
+    }
+
+    // `didChangeFormat` and `streamDidEnd` keep the protocol's no-op defaults: the tile learns about
+    // a format change from the generation stamped on the next sample buffer, and holding the last
+    // picture after the stream ends is the required behaviour rather than something to react to.
 }
 
 #endif  // os(macOS)

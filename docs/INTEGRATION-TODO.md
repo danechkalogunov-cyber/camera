@@ -7,6 +7,28 @@ catch one.
 Ordered by whether it blocks "first light" — the app launching, taking a host and a password, and
 showing moving video.
 
+---
+
+## Status, checked against the tree rather than against reports
+
+Re-verified by grep on 2026-07-26, because an item marked done in a report and an item actually
+present in `Sources/` are different things and this list is only worth keeping if it tracks the second.
+
+| # | Item | State | Evidence |
+|---|---|---|---|
+| 1 | `RTPTrackFormatAdapter` missing | **closed** | `Sources/VigilRTP/Track/RTPTrackFormatAdapter.swift`, plus `VigilCore/Streaming/RTPTrackFormatAdapter+RTSP.swift` and a call site in `StreamController+Session.swift`. Landed in the real module, not promoted from the harness. |
+| 2 | `VideoTileView` not a `VideoSink` | **closed** | `VigilRender/Tile/VideoTileView+VideoSink.swift:58`. |
+| 3 | `EgressGuard` refuses internal DNS names | **closed, and better than asked** | Rather than relaxing the classifier, `RTSPConnection.connect()` now resolves the name itself, classifies **every** returned address, fails closed on any non-LAN answer, and connects to the address literal. `nvr.example.internal` works; a name resolving to a public address is refused. 20/20 executed checks. |
+| 4 | Who creates the display layer | **ruled** | spec-render wins; the view creates it in `makeBackingLayer()`. §4.9 amended. |
+| 5 | Is `.waiting(error)` terminal | **ruled and implemented** | Terminal **only before `.ready`** (`hasBecomeReady`). A powered-off camera still gets the specific §R1.5 diagnosis; a Wi-Fi roam mid-stream no longer costs a reconnect. Neither source said this — both were half right. |
+| 6 | `RTSPConnectionEvent` unconsumed | **closed** | `StreamController` consumes it. Buffering policy changed to `.bufferingOldest(512)` with per-kind drop counters so a `.track` event cannot be evicted by the media it describes. |
+| 7 | Nothing calls `reset()`/`stop()` | **closed** | `stop(reason:)` from `stopSession()`; `reset()` from the new `.connectAttemptStarted` arm in `AppSessionModel.apply(_:)` — chosen because it is the only hook that is provably a gap, so the reset cannot race the detached decode task. |
+| 8 | `.noFormat` is a silent black tile | **closed, all three links** | `VigilRender` witnesses `didDropFrames`; `TileVideoSink` forwards it (`DecodePipeline` holds the sink, not the tile, so without that forward the report died on the protocol default); `RootView` passes `onFramesDropped` and `onDecodeFailure`, which were defaulting to `nil`, and the **logger**, which was defaulting to `NullLogger`. Fifty `noFormat` drops now force a keyframe, which is what makes Hikvision re-send the parameter sets. |
+| 9 | Two contract deviations | **recorded** | `requestKeyframe` stays sync. `streamDidReset`/`streamDidEnd` keep defaults; `didDropFrames` no longer does, which was the one that made 8 silent. |
+
+Items 1–3 blocked first light and none of them do now. What remains below is kept as the record of why
+each was decided the way it was.
+
 ## Blocks first light
 
 ### 1. `RTPTrackFormatAdapter` does not exist

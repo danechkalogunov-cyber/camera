@@ -82,9 +82,18 @@ struct RootView: View {
                       onRetry: { session.perform(.retry) },
                       onRemedy: { session.perform($0) },
                       video: {
+                          // Every callback is passed, and the logger with them. Each one defaults to
+                          // something that compiles and says nothing: `logger` to `NullLogger`, so a
+                          // tile built without it reports its layer lifecycle into a void, and both
+                          // report closures to `nil`, so a decode failure or a drop storm would
+                          // reach neither the screen nor the log. That is the "no video, no error"
+                          // shape this project is built to refuse, and the fix is naming them here.
                           VideoTile(cameraID: cameraID,
                                     frames: session.frames,
-                                    onKeyframeNeeded: { session.recoverStalledPicture() })
+                                    logger: session.dependencies.logger,
+                                    onKeyframeNeeded: { session.recoverStalledPicture() },
+                                    onDecodeFailure: { session.handleDecodeFailure($0) },
+                                    onFramesDropped: { session.handleFramesDropped($0, reason: $1) })
                       })
     }
 

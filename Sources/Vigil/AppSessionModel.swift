@@ -138,6 +138,18 @@ final class AppSessionModel {
     /// session into a restart loop.
     var lastRecoveryAt: Date?
 
+    /// Consecutive decode failures reported by the renderer, reset when one triggers a recovery.
+    ///
+    /// Not published: the status line has no use for it, and a number that changes on the display
+    /// path would invalidate the view body from a report that is not about what is on screen.
+    var decodeFailures = 0
+
+    /// Frames dropped, per `FrameDropReason.rawValue`, for the session.
+    ///
+    /// Keyed by the raw string rather than the enum so this file needs no `VigilVideo` type in its
+    /// stored state; the reasons arrive as strings from `VigilRender` in any case.
+    var droppedByReason: [String: Int] = [:]
+
     /// Keychain handle of the camera currently being connected, so the first frame can be
     /// remembered against the right item.
     var activeRef: CredentialRef?

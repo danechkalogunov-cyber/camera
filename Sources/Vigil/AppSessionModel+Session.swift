@@ -47,6 +47,8 @@ extension AppSessionModel {
         retryInSeconds = nil
         firstFrameLatency = nil
         attemptStartedAt = nil
+        decodeFailures = 0
+        droppedByReason.removeAll()
         guard outgoing != nil || outgoingPipeline != nil else { return }
         // The tile keeps its last picture on purpose — no flush, no blanking (R-36, §4.9).
         Task {
@@ -224,6 +226,24 @@ extension AppSessionModel {
             if let underlying = detail.underlying, let camera {
                 diagnosis = ConnectDiagnosis.from(underlying, camera: camera)
             }
+        case .connectAttemptStarted:
+            // The decode pipeline outlives the socket, so a reconnect must tell it to forget the old
+            // stream — otherwise it keeps the previous parameter sets and format description, and the
+            // tile keeps a queue of samples belonging to a session that no longer exists. Nothing
+            // called `reset()` at all until this arm existed (docs/INTEGRATION-TODO.md item 7); it
+            // was latent only because the RTP layer waits for a keyframe on start.
+            //
+            // ⛔ This event, and not `formatResolved`, because this is the one moment that is
+            // provably a **gap**: `StreamController` emits it before `connect()`, so the new session
+            // has no socket yet and cannot have produced a frame. Resetting after frames are flowing
+            // would race the detached decode task and throw away the new stream's parameter sets.
+            //
+            // Fires on the first attempt too, where it is a no-op on an empty pipeline, and on every
+            // rung of the RTSP path ladder — each of which is equally a gap.
+            //
+            // The attempt number is deliberately not read here: `.stateChanged` owns that property
+            // and carries the same value, and two writers for one number is how they drift apart.
+            resetDecodePipeline()
         case .firstPacketReceived:
             hasFirstPacket = true
         case .firstFrameAssembled(let afterStart):
@@ -266,6 +286,70 @@ extension AppSessionModel {
         default:
             break
         }
+    }
+
+    /// Tells the decode pipeline the stream is starting over, and clears the display-path counters.
+    ///
+    /// `reset()` also calls `streamDidReset()` on the sink, which is how the tile learns to drop the
+    /// samples it is holding **without** clearing the picture — the frozen last frame stays on screen
+    /// under the reconnecting overlay, which is the no-black-flash rule (API_CONTRACT §4.9, R-36).
+    func resetDecodePipeline() {
+        decodeFailures = 0
+        droppedByReason.removeAll()
+        guard let pipeline else { return }
+        Task { await pipeline.reset() }
+    }
+
+    // MARK: - Display-path reports
+
+    /// A sample the video renderer refused to decode.
+    ///
+    /// `VigilRender` hands over a diagnostic string rather than an error, because `any Error` is not
+    /// `Sendable` and the report crosses a thread boundary from whatever queue AVFoundation posts on.
+    /// The decision about what to *do* is here rather than there, which is why the tile only reports.
+    ///
+    /// One failure is not a fault: a truncated access unit after packet loss produces exactly this
+    /// and the next keyframe fixes it. A run of them means the decoder cannot make progress from the
+    /// parameter sets it has, and the only escape is a fresh keyframe — which is what
+    /// ``AppSessionModel/recoverStalledPicture()`` asks for, rate-limited so a decoder that keeps
+    /// failing cannot put the session into a restart loop.
+    func handleDecodeFailure(_ diagnostic: String) {
+        decodeFailures += 1
+        dependencies.logger.error(.video, "renderer failed to decode: \(diagnostic)")
+        guard decodeFailures >= Self.decodeFailuresBeforeRecovery else { return }
+        decodeFailures = 0
+        recoverStalledPicture()
+    }
+
+    /// Frames that never reached the screen, from either end of the display path.
+    ///
+    /// Two origins arrive here through one callback: `VigilVideo`'s pipeline dropping an access unit
+    /// before it became a sample buffer, and the tile's own renderer refusing one it was handed. The
+    /// reason string keeps them apart, and the tile's ``VigilRender/TileRenderState`` already carries
+    /// the running counts for the status line, so this method's job is the part no view can do —
+    /// putting the fact in the log, and acting on the one reason that never resolves by itself.
+    ///
+    /// **`noFormat` is the case this exists for.** It means no parameter sets have arrived, so every
+    /// frame is being discarded and the tile is black with nothing wrong anywhere else. Left alone it
+    /// stays that way forever. Hikvision re-sends SPS/PPS immediately before every IDR, so asking
+    /// for a keyframe is precisely the right remedy — the recovery that looks like it is about a
+    /// stalled picture is really about getting the format.
+    ///
+    /// Logging is thresholded, not per frame: at 25 fps an unresolved `noFormat` would otherwise
+    /// write 1,500 lines a minute and bury the line that matters.
+    func handleFramesDropped(_ count: Int, reason: String) {
+        droppedByReason[reason, default: 0] += count
+        let total = droppedByReason[reason] ?? count
+        if total.isMultiple(of: Self.dropLogInterval) || total == count {
+            dependencies.logger.notice(.video, "dropped \(total) frame(s), reason: \(reason)")
+        }
+        guard reason == FrameDropReason.noFormat.rawValue,
+              total >= Self.noFormatDropsBeforeRecovery
+        else { return }
+        droppedByReason[reason] = 0
+        dependencies.logger.notice(.video, "no parameter sets after \(total) frames; asking for a "
+            + "keyframe so the camera re-sends them")
+        recoverStalledPicture()
     }
 
     func rememberThisCamera() {
@@ -377,6 +461,21 @@ extension AppSessionModel {
 
     /// The shortest gap between two forced keyframe recoveries.
     static let recoveryInterval: TimeInterval = 10
+
+    /// How many renderer decode failures in a row before forcing a keyframe.
+    ///
+    /// Three, because one is packet loss and two can be the same GOP; three means the parameter sets
+    /// the decoder is working from cannot decode what the camera is sending.
+    static let decodeFailuresBeforeRecovery = 3
+
+    /// How many frames may be dropped for want of parameter sets before asking for a keyframe.
+    ///
+    /// Fifty is about two seconds at 25 fps — long enough that a normal startup, where the first
+    /// access units precede the first SPS by a few frames, resolves on its own without a restart.
+    static let noFormatDropsBeforeRecovery = 50
+
+    /// One log line per this many dropped frames of the same reason.
+    static let dropLogInterval = 100
 }
 
 #endif  // os(macOS)
