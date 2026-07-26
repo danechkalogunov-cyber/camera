@@ -79,6 +79,12 @@ public enum Redact {
     ///
     /// Applying this twice changes nothing: every replacement it makes is itself a value it would
     /// leave alone.
+    ///
+    /// **What it cannot catch.** Redaction recognises `key=value`, `key: value`, XML elements,
+    /// authentication headers and URL userinfo. A secret interpolated into free prose —
+    /// `"connecting with password \(password)"` — is indistinguishable from the sentence "the
+    /// password is wrong", so it is not detectable here and must never be written. Matching the
+    /// bare word would eat the value out of every user-facing message that mentions a password.
     public static func secrets(in text: String) -> String {
         guard !text.isEmpty else { return text }
         var chars = Array(text)

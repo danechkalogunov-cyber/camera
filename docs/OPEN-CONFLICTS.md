@@ -107,3 +107,48 @@ a shortcut from `VigilRTP` to `VigilISAPI`, which would create a forbidden depen
 `UX.md` §4.2 sets the camera row at 44 pt with a 30 pt thumbnail; `DESIGN.md` §5.5 enumerates five
 control heights (20/24/28/32/40) and says "five heights, no others". A 44 pt row is not a control, so
 this is probably fine — but the contract should say so, or a reviewer will flag every sidebar row.
+
+---
+
+# Found during implementation (append-only)
+
+These were discovered by agents writing code against the contract, not by reading it. Each is
+recorded so the fix is not silently reverted by a later agent "restoring" the contract's wording.
+
+## I1 — `public static let a: CGFloat = 1, b = 2` annotates only the first binding (H)
+
+API_CONTRACT §4.11 declares the control heights, spacing ladder, radii, borders and icon sizes in
+that comma-separated form. Swift applies the type annotation to the **first** binding only, so
+every subsequent constant infers `Int` rather than `CGFloat`. The result is not a clear error at the
+declaration but a pile of confusing type mismatches at every call site that mixes them.
+
+Fixed in `Sources/VigilUI/Theme/VTheme+Space.swift` by declaring one constant per line with an
+explicit `: CGFloat` on each. The same pattern must not be reintroduced.
+
+## I2 — the monotonic clock's first reading was negative (H)
+
+`SystemMonotonicClock` cached its epoch in a lazily-initialised `static`, and the epoch was read
+*after* the first `SuspendingClock.now`, so the first `MediaInstant` came out at −26 µs. Every
+elapsed-time calculation seeded from it would have been wrong, and the reconnect backoff and the
+latency estimate both seed from it. Caught by a test asserting the first reading is non-negative.
+
+## I3 — four contract declarations could not compile as written (M)
+
+`SystemRandomSource.next()` called a `mutating` method on a temporary; `MediaTimestamp.converted(to:)`
+trapped on a negative target timescale reachable from SDP data; `FrameGeometry.pixelAspectRatio`
+trapped on `sar_height == 0`, which a VUI can legitimately express; and `VideoFormatInfo` had only
+`public var`s and therefore an *internal* memberwise initialiser, so `VigilBitstream` could not
+construct one. All four are fixed in the implementation; the contract text is now behind the code.
+
+## I4 — `Duration.wholeNanoseconds` wrapped instead of saturating (M)
+
+It used `&+` for the final addition, so at exactly the `Int64.max`-nanosecond boundary it wrapped to
+a large negative value while its doc comment promised saturation. Replaced with
+`addingReportingOverflow` and a saturating clamp, with a test at the boundary.
+
+## I5 — `VTheme.Health` and `VLevel` are unowned (M — open)
+
+DESIGN.md §12.1 places them in `VTheme` and §9.20 gives their thresholds, the contract's `VTheme`
+sketch references them, and **no manifest row and no agent brief covers them**. They are literals and
+belong in `VTheme`. Assign them before the UI wave, or the health colouring will be reinvented inline
+in a view, which is exactly what the "literals only in VTheme" rule exists to prevent.
