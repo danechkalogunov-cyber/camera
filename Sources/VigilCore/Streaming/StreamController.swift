@@ -176,17 +176,21 @@ public actor StreamController: Identifiable {
     ///   - dependencies: clock, logger, randomness and the session factory.
     ///   - frameSink: where assembled access units go. May be attached later with
     ///     `attachFrameSink(_:)`.
-    ///   - governor: the per-device authentication counter. **Share one instance across every lane
-    ///     that touches a device** (API_CONTRACT §2 R-25 rule 4); the default builds a private one,
-    ///     which is correct only while this controller is the device's only lane.
     ///   - policy: the backoff ladder.
+    ///
+    /// **There is deliberately no `governor:` parameter.** The authentication counter comes from
+    /// `dependencies.governor`, which the app builds once per process and persists. The parameter
+    /// this initialiser used to have was optional with a `nil` default that minted a private counter,
+    /// and the one call site in the app omitted it — so the budget lived and died with a controller,
+    /// and `AppSessionModel.stopSession()`'s `controller = nil` handed the next attempt two fresh
+    /// strikes. A private counter is now unrepresentable, which is a stronger guarantee than a
+    /// documented requirement (docs/RULING-LOCKOUT.md §2.4).
     public init(camera: Camera,
                 credentialProvider: @escaping @Sendable () async throws -> Credential?,
                 initialQuality: StreamQuality? = nil,
                 initialPriority: StreamPriority = .focused,
                 dependencies: CoreDependencies,
                 frameSink: (@Sendable (EncodedFrame) -> Void)? = nil,
-                governor: LockoutGovernor? = nil,
                 policy: ReconnectPolicy = .default) {
         self.id = camera.id
         self.cameraName = camera.displayName
@@ -199,8 +203,7 @@ public actor StreamController: Identifiable {
         self.logger = dependencies.logger
         self.random = dependencies.random
         self.frameSink = frameSink
-        self.governor = governor ?? LockoutGovernor(clock: dependencies.clock,
-                                                    logger: dependencies.logger)
+        self.governor = dependencies.governor
         self.policy = policy
         self.resolvedCandidate = camera.capabilities.flatMap { capabilities in
             capabilities.resolvedRTSPPath.map { path in
@@ -333,19 +336,57 @@ public actor StreamController: Identifiable {
         await restart()
     }
 
-    /// The user supplied a new password.
+    /// The user supplied a password. Clears this device's authentication counters if — and only if —
+    /// it is a **different** password, then reconnects.
     ///
-    /// Clears this device's authentication counters — **the only thing that may** — and reconnects
-    /// immediately, from `.failed` as readily as from anywhere else (spec-core §7.5 row 52).
-    public func credentialsUpdated(account: String) async {
-        await governor.clear(host: camera.host, account: account)
-        attempt = 0
-        if currentState == .failed || currentState == .stopped || runTask == nil {
-            isStopping = false
-            start()
-        } else {
-            await restart()
+    /// Three things this method used to get wrong, all fixed here (docs/RULING-LOCKOUT.md §4):
+    ///
+    /// 1. It took an `account:` argument the caller supplied, which was never reconciled with
+    ///    `credentialProvider()`'s `Credential.account` — the name the gate and `block()` key on. A
+    ///    mismatch silently cleared nothing. The account is now read from the provider, exactly as
+    ///    `runAttempt()` reads it, so the clear and the block cannot key differently.
+    /// 2. It cleared unconditionally, with no check that the secret had changed. A user whose
+    ///    password genuinely is wrong will retype the same characters, and that is the single most
+    ///    likely route to a real thirty-minute lockout. The governor now demands a fingerprint and
+    ///    refuses a match.
+    /// 3. From `.failed` it called `start()`, whose `runTask == nil` guard returns immediately —
+    ///    because the run loop is asleep inside the five-minute cold retry with `runTask` still set.
+    ///    Fail-safe for the lockout, wrong for the user, and invisible. It now cancels and joins the
+    ///    old loop before starting a new one.
+    ///
+    /// A refused clear is not an error: the reconnect still happens, and the gate in `runAttempt()`
+    /// reports `authenticationFailed` with the remedy that says so.
+    public func credentialsUpdated() async {
+        // A Keychain that will not answer is not a reason to skip the reconnect: the attempt itself
+        // reports `keychainUnavailable` with a remedy, and clearing nothing is the fail-safe outcome.
+        var credential: Credential?
+        do {
+            credential = try await credentialProvider()
+        } catch {
+            logger.warning(.core, "credential update could not read the credential",
+                           ["camera": id.short])
         }
+        if let credential {
+            let cleared = await governor.clear(host: camera.host,
+                                               account: credential.account,
+                                               secretFingerprint: SecretFingerprint.of(credential))
+            logger.info(.core, "credential update \(cleared ? "cleared" : "did not clear") the "
+                + "auth counters", ["camera": id.short])
+        }
+        attempt = 0
+        // Join, do not merely cancel. `start()` is idempotent on `runTask != nil`, and the loop keeps
+        // `runTask` set while it sleeps out the five-minute cold retry, so a bare `start()` here
+        // would return having done nothing. `teardown()` comes first because it closes the session,
+        // which finishes the event stream the attempt is suspended on — without it the join would be
+        // waiting on a loop that has no reason to wake.
+        isStopping = true
+        runTask?.cancel()
+        let outgoing = runTask
+        runTask = nil
+        await teardown()
+        await outgoing?.value
+        isStopping = false
+        start()
     }
 
     // MARK: The run loop
@@ -393,15 +434,22 @@ public actor StreamController: Identifiable {
             case let .retry(error):
                 emit(.error(error, isFatal: false))
                 if policy.hasExhaustedLadder(attempt: attempt) {
-                    let coldRetryAt = Date().addingTimeInterval(policy.coldRetryInterval.seconds)
+                    let coldDelay = max(policy.coldRetryInterval, Self.pauseDelay(for: error))
+                    let coldRetryAt = Date().addingTimeInterval(coldDelay.seconds)
                     transition(to: .failed,
                                detail: .failure(error, state: .failed, attempt: attempt,
                                                 nextRetryAt: coldRetryAt))
-                    try? await clock.sleep(for: policy.coldRetryInterval)
+                    try? await clock.sleep(for: coldDelay)
                     attempt = 0
                     continue
                 }
-                let delay = policy.delay(forAttempt: attempt, random: &random)
+                // `signInPaused` carries its own wait, and it is minutes rather than the ladder's
+                // seconds. Sleeping the ladder delay instead would spin at the governor's gate for
+                // the whole probe window, emitting an error event every half second
+                // (docs/RULING-LOCKOUT.md §3). The same value feeds `nextRetryAt`, which is what the
+                // countdown the UI already renders is read from.
+                let delay = max(policy.delay(forAttempt: attempt, random: &random),
+                                Self.pauseDelay(for: error))
                 attempt += 1
                 let retryAt = Date().addingTimeInterval(delay.seconds)
                 emit(.reconnectScheduled(attempt: attempt, delay: delay, cause: error))
@@ -412,6 +460,18 @@ public actor StreamController: Identifiable {
             }
         }
         endRun(generation)
+    }
+
+    /// How long a `signInPaused` failure says to wait, or zero for anything else.
+    ///
+    /// Read from `context["retryAfterSeconds"]` rather than from a typed payload because `StreamError`
+    /// is a `Hashable` value the whole app compares and a duration in it would have to be one too;
+    /// the key is written in exactly one place, `resolvePath`.
+    static func pauseDelay(for error: StreamError) -> Duration {
+        guard error.code == .signInPaused,
+              let raw = error.context["retryAfterSeconds"],
+              let seconds = Int(raw), seconds > 0 else { return .zero }
+        return .seconds(seconds)
     }
 
     /// Releases `runTask`, but only when this run loop still owns it.

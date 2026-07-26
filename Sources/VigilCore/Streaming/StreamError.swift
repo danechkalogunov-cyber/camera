@@ -212,7 +212,14 @@ public struct StreamError: Error, Sendable, Hashable {
         public var fix: String {
             switch self {
             case .credentialsMissing: "Enter the camera's password."
-            case .authenticationFailed: "Check the password and enter it again."
+            case .authenticationFailed:
+                // Says what Vigil *did*, not only what the user should do: the same code covers a
+                // real rejection and the local gate that refuses a third attempt, and in both cases
+                // re-entering the password is the one action that lets Vigil try again
+                // (docs/RULING-LOCKOUT.md §3, last paragraph).
+                "Vigil stopped trying after two rejected sign-ins, to keep the account from "
+                    + "locking. Enter the password again to let it retry."
+            case .signInPaused: "Nothing to do — Vigil will try again by itself."
             case .accessForbidden: "Give this account live-view rights in the camera's settings."
             case .accountLocked: "Wait for the camera to unlock the account, or reboot it."
             case .portClosed: "Turn RTSP on in the camera's network settings, or check a firewall."

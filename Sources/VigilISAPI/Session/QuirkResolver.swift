@@ -273,13 +273,19 @@ public struct QuirkResolver: Sendable {
     /// Returns the node rather than the bytes so the caller can put it through the same
     /// read-modify-write helper as every other setting — one place that checks the root name
     /// survived the patch, and one place that serialises.
+    /// - Note: the missing-element branch appends the child directly rather than going through
+    ///   `XMLNode.setting(_:to:createIfMissing:)`. That helper compiles its path through `XMLPath`,
+    ///   which lower-cases every name so element matching can be case-insensitive, and so an element
+    ///   it *creates* is named in lower case — which would make this whole quirk row inert. See the
+    ///   defect note in the module result.
     public func sharpnessNode(_ node: XMLNode, level: Int) -> XMLNode {
         guard !node.has("SharpnessLevel|sharpnessLevel") else {
             return ImageWrite.sharpness(node, level: level)
         }
-        return node.setting(quirks.sharpnessElementIsCapitalized ? "SharpnessLevel"
-                                                                 : "sharpnessLevel",
-                            to: String(min(100, max(0, level))), createIfMissing: true)
+        let name = quirks.sharpnessElementIsCapitalized ? "SharpnessLevel" : "sharpnessLevel"
+        let child = XMLNode(name: name, text: String(min(100, max(0, level))))
+        return XMLNode(name: node.name, attributes: node.attributes, text: node.text,
+                       children: node.children + [child])
     }
 
     /// The sharpness read-modify-write body for `level`. Serialises ``sharpnessNode(_:level:)``.

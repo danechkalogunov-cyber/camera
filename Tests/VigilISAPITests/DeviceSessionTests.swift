@@ -237,6 +237,36 @@ enum SessionFixtures {
         </PTZChanelCap>
         """
 
+    /// The `/Streaming/channels/102` answer, for the read half of a substream write.
+    ///
+    /// A single `<StreamingChannel>` rather than the list: that is what the per-stream resource
+    /// returns, and `updateStream` reads it rather than the list so the patch is applied to the
+    /// element the device would validate.
+    static let substreamChannel = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <StreamingChannel version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+        <id>102</id><channelName>Front Door</channelName><enabled>true</enabled>
+        <Video><enabled>true</enabled><videoInputChannelID>1</videoInputChannelID>
+        <videoCodecType>H.264</videoCodecType><videoResolutionWidth>640</videoResolutionWidth>
+        <videoResolutionHeight>360</videoResolutionHeight>
+        <videoQualityControlType>VBR</videoQualityControlType><maxFrameRate>1200</maxFrameRate>
+        <vbrUpperCap>512</vbrUpperCap></Video>
+        </StreamingChannel>
+        """
+
+    /// Refuses every image sub-resource except `kept`.
+    ///
+    /// `RequestDouble` matches routes by **suffix**, so there is no way to express "everything under
+    /// this prefix" in one route — each of the thirteen controls needs its own. Written out here
+    /// rather than in each test so a new `ImageControl` case is covered automatically.
+    static func refuseImageControls(_ double: RequestDouble,
+                                    except kept: Set<ImageControl>) async {
+        for control in ImageControl.allCases where !kept.contains(control) {
+            let resource = ISAPIResource.image(.first, control)
+            await double.route(resource, failing: .notFound(resource: resource))
+        }
+    }
+
     /// Builds a session over a double, on a clock the caller can advance.
     ///
     /// The `endpoint`/`credential` initialiser is deliberately not used: it would construct an
@@ -334,6 +364,7 @@ enum SessionFixtures {
 
     @Test func deviceSessionInvalidatesTheStreamAndChannelRowsOnAStreamWrite() async throws {
         let double = RequestDouble()
+        await double.route("/Streaming/channels/102", xml: SessionFixtures.substreamChannel)
         await double.route("/Streaming/channels", xml: SessionFixtures.streamingChannels)
         let session = SessionFixtures.session(double, clock: SessionTestClock())
 
@@ -458,7 +489,9 @@ enum SessionFixtures {
         _ = try await session.setImageColor(channel: .first, brightness: 62, contrast: nil,
                                             saturation: nil)
         let traffic = await double.requests(to: "/Image/channels/1/color")
-        #expect(traffic.map(\.method) == ["GET", "PUT", "GET"])
+        // The setter re-reads the whole panel afterwards, so assert the first three requests:
+        // the read, the whole-element write, and the confirming read.
+        #expect(traffic.prefix(3).map(\.method) == ["GET", "PUT", "GET"])
 
         let body = try #require(traffic[1].bodyText)
         #expect(body.contains("<brightnessLevel>62</brightnessLevel>"))
@@ -670,7 +703,7 @@ enum SessionFixtures {
         query.recordTypes = [.motion]
         _ = try await session.searchRecordings(query)
         let filteredBody = try #require(await double.requests(to: "/ContentMgmt/search").first?.bodyText)
-        #expect(filteredBody.contains("metadataDescriptor"))
+        #expect(filteredBody.contains("\(CMSearchDescription.allRecordTypes)/motion"))
 
         // Now teach it the refusal and prove the retry drops the filter.
         await session.learn(.recordTypeFilterRejected)
@@ -680,7 +713,9 @@ enum SessionFixtures {
         let retried = await double.requests(to: "/ContentMgmt/search")
         #expect(retried.count == before + 1)
         let unfiltered = try #require(retried.last?.bodyText)
-        #expect(unfiltered.contains(CMSearchDescription.allRecordTypes))
+        #expect(!unfiltered.contains("\(CMSearchDescription.allRecordTypes)/motion"))
+        #expect(unfiltered.contains(
+            "<metadataDescriptor>\(CMSearchDescription.allRecordTypes)</metadataDescriptor>"))
     }
 
     /// Point 2, body builder: a `<Sharpness>` with no level element is the one case where the casing
@@ -724,7 +759,7 @@ enum SessionFixtures {
         #expect(body.contains("2024-05-01T16:00:00Z"))
         // Back: the echoed device-local times are shifted back before anything compares them.
         let segment = try #require(segments.first)
-        #expect(segment.start == Date(timeIntervalSince1970: 1_714_546_800))   // 09:00 −8 h
+        #expect(segment.start == Date(timeIntervalSince1970: 1_714_525_200))   // 09:00Z −8 h = 01:00Z
     }
 
     /// Point 4, the request gate: three `deviceBusy` answers inside ten seconds drop the device to
@@ -905,7 +940,7 @@ enum SessionFixtures {
         await double.route("/Image/channels/1/color", xml: SessionFixtures.color)
         await double.route("/Image/channels/1/ircutFilter", xml: SessionFixtures.ircut)
         // Everything else is refused, which is the common case on a fixed camera.
-        await double.route("/Image/channels/1/", failing: .notFound(resource: "/Image/channels/1/x"))
+        await SessionFixtures.refuseImageControls(double, except: [.color, .ircut])
         let session = SessionFixtures.session(double, clock: SessionTestClock())
 
         let settings = try await session.imageSettings(channel: .first)
@@ -917,8 +952,7 @@ enum SessionFixtures {
     /// A device that refuses all thirteen is a normal camera without image controls, not an error.
     @Test func deviceSessionReturnsEmptyImageSettingsWhenEveryControlIsRefused() async throws {
         let double = RequestDouble()
-        await double.route("/Image/channels/1/",
-                           failing: .notSupported(resource: "/Image/channels/1/x"))
+        await SessionFixtures.refuseImageControls(double, except: [])
         let session = SessionFixtures.session(double, clock: SessionTestClock())
 
         #expect(try await session.imageSettings(channel: .first).available.isEmpty)
@@ -1096,7 +1130,10 @@ enum SessionFixtures {
         await double.route("/System/deviceInfo", xml: SessionFixtures.deviceInfo())
         await double.route("/Security/userCheck", xml: SessionFixtures.userCheckOK)
         await double.route("/Streaming/channels", xml: SessionFixtures.streamingChannels)
-        await double.route("/PTZCtrl/", failing: .notSupported(resource: "/PTZCtrl/x"))
+        await double.route("/PTZCtrl/channels/1/capabilities",
+                           failing: .notSupported(resource: "/PTZCtrl/channels/1/capabilities"))
+        await double.route("/PTZCtrl/channels",
+                           failing: .notSupported(resource: "/PTZCtrl/channels"))
         let session = SessionFixtures.session(double, clock: SessionTestClock())
 
         let outcome = try await session.connect(startingAlertStream: false)
@@ -1111,7 +1148,10 @@ enum SessionFixtures {
         await double.route("/System/deviceInfo", xml: SessionFixtures.deviceInfo())
         await double.route("/Security/userCheck", xml: SessionFixtures.userCheckOK)
         await double.route("/Streaming/channels", xml: SessionFixtures.streamingChannels)
-        await double.route("/ContentMgmt/", failing: .notFound(resource: "/ContentMgmt/x"))
+        await double.route("/ContentMgmt/record/tracks",
+                           failing: .notFound(resource: "/ContentMgmt/record/tracks"))
+        await double.route("/ContentMgmt/Storage",
+                           failing: .notFound(resource: "/ContentMgmt/Storage"))
         let session = SessionFixtures.session(double, clock: SessionTestClock())
 
         let outcome = try await session.connect(startingAlertStream: false)

@@ -50,46 +50,70 @@ public struct CoreDependencies: Sendable {
     /// stalled app names the camera.
     public var makeRTSPSession: RTSPSessionFactory
 
+    /// The one per-device authentication counter, shared by every lane that touches a device
+    /// (API_CONTRACT §2 R-25 rule 4, docs/RULING-LOCKOUT.md §2.3).
+    ///
+    /// **Non-optional, and there is no default anywhere.** `StreamController` used to take
+    /// `governor: LockoutGovernor? = nil` and mint a private one when the argument was omitted —
+    /// which is exactly what the one call site in the app did, so the counter lived and died with a
+    /// controller and every rebuild granted two more attempts. A field with no default makes a
+    /// private counter unrepresentable rather than merely discouraged.
+    ///
+    /// `StreamProbe` reads it from here too, which matters because the probe ladder is where the
+    /// credentials are actually spent.
+    public var governor: LockoutGovernor
+
     /// Builds a dependency set explicitly. Used by tests and by anything that needs to substitute
     /// one member of `live`.
     public init(clock: any MonotonicClock,
                 logger: any LoggerProtocol,
                 keychain: any KeychainProtocol,
                 random: any RandomSource,
+                governor: LockoutGovernor,
                 makeRTSPSession: @escaping RTSPSessionFactory) {
         self.clock = clock
         self.logger = logger
         self.keychain = keychain
         self.random = random
+        self.governor = governor
         self.makeRTSPSession = makeRTSPSession
     }
 
     /// The production set: the system monotonic clock, the real Keychain, the system random source
     /// and real sockets.
     ///
+    /// A function rather than a `static let`, because the governor has to come from outside: it is
+    /// the app that owns the one instance and that knows where it is persisted (`AppEnvironment`),
+    /// and a `static let` here would either build a second, unpersisted counter or hand every caller
+    /// a way to construct one.
+    ///
     /// The logger is `NullLogger` until `Logging/OSLogLogger.swift` lands (W4, API_CONTRACT §5.12);
-    /// substitute it with `CoreDependencies(clock:logger:…)` at the call site in the meantime
-    /// rather than editing this property, so there is one place that knows what "live" means.
-    public static let live = CoreDependencies(
-        clock: SystemMonotonicClock(),
-        logger: NullLogger(),
-        keychain: SystemKeychain(),
-        random: SystemRandomSource(),
-        makeRTSPSession: { config, credential, shortID in
-            RTSPConnection(config: config,
-                           credential: credential,
-                           clock: SystemMonotonicClock(),
-                           random: SystemRandomSource(),
-                           logger: NullLogger(),
-                           shortID: shortID,
-                           connectTimeout: StreamController.connectTimeout)
-        })
+    /// substitute it with `withLogger(_:)` at the call site in the meantime rather than editing this
+    /// function, so there is one place that knows what "live" means.
+    public static func live(governor: LockoutGovernor) -> CoreDependencies {
+        CoreDependencies(
+            clock: SystemMonotonicClock(),
+            logger: NullLogger(),
+            keychain: SystemKeychain(),
+            random: SystemRandomSource(),
+            governor: governor,
+            makeRTSPSession: { config, credential, shortID in
+                RTSPConnection(config: config,
+                               credential: credential,
+                               clock: SystemMonotonicClock(),
+                               random: SystemRandomSource(),
+                               logger: NullLogger(),
+                               shortID: shortID,
+                               connectTimeout: StreamController.connectTimeout)
+            })
+    }
 
     /// A dependency set with a different logger, keeping everything else.
     ///
     /// The one field the app target genuinely has to override before `OSLogLogger` exists, so it
     /// gets a named accessor instead of a memberwise re-spelling that would silently drop a field
-    /// added to `live` later.
+    /// added to `live` later. **The governor's identity is carried through**, not rebuilt: a copy
+    /// here would be a second counter, which is the whole defect.
     public func withLogger(_ logger: any LoggerProtocol) -> CoreDependencies {
         let clock = clock
         let random = random
@@ -97,6 +121,7 @@ public struct CoreDependencies: Sendable {
                                 logger: logger,
                                 keychain: keychain,
                                 random: random,
+                                governor: governor,
                                 makeRTSPSession: { config, credential, shortID in
                                     RTSPConnection(config: config,
                                                    credential: credential,
