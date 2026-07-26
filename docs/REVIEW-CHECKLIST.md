@@ -212,3 +212,34 @@ the structural worries, which were the ones most likely to be wrong:
   whose only use for it is telling stale buffers apart.
 - `PartialSync` for H.265 CRA/BLA and `IsDependedOnByOthers` are deliberately absent rather than
   guessed at.
+
+## VigilUI (`impl:ui`)
+
+The agent deliberately did **not** import `VigilCore` or `VigilRender`, because both were empty when
+it wrote and the whole module is elided on Linux — so a wrong guess at a sibling's API would have
+built green here and failed only on a Mac. The renderer arrives as a `@ViewBuilder` and state as
+UI-local `Sendable` values instead. That wiring is the app target's job.
+
+**Highest risk, single line:** `@MainActor struct VButtonSurface: ButtonStyle`. This is fine if the
+SDK declares `ButtonStyle` as `@MainActor @preconcurrency` (Xcode 16 and later); on an older SDK a
+`@MainActor` conformer cannot witness a non-isolated `makeBody`. `VStatusTriangle` sidesteps the same
+question with an explicit `nonisolated func path(in:)`, which satisfies the requirement either way.
+
+Also unverified: `Text.foregroundStyle(_:) -> Text` on macOS 14;
+`Measurement<UnitDuration>.formatted(.measurement(...))` labels, used in three places;
+`KeyframeAnimator` / `CubicKeyframe` signatures in the error shake — whose content closure re-runs
+per frame, rebuilding text fields about sixty times over 380 ms, so focus survival wants one real
+run; `.focused(binding, equals:)` propagating through a `Group`; and a handful of modifiers assumed
+to be within the macOS 14 floor.
+
+**Two things that will render wrong rather than fail to build:** no `Localizable.xcstrings` exists,
+so keys resolve to their English source text; and the hero glyph falls back to `video` because the
+custom `vigil.aperture` symbol needs a `Symbols.xcassets` that has not been created, which would
+otherwise render blank.
+
+**Specification conflicts resolved by the implementer** (each cited in-file): the degraded banner
+takes DESIGN's top position with UX's height, because UX's bottom placement collides with the name
+chip; the connecting indicator takes DESIGN's spinning ring with UX's amber; shimmer takes the token
+over UX's looser numbers; and the hover shadow multiplier from §9.1 is **not** implemented, because
+`Elevation.Shadow` exposes a pre-composited colour and multiplying a colour's alpha above 1 is not a
+documented operation.

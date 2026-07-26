@@ -227,15 +227,14 @@ final class AppSessionModel {
     /// `ConnectFormView` has already validated the fields and set `form.isConnecting`; this is the
     /// app half — Keychain, camera record, controller.
     func connect(_ request: ConnectRequest) {
+        stopSession()
         form.isConnecting = true
         diagnosis = nil
         beginConnecting()
-        // Reuse the Keychain handle when this is the same camera and account as last time: `save`
-        // updates an existing item in place, whereas a fresh `CredentialRef` would leave the old
-        // item behind as an orphan on every retry.
-        let ref = rememberedRef(host: request.host, account: request.username) ?? CredentialRef()
+        let known = knownHandle(for: request)
+        resolvedPath = known.rtspPath
         sessionTask = Task { [weak self] in
-            await self?.connect(request, ref: ref)
+            await self?.connect(request, ref: known.ref, rtspPath: known.rtspPath)
         }
     }
 
@@ -244,37 +243,11 @@ final class AppSessionModel {
     /// - Parameter forget: when `true`, the remembered connection is cleared so the next launch
     ///   shows the form rather than reconnecting.
     func disconnect(forget: Bool = false) {
-        eventTask?.cancel()
-        eventTask = nil
-        sessionTask?.cancel()
-        sessionTask = nil
-        // Finishing the continuation ends the decode task's loop after the frames already queued,
-        // so nothing is torn down under the pipeline mid-frame.
-        frameContinuation?.finish()
-        frameContinuation = nil
-        decodeTask = nil
-        let outgoing = controller
-        let outgoingPipeline = pipeline
-        controller = nil
-        pipeline = nil
-        activeRef = nil
+        stopSession()
         phase = .connect
         form.isConnecting = false
-        isReceivingMedia = false
-        hasFirstPacket = false
-        streamState = .idle
-        retryInSeconds = nil
-        firstFrameLatency = nil
-        attemptStartedAt = nil
         if forget {
             LastConnection.clear(in: defaults)
-        }
-        // The tile keeps its last picture on purpose — no flush, no blanking (R-36, §4.9).
-        Task {
-            await outgoingPipeline?.stop(reason: .stopped)
-            // Graceful TEARDOWN: `stop` is safe to await from a cancelled task, and the UI must not
-            // wait 1.5 s to go back to the form, so it happens here rather than inline.
-            await outgoing?.stop(reason: .userRequested)
         }
     }
 

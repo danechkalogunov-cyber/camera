@@ -195,7 +195,11 @@ public actor StreamController: Identifiable {
                 RTSPPathCandidate(template: capabilities.rtspPathTemplate, path: path, order: 0)
             }
         }
-        self.broadcaster = Broadcaster<StreamEvent>(replaysLatest: false,
+        // `replaysLatest` per spec-core §6.9's table: a tile that subscribes after the connect
+        // sequence started still sees where the stream is. It replays the newest *event*, which is
+        // not necessarily a state change — a subscriber that needs the state itself reads
+        // `state()`, which is why that accessor exists alongside the stream.
+        self.broadcaster = Broadcaster<StreamEvent>(replaysLatest: true,
                                                     bufferingPolicy: .bufferingNewest(64))
         self.probe = StreamProbe(dependencies: dependencies)
     }
