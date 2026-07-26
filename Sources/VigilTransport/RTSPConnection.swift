@@ -1457,6 +1457,8 @@ public actor RTSPConnection {
     ///   `case posix(POSIXErrorCode)`
     ///   `case dns(DNSServiceErrorType)`
     ///   `case tls(OSStatus)`
+    ///   `case wifiAware(...)`  — added in the macOS 26 SDK; see the `default` arm on why it is not
+    ///                            named explicitly.
     ///
     /// Anything unmapped becomes `.network(_:)` carrying the description, so a log line still
     /// diagnoses it — an error reduced to "something went wrong" is a support case nobody can close.
@@ -1493,7 +1495,23 @@ public actor RTSPConnection {
             // one place a TLS failure could vanish.
             return .transport(.tlsFailed("OSStatus \(status)"))
 
-        @unknown default:
+        default:
+            // `default`, deliberately, and NOT `@unknown default`.
+            //
+            // `NWError` is a resilient Apple enum that keeps gaining cases. `@unknown default` only
+            // matches cases the compiler did *not* know about, so as soon as an SDK ships a new one
+            // — SDK 26 added `.wifiAware` — every build warns "switch must be exhaustive" for a
+            // branch that is a catch-all by design. Naming the case instead would break compilation
+            // on any older SDK, and this repo has to build on both.
+            //
+            // Nothing is lost by bucketing: `describe(_:)` carries the whole `NWError`, so the log
+            // line still names the actual failure. The cases that get a *specific* diagnosis are
+            // handled above with intent; `.wifiAware` is a peer-to-peer transport a LAN camera never
+            // uses, so it belongs here on merit rather than by omission.
+            //
+            // The cost, stated plainly: a future case that deserves its own diagnosis will land here
+            // silently instead of raising a warning. It will still be legible in a support log, which
+            // is the property that actually matters.
             return .transport(.network(describe(error)))
         }
     }
