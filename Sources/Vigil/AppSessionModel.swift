@@ -98,6 +98,10 @@ final class AppSessionModel {
     private var sessionTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
 
+    /// Keychain handle of the camera currently being connected. Held so that the first decoded
+    /// frame can be remembered against the right item without re-reading `UserDefaults`.
+    private var activeRef: CredentialRef?
+
     // MARK: - Computed Properties
 
     /// Whether the connect form's primary button should fire.
@@ -179,6 +183,7 @@ final class AppSessionModel {
         sessionTask = nil
         let outgoing = controller
         controller = nil
+        activeRef = nil
         phase = .connect
         isConnecting = false
         isShowingPicture = false
@@ -264,6 +269,7 @@ final class AppSessionModel {
     /// Builds the controller, subscribes to its events, and starts it. The only place a
     /// `StreamController` is created in the app.
     private func stream(camera: Camera, ref: CredentialRef) async {
+        activeRef = ref
         let store = credentials
         // The provider is called by the controller on every connect attempt, so the password is
         // read from the Keychain each time and never captured in the closure (docs/spec-core.md §2).
@@ -316,8 +322,10 @@ final class AppSessionModel {
             statusLine = ""
             failure = nil
             password = ""
-            LastConnection(host: host, account: account,
-                           credentialRef: currentRef ?? CredentialRef()).save(to: defaults)
+            if let activeRef {
+                LastConnection(host: host, account: account, credentialRef: activeRef)
+                    .save(to: defaults)
+            }
             dependencies.logger.info(.app, "first frame after \(afterStart)")
         case .error(let error, let isFatal):
             failure = Self.sentence(for: error)
@@ -332,15 +340,6 @@ final class AppSessionModel {
             break
         }
     }
-
-    /// The Keychain handle of the camera currently streaming, if any.
-    private var currentRef: CredentialRef? {
-        LastConnection.load(from: defaults)?.credentialRef ?? pendingRef
-    }
-
-    /// Set for the duration of a connect attempt so a success can be remembered against the right
-    /// Keychain item even before anything has been written to `UserDefaults`.
-    private var pendingRef: CredentialRef?
 
     private func fail(with error: any Error) {
         isConnecting = false

@@ -134,6 +134,10 @@ public final class VideoTileView: NSView {
     /// `true` between `viewWillStartLiveResize()` and `viewDidEndLiveResize()`.
     var isLiveResizing = false
 
+    /// The handle that attached this view, held weakly so the handle can outlive the view and vice
+    /// versa. Set by `FrameStreamHandle.attach(_:)`.
+    weak var frameSource: FrameStreamHandle?
+
     // MARK: - Lifecycle
 
     /// Builds a tile view for one camera.
@@ -200,6 +204,18 @@ public final class VideoTileView: NSView {
     /// put anything into them. This override exists so that the `wantsUpdateLayer` path is a no-op
     /// rather than inherited behaviour.
     override public func updateLayer() {}
+
+    // MARK: - Public API
+
+    /// Tells the frame source to stop delivering into this view.
+    ///
+    /// Called from `VideoTile.dismantleNSView`. The display layer is deliberately **not** flushed
+    /// and **not** blanked: the view is on its way out, and blanking it would produce exactly the
+    /// black flash the contract forbids if SwiftUI is merely rebuilding the hierarchy.
+    public func detachFromFrameSource() {
+        guard let frameSource, frameSource.sink === self else { return }
+        frameSource.detach()
+    }
 
     // MARK: - Frame ingest (nonisolated)
 

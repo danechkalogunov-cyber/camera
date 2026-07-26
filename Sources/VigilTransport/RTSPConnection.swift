@@ -177,9 +177,14 @@ public actor RTSPConnection {
     // MARK: - Injected
 
     private let config: RTSPSessionConfig
-    private let clock: any MonotonicClock
-    private let logger: any LoggerProtocol
     private let connectTimeout: Duration
+
+    // `clock`, `logger`, `machine`, `execute(_:)` and `isRunning` are `internal` rather than
+    // `private` for one reason: `RTSPConnection+Timers.swift` is a second file, and Swift's
+    // `private` is file-scoped, so an extension elsewhere cannot see it. Nothing outside this
+    // module can, because the type's own members are not `public`.
+    let clock: any MonotonicClock
+    let logger: any LoggerProtocol
 
     /// The one queue Network.framework calls back on. Serial and `.userInitiated`, per
     /// API_CONTRACT §4.7.
@@ -192,7 +197,7 @@ public actor RTSPConnection {
 
     // MARK: - Session
 
-    private var machine: RTSPSessionMachine
+    var machine: RTSPSessionMachine
 
     // MARK: - Socket
 
@@ -272,6 +277,9 @@ public actor RTSPConnection {
     /// Always `false` in this slice: TLS is not part of first light, so nothing here ever negotiates
     /// it. Kept because API_CONTRACT §4.7 declares it and `VigilCore` reads it.
     public nonisolated var isTLS: Bool { false }
+
+    /// Whether the connection is up and the session is being driven. Read by the timer extension.
+    var isRunning: Bool { lifecycle == .running }
 
     /// The session machine's current state.
     public var sessionState: RTSPSessionState { machine.state }
@@ -760,7 +768,7 @@ public actor RTSPConnection {
     /// returns (docs/spec-rtsp.md §14.6) — `.stateChanged` before what the state causes, every
     /// `.emitTrack` before its `.emitTiming` before its `.emitMedia`, `.fail` last — and an `await`
     /// anywhere in this loop would let a timer or a command interleave and break that.
-    private func execute(_ actions: [RTSPAction]) {
+    func execute(_ actions: [RTSPAction]) {
         for action in actions {
             switch action {
             case .send(let data):
