@@ -310,9 +310,14 @@ public actor RTSPConnection {
     /// Opens the TCP connection and starts the session.
     ///
     /// Returns once the socket is ready and `OPTIONS` has been queued for writing; everything after
-    /// that arrives on ``events()``. Throws `.transport(.egressBlocked)` for a destination outside
-    /// the LAN, `.transport(.connectTimeout)` when the handshake does not complete in time, and
-    /// whatever `NWError` mapped to when the connection failed outright.
+    /// that arrives on ``events()``.
+    ///
+    /// Throws `.transport(.egressBlocked)` for a destination outside the LAN — before the socket
+    /// exists for an IP literal, and after the resolver has answered for a DNS name (R-71);
+    /// `.transport(.connectRefused)` or `.transport(.hostUnreachable)` as soon as the platform says
+    /// so, including through `NWConnection.State.waiting`, which is **terminal** here; and
+    /// `.transport(.connectTimeout)` only when the handshake genuinely hangs with no state change
+    /// at all.
     ///
     /// - Note: API_CONTRACT §4.7 declares `throws(TransportError)`. The brief for this file requires
     ///   failures to surface as `VigilError`, which is the wider type `VigilCore` switches on, so
@@ -320,8 +325,12 @@ public actor RTSPConnection {
     public func connect() async throws(VigilError) {
         try vigilRequire(lifecycle == .idle, "RTSPConnection.connect() called twice")
 
-        // R-71: the destination is classified before a socket exists, not after.
-        guard EgressGuard.isPermitted(config.url.host) else {
+        // R-71, stage one: an IP literal is classified before a socket exists, and a refused one
+        // never gets one. A DNS name that only a resolver can classify passes here and is re-checked
+        // in `socketStateChanged(.ready)`; see `enforceResolvedEgress`. The `guard` spells out what
+        // `EgressGuard.requirePermitted(_:)` would throw, so that this function's typed
+        // `throws(VigilError)` needs no error conversion.
+        guard EgressGuard.classify(config.url.host) != .refused else {
             throw VigilError.transport(.egressBlocked(host: config.url.host))
         }
         let port = try endpointPort()
@@ -440,27 +449,27 @@ public actor RTSPConnection {
     private func socketStateChanged(_ state: NWConnection.State) {
         switch state {
         case .ready:
+            // R-71, stage two. Nothing has been written yet — `connect()` starts the write drain
+            // only after this resumes — so a name that resolved off the LAN costs one TCP handshake
+            // and not one byte of RTSP.
+            if let failure = enforceResolvedEgress() {
+                terminate(with: failure, reason: "egress blocked after resolution")
+                return
+            }
             finishConnect(with: nil)
 
         case .waiting(let error):
-            // `.waiting` is **not** terminal — Network.framework keeps retrying behind it, which is
-            // right for a laptop whose Wi-Fi is coming back and wrong for a camera that is not
-            // there. We do not act on it; the connect watchdog decides, and after `.ready` the
-            // session's own timers do.
-            logger.notice(.transport, "connection waiting", ["reason": Self.describe(error)])
+            // **`.waiting` is terminal**, per docs/spec-discovery.md §5.9 and the supervisor's
+            // ruling on docs/INTEGRATION-TODO.md item 5. Network.framework reports connection
+            // refusal and `EHOSTUNREACH` as `.waiting(POSIXError)` and would otherwise retry behind
+            // it forever, so waiting for the connect watchdog turns "nothing is listening" into
+            // "timed out" five seconds later — the vaguer of the two diagnoses, where
+            // docs/REQUIREMENTS-CUSTOMER.md §R1.5 promises the specific one. The watchdog stays for
+            // the case it is actually for: a handshake that hangs with no state change at all.
+            terminate(with: Self.mapped(error), reason: Self.describe(error))
 
         case .failed(let error):
-            let mapped = Self.mapped(error)
-            if connectContinuation != nil {
-                finishConnect(with: mapped)
-            } else {
-                // `.failed` can arrive after `.ready`, and when it does the session is over. The
-                // reconnect decision belongs to `VigilCore` (.vigil/STEP3.md §3.1), so it is
-                // surfaced and never retried here. Reported before the machine is told, for the
-                // reason given in `runReadLoop`'s `.failed` case.
-                deliverFailure(mapped)
-                feedConnectionClosed(reason: Self.describe(error))
-            }
+            terminate(with: Self.mapped(error), reason: Self.describe(error))
 
         case .cancelled:
             if connectContinuation != nil {
@@ -473,6 +482,109 @@ public actor RTSPConnection {
         @unknown default:
             // A state added after macOS 14. Logged rather than guessed at.
             logger.notice(.transport, "unrecognised NWConnection state")
+        }
+    }
+
+    /// Ends the connection on a socket-layer failure, from whichever state it is in.
+    ///
+    /// Before the socket is ready the failure is the answer to `connect()`; afterwards it is the
+    /// session's cause of death, and the machine is told so it can produce its last actions.
+    /// `deliverFailure` latches, so the first cause wins and a later, vaguer one — the machine's own
+    /// timeout, typically — cannot overwrite it.
+    ///
+    /// - Parameters:
+    ///   - failure: what the owner is told.
+    ///   - reason: the platform's own words, already redacted, for the log line and for the
+    ///     machine's `connectionClosed`. Kept separate from `failure` because the mapped error
+    ///     deliberately loses detail — `.hostUnreachable` does not say which `NWError` produced it.
+    private func terminate(with failure: VigilError, reason: String) {
+        logger.notice(.transport, "connection ended by the socket layer", ["reason": reason])
+        if connectContinuation != nil {
+            finishConnect(with: failure)
+        } else {
+            // Reported before the machine is told, for the reason given in `runReadLoop`'s
+            // `.failed` case: `RTSPError` has no `transportClosed` member, so the machine answers a
+            // dead socket with the closest retryable timeout — accurate about the policy, useless
+            // about the cause.
+            deliverFailure(failure)
+            feedConnectionClosed(reason: reason)
+        }
+    }
+
+    // MARK: - Egress, stage two
+
+    /// Re-checks the destination against the address the resolver actually returned (R-71).
+    ///
+    /// A DNS name cannot be classified before it resolves, so `connect()` lets one through and this
+    /// is where the LAN-only rule is actually enforced for it. The check runs for every destination,
+    /// literal or name: an IP literal simply agrees with itself, and running it unconditionally
+    /// means there is one enforcement point rather than two behaviours to keep in step.
+    ///
+    /// **What this does not prevent.** The TCP handshake to a name that resolves off the LAN has
+    /// already happened by the time `.ready` arrives — that is inherent in classifying after
+    /// resolution. No RTSP byte is written, because `connect()` starts the write drain only after
+    /// this returns; a public destination therefore sees a connect and a disconnect and learns
+    /// nothing else. Closing even that gap means resolving the name ourselves before connecting,
+    /// which the slice does not do.
+    ///
+    /// - Returns: the failure to end the connection with, or `nil` when the destination is
+    ///   permitted or when the platform did not give an address to check.
+    private func enforceResolvedEgress() -> VigilError? {
+        guard let socket else { return nil }
+        guard let address = Self.resolvedAddress(of: socket) else {
+            // Not fatal, and deliberately so: refusing here would break every camera reached by
+            // name the moment the platform stopped reporting a resolved endpoint, which is a
+            // worse failure than the one being guarded against. The pre-connect classification
+            // still applied, and this is logged so the gap is visible in a bug report.
+            logger.notice(.transport, "no resolved address reported; egress re-check skipped",
+                          ["host": config.url.host])
+            return nil
+        }
+        guard EgressGuard.isPermitted(resolvedAddress: address) else {
+            logger.warning(.transport, "destination resolved outside the local network",
+                           ["host": config.url.host])
+            return .transport(.egressBlocked(host: config.url.host))
+        }
+        return nil
+    }
+
+    /// The remote address this connection actually reached, in the platform's raw form: four bytes
+    /// for IPv4, sixteen for IPv6, network byte order.
+    ///
+    /// `NWConnection.endpoint` is the endpoint we *asked* for and still holds the name; the path's
+    /// `remoteEndpoint` is the one the connection settled on.
+    ///
+    /// `Network`:
+    ///   `extension NWConnection { public var currentPath: NWPath? { get } }`
+    ///   `public struct NWPath { public var remoteEndpoint: NWEndpoint? { get } }`
+    ///   `public enum NWEndpoint {`
+    ///   `    case hostPort(host: NWEndpoint.Host, port: NWEndpoint.Port)`
+    ///   `    case service(name: String, type: String, domain: String, interface: NWInterface?)`
+    ///   `    case unix(path: String)`
+    ///   `    case url(URL)`
+    ///   `}`
+    ///   `public enum NWEndpoint.Host { case name(String, NWInterface?)`
+    ///   `                              case ipv4(IPv4Address)`
+    ///   `                              case ipv6(IPv6Address) }`
+    ///   `public protocol IPAddress { var rawValue: Data { get } … }`
+    ///
+    /// `Network.IPv4Address` and `VigilProtocols.IPv4Address` are different types with the same
+    /// name, and both modules are imported here. Neither name is written below — the addresses are
+    /// bound by pattern and reduced immediately to `rawValue` — so nothing in this file has to be
+    /// qualified.
+    private static func resolvedAddress(of socket: NWConnection) -> Data? {
+        guard let endpoint = socket.currentPath?.remoteEndpoint else { return nil }
+        guard case .hostPort(let host, _) = endpoint else { return nil }
+        switch host {
+        case .ipv4(let address):
+            return address.rawValue
+        case .ipv6(let address):
+            return address.rawValue
+        case .name:
+            // The path still names the host: nothing was resolved that this can classify.
+            return nil
+        @unknown default:
+            return nil
         }
     }
 
@@ -1005,9 +1117,15 @@ public actor RTSPConnection {
                 return .transport(.network("POSIX \(code.rawValue)"))
             }
 
-        case .dns(let code):
-            // A name that does not resolve is not reachable, which is the same thing to the caller.
-            return .transport(.network("DNS resolution failed (\(code))"))
+        case .dns:
+            // A name that does not resolve is not reachable, and `.hostUnreachable` is what says so
+            // in the vocabulary the user sees: `VigilCore` maps it to `.hostResolutionFailed` and
+            // the connect screen to "not on this network", which is the specific diagnosis
+            // docs/REQUIREMENTS-CUSTOMER.md §R1.5 asks for. Reducing it to `.network(_:)` instead
+            // would land in the undiagnosed bucket and say only that something went wrong. The
+            // `DNSServiceErrorType` itself is not lost: every call site logs `describe(_:)`, which
+            // carries the whole `NWError` including the code.
+            return .transport(.hostUnreachable)
 
         case .tls(let status):
             // Unreachable in this slice — there is no TLS — but a silent default here would be the
