@@ -278,8 +278,12 @@ private func withNALPointer<T>(
     bytes.withUnsafeBytes { raw in
         do {
             outcome = .success(try body(raw))
-        } catch {
+        } catch let error as BitstreamError {
             outcome = .failure(error)
+        } catch {
+            // Unreachable: `body` is typed `throws(BitstreamError)`. The clause exists only because
+            // `withUnsafeBytes` is `rethrows`, which erases the closure's thrown type to `any Error`.
+            outcome = .failure(.unsupportedSyntax("unexpected error from a typed-throws closure"))
         }
     }
     switch outcome {

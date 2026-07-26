@@ -226,10 +226,11 @@ public struct HEVCDecoderConfigurationRecord: Sendable, Hashable {
         out.append(0xF8 | (bitDepthChromaMinus8 & 0x07))
         out.append(UInt8(truncatingIfNeeded: avgFrameRate >> 8))
         out.append(UInt8(truncatingIfNeeded: avgFrameRate))
-        out.append((constantFrameRate & 0x03) << 6
-                   | (numTemporalLayers & 0x07) << 3
-                   | (temporalIDNested ? 0x04 : 0x00)
-                   | (lengthSizeMinusOne & 0x03))
+        var trailer: UInt8 = (constantFrameRate & 0x03) << 6
+        trailer |= (numTemporalLayers & 0x07) << 3
+        if temporalIDNested { trailer |= 0x04 }
+        trailer |= lengthSizeMinusOne & 0x03
+        out.append(trailer)
         out.append(UInt8(truncatingIfNeeded: arrays.count))
         for array in arrays {
             out.append((array.arrayCompleteness ? 0x80 : 0x00) | (array.nalUnitType & 0x3F))

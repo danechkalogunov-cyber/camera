@@ -28,46 +28,27 @@ extension VideoFormatInfo {
     /// accepted only when the tick is non-zero and the result lies in 1…240 fps. It is metadata:
     /// the presentation clock comes from RTP timestamps, never from here.
     public init(_ sps: H264SPS) {
-        let chromaArrayType: UInt8 = sps.separateColourPlaneFlag ? 0 : sps.chromaFormatIDC
-        let sub = VideoFormatInfo.subSampling(sps.chromaFormatIDC,
-                                              separateColourPlane: sps.separateColourPlaneFlag)
-        let frameMbsOnly = sps.frameMbsOnlyFlag
-        let codedWidth = sps.picWidthInMbs * 16
-        let codedHeight = (frameMbsOnly ? 1 : 2) * sps.picHeightInMapUnits * 16
-
-        let cropUnitX = chromaArrayType == 0 ? 1 : sub.width
-        let cropUnitY = chromaArrayType == 0
-            ? (frameMbsOnly ? 1 : 2)
-            : sub.height * (frameMbsOnly ? 1 : 2)
+        // The derivations live on `H264SPS` so that a caller holding only the parsed model gets the
+        // same numbers; duplicating them here is how the reported size and the allocated size come
+        // to disagree.
         let crop = sps.frameCropping
-        let cropLeft = cropUnitX * crop.left
-        let cropTop = cropUnitY * crop.top
-        let cropWidth = max(0, codedWidth - cropUnitX * (crop.left + crop.right))
-        let cropHeight = max(0, codedHeight - cropUnitY * (crop.top + crop.bottom))
-
         let sar = VideoFormatInfo.sanitisedSAR(width: sps.sarWidth, height: sps.sarHeight)
         let geometry = FrameGeometry(
-            codedWidth: codedWidth, codedHeight: codedHeight,
-            cropLeft: cropLeft, cropTop: cropTop, cropWidth: cropWidth, cropHeight: cropHeight,
+            codedWidth: sps.codedWidth, codedHeight: sps.codedHeight,
+            cropLeft: sps.cropUnitX * crop.left, cropTop: sps.cropUnitY * crop.top,
+            cropWidth: max(0, sps.displayWidth), cropHeight: max(0, sps.displayHeight),
             sarWidth: sar.width, sarHeight: sar.height,
             bitDepth: sps.bitDepthLuma,
-            fieldOrder: frameMbsOnly ? .progressive : .topFieldFirst,
+            fieldOrder: sps.frameMbsOnlyFlag ? .progressive : .topFieldFirst,
             color: VideoFormatInfo.colorInfo(primaries: sps.colourPrimaries,
                                              transfer: sps.transferCharacteristics,
                                              matrix: sps.matrixCoefficients,
                                              fullRange: sps.videoFullRangeFlag,
-                                             codedHeight: codedHeight))
-
-        // H.264 time_scale counts field ticks, hence the factor of two absent from the H.265 form.
-        var fps: Double?
-        if let tick = sps.numUnitsInTick, let scale = sps.timeScale, tick > 0 {
-            let candidate = Double(scale) / (2.0 * Double(tick))
-            if candidate >= 1.0, candidate <= 240.0 { fps = candidate }
-        }
+                                             codedHeight: sps.codedHeight))
 
         self.init(codec: .h264,
                   geometry: geometry,
-                  frameRate: fps,
+                  frameRate: sps.frameRate,
                   profileIDC: sps.profileIDC,
                   constraintFlags: sps.constraintFlags,
                   levelIDC: sps.levelIDC,
@@ -78,10 +59,8 @@ extension VideoFormatInfo {
                   minSpatialSegmentationIDC: 0,
                   numTemporalLayers: 1,
                   temporalIDNested: false,
-                  profileName: VideoFormatInfo.h264ProfileName(sps.profileIDC,
-                                                               constraintFlags: sps.constraintFlags),
-                  levelName: VideoFormatInfo.h264LevelName(sps.levelIDC,
-                                                           constraintFlags: sps.constraintFlags))
+                  profileName: sps.profileName,
+                  levelName: sps.levelName)
     }
 }
 
@@ -143,21 +122,6 @@ extension VideoFormatInfo {
 
 extension VideoFormatInfo {
 
-    /// `SubWidthC` and `SubHeightC` from H.264 Table 6-1 / H.265 Table 6-1, which are identical.
-    ///
-    /// Monochrome leaves them undefined in both standards; 1 is returned because the only caller
-    /// guards on `ChromaArrayType == 0` before using them.
-    static func subSampling(_ chromaFormatIDC: UInt8,
-                            separateColourPlane: Bool) -> (width: Int, height: Int) {
-        if separateColourPlane { return (1, 1) }
-        switch chromaFormatIDC {
-        case 1: return (2, 2)       // 4:2:0
-        case 2: return (2, 1)       // 4:2:2
-        case 3: return (1, 1)       // 4:4:4
-        default: return (1, 1)      // monochrome
-        }
-    }
-
     /// The SAR sanity rule: a zero or negative component means "unspecified", which is 1:1.
     ///
     /// Hikvision routinely omits the SAR entirely on substreams, and a `sar_height` of 0 is
@@ -203,32 +167,5 @@ extension VideoFormatInfo {
             }
         }
         return info
-    }
-
-    /// H.264 profile name (spec-bitstream §8.7).
-    ///
-    /// "Constrained Baseline" requires `constraint_set1_flag`, mask `0x40` — **not** `0x80`, which
-    /// is `constraint_set0_flag`. Confusing the two mislabels every Baseline substream.
-    static func h264ProfileName(_ idc: UInt8, constraintFlags: UInt8) -> String {
-        let constraintSet1 = constraintFlags & 0b0100_0000 != 0
-        switch idc {
-        case 66: return constraintSet1 ? "Constrained Baseline" : "Baseline"
-        case 77: return "Main"
-        case 88: return "Extended"
-        case 100: return "High"
-        case 110: return "High 10"
-        case 122: return "High 4:2:2"
-        case 244: return "High 4:4:4 Predictive"
-        case 44: return "CAVLC 4:4:4 Intra"
-        default: return "Unknown (\(idc))"
-        }
-    }
-
-    /// H.264 level name (spec-bitstream §8.7). Level "1b" is `level_idc == 11` with
-    /// `constraint_set3_flag` set, or the historical `level_idc == 9`.
-    static func h264LevelName(_ idc: UInt8, constraintFlags: UInt8) -> String {
-        let constraintSet3 = constraintFlags & 0b0001_0000 != 0
-        if idc == 9 || (idc == 11 && constraintSet3) { return "1b" }
-        return "\(idc / 10).\(idc % 10)"
     }
 }

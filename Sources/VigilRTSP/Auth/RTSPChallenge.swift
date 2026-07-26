@@ -44,9 +44,17 @@ public struct RTSPChallenge: Sendable, Hashable {
     /// unquoted token.
     public var stale: Bool
 
+    /// Whether the device actually wrote an `algorithm` parameter.
+    ///
+    /// `algorithm` defaults to `"MD5"`, so the default and an explicit `algorithm=MD5` are otherwise
+    /// indistinguishable — and the difference is on the wire: RFC 2617 §3.2.2 says a client echoes
+    /// the algorithm it was given, and Hikvision firmware that sent none expects none back.
+    public var specifiesAlgorithm: Bool
+
     /// Creates a challenge. Used by the parser and by tests; nothing else builds one.
     public init(scheme: String, realm: String = "", nonce: String? = nil, opaque: String? = nil,
-                qop: [String] = [], algorithm: String = "MD5", stale: Bool = false) {
+                qop: [String] = [], algorithm: String = "MD5", stale: Bool = false,
+                specifiesAlgorithm: Bool = false) {
         self.scheme = scheme
         self.realm = realm
         self.nonce = nonce
@@ -54,6 +62,7 @@ public struct RTSPChallenge: Sendable, Hashable {
         self.qop = qop
         self.algorithm = algorithm
         self.stale = stale
+        self.specifiesAlgorithm = specifiesAlgorithm
     }
 
     // MARK: - Classification
@@ -149,6 +158,7 @@ public struct RTSPChallenge: Sendable, Hashable {
             challenges[index].stale = ASCII.lowercased(value) == "true"
         case "algorithm":
             challenges[index].algorithm = normalizedAlgorithm(value)
+            challenges[index].specifiesAlgorithm = true
         case "qop":
             challenges[index].qop = RTSPHeaderScanner
                 .topLevelSplit(Substring(value), on: ",")
