@@ -3,7 +3,7 @@
 <!--
     Resources/Vigil-Dev.entitlements — local development only. NEVER DISTRIBUTED.
 
-    Implements docs/ARCHITECTURE.md §13.4. Selected by `Scripts/build-app.sh --sandbox off`, which
+    Implements docs/ARCHITECTURE.md §13.4. Selected by the sandbox-off flag of build-app.sh, which
     prints a loud warning and stamps VigilDevBuild=true into the bundle's Info.plist so the About
     window can show it.
 

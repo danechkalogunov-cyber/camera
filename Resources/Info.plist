@@ -46,11 +46,11 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
 
-    <!-- Marketing version. Overwritten by Scripts/build-app.sh --version. -->
+    <!-- Marketing version. Scripts/build-app.sh overwrites it from its version flag. -->
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
 
-    <!-- Build number. Overwritten by Scripts/build-app.sh with `git rev-list --count HEAD`. -->
+    <!-- Build number. Overwritten by Scripts/build-app.sh with the commit count from git. -->
     <key>CFBundleVersion</key>
     <string>1</string>
 

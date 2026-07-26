@@ -5,7 +5,7 @@
 
     Implements docs/ARCHITECTURE.md §13.3 and docs/spec-discovery.md §9.1.
 
-    Used by Scripts/build-app.sh unless --sandbox off or --entitlements PATH is given. If codesign
+    Used by Scripts/build-app.sh unless its sandbox or entitlements flag says otherwise. If codesign
     rejects the multicast key (no provisioning profile), the script automatically retries with
     Resources/Vigil-nomulticast.entitlements and says so loudly; the app then detects the situation
     at runtime and degrades to a unicast sweep. There is one binary and no compile-time flag.

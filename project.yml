@@ -1,0 +1,141 @@
+# project.yml — XcodeGen input for Vigil.
+#
+# Implements docs/ARCHITECTURE.md §12.4.
+#
+# You do not need this file. The primary Xcode workflow is "open Package.swift", which already
+# gives you build, run and test with no generated project at all. This exists for engineers who
+# want a real .xcodeproj: schemes they can edit in the UI, a signing team picked from a menu, and
+# a run destination that persists.
+#
+#   brew install xcodegen
+#   xcodegen generate        # writes Vigil.xcodeproj
+#   open Vigil.xcodeproj
+#
+# Vigil.xcodeproj is git-ignored (.gitignore ships `*.xcodeproj/`). NO HAND-WRITTEN .pbxproj MAY
+# EVER BE COMMITTED — regenerate it instead.
+#
+# One target only. It links the local SwiftPM package and does not duplicate the source file
+# lists, so Package.swift stays the single definition of the module graph.
+#
+# UNVERIFIED: xcodegen is not installed in the Linux development container, so this file has never
+# been fed to it. The YAML is well-formed and the keys are the documented ones, but a Mac has to
+# confirm it generates.
+
+name: Vigil
+
+options:
+  bundleIdPrefix: com.vigil
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  # Keep the generated project honest about which Xcode wrote it.
+  xcodeVersion: "16.0"
+
+# Non-source files worth having visible in the navigator.
+fileGroups:
+  - Package.swift
+  - README.md
+  - Resources
+  - Scripts
+  - docs
+
+packages:
+  # The package at the repository root. Xcode resolves it as a local package, so edits to
+  # Sources/** are picked up without a checkout step.
+  Vigil:
+    path: .
+
+targets:
+  Vigil:
+    type: application
+    platform: macOS
+
+    # Only the executable target's own sources. Everything else arrives through the VigilApp
+    # product below.
+    sources:
+      - path: Sources/Vigil
+
+    dependencies:
+      # VigilApp = VigilUI + VigilCore + VigilRender, declared in Package.swift precisely so an
+      # Xcode host project has one product to link.
+      - package: Vigil
+        product: VigilApp
+
+    # NOTE — deliberately not using XcodeGen's `info:` and `entitlements:` blocks.
+    #
+    # Both of those GENERATE a file at the path you give them from the properties in this YAML,
+    # overwriting whatever is there. Vigil's Info.plist and entitlements are hand-maintained,
+    # heavily commented, and shared with Scripts/build-app.sh — having `xcodegen generate` quietly
+    # rewrite them (dropping NSBonjourServices, the ATS exception and the exported UTIs, and with
+    # them discovery, ISAPI and drag-and-drop) is exactly the silent failure this repository keeps
+    # warning about. Pointing the build settings at the existing files instead is safe.
+    settings:
+      base:
+        PRODUCT_NAME: Vigil
+        PRODUCT_BUNDLE_IDENTIFIER: com.vigil.app
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+        INFOPLIST_FILE: Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Resources/Vigil.entitlements
+
+        # Ad-hoc by default so a fresh clone builds and runs with no Apple account. Change
+        # CODE_SIGN_IDENTITY and DEVELOPMENT_TEAM in the Xcode UI (Signing & Capabilities) when
+        # you have one; the multicast entitlement additionally needs a provisioning profile.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+        ENABLE_HARDENED_RUNTIME: YES
+        # ENABLE_APP_SANDBOX is YES for the Signing & Capabilities UI, but the entitlements file
+        # above remains the source of truth; Xcode merges its generated sandbox key with it.
+        ENABLE_APP_SANDBOX: YES
+
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        GCC_TREAT_WARNINGS_AS_ERRORS: YES
+        # docs/ARCHITECTURE.md §3: ExistentialAny is on package-wide, so `any P` is mandatory.
+        OTHER_SWIFT_FLAGS: "-enable-upcoming-feature ExistentialAny"
+
+        COMBINE_HIDPI_IMAGES: YES
+        DEAD_CODE_STRIPPING: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          ONLY_ACTIVE_ARCH: YES
+          # Local debug builds want a debugger attach, which the sandboxed entitlements do not
+          # grant. Point Debug at the development set instead.
+          CODE_SIGN_ENTITLEMENTS: Resources/Vigil-Dev.entitlements
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          ONLY_ACTIVE_ARCH: NO
+          ARCHS: "$(ARCHS_STANDARD)"
+
+schemes:
+  Vigil:
+    build:
+      targets:
+        Vigil: all
+    run:
+      config: Debug
+      # Vigil talks only to devices on the local network; there is nothing to point at a staging
+      # server. Environment variables are listed here so the slot is obvious when one is needed.
+      environmentVariables:
+        # Keep OSLog debug and info messages visible when running from Xcode.
+        OS_ACTIVITY_MODE: enable
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    # The test targets are SwiftPM test targets, not project targets, so they cannot be listed
+    # here. Run them with `swift test`, or by opening Package.swift in Xcode.
+    test:
+      config: Debug
+      gatherCoverageData: true

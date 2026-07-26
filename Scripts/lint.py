@@ -163,6 +163,38 @@ def check_file_header(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     return []
 
 
+def check_plists() -> list[Violation]:
+    """Property lists and entitlements must be well-formed XML, or the app cannot be built.
+
+    The failure this catches in practice: XML forbids a double hyphen *anywhere* inside a comment,
+    so documenting a command-line flag as `--version` in a plist comment produces a file that
+    plutil, codesign and Xcode all reject. It looks completely fine to a human reader.
+    """
+    import plistlib
+
+    out: list[Violation] = []
+    for directory in ("Resources", "Sources"):
+        base = ROOT / directory
+        if not base.exists():
+            continue
+        for path in sorted(list(base.rglob("*.plist")) + list(base.rglob("*.entitlements"))):
+            rel = str(path.relative_to(ROOT))
+            raw = path.read_bytes()
+            try:
+                plistlib.loads(raw)
+            except Exception as error:  # plistlib raises several unrelated types
+                hint = ""
+                text = raw.decode("utf-8", "replace")
+                for n, line in enumerate(text.splitlines(), 1):
+                    stripped = line.strip()
+                    if "--" in stripped.replace("<!--", "").replace("-->", ""):
+                        hint = (f" — line {n} has a double hyphen inside a comment, which XML "
+                                f"forbids; reword the flag name")
+                        break
+                out.append((rel, 1, "plist", f"not valid XML: {error}{hint}"))
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--summary", action="store_true", help="print counts only")
@@ -186,6 +218,7 @@ def main() -> int:
         violations += check_trailing_whitespace(path, lines)
 
     violations += check_duplicate_test_names()
+    violations += check_plists()
 
     if not violations:
         n_src = len(swift_files("Sources"))

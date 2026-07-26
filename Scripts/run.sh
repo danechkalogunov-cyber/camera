@@ -52,7 +52,21 @@ while [ $# -gt 0 ]; do
         --no-build)  DO_BUILD="no";       shift   ;;
         --logs-only) DO_BUILD="no"; DO_LAUNCH="no"; shift ;;
         --)          shift; BUILD_ARGS="$*"; break ;;
-        -h|--help)   sed -n '3,20p' "$SCRIPT_DIR/run.sh" | sed 's|^# \{0,1\}||'; exit 0 ;;
+        -h|--help)
+            cat <<'USAGE'
+Scripts/run.sh — build Vigil.app, launch it, and stream its OSLog output here.
+
+  --category LIST   comma-separated OSLog categories (app, discovery, rtsp, rtp, bitstream,
+                    isapi, transport, video, render, core, storage, ui, perf)
+  --level LEVEL     default|info|debug          (default: debug)
+  --output DIR      where the bundle lives      (default: dist)
+  --no-build        skip the build, launch what is already there
+  --logs-only       do not build or launch; attach to a running instance
+  --                everything after this is passed through to Scripts/build-app.sh
+
+Ctrl-C stops the log stream; the app keeps running. Quit it with Cmd-Q.
+USAGE
+            exit 0 ;;
         *) die "Unknown option: $1" "Run $0 --help for the accepted flags." ;;
     esac
 done
