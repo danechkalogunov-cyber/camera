@@ -527,12 +527,20 @@ public struct RTSPWireDecoder: Sendable {
 
     /// Whether the bytes at `offset` are a `$` frame, per the §5.4 heuristic.
     ///
-    /// Every condition is required, and the order matters: the cheap rejections (channel, length,
-    /// RTP version bits) are decided from five bytes, so a genuinely malformed header line that
-    /// begins with `$` is classified without waiting for data that will never come. Only after the
-    /// frame looks real do we insist on having all of it.
+    /// Every condition is required, and the order matters: the cheap rejections (magic, channel,
+    /// length, RTP version bits) are decided from five bytes, so a genuinely malformed header line
+    /// that begins with `$` is classified without waiting for data that will never come. Only after
+    /// the frame looks real do we insist on having all of it.
+    ///
+    /// The magic check belongs **here**, not at the call sites, because the resynchronization chain
+    /// validates links 2…n through this function at offsets derived from the *previous* link's
+    /// length field. If a length is wrong — a truncated write, a firmware quirk, corruption — that
+    /// offset lands mid-packet, and a link accepted without its magic byte would let the decoder
+    /// lock onto a false boundary and hand garbage to the depacketizer, which surfaces as malformed
+    /// frames several layers away from the cause.
     private func interleavedVerdict(at offset: Int) -> FrameVerdict {
         guard bufferedByteCount - offset >= 5 else { return .needMore }
+        guard byte(at: offset) == 0x24 else { return .reject }
         let channel = byte(at: offset + 1)
         guard channels.contains(channel) else { return .reject }
         let length = Int(byte(at: offset + 2)) << 8 | Int(byte(at: offset + 3))
@@ -599,6 +607,12 @@ public struct RTSPWireDecoder: Sendable {
     }
 
     /// Validates `resyncChainDepth` consecutive frames starting at `offset`.
+    ///
+    /// Every link is checked in full, magic byte included: the whole point of chaining is that one
+    /// coincidental four-byte pattern is not evidence of a frame boundary. A link that fails is a
+    /// `.reject` for the *candidate*, not for the connection — the caller advances one byte and
+    /// keeps scanning, so a bad length field costs a resynchronization rather than desynchronizing
+    /// the stream permanently or discarding the buffer.
     private func chainVerdict(at offset: Int) -> FrameVerdict {
         var cursor = offset
         var remaining = max(1, limits.resyncChainDepth)

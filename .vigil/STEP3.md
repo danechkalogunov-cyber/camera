@@ -31,6 +31,22 @@ Everything below exists to make that survivable.
 
 ### 3.1 `VigilTransport` — TCP for the slice
 
+> **Two integration findings from `VigilTestKit`, both discovered by driving the real state machine
+> with synthetic bytes. Read these before writing a line — each produces a failure that points at
+> the wrong component.**
+>
+> **1. `transportReady(isTLS:now:)` returns an empty action list.** It only resets nonce state.
+> Nothing reaches the wire until `handle(.start, now:)` is called. A driver that connects the socket,
+> calls `transportReady`, and then waits for the machine to say something **stalls forever with no
+> error at all** — the harness's first run produced zero requests. `RTSPConnection` must issue
+> `.start` after the transport is up. The contract's §4.3 does not mention this.
+>
+> **2. A TCP-interleaved client sends RTCP receiver reports back to the camera inside `$` frames on
+> the same connection.** If the receive path treats those bytes as RTSP traffic, the session dies
+> roughly forty seconds later with an authentication rejection — a failure that looks exactly like a
+> wrong password and is not. The write path must frame outbound RTCP as `$` on channel 1, and the
+> read path must not confuse the two directions.
+
 Wire the pure `RTSPSessionMachine` to a real socket with `NWConnection`. Only what the slice needs:
 TCP, no TLS, no UDP, no multicast. Feed received bytes into `ingest`, execute the machine's
 `.send` actions as single atomic writes, drive `.setTimer` from a monotonic source, and surface
