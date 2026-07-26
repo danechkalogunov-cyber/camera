@@ -135,6 +135,15 @@ public struct NegativeCapabilityCache: Sendable, Hashable {
         return true
     }
 
+    /// Drops the entry for `resource`, if any.
+    ///
+    /// The retry paths need this: a `403 notSupport` for `/picture` **with** resolution query items
+    /// is a refusal of the query, not of the resource, and leaving the entry in place would suppress
+    /// every later snapshot of every channel — the template collapses the channel number.
+    public mutating func forget(_ resource: String) {
+        refusals[ISAPIResource.template(of: resource)] = nil
+    }
+
     /// Every suppressed template, sorted, for the diagnostics bundle.
     public var suppressedTemplates: [String] { refusals.keys.sorted() }
 

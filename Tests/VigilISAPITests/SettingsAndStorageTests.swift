@@ -420,13 +420,12 @@ enum SettingsFixtures {
         // sibling.
         #expect(text.contains("<contrastLevel>50</contrastLevel>"))
         #expect(text.contains("version=\"2.0\""))
-        // KNOWN GAP, reported: `ISAPIDocument`'s parser discards every `xmlns*` attribute
-        // (`Sources/VigilISAPI/XML/ISAPIDocument.swift`, `where !name.hasPrefix("xmlns")`), so a
-        // read-modify-write body cannot echo the namespace that docs/spec-isapi.md §8 and §17.2
-        // say some 5.4.x builds require. This assertion pins the current behaviour so the fix is
-        // visible as a failing test rather than as silence.
-        #expect(!text.contains("xmlns"),
-                "xmlns is dropped on parse today; when that is fixed, assert it round-trips")
+        // FIXED: the parser used to discard every `xmlns*` attribute, so no read-modify-write body
+        // could carry the namespace. docs/spec-isapi.md §8 ("Namespace policy") and §17.2 both
+        // require the `GET`'s `version` **and** `xmlns` to ride back out verbatim, because some
+        // 5.4.x builds reject a `<Color>` element without them.
+        #expect(text.contains("xmlns=\"http://www.hikvision.com/ver20/XMLSchema\""),
+                "a read-modify-write body must echo the device's own xmlns verbatim (§8, §17.2)")
     }
 
     @Test func imageColorPatchClampsToZeroToHundred() throws {

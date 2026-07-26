@@ -11,6 +11,11 @@
 //  parser's namespace processing, because Hikvision firmware ships malformed namespace
 //  declarations and the parser's own handling of them varies between the two platforms.
 //
+//  "Stripped" applies to element and attribute *names* only. The `xmlns` declarations themselves
+//  are preserved verbatim on the node, because a read-modify-write body must echo the element's
+//  `version` and `xmlns` exactly as received (§8, §17.2) and some 5.4.x builds reject a `<Color>`
+//  without them.
+//
 
 import Foundation
 import VigilProtocols
@@ -215,6 +220,17 @@ private final class XMLTreeBuilder: NSObject, XMLParserDelegate {
         return String(raw[raw.index(after: colon)...])
     }
 
+    /// True for a namespace *declaration* — `xmlns` or `xmlns:prefix` — as opposed to an attribute
+    /// that merely happens to sit in a namespace.
+    ///
+    /// The XML namespaces recommendation reserves the exact lowercase spelling, so this does not
+    /// match case-insensitively: an attribute genuinely named `XMLNS` is not a declaration, and
+    /// treating it as one would echo it back in a shape the device never sent. Nor does it match a
+    /// bare prefix such as `xmlnsfoo`, which the old `hasPrefix("xmlns")` test wrongly swallowed.
+    private static func isNamespaceDeclaration(_ raw: String) -> Bool {
+        raw == "xmlns" || raw.hasPrefix("xmlns:")
+    }
+
     func parser(_ parser: XMLParser, didStartElement elementName: String,
                 namespaceURI: String?, qualifiedName qName: String?,
                 attributes attributeDict: [String: String] = [:]) {
@@ -225,8 +241,16 @@ private final class XMLTreeBuilder: NSObject, XMLParserDelegate {
         }
         var lowered: [String: String] = [:]
         lowered.reserveCapacity(attributeDict.count)
-        for (name, value) in attributeDict where !name.hasPrefix("xmlns") {
-            lowered[Self.localName(name).lowercased()] = value
+        for (name, value) in attributeDict {
+            // A namespace declaration is kept under its **verbatim** name, neither prefix-stripped
+            // nor lowercased, because a read-modify-write body has to echo `version` *and* `xmlns`
+            // exactly as the device sent them (docs/spec-isapi.md §8 "Namespace policy" and §17.2)
+            // — some 5.4.x builds reject a `<Color>` element without them. Prefix-stripping is what
+            // the rest of this loop does and is deliberate for ordinary attributes so that path
+            // expressions stay namespace-agnostic; applying it here would reduce `xmlns:hik` to
+            // `hik`, which is a different attribute and no longer a declaration at all.
+            let key = Self.isNamespaceDeclaration(name) ? name : Self.localName(name).lowercased()
+            lowered[key] = value
         }
         stack.append(Frame(name: Self.localName(elementName), attributes: lowered,
                            text: "", children: []))

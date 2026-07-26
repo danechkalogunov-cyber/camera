@@ -95,10 +95,16 @@ public actor DiscoveryCoordinator {
     /// Multicast is skipped and the sweep promoted. Decided from the entitlement status up front and
     /// again empirically if a channel refuses to open (§9.3).
     private var isDegraded = false
+    /// True for `.single(address:)`: one named address, no group probe, and therefore no multicast
+    /// diagnostic and no `.fail` policy — the caller asked about one host, not about the network.
+    private var isSingleAddressRun = false
     private var entitlements: EntitlementStatus
+    /// The multicast listening window, fixed once at the start of the run so that a channel failing
+    /// halfway through cannot shorten the window the other interfaces are still listening on.
+    private var multicastWindowValue = Duration.zero
 
-    private var sadpProbeUUID = UUID()
-    private var wsdMessageIDs: [UUID] = []
+    private let sadpProbeUUID: UUID
+    private let wsdMessageIDs: [UUID]
     private var sadpLimiter = SADPIngestLimiter()
     private var wsdDedupe = WSDDedupeSet()
 
