@@ -416,7 +416,9 @@ if ! sign_with "$ENTITLEMENTS" >"$SIGN_LOG" 2>&1; then
     cat "$SIGN_LOG" >&2
 
     FALLBACK_ENT="Resources/Vigil-nomulticast.entitlements"
-    if grep -q "com.apple.developer.networking.multicast" "$ENTITLEMENTS" 2>/dev/null \
+    # Match the key element, not any mention of the string: the fallback file names the entitlement
+    # in a comment, and matching that would make it "retry" with the file it is already using.
+    if grep -q "<key>com.apple.developer.networking.multicast</key>" "$ENTITLEMENTS" 2>/dev/null \
         && [ -f "$FALLBACK_ENT" ]; then
 
         loud "CODE SIGNING FAILED WITH THE MULTICAST ENTITLEMENT — RETRYING WITHOUT IT" \
