@@ -357,7 +357,10 @@ final class AppSessionModel {
                 // secure field once a frame arrives, so the empty string it now holds must never be
                 // written over a credential that works.
                 guard try await credentials.hasCredential(for: ref) else {
-                    fail(with: CredentialError.notFound, host: request.host)
+                    // No stored password and none typed. `wrongPassword` is the closest named cause
+                    // — its remedy puts the cursor in the password field, which is the action that
+                    // matters — and `ConnectDiagnosis` has no "never had one" case to be exact with.
+                    present(.wrongPassword(host: request.host))
                     return
                 }
             } else {
@@ -544,11 +547,18 @@ final class AppSessionModel {
 
     /// A failure before the controller existed: a bad address, or a Keychain that would not answer.
     private func fail(with error: any Error, host: String) {
-        let named = Self.diagnosis(for: error, host: host)
+        present(Self.diagnosis(for: error, host: host))
+        dependencies.logger.error(.app, "connect failed: \(error)")
+    }
+
+    /// Shows a named cause on the connect form.
+    ///
+    /// `ConnectFormState.fail` also clears the in-flight flag and bumps the failure counter that
+    /// drives the form's one-per-failure shake, so this is the only way a diagnosis reaches it.
+    private func present(_ named: ConnectDiagnosis) {
         diagnosis = named
         phase = .connect
         form.fail(named)
-        dependencies.logger.error(.app, "connect failed: \(error)")
     }
 
     /// Turns an error raised on the app's own half of the connect path into a named cause.
@@ -572,15 +582,20 @@ final class AppSessionModel {
         }
     }
 
-    /// The Keychain handle for this host and account, when it is the one we already have.
-    private func rememberedRef(host: String, account: String) -> CredentialRef? {
+    /// What we already know about this host and account: its Keychain handle, and the RTSP path
+    /// that worked last time.
+    ///
+    /// Reusing the handle matters because `save` updates an item in place, whereas a fresh
+    /// `CredentialRef` would leave the old item behind as an orphan on every retry. Reusing the
+    /// path is R1.2's "the probe happens exactly once per device, ever".
+    private func knownHandle(for request: ConnectRequest) -> (ref: CredentialRef, rtspPath: String?) {
         guard let remembered = LastConnection.load(from: defaults),
-              remembered.host.caseInsensitiveCompare(host) == .orderedSame,
-              remembered.account == account
+              remembered.host.caseInsensitiveCompare(request.host) == .orderedSame,
+              remembered.account == request.username
         else {
-            return nil
+            return (CredentialRef(), nil)
         }
-        return remembered.credentialRef
+        return (remembered.credentialRef, remembered.rtspPath)
     }
 
     /// Removes a password the camera has rejected.
