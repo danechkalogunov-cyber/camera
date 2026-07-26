@@ -15,14 +15,22 @@ import VigilProtocols
 
 @Suite struct AudioSpecificConfigTests {
 
-    /// docs/spec-rtp.md §15.5. Every one of these is a real Hikvision `config=` value.
+    /// docs/spec-rtp.md §15.5.
+    ///
+    /// **Spec defect.** The document's table gives `config=1210` one channel, and its bit
+    /// decomposition `00010 0100 0001 0000` is seventeen bits long for a sixteen-bit config. The
+    /// fields are `audioObjectType` (5), `samplingFrequencyIndex` (4), `channelConfiguration` (4),
+    /// so `0x1210` is bits `00010 0100 0010 000` — AAC-LC, 44 100 Hz, **stereo**. `0x1208` is the
+    /// mono form. The `1190` row, which the document gives two channels, decodes the same way and
+    /// agrees, which is what pins the field offsets.
     @Test func audioSpecificConfigParsesTheDocumentedHikvisionConfigs() throws {
         let cases: [(String, Int32, Int32, Int32)] = [
-            ("1210", 44_100, 1, 1024),
+            ("1210", 44_100, 2, 1024),
+            ("1208", 44_100, 1, 1024),
             ("1408", 16_000, 1, 1024),
             ("1588", 8_000, 1, 1024),
             ("1190", 48_000, 2, 1024),
-            ("121056E500", 44_100, 1, 1024),   // backward-compatible SBR: the core rate is kept
+            ("121056E500", 44_100, 2, 1024),   // backward-compatible SBR: the core rate is kept
         ]
         for (hex, rate, channels, frames) in cases {
             let format = try AudioSpecificConfig.parse(hex: hex)
@@ -43,7 +51,10 @@ import VigilProtocols
     /// Upper case, lower case and surrounding whitespace all parse; anything else is rejected.
     @Test func audioSpecificConfigHexParsingIsLenientButNotSloppy() throws {
         #expect(try AudioSpecificConfig.parse(hex: "1408").sampleRate == 16_000)
-        #expect(try AudioSpecificConfig.parse(hex: " 14a8 ").sampleRate == 16_000)
+        #expect(try AudioSpecificConfig.parse(hex: " 1408 ").sampleRate == 16_000)
+        // Same config in upper and lower case must give the same answer.
+        #expect(try AudioSpecificConfig.parse(hex: "121056E500").sampleRate
+            == AudioSpecificConfig.parse(hex: "121056e500").sampleRate)
         #expect(throws: RTPError.self) { try AudioSpecificConfig.parse(hex: "140") }
         #expect(throws: RTPError.self) { try AudioSpecificConfig.parse(hex: "14zz") }
         #expect(throws: RTPError.self) { try AudioSpecificConfig.parse(hex: "") }

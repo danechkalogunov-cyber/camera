@@ -71,7 +71,11 @@ import VigilProtocols
         #expect(decoded.truncated == false)
         #expect(decoded.elements.count == 1)
         #expect(decoded.elements.first?.id == 1)
-        #expect(Array(decoded.elements.first?.value ?? Data()) == [0xAB])
+        // RFC 8285 one-byte form: the low nibble is `length - 1`, so `0x12` is id 1 with a **three**
+        // byte value. docs/spec-rtp.md §3.3 states that rule correctly and then annotates this same
+        // vector as "id 1, value AB, then two padding bytes", which contradicts it — a one-byte
+        // value would need a `0x10` header byte. The RFC and the spec's own rule win.
+        #expect(Array(decoded.elements.first?.value ?? Data()) == [0xAB, 0x00, 0x00])
     }
 
     @Test func rtpPacketParsesEveryCSRCCountOffsetCorrectly() throws {

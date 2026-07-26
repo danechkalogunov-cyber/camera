@@ -247,6 +247,9 @@ public struct H265Depacketizer: Depacketizer {
         if isStart {
             startFragment(payload: payload, typeCode: typeCode, body: body, packet: packet,
                           context: context, at: now, into: &out)
+            // `S` and `E` both set is a one-packet fragment run. It is legal, and some NVR streams
+            // send it, so it must complete here rather than wait for a continuation.
+            if isEnd { completeFragment(into: &out) }
         } else {
             continueFragment(body: body, packet: packet, isEnd: isEnd, at: now, into: &out)
         }
@@ -362,7 +365,12 @@ public struct H265Depacketizer: Depacketizer {
             report(reason, at: now, into: &out)
             assembler.markAccessUnitCorrupt()
         }
-        if configuration.waitForKeyframeAfterLoss { assembler.armKeyframeGate() }
+        // A picture missing a slice is worse than a dropped picture, so the stream is held until
+        // the next clean restart point (docs/spec-rtp.md §5.4).
+        if configuration.waitForKeyframeAfterLoss {
+            assembler.armKeyframeGate()
+            out.events.append(.keyframeNeeded(reason: .packetLoss))
+        }
     }
 
     // MARK: - Private Helpers — classification

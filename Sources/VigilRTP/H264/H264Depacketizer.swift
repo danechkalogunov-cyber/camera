@@ -334,7 +334,12 @@ public struct H264Depacketizer: Depacketizer {
             report(reason, at: now, into: &out)
             assembler.markAccessUnitCorrupt()
         }
-        if configuration.waitForKeyframeAfterLoss { assembler.armKeyframeGate() }
+        // A picture missing a slice is worse than a dropped picture, so the stream is held until
+        // the next clean restart point (docs/spec-rtp.md §5.4).
+        if configuration.waitForKeyframeAfterLoss {
+            assembler.armKeyframeGate()
+            out.events.append(.keyframeNeeded(reason: .packetLoss))
+        }
     }
 
     // MARK: - Private Helpers — classification
