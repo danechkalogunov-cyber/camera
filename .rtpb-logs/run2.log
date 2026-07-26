@@ -49,3 +49,15 @@ Building for debugging...
 [57/96] Compiling VigilProtocolsTests ByteReaderTests.swift
 [58/97] Emitting module VigilRTPTests
 [59/97] Emitting module VigilBitstreamTests
+[61/97] Compiling VigilRTPTests RTPTrackReceiverTests.swift
+[62/97] Compiling VigilProtocolsTests ASCIITests.swift
+[63/97] Compiling VigilProtocolsTests Base64Tests.swift
+[64/97] Compiling VigilRTPTests H265DepacketizerTests.swift
+[65/98] Wrapping AST for VigilRTPTests for debugging
+[67/98] Compiling VigilProtocolsTests MACAddressTests.swift
+[68/98] Compiling VigilProtocolsTests MediaInstantTests.swift
+[69/98] Compiling VigilProtocolsTests MediaTimestampTests.swift
+[70/98] Compiling VigilProtocolsTests ParameterSetsTests.swift
+[71/98] Compiling VigilProtocolsTests PercentEncodingTests.swift
+[72/98] Compiling VigilProtocolsTests Placeholder.swift
+[73/98] Compiling VigilProtocolsTests RTPTimestampWraparoundTests.swift

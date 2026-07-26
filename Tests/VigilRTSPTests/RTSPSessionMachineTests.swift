@@ -90,7 +90,7 @@ private func kind(_ action: RTSPAction) -> String {
     case let .stateChanged(state): "stateChanged(\(stateName(state)))"
     case .log: "log"
     case .setReadBackpressure: "setReadBackpressure"
-    case let .fail(error): "fail(\(error))"
+    case let .fail(error): "fail(\(errorName(error)))"
     case let .closeTransport(reason): "closeTransport(\(reason.rawValue))"
     case .reconnect: "reconnect"
     }
@@ -104,6 +104,19 @@ private func timerName(_ id: RTSPTimerID) -> String {
     case .dataIdle: "dataIdle"
     case .sessionExpiry: "sessionExpiry"
     case .teardownGrace: "teardownGrace"
+    }
+}
+
+/// A stable short name for an error, so an assertion does not depend on how Swift happens to print
+/// a nested enum from another module.
+private func errorName(_ error: RTSPError) -> String {
+    switch error {
+    case let .timeout(id): "timeout(\(timerName(id)))"
+    case let .sdpParse(detail): "sdpParse(\(detail))"
+    case let .unexpectedStatus(code): "unexpectedStatus(\(code))"
+    case let .headerTooLarge(bytes): "headerTooLarge(\(bytes))"
+    case let .interleaveDesync(recovered): "interleaveDesync(\(recovered))"
+    default: "\(error)"
     }
 }
 

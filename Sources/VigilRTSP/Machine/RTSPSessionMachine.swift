@@ -484,6 +484,15 @@ public struct RTSPSessionMachine: Sendable {
                                                   contentBase: contentBase,
                                                   contentLocation: contentLocation,
                                                   requestURI: config.url)
+        // Hikvision's session-level `a=control` is the request URI plus a trailing slash, and its
+        // own wire trace (docs/spec-rtsp.md §11.1) then sends `PLAY` to the URI *without* the
+        // slash. Prefer the verbatim request URI whenever the two differ only by that slash: it is
+        // what the device logged at DESCRIBE time, and it keeps the digest URI identical across
+        // DESCRIBE, PLAY and TEARDOWN — a mismatch there is a mysterious 401 on PLAY alone.
+        let requestForm = config.url.requestLineForm
+        if aggregateURI == requestForm + "/" || requestForm == aggregateURI + "/" {
+            aggregateURI = requestForm
+        }
         var actions = buildTracks(from: parsed, contentBase: contentBase,
                                   contentLocation: contentLocation)
         actions.append(.log(.sdpParsed(trackCount: negotiatedTracks.count,
