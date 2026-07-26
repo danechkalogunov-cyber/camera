@@ -240,6 +240,9 @@ public struct H264Depacketizer: Depacketizer {
         if isStart {
             startFragment(indicator: indicator, typeCode: typeCode, body: body, packet: packet,
                           context: context, at: now, into: &out)
+            // `S` and `E` both set is a one-packet fragment run. It is legal, and some NVR streams
+            // send it, so it must complete here rather than wait for a continuation.
+            if isEnd { completeFragment(into: &out) }
         } else {
             continueFragment(body: body, packet: packet, isEnd: isEnd, at: now, into: &out)
         }
