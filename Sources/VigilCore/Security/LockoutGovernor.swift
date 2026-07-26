@@ -99,6 +99,17 @@ public actor LockoutGovernor {
         failures[Key(host: host, account: account)] ?? 0
     }
 
+    /// Declares this account spent, without counting up to it one 401 at a time.
+    ///
+    /// Used when a session machine reports `RTSPError.authRejected`: that error is already the
+    /// verdict of `RTSPAuthenticator`'s own two-strike cap, so the attempts have been spent and
+    /// counting a single failure here would under-report by one and permit another connection.
+    public func block(host: String, account: String, reason: String) {
+        failures[Key(host: host, account: account)] = Self.maxCredentialedFailures
+        logger.warning(.core, "authentication blocked for this account",
+                       ["host": Redact.host(host, salt: 0), "reason": reason])
+    }
+
     /// True when no further authenticated request may be sent for this account.
     ///
     /// The caller must check this **before building a connection**, not after a failure: the point

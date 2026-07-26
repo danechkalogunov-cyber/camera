@@ -190,41 +190,64 @@ extension ConnectDiagnosis {
     /// here is assembled from fragments (§14.2, "Never concatenate").
     @MainActor
     package var message: Text {
+        // Each message is one multi-line *literal* with `\` continuations, not two literals joined
+        // with `+`: `LocalizedStringKey` is expressible by string interpolation, so a concatenated
+        // `String` would silently take `Text`'s non-localising initialiser instead.
         switch self {
         case .notOnThisNetwork(let host):
-            return Text("No response from \(host). Check that it's powered on and on the same "
-                        + "network as this Mac.", bundle: .module)
+            return Text("""
+                No response from \(host). Check that it's powered on and on the same network \
+                as this Mac.
+                """, bundle: .module)
         case .cameraNotActivated(let host):
-            return Text("\(host) is brand new and has no password yet. Set one now to start "
-                        + "using it.", bundle: .module)
+            return Text("""
+                \(host) is brand new and has no password yet. Set one now to start using it.
+                """, bundle: .module)
         case .wrongPassword(let host):
-            return Text("\(host) rejected this password. Check it and try again — too many "
-                        + "attempts will lock the device.", bundle: .module)
+            return Text("""
+                \(host) rejected this password. Check it and try again — too many attempts \
+                will lock the device.
+                """, bundle: .module)
         case .accountLocked(let host, let minutes):
             if let minutes {
-                return Text("\(host) locked this account after too many failed sign-ins. It "
-                            + "usually unlocks in about \(minutes) minutes.", bundle: .module)
+                return Text("""
+                    \(host) locked this account after too many failed sign-ins. It usually \
+                    unlocks in about \(minutes) minutes.
+                    """, bundle: .module)
             }
-            return Text("\(host) locked this account after too many failed sign-ins. It unlocks "
-                        + "on its own, or immediately if you reboot the camera.", bundle: .module)
+            return Text("""
+                \(host) locked this account after too many failed sign-ins. It unlocks on its \
+                own, or immediately if you reboot the camera.
+                """, bundle: .module)
         case .rtspPortClosed(let host, let httpPort, let rtspPort):
-            return Text("Vigil reached \(host) on port \(httpPort), but RTSP port \(rtspPort) "
-                        + "refused the connection.", bundle: .module)
+            return Text("""
+                Vigil reached \(host) on port \(httpPort), but RTSP port \(rtspPort) refused \
+                the connection.
+                """, bundle: .module)
         case .notHikvisionDevice(let host):
-            return Text("\(host) answered, but it doesn't speak ISAPI. Vigil can still try "
-                        + "ONVIF, with fewer features.", bundle: .module)
+            return Text("""
+                \(host) answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, \
+                with fewer features.
+                """, bundle: .module)
         case .codecUnsupported(_, let codec):
-            return Text("This camera streams \(codec). Vigil plays H.265, H.264 and MJPEG.",
-                        bundle: .module)
+            return Text("""
+                This camera streams \(codec). Vigil plays H.265, H.264 and MJPEG.
+                """, bundle: .module)
         case .noPictureUDPBlocked(let host):
-            return Text("\(host) started the stream but sent no video. Something on the network "
-                        + "is blocking UDP.", bundle: .module)
+            return Text("""
+                \(host) started the stream but sent no video. Something on the network is \
+                blocking UDP.
+                """, bundle: .module)
         case .pictureStalls(let host):
-            return Text("\(host) is sending data but no complete picture yet. Vigil has asked it "
-                        + "for a new keyframe.", bundle: .module)
+            return Text("""
+                \(host) is sending data but no complete picture yet. Vigil has asked it for a \
+                new keyframe.
+                """, bundle: .module)
         case .undiagnosed(let host, _):
-            return Text("\(host) answered, but not in a way Vigil recognises. The device's own "
-                        + "reply is in the details below.", bundle: .module)
+            return Text("""
+                \(host) answered, but not in a way Vigil recognises. The device's own reply is \
+                in the details below.
+                """, bundle: .module)
         }
     }
 

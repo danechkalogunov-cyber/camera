@@ -72,12 +72,17 @@ final class AppSessionModel {
     /// The controller's last reported state, or `nil` before the first connect attempt.
     private(set) var streamState: StreamState?
 
-    /// `true` once a decoded frame has reached the display layer. Drives the removal of the
-    /// connecting chrome, and is the R1.7 acceptance signal.
-    private(set) var isShowingPicture: Bool = false
+    /// `true` once the first complete access unit has been assembled from RTP.
+    ///
+    /// This is the earliest honest "the camera is sending video" signal available at this layer:
+    /// `StreamEvent.firstFrameAssembled` is named for what the controller can observe, and the
+    /// decoder reports the picture separately (see the case's own documentation in
+    /// `VigilCore/Streaming/StreamEvent.swift`). A view that needs the exact moment pixels appear
+    /// should read `TileRenderState.isReceivingFrames` from its own tile instead of this.
+    private(set) var isReceivingMedia: Bool = false
 
-    /// Time from `start()` to the first decoded frame, as reported by the controller. Kept for the
-    /// R1.7 measurement and written to the log; the UI may show it and may ignore it.
+    /// Time from `start()` to the first assembled access unit, as reported by the controller. Kept
+    /// for the R1.7 measurement and written to the log; the UI may show it and may ignore it.
     private(set) var firstFrameLatency: Duration?
 
     /// One sentence naming what went wrong, or `nil` when nothing is wrong.
@@ -334,12 +339,14 @@ final class AppSessionModel {
         switch event {
         case .stateChanged(_, let to, let detail):
             streamState = to
-            statusLine = isShowingPicture ? "" : (detail?.narration ?? Self.narration(for: to))
-            if let underlying = detail?.underlying {
+            // `StateDetail` is not optional in the landed enum, and its narration already falls
+            // back to `StreamState.narration` for a plain transition (`StateDetail.plain`).
+            statusLine = isReceivingMedia && to.isActive ? "" : detail.narration
+            if let underlying = detail.underlying {
                 report(streamError: underlying)
             }
-        case .firstFrameDecoded(let afterStart):
-            isShowingPicture = true
+        case .firstFrameAssembled(let afterStart):
+            isReceivingMedia = true
             isConnecting = false
             firstFrameLatency = afterStart
             statusLine = ""
@@ -352,7 +359,8 @@ final class AppSessionModel {
                 LastConnection(host: host, account: account, credentialRef: activeRef)
                     .save(to: defaults)
             }
-            dependencies.logger.info(.app, "first frame after \(afterStart)")
+            // The R1.7 number, in the log where the acceptance checklist can read it.
+            dependencies.logger.info(.app, "first frame assembled after \(afterStart)")
         case .error(let error, let isFatal):
             report(streamError: error)
             if error.code.forbidsColdRetry {
@@ -410,20 +418,12 @@ final class AppSessionModel {
         }
     }
 
-    /// Fallback narration for the states the controller has not described for us.
+    /// What the status line says between pressing Return and the controller's first transition.
     ///
-    /// `StateDetail.narration` is the authority (docs/spec-core.md §7.3) and is localized; this
-    /// exists only so the status line is never blank while something is happening.
-    private static func narration(for state: StreamState?) -> String {
-        guard let state else { return "Connecting…" }
-        switch state {
-        case .playing: return "Waiting for the first keyframe…"
-        case .reconnecting: return "Reconnecting…"
-        case .failed: return "Not connected."
-        case .stopped: return "Stopped."
-        default: return "Connecting…"
-        }
-    }
+    /// Every later sentence comes from `StateDetail.narration`, which is the authority
+    /// (docs/spec-core.md §7.3) and is localized. This one exists only so the line is never blank
+    /// while something is happening.
+    private static let openingNarration = StreamState.connecting.narration
 }
 
 #endif  // os(macOS)
