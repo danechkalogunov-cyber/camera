@@ -1425,4 +1425,1215 @@ If a GOP is longer than the ring, decode only every *n*-th frame where
 timing, no `DisplayImmediately`), which `AVAssetWriter` muxes with passthrough. The tap is
 lazily created and adds < 0.1 % CPU.
 
-<!-- PART2 -->
+---
+
+## 12. Decode-budget scheduler
+
+### 12.1 Why
+
+macOS has a finite number of concurrent hardware decode sessions (the practical limit on an M1 is
+around 20–24 simultaneous `VTDecompressionSession`s before `kVTCouldNotCreateInstanceErr`, and the
+media engine saturates on throughput well before that). A 16-up wall plus sidebar previews plus a
+playback window plus a snapshot easily exceeds it. Without central admission the failure mode is
+random: the 17th tile shows black and the log shows `-12907`. With it, the failure mode is designed:
+the least important tile degrades to a JPEG refresh.
+
+### 12.2 Cost model
+
+Cost is expressed in **decode units (DU)**, normalised so that 1080p30 H.264 = 1.00 DU:
+
+```
+DU = (width × height × fps) / (1920 × 1080 × 30) × codecWeight × modeWeight
+```
+
+| Factor | Value |
+|---|---|
+| `codecWeight` H.264 8-bit | 1.00 |
+| `codecWeight` H.265 8-bit | 1.35 |
+| `codecWeight` H.265 Main10 | 1.70 |
+| `codecWeight` MJPEG (software) | 0.40 (CPU only, does not consume a hardware slot) |
+| `modeWeight` full decode | 1.00 |
+| `modeWeight` fps-capped (15 fps ceiling on a 30 fps stream) | 0.55 (not 0.5 — reference frames are still decoded) |
+| `modeWeight` keyframe-only | 0.12 |
+| `modeWeight` downscaled output (§7.4) | +0.05 additive (the scaler pass) |
+| `modeWeight` reverse playback | 6.00 (whole-GOP bursts + memory) |
+
+Worked examples:
+
+| Stream | DU |
+|---|---|
+| 704×576 @ 25 H.264 (typical Hikvision substream) | 0.16 |
+| 1280×720 @ 25 H.264 | 0.37 |
+| 1920×1080 @ 30 H.264 | 1.00 |
+| 1920×1080 @ 30 H.265 | 1.35 |
+| 2688×1520 @ 25 H.265 (4 MP main) | 2.37 |
+| 3840×2160 @ 30 H.265 Main10 (8 MP) | 6.80 |
+| 16 × 704×576 @ 25 H.264 substreams | 2.56 |
+| 16 × 1920×1080 @ 30 H.264 substreams | 16.0 |
+
+### 12.3 Machine budget
+
+Seeded from a static table, then **calibrated at runtime**.
+
+```swift
+struct MachineClass: Sendable {
+    let name: String
+    let budgetDU: Double
+    let maxSessions: Int
+    let hasHardwareHEVC: Bool
+    let hasHardware10bit: Bool
+}
+```
+
+| Detection | Class | budget DU | max sessions |
+|---|---|---|---|
+| `hw.optional.arm64 == 1`, `hw.model` contains `Mac14,13`/`Mac14,14`/`Mac15,x Ultra`/two media engines | Apple silicon Max/Ultra | 48 | 32 |
+| Apple silicon, `hw.perflevel0.physicalcpu >= 6` (Pro) | Apple silicon Pro | 32 | 28 |
+| Apple silicon, base M1/M2/M3/M4 | Apple silicon base | 20 | 24 |
+| Intel, HEVC probe session with `RequireHardware` succeeds (T2 or Kaby Lake+) | Intel + Quick Sync | 12 | 16 |
+| Intel, H.264 hardware only | Intel legacy | 6 | 8 |
+| Both probe sessions fail (VM, stripped GPU) | software only | 3 | 4 |
+
+Detection code:
+
+```swift
+func sysctlString(_ name: String) -> String? {
+    var size = 0
+    guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
+    var buf = [CChar](repeating: 0, count: size)
+    guard sysctlbyname(name, &buf, &size, nil, 0) == 0 else { return nil }
+    return String(cString: buf)
+}
+func sysctlInt(_ name: String) -> Int? {
+    var v: Int64 = 0; var size = MemoryLayout<Int64>.size
+    guard sysctlbyname(name, &v, &size, nil, 0) == 0 else { return nil }
+    return Int(v)
+}
+// hw.model, machdep.cpu.brand_string, hw.optional.arm64,
+// hw.perflevel0.physicalcpu, hw.perflevel1.physicalcpu, hw.memsize
+```
+
+Never gate features on the static table alone — it goes stale with every new Mac. The table is a
+**seed**; the closed loop is authoritative:
+
+| Observation (10 s window, aggregated over all streams) | Adjustment |
+|---|---|
+| `decodeLateRatio > 2 %` **or** any `kVTCouldNotCreateInstanceErr` | `budget *= 0.90`, `maxSessions -= 1` (floor 2 / 2 DU) |
+| `decodeLateRatio < 0.2 %` **and** at least one request is queued for admission | `budget *= 1.05` (ceiling 1.5 × seed) |
+| `thermalState` change | apply the §16.3 multiplier (multiplicative, not persisted) |
+
+`decodeLateRatio` = frames whose decode wall time exceeded their duration, over frames submitted.
+Calibration state persists in `~/Library/Application Support/Vigil/decode-budget.json`
+(`{"model":"Mac14,2","budgetDU":19.4,"maxSessions":23,"version":1}`) so the second launch starts
+calibrated. `VigilCore` owns the file write; `VigilVideo` supplies the value via
+`DecodeBudget.calibration`.
+
+### 12.4 Admission
+
+```swift
+@globalActor
+public actor DecodeBudget {
+    public static let shared = DecodeBudget()
+
+    public struct Request: Sendable {
+        public let streamID: StreamIdentifier
+        public let cost: DecodeCost
+        public let priority: TilePriority
+        public let isPreemptible: Bool          // false for the focused tile and for recording
+    }
+    public struct Grant: Sendable, Identifiable { public let id: UUID; public let cost: DecodeCost }
+
+    public func admit(_ r: Request) async -> AdmissionResult
+    public func update(_ id: Grant.ID, cost: DecodeCost, priority: TilePriority) async
+    public func release(_ id: Grant.ID) async
+    public func reserveTransient(du: Double, for: Duration) async -> Bool   // §7.8 strategy switch
+    public var changes: AsyncStream<BudgetChange> { get }   // demotion orders to pipelines
+    public func snapshot() async -> BudgetSnapshot          // for the diagnostics panel
+}
+
+public enum AdmissionResult: Sendable {
+    case granted(DecodeBudget.Grant)
+    case grantedDegraded(DecodeBudget.Grant, DecodeMode)   // admitted at a cheaper mode
+    case denied(reason: DenialReason)                      // caller must use JPEG poll or pause
+}
+
+public enum TilePriority: Int, Comparable, Sendable {
+    case focused = 5          // the tile with keyboard focus / fullscreen / 1-up
+    case visibleLarge = 4     // on screen, ≥ 640 backing px wide
+    case visibleSmall = 3     // on screen, smaller
+    case recording = 4        // must not be preempted while a clip is being written
+    case sidebarThumbnail = 1
+    case offscreen = 0
+}
+```
+
+Algorithm:
+
+1. `headroom = budget × 0.92 - committed` (8 % kept free: 2 DU minimum for transient strategy
+   switches and one-shot snapshot sessions).
+2. If `cost ≤ headroom` and `sessions < maxSessions` → `granted`.
+3. Else try the next cheaper `DecodeMode` for this request (full → fpsCapped → keyframesOnly) and
+   re-test → `grantedDegraded`.
+4. Else preempt: sort existing grants by `(priority, -cost, lastPromotedAt)` ascending; for each
+   preemptible grant with strictly lower priority, demote it one mode (emitting
+   `BudgetChange.demote(streamID:to:)`), recompute headroom, and retry. Never demote below
+   `keyframesOnly` by preemption — the last step (to `jpegPoll`) is only taken for the tile's *own*
+   size policy, so a large visible tile never silently becomes a still image because of an offscreen
+   one.
+5. Else `denied(.insufficientBudget)`. Caller falls back to JPEG poll (visible) or paused (not).
+
+Promotion is the mirror image and is rate-limited to one promotion per stream per 3 s, with a
+minimum dwell of 5 s in the current mode, to stop wall-wide oscillation. Every admission decision
+is logged once at `.info` with the resulting `BudgetSnapshot` (committed DU, session count, per-tile
+mode) — this log is the first thing to look at in a "why is tile 12 a still image" bug report.
+
+### 12.5 Tile policy table (normative — D6)
+
+Sizes are the tile's **backing-store pixel width** (`points × backingScaleFactor`), because that is
+what actually costs bandwidth. Aspect is assumed 16:9; for 4:3 channels use the width unchanged.
+
+```swift
+public enum DecodeMode: Int, Comparable, Sendable {
+    case paused = 0, jpegPoll = 1, keyframesOnly = 2, fpsCapped = 3, full = 4
+}
+public enum StreamChoice: Sendable { case main, sub, third, none }
+```
+
+| Tile backing width | Layout context | Stream | Mode | fps ceiling | Notes |
+|---|---|---|---|---|---|
+| ≥ 1600 | 1-up or 2-up, focused | `main` | `full` | native | full quality; HEVC and 4 K allowed if budget permits |
+| 960 … 1599 | any | `main` if ≤ 4 tiles else `sub` | `full` | native | |
+| 640 … 959 | any | `sub` | `full` | native | the common 16-up case on a 27″ display |
+| 384 … 639 | any | `sub` | `fpsCapped` | 15 | `ReducedFrameDelivery = 0.5`; downscale-on-decode active |
+| 224 … 383 | any | `sub` | `keyframesOnly` | ~0.5–2 | `OnlyTheseFrames = KeyFrames`; suggest the user set the camera I-frame interval to ≤ 25 for a nicer refresh |
+| < 224 | grid tile | `none` | `jpegPoll` | — | ISAPI JPEG every **2.0 s**, requested at 320×180 |
+| any | sidebar / camera-list thumbnail | `none` | `jpegPoll` | — | JPEG every **5.0 s**, requested at 320×180 |
+| any | scrolled out of a visible scroll view | `none` | `jpegPoll` | — | JPEG every **15.0 s** |
+| any | window occluded / minimised / on another Space | `none` | `paused` | — | no decode, no poll (§12.7) |
+| any | tile hovered or clicked (any size) | as above | promote one step for 10 s | | "peek" promotion, so hovering a JPEG tile gives live video within ~400 ms |
+
+JPEG request sizing: round the tile's backing width up to the next of `{320, 640, 1280}` and request
+`GET /ISAPI/Streaming/channels/{id}/picture?videoResolutionWidth=W&videoResolutionHeight=H`.
+Per-device JPEG concurrency is 1 and per-device rate is ≤ 1 request/s (Hikvision devices serialise
+snapshot generation and a burst starves the RTSP server); the poller therefore round-robins across
+that device's tiles and stretches the nominal interval when a device has many polled tiles:
+`effectiveInterval = max(nominalInterval, pollingTileCount × 1.0 s)`.
+
+Jitter every poll by ±15 % to avoid 16 tiles hitting one NVR on the same tick.
+
+Why 224 px for keyframes-only: below ~224 px a 1080p substream is downscaled more than 3:1, so
+temporal detail is nearly invisible while decode cost is unchanged; and below 224 px a 2 s JPEG
+refresh is visually indistinguishable from 15 fps for surveillance content at normal viewing
+distance. These two thresholds (224, 384) were chosen so that the standard layouts land cleanly:
+
+| Layout | 1440 pt window (13″ MBA, ×2) | 2560 pt window (27″, ×2) |
+|---|---|---|
+| 4-up (2×2) | 1440 px → `main`, full | 2560 px → `main`, full |
+| 9-up (3×3) | 960 px → `sub`/`full` | 1706 px → `main`, full |
+| 16-up (4×4) | 720 px → `sub`, `full` | 1280 px → `sub`, `full` |
+| 36-up (6×6) | 480 px → `sub`, `fpsCapped` 15 | 853 px → `sub`, `full` |
+| 64-up (8×8) | 360 px → `sub`, `fpsCapped` 15 | 640 px → `sub`, `full` |
+| 64-up in a 720 pt side panel | 180 px → `jpegPoll` 2 s | 180 px → `jpegPoll` 2 s |
+
+So on Apple silicon the headline case — **16-up 1080p substreams — is always full decode**, which
+is exactly what the product bar demands (16 × 1080p30 H.264 sub = 16.0 DU against a base-M1 budget
+of 20 DU, at 9–14 % total CPU). The degraded modes exist for 36/64-up and for Intel.
+
+```swift
+public enum TilePolicy {
+    public static func mode(for tile: TileContext) -> (StreamChoice, DecodeMode, Int?, TimeInterval?)
+}
+public struct TileContext: Sendable {
+    public var backingWidth: Int
+    public var tileCount: Int
+    public var isFocused: Bool
+    public var isSidebarThumbnail: Bool
+    public var isScrolledOffscreen: Bool
+    public var windowIsOccluded: Bool
+    public var isHoveredRecently: Bool
+    public var deviceSupportsSubstream: Bool     // some analog channels have no substream
+}
+```
+
+If a camera has no substream (`deviceSupportsSubstream == false`), a tile that wanted `sub` gets
+`main` at `fpsCapped`/`keyframesOnly` instead, and its cost is recomputed — a single 4 MP main stream
+at keyframes-only is 0.28 DU, still cheap.
+
+### 12.6 MJPEG channels
+
+Some analog-encoder channels only offer MJPEG. MJPEG is decoded with
+`CGImageSourceCreateWithData` + `CGImageSourceCreateImageAtIndex` (or `CIImage(data:)` for the
+Metal path) on a dedicated `TaskGroup` with concurrency 2 per stream; it never creates a
+`VTDecompressionSession` and never consumes a hardware slot, but it does consume CPU budget
+(0.40 DU-equivalent, tracked separately as `cpuDU` with its own ceiling of
+`activeProcessorCount × 0.5`). Frame rate is capped at 10 fps regardless of tile size.
+
+### 12.7 Pausing for occlusion, minimisation and Spaces
+
+Observed on `@MainActor` by `OcclusionMonitor`:
+
+```swift
+NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, …)
+NotificationCenter.default.addObserver(forName: NSWindow.didMiniaturizeNotification, …)
+NotificationCenter.default.addObserver(forName: NSWindow.didDeminiaturizeNotification, …)
+NotificationCenter.default.addObserver(forName: NSApplication.didHideNotification, …)
+NotificationCenter.default.addObserver(forName: NSWorkspace.shared.notificationCenter
+                                             .didActivateApplicationNotification, …)   // Space change proxy
+let visible = window.occlusionState.contains(.visible)
+```
+
+The escalation ladder (per stream, timers reset the moment the window becomes visible):
+
+| Time occluded | Action | Cost freed | Resume cost |
+|---|---|---|---|
+| 0 s | stop calling `sink.present`; keep decoding for 1 s so a quick Cmd-Tab back is instantaneous | 0 | 0 ms |
+| 1 s | stop submitting AUs to the decoder; `awaitingKeyframe = true`; keep the session and the RTSP stream | ~90 % of GPU/media engine | ~1 GOP (≤ 2 s) or instant with an IDR request |
+| 30 s | `VTDecompressionSessionInvalidate`; release the `DecodeBudget` grant; keep the RTSP session (TCP keepalive only, packets discarded after depacketize) | the hardware slot | session create (~10 ms) + IDR |
+| 5 min | tell `VigilCore` to tear the RTSP session down entirely (`.event(.idleTeardownAdvised)`) | socket + camera-side session | full reconnect (0.5–2 s) |
+
+On resume: request an IDR immediately, and simultaneously fire **one** ISAPI JPEG so the tile shows
+a current image within ~150 ms instead of waiting for the keyframe. This "JPEG bridge" is the
+single most noticeable polish detail in the whole module — implement it.
+
+`requiresFlushToResumeDecoding` (§6.5) frequently becomes `true` exactly here, so the resume path
+must call `rendering.flush()` before enqueueing.
+
+---
+
+## 13. Audio playback
+
+### 13.1 Graph
+
+One `AVAudioEngine` for the whole app (`AudioPlaybackEngine`, an actor with a `@MainActor`-free
+interior). Per camera:
+
+```
+AVAudioSourceNode(format: 48k/1ch/Float32, renderBlock:)   ← AudioRingBuffer ← decoder
+        │
+        ├── AVAudioMixerNode  (per-camera volume, pan, mute ramp)
+        │
+        └──▶ engine.mainMixerNode ──▶ engine.outputNode
+```
+
+```swift
+let engineFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                 sampleRate: 48_000, channels: 1, interleaved: false)!
+let source = AVAudioSourceNode(format: engineFormat) { silence, timestamp, frameCount, audioBufferList in
+    // REALTIME THREAD. No allocation, no locks that can block, no Swift runtime calls that allocate,
+    // no actor access, no os_log with interpolation.
+    let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
+    guard let out = abl[0].mData?.assumingMemoryBound(to: Float.self) else { return noErr }
+    let got = ring.read(into: out, frames: Int(frameCount))     // lock-free SPSC
+    if got < Int(frameCount) {
+        // Underrun: fade the tail over the last 64 frames, then zero. Never emit a click.
+        Ring.fadeOutAndZero(out, from: got, to: Int(frameCount))
+        underrunFlag.store(true, ordering: .relaxed)            // Atomics via os_unfair_lock-free flag
+    }
+    return noErr
+}
+engine.attach(source); engine.attach(mixer)
+engine.connect(source, to: mixer, format: engineFormat)
+engine.connect(mixer, to: engine.mainMixerNode, format: engineFormat)
+```
+
+Engine lifecycle: started lazily on the first unmuted stream; stopped 5 s after the last one goes
+silent (saves ~1.5 % CPU and lets the audio hardware idle). `AVAudioEngineConfigurationChange`
+notification (device change, sample-rate change, headphones) → stop, rebuild connections, restart,
+reprime every ring. Never assume the output sample rate; always convert to 48 kHz internally and let
+the engine's output node resample if the device runs at 44.1 kHz.
+
+### 13.2 AAC decode (AudioToolbox `AudioConverter`)
+
+Input: `EncodedAudioFrame` from `VigilRTP` (RFC 3640 AAC-hbr), one or more raw AAC access units per
+RTP packet, plus the `AudioSpecificConfig` bytes derived from the SDP `config=` hex string.
+
+```swift
+final class AACDecoder {
+    private var converter: AudioConverterRef?
+    private var inASBD = AudioStreamBasicDescription()
+    private var outASBD = AudioStreamBasicDescription()
+
+    init(asc: Data, channels: UInt32, sampleRate: Double) throws {
+        inASBD.mSampleRate = sampleRate
+        inASBD.mFormatID = kAudioFormatMPEG4AAC
+        inASBD.mFormatFlags = 0
+        inASBD.mChannelsPerFrame = channels
+        inASBD.mFramesPerPacket = 1024              // 2048 for AAC-LD/ELD; 960 for some configs
+        inASBD.mBytesPerPacket = 0                  // variable
+        inASBD.mBytesPerFrame = 0
+        inASBD.mBitsPerChannel = 0
+
+        outASBD.mSampleRate = sampleRate            // decode at native rate; resample in §13.3
+        outASBD.mFormatID = kAudioFormatLinearPCM
+        outASBD.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked
+        outASBD.mChannelsPerFrame = channels
+        outASBD.mFramesPerPacket = 1
+        outASBD.mBytesPerPacket = 4 * channels
+        outASBD.mBytesPerFrame = 4 * channels
+        outASBD.mBitsPerChannel = 32
+
+        var conv: AudioConverterRef?
+        let st = AudioConverterNew(&inASBD, &outASBD, &conv)
+        guard st == noErr, let c = conv else { throw AudioError.converterCreate(st) }
+        converter = c
+        // The magic cookie IS the AudioSpecificConfig for MPEG-4 AAC.
+        try asc.withUnsafeBytes { raw in
+            let st = AudioConverterSetProperty(c, kAudioConverterDecompressionMagicCookie,
+                                              UInt32(raw.count), raw.baseAddress!)
+            guard st == noErr else { throw AudioError.magicCookie(st) }
+        }
+    }
+
+    /// Decodes one access unit into interleaved Float32. Returns frames produced.
+    func decode(_ au: Data, into out: UnsafeMutablePointer<Float>, capacityFrames: Int) throws -> Int
+}
+```
+
+`decode` uses `AudioConverterFillComplexBuffer` with an input proc that hands over exactly one
+packet and then reports `0` packets:
+
+```swift
+let inputProc: AudioConverterComplexInputDataProc = { _, ioNumberDataPackets, ioData, outPD, userData in
+    let ctx = userData!.assumingMemoryBound(to: FeedContext.self)
+    if ctx.pointee.consumed { ioNumberDataPackets.pointee = 0; return noErr }
+    ctx.pointee.consumed = true
+    ioNumberDataPackets.pointee = 1
+    ioData.pointee.mNumberBuffers = 1
+    ioData.pointee.mBuffers.mData = UnsafeMutableRawPointer(mutating: ctx.pointee.base)
+    ioData.pointee.mBuffers.mDataByteSize = UInt32(ctx.pointee.count)
+    ioData.pointee.mBuffers.mNumberChannels = ctx.pointee.channels
+    ctx.pointee.packetDesc = AudioStreamPacketDescription(
+        mStartOffset: 0, mVariableFramesInPacket: 0, mDataByteSize: UInt32(ctx.pointee.count))
+    outPD?.pointee = withUnsafeMutablePointer(to: &ctx.pointee.packetDesc) { $0 }
+    return noErr
+}
+```
+
+Notes: `AudioConverterFillComplexBuffer` returning `noErr` with `ioOutputDataPacketSize == 0` means
+"needs more input" — that is normal for the first call after a reset. On
+`kAudioConverterErr_*`/`-50` reset with `AudioConverterReset` and drop 1 AU. Multi-AU RTP packets are
+decoded in a loop; the RFC 3640 AU-header parsing (`AU-headers-length`, `sizeLength=13`,
+`indexLength=3`, `indexDeltaLength=3`) belongs to `VigilRTP`.
+
+We do **not** use `AVAudioConverter`: the compressed-buffer packet-description plumbing for
+multi-AU RTP payloads and the inability to set `kAudioConverterPrimeMethod` make it a worse fit,
+and `AudioConverterRef` is what `AVAudioConverter` wraps anyway.
+
+Hikvision AAC is almost always 16 kHz mono (`config=1408` → AAC-LC, 16 kHz, mono) or 8 kHz mono
+(`config=1588`). ADTS wrapping is never needed for `AudioConverter` — pass raw AUs with the magic
+cookie.
+
+### 13.3 G.711 (and G.726)
+
+```swift
+enum G711 {
+    /// 256-entry decode tables, built once at type-initialisation time.
+    static let uLawToLinear: [Int16] = (0..<256).map { decodeMuLaw(UInt8($0)) }
+    static let aLawToLinear: [Int16] = (0..<256).map { decodeALaw(UInt8($0)) }
+
+    static func decodeMuLaw(_ u: UInt8) -> Int16 {
+        let x = ~u
+        let sign = (x & 0x80) != 0
+        let exponent = Int((x >> 4) & 0x07)
+        let mantissa = Int(x & 0x0F)
+        var sample = ((mantissa << 1) + 33) << exponent - 33   // bias 33, 14-bit
+        sample <<= 2                                            // scale to 16-bit
+        return Int16(clamping: sign ? -sample : sample)
+    }
+
+    static func decodeALaw(_ a: UInt8) -> Int16 {
+        let x = a ^ 0x55
+        let sign = (x & 0x80) != 0
+        let exponent = Int((x >> 4) & 0x07)
+        let mantissa = Int(x & 0x0F)
+        var sample = exponent == 0 ? (mantissa << 1) + 1 : ((mantissa << 1) + 33) << (exponent - 1)
+        sample <<= 3
+        return Int16(clamping: sign ? -sample : sample)
+    }
+
+    /// Hot path: byte → Float in one pass, no branches.
+    static func decode(_ bytes: UnsafeRawBufferPointer, law: Law,
+                       into out: UnsafeMutablePointer<Float>) {
+        let table = law == .aLaw ? aLawToLinear : uLawToLinear
+        table.withUnsafeBufferPointer { t in
+            for i in 0..<bytes.count { out[i] = Float(t[Int(bytes[i])]) * (1.0 / 32768.0) }
+        }
+    }
+}
+```
+
+Payload types: `PCMU` = 0 (μ-law, 8 kHz), `PCMA` = 8 (A-law, 8 kHz). Hikvision two-way audio also
+offers G.726 (16/24/32/40 kbit/s ADPCM); implement the 32 kbit/s (4-bit) variant only, per
+ITU-T G.726 §4, as `G726Codec` with the standard quantiser tables — it is used by a minority of
+older DS-2CD2 models. If a device offers only G.726 at a rate we do not implement, talkback is
+disabled with a clear message and *playback* falls back to G.711 (every device offers it).
+
+Cost: 8 kHz G.711 decode is ~0.02 % of one core per stream. Resample 8 kHz → 48 kHz with a 6×
+linear-phase FIR (31 taps, designed offline, coefficients in the source) applied via
+`vDSP_desamp`/`vDSP_conv`; linear interpolation is audibly harsh on speech and is not acceptable at
+this product bar.
+
+### 13.4 Ring buffer and drift
+
+```swift
+final class AudioRingBuffer: @unchecked Sendable {   // SPSC: writer = decode task, reader = RT thread
+    init(capacityFrames: Int)                        // 48_000 × 0.4 = 19_200 frames (400 ms)
+    func write(_ src: UnsafePointer<Float>, frames: Int) -> Int   // returns frames written
+    func read(into dst: UnsafeMutablePointer<Float>, frames: Int) -> Int
+    var availableFrames: Int { get }                 // relaxed atomic load
+}
+```
+
+| Parameter | Value |
+|---|---|
+| Capacity | 400 ms |
+| Prime target (frames buffered before the source node starts emitting) | 120 ms |
+| Minimum before start | 60 ms |
+| Overrun trim | if `available > 300 ms` for 2 s, discard the oldest 40 ms (with a 5 ms cross-fade) |
+| Underrun response | fade to silence over 64 frames; count it |
+| Adaptive prime | 3 underruns in 5 s → prime target += 20 ms, cap 240 ms; 30 s clean → -10 ms, floor 80 ms |
+| Long-term drift | camera clock vs. output clock differ by 10–200 ppm. Correct by dropping/duplicating one 10 ms block whenever the smoothed depth drifts 30 ms from target. No resampler PLL — inaudible for speech, and far simpler. |
+
+### 13.5 Mute, solo and focus (D8)
+
+```swift
+public actor AudioRouter {
+    public func setFocused(_ id: StreamIdentifier?) async
+    public func setUserMuted(_ id: StreamIdentifier, _ muted: Bool) async
+    public func setSolo(_ id: StreamIdentifier?) async
+    public func setVolume(_ id: StreamIdentifier, _ gain: Float) async  // 0...1, applied as dB
+    public func setFollowFocus(_ enabled: Bool) async                   // default true
+    public var audible: Set<StreamIdentifier> { get async }
+}
+```
+
+| Situation | Result |
+|---|---|
+| `followFocus == true` (default) | exactly the focused camera is audible; every other stream's audio RTP is depacketized but **not decoded** (saves the AAC decode) |
+| User explicitly unmutes a non-focused camera | it stays audible when focus moves; at most **4** simultaneously unmuted (the 5th unmute mutes the least-recently-unmuted, with a toast) |
+| `solo(x)` | `x` audible, everything else muted, previous mute states remembered and restored on `solo(nil)` |
+| Focus change | 100 ms equal-power fade-out on the old, 100 ms fade-in on the new (`AVAudioMixerNode.volume` ramped over 6 ticks; never a hard cut) |
+| More than one audible | each mixer gets `-3 dB × (n - 1)` headroom so summing cannot clip |
+| System output muted / no output device | engine paused, decoders released |
+| Talkback active | see §14 |
+
+An audio stream that is not audible has its `AACDecoder` torn down after 5 s (it costs 0.3 MB and a
+little CPU) and rebuilt on unmute; the first ~200 ms after unmute may be silent while the ring
+primes. That is the correct trade.
+
+### 13.6 Audio statistics
+
+`AudioStatistics` (per stream): `sampleRate`, `channels`, `codec`, `ringDepthMS` (EWMA α = 0.2),
+`underruns`, `overruns`, `decodeErrors`, `peakLevel` and `rmsLevel` over the last 100 ms (computed
+with `vDSP_maxmgv` / `vDSP_rmsqv` in the decode task, never on the RT thread) — `VigilUI` draws the
+level meter from these.
+
+### 13.7 Recorded-playback audio
+
+Recorded playback uses `AVSampleBufferAudioRenderer` added to the same
+`AVSampleBufferRenderSynchronizer` as the video renderer, fed with compressed AAC
+`CMSampleBuffer`s (built exactly like video samples, with an audio `CMFormatDescription` from
+`CMAudioFormatDescriptionCreate`). This gives real A/V sync, correct behaviour at rate 0.25×–2×, and
+automatic muting outside `[0.5, 2.0]`. `AVAudioEngine` is **not** used for recorded playback. This
+split is deliberate: live needs a custom low-latency path, recorded needs sync, and each API is
+best at one of them.
+
+---
+
+## 14. Two-way audio (talkback)
+
+### 14.1 Capture path
+
+```
+AVAudioEngine.inputNode ──tap(bufferSize: 320 frames @ device rate)
+   └─▶ AVAudioConverter (device format → 8 kHz mono Float32)
+        └─▶ Int16 clamp ─▶ G.711 A-law encode ─▶ 320-byte chunks (40 ms)
+             └─▶ ISAPI POST /ISAPI/System/TwoWayAudio/channels/{id}/audioData (chunked)
+```
+
+```swift
+public actor TalkbackController {
+    public enum State: Sendable { case idle, opening, live, closing, failed(TalkbackError) }
+    public private(set) var state: State
+    public func begin(camera: StreamIdentifier) async throws   // negotiate + open + start capture
+    public func end() async
+    public var levels: AsyncStream<Float> { get }              // for the PTT meter
+}
+```
+
+Negotiation (via injected `VigilISAPI` closures — `VigilVideo` never imports it):
+
+1. `GET /ISAPI/System/TwoWayAudio/channels` → list with `audioCompressionType`
+   (`G.711ulaw`, `G.711alaw`, `G.726`, `AAC`), `audioInputType`, `speakerVolume`, `noisereduce`.
+2. Preference order: **`G.711alaw` → `G.711ulaw` → `G.726` (32 k)**. AAC upload is not implemented
+   (it needs an encoder and no Hikvision device requires it).
+3. `PUT /ISAPI/System/TwoWayAudio/channels/{id}/open` → `<TwoWayAudioSession>` with the accepted
+   codec and sample rate. If the device replies `deviceBusy`, surface "another client is talking".
+4. Start the chunked `POST …/audioData` upload; keep it open for the duration.
+5. `PUT …/close` on end, on error, and on a 2 s idle timeout.
+
+### 14.2 Encoder
+
+```swift
+enum G711Encoder {
+    static func encodeALaw(_ pcm: UnsafePointer<Int16>, count: Int, into out: UnsafeMutablePointer<UInt8>)
+    static func encodeMuLaw(_ pcm: UnsafePointer<Int16>, count: Int, into out: UnsafeMutablePointer<UInt8>)
+}
+```
+A-law encode: take `|x| >> 3` (13-bit), find the segment via the position of the highest set bit
+above bit 4, form `(sign << 7) | (exponent << 4) | mantissa`, XOR with `0x55`. μ-law encode: add the
+132 bias, find the exponent, `(sign << 7) | (exp << 4) | mantissa`, then complement. Both are exact
+inverses of §13.3 and must be unit-tested round-trip over all 65 536 inputs with the standard
+maximum error bound.
+
+Chunking: **320 bytes = 320 samples = 40 ms** at 8 kHz. Hikvision firmware is sensitive to chunk
+size; 40 ms is the value that works across DS-2CD2, DS-2DE and DS-7xxx. Send at a steady 25 Hz from
+a `Task` with `Task.sleep(until:)` pacing, not as fast as the encoder produces.
+
+### 14.3 Echo cancellation and push-to-talk
+
+* Enable Apple's voice-processing I/O while talkback is active:
+  `try engine.inputNode.setVoiceProcessingEnabled(true)` **and**
+  `try engine.outputNode.setVoiceProcessingEnabled(true)`. This gives AEC, AGC and noise
+  suppression for free. It **must** be toggled while the engine is stopped, so `begin` does:
+  stop engine → enable voice processing → rebuild the graph → start engine, and `end` reverses it.
+  The whole transition takes 80–200 ms, which is why we do it on `begin`, not per PTT press.
+* Additionally attenuate the camera's *downstream* audio to **−18 dB** while transmitting
+  (a 30 ms ramp). Belt and braces: AEC plus attenuation makes speaker-to-mic howl practically
+  impossible on a MacBook's built-in mic.
+* Microphone permission: `Info.plist` `NSMicrophoneUsageDescription`, and
+  `AVCaptureDevice.requestAccess(for: .audio)` before `begin`. A denial maps to
+  `TalkbackError.microphonePermissionDenied` with a "Open System Settings ▸ Privacy" action.
+
+Push-to-talk semantics:
+
+| Gesture | Behaviour |
+|---|---|
+| Hold the talk button, or hold **Space** while a tile is focused | `begin` on key-down (the ISAPI open happens once and is then kept warm for 10 s), transmit while held, `end` 250 ms after release (the tail avoids clipping the last syllable) |
+| Press-and-release under 200 ms | treated as a **latch**: transmission stays on until the next press (Discord-style); the UI shows a pulsing red "ON AIR" chip. Escape always ends it. |
+| Focus moves to another camera while transmitting | transmission ends (never accidentally talk to the wrong camera) |
+| First 150 ms after `begin` | 150 ms of captured audio is buffered and sent once the session opens, so the beginning of the first word is not lost |
+| Window loses focus / app hides | transmission ends immediately |
+| Device or permission error | `end`, show a non-modal error, restore the previous audio graph |
+
+---
+
+## 15. Snapshot capture
+
+### 15.1 Sources
+
+| Mode | Source | Contents |
+|---|---|---|
+| `.decoded` | the last decoded `CVPixelBuffer` (Strategy B), or a one-shot decode session on the next keyframe (Strategy A) | full frame, no zoom, no overlays |
+| `.displayed` | `VigilRender` renders the current tile into an offscreen `MTLTexture` and returns a `CVPixelBuffer` | exactly what the user sees: zoom, pan, colour grading, deinterlace |
+| `.jpeg` | ISAPI `/picture` (owned by `VigilCore`) | cheapest, camera-side, no decode |
+
+### 15.2 `CVPixelBuffer` → `CGImage`
+
+Primary (fast, hardware-assisted, handles all our YCbCr formats and clean aperture):
+
+```swift
+func makeCGImage(_ pb: CVPixelBuffer) throws -> CGImage {
+    var out: Unmanaged<CGImage>?
+    let st = VTCreateCGImageFromCVPixelBuffer(pb, options: nil, imageOut: &out)
+    guard st == noErr, let image = out?.takeRetainedValue() else {
+        return try makeCGImageWithCoreImage(pb)      // fallback
+    }
+    return image
+}
+```
+
+`VTCreateCGImageFromCVPixelBuffer(_ pixelBuffer: CVPixelBuffer, options: CFDictionary?, imageOut: UnsafeMutablePointer<Unmanaged<CGImage>?>) -> OSStatus`
+— note `Unmanaged`: use `takeRetainedValue()` exactly once. Leaking here is a common bug because the
+function returns a +1 reference.
+
+Fallback / colour-managed path (used for 10-bit HEVC, for BT.2020, and whenever the primary returns
+`kVTPixelTransferNotSupportedErr`):
+
+```swift
+let ciContext = CIContext(options: [
+    .workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)!,
+    .outputColorSpace:  CGColorSpace(name: CGColorSpace.displayP3)!,
+    .cacheIntermediates: false,
+    .useSoftwareRenderer: false,
+])
+let ci = CIImage(cvPixelBuffer: pb, options: [.applyOrientationProperty: false])
+    .cropped(to: cleanApertureRect(pb))
+guard let cg = ciContext.createCGImage(ci, from: ci.extent,
+                                       format: pb.is10Bit ? .RGBA16 : .RGBA8,
+                                       colorSpace: outputColorSpace) else { throw … }
+```
+
+One shared `CIContext` per app (creating one costs ~30 ms and a chunk of VRAM); it lives in
+`SnapshotEncoder` behind a lazy `static let`. Clean aperture must be applied here — otherwise a
+1920×1088 snapshot appears with 8 rows of garbage at the bottom, which is a visible bug.
+
+```swift
+func cleanApertureRect(_ pb: CVPixelBuffer) -> CGRect {
+    if let d = CVBufferGetAttachment(pb, kCVImageBufferCleanApertureKey, nil) as? [CFString: Any],
+       let w = d[kCVImageBufferCleanApertureWidthKey] as? CGFloat,
+       let h = d[kCVImageBufferCleanApertureHeightKey] as? CGFloat,
+       let x = d[kCVImageBufferCleanApertureHorizontalOffsetKey] as? CGFloat,
+       let y = d[kCVImageBufferCleanApertureVerticalOffsetKey] as? CGFloat {
+        let full = CGSize(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
+        return CGRect(x: (full.width - w) / 2 + x, y: (full.height - h) / 2 + y, width: w, height: h)
+    }
+    return CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
+}
+```
+
+### 15.3 Encoding to a file
+
+```swift
+public struct SnapshotOptions: Sendable {
+    public var format: SnapshotFormat = .png           // .png, .jpeg(quality: 0.9), .heic(quality: 0.85)
+    public var burnInOverlay: Bool = false             // camera name + timestamp, drawn by VigilRender
+    public var metadata: SnapshotMetadata
+}
+public struct SnapshotMetadata: Sendable {
+    public var cameraName: String
+    public var host: String            // never credentials
+    public var captureDate: Date
+    public var channel: Int
+    public var appVersion: String
+}
+
+func write(_ image: CGImage, to url: URL, options: SnapshotOptions) throws {
+    let type: UTType = switch options.format {
+        case .png: .png
+        case .jpeg: .jpeg
+        case .heic: .heic
+    }
+    guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil)
+    else { throw SnapshotError.destinationUnavailable(url) }
+
+    let fmt = DateFormatter.exif      // "yyyy:MM:dd HH:mm:ss", en_US_POSIX, device time zone
+    var props: [CFString: Any] = [
+        kCGImagePropertyTIFFDictionary: [
+            kCGImagePropertyTIFFMake: "Hikvision",
+            kCGImagePropertyTIFFModel: options.metadata.cameraName,
+            kCGImagePropertyTIFFSoftware: "Vigil \(options.metadata.appVersion)",
+            kCGImagePropertyTIFFDateTime: fmt.string(from: options.metadata.captureDate),
+            kCGImagePropertyTIFFImageDescription: "\(options.metadata.cameraName) ch\(options.metadata.channel)",
+        ] as CFDictionary,
+        kCGImagePropertyExifDictionary: [
+            kCGImagePropertyExifDateTimeOriginal: fmt.string(from: options.metadata.captureDate),
+            kCGImagePropertyExifSubsecTimeOriginal: String(
+                format: "%03d", Int(options.metadata.captureDate.timeIntervalSince1970
+                                    .truncatingRemainder(dividingBy: 1) * 1000)),
+            kCGImagePropertyExifUserComment: "Captured by Vigil from \(options.metadata.host)",
+        ] as CFDictionary,
+        kCGImagePropertyIPTCDictionary: [
+            kCGImagePropertyIPTCObjectName: options.metadata.cameraName,
+            kCGImagePropertyIPTCDateCreated: ISO8601DateFormatter().string(from: options.metadata.captureDate),
+        ] as CFDictionary,
+    ]
+    if case .jpeg(let q) = options.format { props[kCGImageDestinationLossyCompressionQuality] = q }
+    if case .heic(let q) = options.format { props[kCGImageDestinationLossyCompressionQuality] = q }
+    if options.format == .png { props[kCGImagePropertyPNGDictionary] = [
+        kCGImagePropertyPNGSoftware: "Vigil" ] as CFDictionary }
+
+    CGImageDestinationAddImage(dest, image, props as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { throw SnapshotError.encodeFailed(url) }
+}
+```
+
+| Format | Use | 1080p size | Encode time (M1) |
+|---|---|---|---|
+| PNG | default; lossless; 16-bit for 10-bit sources | 1.8–3.5 MB | 28 ms |
+| JPEG q0.9 | sharing, evidence bundles | 280–450 KB | 7 ms |
+| HEIC q0.85 | archives; keeps 10-bit and wide gamut | 150–260 KB | 22 ms |
+
+Never encode on the pipeline actor or the MainActor — `SnapshotEncoder` runs the whole
+raster+encode on a detached `Task(priority: .userInitiated)`. Target: shutter feedback within one
+frame, file on disk within 120 ms. `VigilCore` owns destinations (folder, clipboard via
+`NSPasteboard`, Quick Look) and the file-name template.
+
+---
+
+## 16. Hardware verification, energy and thermals
+
+### 16.1 Proving hardware decode is engaged
+
+1. **Authoritative, programmatic:**
+
+```swift
+func isUsingHardwareDecode(_ s: VTDecompressionSession) -> Bool {
+    var value: CFTypeRef?
+    let st = VTSessionCopyProperty(
+        s, key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+        allocator: kCFAllocatorDefault, valueOut: &value)
+    guard st == noErr, let b = value as? Bool else { return false }
+    return b
+}
+```
+Read once, ~200 ms after the first successful decode (the property is not meaningful before the
+decoder has committed), and store it in `DecodeStatistics.hardwareAccelerated`. Surface it in the
+diagnostics panel as "Hardware decode: yes/no" per stream — users and support need this.
+
+2. **Capability probe at launch** (`HardwareProbe`): create two throwaway sessions from canned
+   parameter sets (a 64×64 H.264 SPS/PPS and a 64×64 HEVC VPS/SPS/PPS embedded as literals) with
+   `RequireHardwareAcceleratedVideoDecoder = true`. Success/failure fills
+   `MachineClass.hasHardwareHEVC` / `hasHardware10bit` and takes < 15 ms total. Also decides whether
+   HEVC cameras should be asked (via ISAPI) to switch to H.264.
+
+3. **Signpost timing** (`OSSignposter`, category `decode`): interval `decodeFrame`, per frame.
+   1080p H.264 hardware p50 is **2–4 ms**; software is **12–25 ms**. A p50 above 8 ms means
+   software decode regardless of what the property says.
+
+4. **Instruments**: the *Metal System Trace* + *os_signpost* template shows our intervals against
+   GPU work; the *Energy Log* shows the media-engine contribution as low CPU with non-zero GPU.
+
+5. **`powermetrics`** (documented in the benchmark harness README):
+   `sudo powermetrics -i 1000 -n 30 --samplers cpu_power,gpu_power`. Acceptance: 16×1080p30 H.264
+   on an M1 must stay under **3.5 W** combined CPU+GPU package power delta over idle. Software
+   decode blows straight past 12 W.
+
+6. **`log stream --predicate 'subsystem == "com.apple.coremedia"' --level debug`** shows decoder
+   selection (`AppleAVD` for the hardware path on Apple silicon). Useful only for triage.
+
+### 16.2 Expected numbers (acceptance targets)
+
+Measured on M1 (8-core, 16 GB), macOS 14, 120 Hz display, Strategy A unless noted. Percentages are
+of **total machine CPU** (all cores).
+
+| Scenario | CPU | GPU | Memory (RSS) | Media engine |
+|---|---|---|---|---|
+| 1 × 1080p30 H.264, layer | 1.5–2.5 % | 3–5 % | 120 MB | ~4 % |
+| 1 × 1080p30 H.264, VT+Metal, zoom active | 2.5–4 % | 7–10 % | 165 MB | ~4 % |
+| 4 × 1080p30 H.264 sub, layer | 3–5 % | 8–12 % | 250 MB | ~15 % |
+| **16 × 1080p30 H.264 sub, layer** | **9–14 %** | **25–33 %** | **640 MB** | ~60 % |
+| 16 × 1080p30 H.264 sub, VT+Metal atlas | 14–19 % | 30–38 % | 980 MB | ~60 % |
+| 16 × 704×576@25 H.264 sub, layer | 4–6 % | 10–14 % | 340 MB | ~14 % |
+| 4 × 1080p30 HEVC main, layer | 5–8 % | 12–16 % | 320 MB | ~28 % |
+| 1 × 4 K30 HEVC Main10 main, VT+Metal | 6–9 % | 18–24 % | 380 MB | ~30 % |
+| 64-up mixed (16 decode + 48 JPEG poll) | 11–16 % | 26–34 % | 780 MB | ~60 % |
+
+Product bar: **16 × 1080p under 35 % CPU** — the layer path meets it with a 2.5× margin. Regression
+gate in CI: any scenario exceeding its table value by > 15 % fails the benchmark job.
+
+Per-frame cost references (M1, hardware): H.264 1080p decode 2.8 ms, HEVC 1080p 4.1 ms,
+HEVC 4 K Main10 9.5 ms, sample-buffer construction 45 µs, `CVPixelBuffer` → `MTLTexture` 30 µs,
+one Metal tile draw 90 µs.
+
+### 16.3 Thermal and power adaptation
+
+`ThermalGovernor` (an actor, observes `ProcessInfo.thermalStateDidChangeNotification`,
+`NSProcessInfoPowerStateDidChange`, and `NSWorkspace` sleep/wake):
+
+| Condition | Budget multiplier | Other actions |
+|---|---|---|
+| `.nominal`, on AC | 1.00 | `MaximizePowerEfficiency = false` on the focused tile |
+| `.nominal`, on battery | 0.85 | `MaximizePowerEfficiency = true` everywhere; cap non-focused tiles at 15 fps |
+| Low Power Mode | 0.60 | as above **plus** 30 Hz display pacing cap, JPEG intervals × 2 |
+| `.fair` | 0.85 | non-focused tiles → `fpsCapped` |
+| `.serious` | 0.60 | non-focused → `keyframesOnly`; disable colour-grading shader passes; JPEG intervals × 1.5 |
+| `.critical` | 0.35 | only the focused tile decodes; everything else → `jpegPoll` at 5 s; emit a user-visible warning chip; log `.fault` |
+| System will sleep | — | invalidate all sessions, release grants, stop the engine |
+| System did wake | — | expect `kVTInvalidSessionErr` on the first submit; recreate everything, request IDRs, one JPEG bridge per visible tile |
+
+Every transition is announced through `DecodeBudget.changes` so pipelines act at once, and logged at
+`.notice` (thermal events are the top cause of "it got worse after 20 minutes" reports).
+
+---
+
+## 17. Benchmark harness
+
+`BenchmarkHarness` lives in `VigilVideo` (shipped, not test-only, so it can run on a user's machine
+for support) and is driven by a hidden launch argument:
+
+```
+Vigil.app/Contents/MacOS/Vigil --benchmark <plan.json> [--out results.csv] [--duration 60]
+```
+
+### 17.1 Inputs
+
+Elementary-stream fixtures in `Tests/Fixtures/Streams/`, each a 4-byte-length-prefixed NAL file plus
+a `.json` sidecar with the parameter sets, timing and expected format:
+
+| Fixture | Contents |
+|---|---|
+| `h264-1080p30-main-gop50.bin` | 300 frames, synthetic moving pattern, encoded once with VideoToolbox and committed (1.9 MB) |
+| `h264-704x576-25-gop50.bin` | typical substream (410 KB) |
+| `h265-1080p30-main.bin` | (1.4 MB) |
+| `h265-4k30-main10.bin` | 90 frames (4.8 MB) |
+| `h264-1080p30-bframes.bin` | High profile, 2 reorder frames — exercises §11.2 |
+| `h264-midstream-resolution-change.bin` | 1080p → 720p → 1080p, three SPS — exercises §9 |
+| `h264-corrupt-au.bin` | deliberately damaged NALs — exercises `kVTVideoDecoderBadDataErr` |
+| `h264-starts-mid-gop.bin` | begins on a P-frame — exercises `awaitingKeyframe` |
+| `aac-16k-mono.bin`, `g711a-8k.bin` | audio |
+
+A `Scripts/make-fixtures.swift` regenerates them with `VTCompressionSession` (run manually, output
+committed, because CI must not depend on encoder version differences).
+
+### 17.2 Plan and metrics
+
+```json
+{ "name": "wall-16x1080p",
+  "streams": [{ "fixture": "h264-1080p30-main-gop50.bin", "count": 16, "strategy": "layer",
+                "tileWidth": 1280, "realtime": true }],
+  "durationSeconds": 60, "warmupSeconds": 5 }
+```
+
+Emitted per stream and aggregate:
+
+| Metric | Definition |
+|---|---|
+| `decodeMS` p50/p95/p99/max | signpost `decodeFrame` interval |
+| `pipelineMS` p50/p95/p99 | submit → `sink.present` (our 55 ms budget) |
+| `framesSubmitted / presented / dropped{queueFull,awaitingKeyframe,badData,decoder,formatChange}` | counters |
+| `hardwareAccelerated` | §16.1 |
+| `cpuPercent`, `gpuPercent` | sampled at 1 Hz via `host_statistics64` / `IOReport`-free approximation: `ProcessInfo` + `task_info(TASK_ABSOLUTETIME_INFO)` for our own CPU; GPU from `MTLDevice.currentAllocatedSize` deltas plus `powermetrics` when run with `--privileged` |
+| `rssBytes`, `peakRSS` | `task_vm_info` |
+| `sessionCreates`, `sessionRecreates`, `vtErrors[code]` | counters |
+| `thermalTransitions` | governor log |
+
+Output: one CSV row per (scenario, stream) plus a JSON summary. `Scripts/bench-gate.swift` compares
+against `Tests/Fixtures/baselines/<machine-class>.json` and fails on p95 regressions > 10 % or any
+increase in `framesDropped`. The harness feeds frames from the fixture at real time using
+`Task.sleep(until:)` against a host-clock schedule (never `Thread.sleep`), so measured latency is
+comparable to a live camera.
+
+The same harness runs the **synthetic RTSP server + RTP generator** fixture from
+`ARCHITECTURE.md` when `--via-rtsp` is passed, which exercises the whole stack end to end on one
+machine with no camera present.
+
+---
+
+## 18. Public API reference
+
+### 18.1 `DecodePipeline`
+
+```swift
+public actor DecodePipeline {
+
+    public init(streamID: StreamIdentifier,
+                configuration: DecodePipelineConfiguration,
+                sink: any VideoSink,
+                budget: DecodeBudget = .shared,
+                requestKeyframe: @escaping @Sendable () async -> Void,
+                jpegProvider: (@Sendable (CGSize) async throws -> Data)? = nil,
+                logger: any LoggerProtocol)
+
+    // Lifecycle -------------------------------------------------------------------------------
+    public func start() async throws
+    public func stop() async
+    public var events: AsyncStream<PipelineEvent> { get }
+
+    // Feeding ---------------------------------------------------------------------------------
+    /// Never throws, never suspends on I/O, never blocks the caller. Applies the §10.3 drop policy.
+    public func submit(_ frame: EncodedFrame)
+    public func submitAudio(_ frame: EncodedAudioFrame)
+
+    // Control ---------------------------------------------------------------------------------
+    public func setStrategy(_ strategy: DisplayStrategy) async throws
+    public func setMode(_ mode: DecodeMode, stream: StreamChoice) async
+    public func setTileContext(_ context: TileContext) async     // recomputes policy + cost
+    public func setPaused(_ paused: Bool, reason: PauseReason) async
+    public func flushAndRequestKeyframe() async
+    public func setAudioEnabled(_ enabled: Bool) async
+
+    // Query -----------------------------------------------------------------------------------
+    public func statistics() -> DecodeStatistics
+    public func currentFormat() -> VideoFormat?
+    public func snapshot(_ mode: SnapshotSource) async throws -> DecodedVideoFrame
+}
+
+public struct DecodePipelineConfiguration: Sendable {
+    public var isLive: Bool = true
+    public var queueCapacity: Int = 6
+    public var targetQueueDepth: Int = 2
+    public var requireHardwareDecode: Bool = false
+    public var allowDownscaleOnDecode: Bool = true
+    public var initialStrategy: DisplayStrategy = .sampleBufferLayer
+    public var audioEnabled: Bool = false
+    public var maximumKeyframeRequestsPerMinute: Int = 10
+    public static let live = DecodePipelineConfiguration()
+    public static let thumbnail = DecodePipelineConfiguration(queueCapacity: 2, targetQueueDepth: 1)
+}
+
+public enum PipelineEvent: Sendable {
+    case started
+    case firstFrame(latencyMS: Double)
+    case formatChanged(VideoFormat)
+    case formatChangeStalled
+    case hardwareDecodeDetermined(Bool)
+    case latencyLevelChanged(LatencyLevel, measuredLatencyMS: Double)
+    case persistentlyBehind(measuredLatencyMS: Double)
+    case modeChanged(DecodeMode, reason: ModeChangeReason)
+    case stalled(sinceMS: Double)
+    case recovered
+    case awaitingParameterSets
+    case noParameterSets
+    case keyframeRequested
+    case keyframeTimeout
+    case unsupportedFormat(codec: VideoCodec, detail: String)
+    case degraded(VideoPipelineError)
+    case failed(VideoPipelineError)
+    case stopped
+}
+```
+
+### 18.2 `PlaybackPipeline`
+
+```swift
+public actor PlaybackPipeline {
+    public init(streamID: StreamIdentifier, transport: any PlaybackTransportControl,
+                sink: any VideoSink, budget: DecodeBudget = .shared, logger: any LoggerProtocol)
+
+    public func submit(_ frame: EncodedFrame)
+    public func submitAudio(_ frame: EncodedAudioFrame)
+
+    public func play() async throws
+    public func pause() async
+    public func setRate(_ rate: PlaybackRate, direction: PlaybackDirection) async throws
+    public func seek(to date: Date, precise: Bool) async throws
+    public func stepForward() async throws
+    public func stepBackward() async throws
+    public func setLoop(_ range: ClosedRange<Date>?) async
+
+    public var currentTime: Date { get async }
+    public var state: PlaybackState { get async }
+    public var events: AsyncStream<PlaybackEvent> { get }
+    public var sampleTap: AsyncStream<Unsafe<CMSampleBuffer>> { get }
+}
+
+public enum PlaybackState: Sendable, Equatable {
+    case idle, buffering, playing(rate: Double), paused, seeking(progress: Double), ended, failed
+}
+```
+
+### 18.3 Statistics
+
+```swift
+public struct DecodeStatistics: Sendable, Codable {
+    public var hardwareAccelerated: Bool?
+    public var codec: VideoCodec?
+    public var format: VideoFormat?
+    public var mode: DecodeMode
+    public var strategy: DisplayStrategy
+    public var costDU: Double
+
+    public var framesSubmitted: UInt64
+    public var framesPresented: UInt64
+    public var framesDroppedQueueFull: UInt64
+    public var framesDroppedAwaitingKeyframe: UInt64
+    public var framesDroppedBadData: UInt64
+    public var framesDroppedByDecoder: UInt64
+    public var framesDroppedFormatChange: UInt64
+    public var framesDroppedNoFormat: UInt64
+    public var framesDroppedPolicy: UInt64        // fps ceiling / keyframes-only
+
+    public var decodeMSp50: Double
+    public var decodeMSp95: Double
+    public var pipelineMSp50: Double              // submit → present
+    public var pipelineMSp95: Double
+    public var endToEndMSEWMA: Double             // capture → present
+    public var queueDepthEWMA: Double
+    public var framesInFlight: Int
+    public var poolStarvation: UInt64
+
+    public var sessionCreates: UInt32
+    public var sessionRecreates: UInt32
+    public var lastVTError: OSStatus?
+    public var acceptedProperties: [String]
+    public var latencyLevel: LatencyLevel
+    public var audio: AudioStatistics?
+}
+```
+
+Percentiles come from a fixed 256-slot reservoir per metric (no allocation, `p95` computed by
+partial selection on demand). `HealthMonitor` in `VigilCore` samples `statistics()` at 1 Hz; the
+call must cost < 20 µs, so it returns a copied struct and never recomputes anything eagerly.
+
+### 18.4 Error type
+
+```swift
+public enum VideoPipelineError: Error, Sendable, CustomStringConvertible {
+    // Format
+    case missingParameterSets
+    case emptyParameterSet(index: Int)
+    case tooManyParameterSets(count: Int)
+    case formatDescriptionFailed(status: OSStatus, codec: VideoCodec)
+    case malformedAccessUnit(reason: String)
+    case codecNotDecodedByThisPath(VideoCodec)
+    // Buffers
+    case blockBufferFailed(status: OSStatus)
+    case sampleBufferFailed(status: OSStatus)
+    case attachmentsUnavailable
+    case pixelBufferPoolFailed(CVReturn)
+    // Decoder
+    case decoderCreationFailed(status: OSStatus, requireHardware: Bool)
+    case decodeSubmitFailed(status: OSStatus)
+    case decoderMalfunction(status: OSStatus, recreateAttempt: Int)
+    case unsupportedFormat(codec: VideoCodec, detail: String)
+    case hardwareDecodeUnavailable
+    // Display
+    case timebaseFailed
+    case layerFailed(underlying: Error?)
+    case metalUnavailable
+    // Budget
+    case admissionDenied(reason: DenialReason)
+    // Playback
+    case seekFailed(underlying: Error)
+    case rateNotSupported(Double)
+    case reverseNotAvailable(reason: String)
+    // Audio
+    case audio(AudioError)
+    case talkback(TalkbackError)
+
+    public var isRecoverable: Bool { … }        // drives §7.9 class A/C vs. B/E
+    public var userFacingMessage: String { … }  // localised, actionable, never a raw OSStatus
+    public var diagnosticDetail: String { … }   // includes the OSStatus and the four-char code
+}
+```
+
+Every `OSStatus` is rendered in the diagnostic detail as both decimal and FourCC
+(`"-12909 (kVTVideoDecoderBadDataErr)"`) using a static table in `Diagnostics/VTErrorNames.swift` —
+users paste these into support tickets, so the mapping ships in the app.
+
+Errors never propagate as thrown errors out of `submit`; they surface as `PipelineEvent.degraded`
+or `.failed`. Only `start()`, `setStrategy`, `snapshot()` and the playback control methods throw.
+`VigilCore.StreamController` maps `.failed` to its `failed` state and owns reconnect.
+
+---
+
+## 19. Observability
+
+| Signal | Detail |
+|---|---|
+| OSLog subsystem | `com.vigil.app` |
+| Categories | `video.pipeline`, `video.format`, `video.budget`, `video.playback`, `audio.playback`, `audio.talkback`, `video.snapshot`, `video.bench` |
+| Signposter intervals | `decodeFrame`, `presentFrame`, `sessionCreate`, `formatChange`, `seek`, `snapshot`, `jpegPoll` |
+| Signpost events | `keyframeRequested`, `dropToKeyframe`, `budgetDemote`, `budgetPromote`, `thermalTransition`, `underrun` |
+| Log levels | `.debug` per-frame (compiled out of release via `if VigilLog.isFrameLoggingEnabled`), `.info` for lifecycle and admission, `.notice` for thermal/mode changes, `.error` for recoverable failures, `.fault` for class-E bugs |
+| Privacy | no credentials, no host names in `.debug` frame logs; `%{private}` on host and camera name in release |
+| Rate limiting | any repeated log inside a frame loop goes through `RateLimitedLog(every: 2.0)` |
+
+The pipeline never imports `OSLog` directly in code shared with the pure layer; it uses
+`LoggerProtocol` from `VigilProtocols` and the macOS implementation wraps `Logger`.
+
+---
+
+## 20. File layout
+
+```
+Sources/VigilVideo/
+  Format/
+    FormatDescriptionFactory.swift      §4.1–4.4
+    ParameterSetStore.swift             §4.5
+    FormatFingerprint.swift
+    FormatOverrides.swift
+    VideoFormat.swift                   §2.2
+  Sample/
+    SampleBufferBuilder.swift           §5.1–5.3
+    BlockBufferPool.swift
+    SampleAttachments.swift
+    TimestampConversion.swift           §3
+  Decode/
+    DecodePipeline.swift                §18.1
+    DecodeSessionProtocol.swift         §8
+    LayerDecodeSession.swift            §6
+    SampleBufferRendering.swift         §6.2
+    VTDecodeSession.swift               §7
+    VTConfig.swift
+    PixelBufferPool.swift               §7.5
+    FrameQueue.swift                    §10.3
+    LatencyController.swift             §10.4
+    FormatChangeCoordinator.swift       §9
+  Playback/
+    PlaybackPipeline.swift              §11, §18.2
+    ReorderHeap.swift                   §11.2
+    RateController.swift                §11.3
+    SeekController.swift                §11.4
+    ReverseGOPDecoder.swift             §11.5
+  Budget/
+    DecodeBudget.swift                  §12.4
+    DecodeCost.swift                    §12.2
+    MachineClass.swift                  §12.3
+    TilePolicy.swift                    §12.5
+    JPEGPoller.swift                    §12.5
+    MJPEGDecoder.swift                  §12.6
+    OcclusionMonitor.swift              §12.7
+    ThermalGovernor.swift               §16.3
+  Audio/
+    AudioPlaybackEngine.swift           §13.1
+    AudioStreamPlayer.swift
+    AACDecoder.swift                    §13.2
+    G711.swift                          §13.3
+    G726.swift
+    Resampler.swift
+    AudioRingBuffer.swift               §13.4
+    AudioRouter.swift                   §13.5
+    TalkbackController.swift            §14
+    G711Encoder.swift                   §14.2
+  Snapshot/
+    SnapshotEncoder.swift               §15
+    PixelBufferImaging.swift
+  Diagnostics/
+    DecodeStatistics.swift              §18.3
+    VideoSignposts.swift
+    VTErrorNames.swift
+    HardwareProbe.swift                 §16.1
+    BenchmarkHarness.swift              §17
+  Support/
+    Boxes.swift                         §2.3
+    VideoSink.swift                     §2.4
+    VideoPipelineError.swift            §18.4
+Tests/VigilVideoTests/                  (macOS-only; see §21)
+```
+
+Every file carries the repo-standard header, `internal` by default, `public` only for the API in
+§18, no force-unwraps outside tests (the `!` on `kCFBooleanTrue` and on canned literal parameter
+sets is the documented exception, wrapped in helpers `cfTrue` / `cfFalse`), 110-column lines,
+`// MARK:` sections.
+
+---
+
+## 21. Test matrix
+
+macOS-only (these need VideoToolbox, so they run on the Mac CI job, not the Linux job):
+
+| # | Test | Assertion |
+|---|---|---|
+| 1 | `FormatDescriptionFactory` with 6 real Hikvision SPS/PPS pairs (shared fixtures with `spec-bitstream.md`) | dimensions, clean aperture, PAR match the expected table |
+| 2 | Same, but sets in the wrong order (PPS first) | throws, does not crash |
+| 3 | Parameter set with 3 trailing `0x00` | trimmed, creation succeeds |
+| 4 | `withParameterSetPointers` with 4 non-contiguous `Data` slices | pointers distinct, sizes correct, no dangling access under Address Sanitizer |
+| 5 | Sample buffer attachments | keyframe has no `NotSync`; P-frame has `NotSync` + `DependsOnOthers`; live sample has `DisplayImmediately`; recorded sample does not |
+| 6 | `h264-1080p30-main-gop50.bin` through Strategy B | 300 frames in, 300 presented, 0 dropped, monotonic PTS, `hardwareAccelerated == true` on Apple silicon |
+| 7 | `h264-starts-mid-gop.bin` | frames before the first IDR are dropped and counted; first presented frame is the IDR |
+| 8 | `h264-corrupt-au.bin` | `kVTVideoDecoderBadDataErr` handled, session **not** recreated, exactly one keyframe request after 4 errors |
+| 9 | `h264-midstream-resolution-change.bin` | 2 format changes, `sessionRecreates == 2`, `framesDroppedFormatChange ≤ 4`, `willChangeFormat`/`didChangeFormat` called in pairs, `generation` increments |
+| 10 | Injected `kVTInvalidSessionErr` (a test hook that invalidates the session mid-stream) | recreated once, `awaitingKeyframe` set, recovery within 1 GOP |
+| 11 | Injected `kVTCouldNotCreateInstanceErr` on the 17th session | budget lowers, tile demotes, no black tile |
+| 12 | `FrameQueue` drop policy | all four ordered rules, including the all-keyframes case |
+| 13 | `LatencyController` fed synthetic depth traces | exact level transitions at the §10.4 thresholds, hysteresis honoured, no oscillation on a noisy trace |
+| 14 | `TilePolicy.mode(for:)` over the §12.5 table | every row, including the 16-up-at-1280 = `full` case |
+| 15 | `DecodeCost` arithmetic | matches the §12.2 worked examples to 0.01 DU |
+| 16 | `DecodeBudget` admission and preemption | priority ordering, no preemption below `keyframesOnly`, promotion rate limit, transient reservation |
+| 17 | `h264-1080p30-bframes.bin` through `PlaybackPipeline` | presented in PTS order, `ReorderHeap` emits ascending, no duplicate PTS |
+| 18 | Seek to a mid-GOP timestamp | first displayed frame PTS == requested, pre-roll frames carry `DoNotDisplay` |
+| 19 | Reverse playback over 3 GOPs | strictly descending PTS, memory under the 320 MB cap |
+| 20 | `G711` decode tables | match the ITU-T G.711 reference vectors for all 256 codes, both laws |
+| 21 | `G711Encoder` round-trip | all 65 536 Int16 inputs within the standard error bound |
+| 22 | `AACDecoder` with `aac-16k-mono.bin` | exact frame count, RMS within 0.5 dB of the reference |
+| 23 | `AudioRingBuffer` SPSC under `ThreadSanitizer` | 10 M frames, no races, no lost frames, underrun/overrun counts exact |
+| 24 | `AudioRouter` | focus-follow, 4-stream cap, solo restore, fade timing |
+| 25 | Snapshot from a 1920×1088 buffer with clean aperture | output is exactly 1920×1080, no garbage rows |
+| 26 | Snapshot of a 10-bit HEVC frame to HEIC | 10-bit preserved (`CGImage.bitsPerComponent == 16`), EXIF present |
+| 27 | `SnapshotEncoder` metadata | TIFF/EXIF/IPTC keys present, no credential substring anywhere in the file bytes |
+| 28 | Occlusion ladder with a fake clock | each escalation fires at its threshold; resume issues 1 IDR request and 1 JPEG bridge |
+| 29 | `ThermalGovernor` with injected thermal states | multipliers applied, modes changed, restored on return to nominal |
+| 30 | Strategy switch A→B→A under load | no black frame (the sink records a continuous stream of presented frames with gaps ≤ 2 frames) |
+| 31 | 16-stream soak, 30 minutes | no leaked `CVPixelBuffer` (`CVPixelBufferPool` allocation count stable), RSS flat within 5 %, `sessionRecreates == 0` |
+| 32 | Swift 6 strict-concurrency build with `-warnings-as-errors` | zero data-race warnings; no `@unchecked Sendable` outside `Support/Boxes.swift` and the three documented types |
+
+Linux job: this module does not build on Linux and is excluded from `swift build --target` on the
+Linux CI matrix. All its *inputs* (`EncodedFrame`, parameter sets, `MediaTimestamp`, cost
+arithmetic) are tested there through `VigilRTP`/`VigilBitstream`. `DecodeCost` and `TilePolicy` are
+pure arithmetic and are additionally compiled into a small Foundation-only file
+(`Budget/DecodeCost.swift`, `Budget/TilePolicy.swift`, both free of CoreMedia imports) so those two
+test groups (#14, #15) also run on Linux via the `VigilProtocols` test target — a deliberate
+exception to the "macOS-only target" rule, achieved by keeping those two files import-free.
+

@@ -253,6 +253,13 @@ let package = Package(
         // if someone adds `import CoreMedia` to VigilRTP, this product stops building.
         .library(
             name: "VigilPure",
+            // `type:` is REQUIRED here, not cosmetic. A library product with no explicit type is an
+            // "automatic" product, and SwiftPM refuses `swift build --product <automatic library>`:
+            //   warning: '--product' cannot be used with the automatic product 'VigilPure';
+            //            building the default target instead
+            // That silently turns the Linux purity gate into a full-package build, which defeats it.
+            // Verified on Swift 6.1.2 / Linux — see docs/BUILD-VERIFICATION.md.
+            type: .static,
             targets: [
                 "VigilProtocols",
                 "VigilBitstream",
@@ -1728,10 +1735,10 @@ public struct SyntheticCameraProfile: Sendable {
     public var quirks: Set<Quirk>
     public var seed: UInt64                          // drives ALL randomness; print it on failure
 
-    public static func ds2cd2143g2(seed: UInt64 = 0xVIGIL) -> Self
-    public static func ds7608nvr(channels: Int = 8, seed: UInt64 = 0xVIGIL) -> Self
-    public static func hevcCamera(seed: UInt64 = 0xVIGIL) -> Self
-    public static func mjpegCamera(seed: UInt64 = 0xVIGIL) -> Self
+    public static func ds2cd2143g2(seed: UInt64 = 0x5649_4749_4C00) -> Self
+    public static func ds7608nvr(channels: Int = 8, seed: UInt64 = 0x5649_4749_4C00) -> Self
+    public static func hevcCamera(seed: UInt64 = 0x5649_4749_4C00) -> Self
+    public static func mjpegCamera(seed: UInt64 = 0x5649_4749_4C00) -> Self
 }
 ```
 
@@ -2000,4 +2007,681 @@ resolves through `Bundle.module` and works identically on Linux and macOS.
 
 ---
 
-<!-- PART3 -->
+## 11. Repository layout
+
+```
+/
+├── Package.swift
+├── Package.resolved                 # committed; will contain no dependencies (proof of C1)
+├── README.md
+├── LICENSE
+├── .gitignore
+├── .swift-format                    # config for `swift format` (ships with the toolchain)
+├── project.yml                      # XcodeGen input (§12.4)
+├── Info.plist                       # app bundle Info.plist (§13.1)
+├── Vigil.entitlements               # sandboxed, shipping (§13.3)
+├── Vigil-Dev.entitlements           # unsandboxed developer build (§13.4)
+│
+├── .github/workflows/
+│   ├── linux.yml                    # swift:6.1-noble — pure build + full test run
+│   ├── macos.yml                    # macos-14 — full build, full tests, app assembly
+│   └── lint.yml                     # swift format lint + Scripts/lint.sh
+│
+├── Scripts/
+│   ├── build-app.sh                 # THE contract (§12)
+│   ├── test-linux.sh
+│   ├── test-macos.sh
+│   ├── lint.sh                      # format lint + import allow-list + banned patterns
+│   ├── coverage.sh
+│   ├── bench.sh                     # signpost-driven latency/CPU benchmark
+│   ├── gen-xcode.sh                 # xcodegen generate (optional, documented as such)
+│   └── make-icon.sh                 # iconutil from Sources/VigilUI/Resources/AppIcon.iconset
+│
+├── Sources/
+│   ├── VigilProtocols/
+│   │   ├── Bytes/                   ByteReader.swift ByteWriter.swift BitReader.swift BitWriter.swift
+│   │   ├── Time/                    MediaTimestamp.swift Clocks.swift RandomSource.swift
+│   │   ├── Media/                   EncodedFrame.swift ParameterSets.swift Codecs.swift
+│   │   ├── Errors/                  VigilError.swift DomainErrors.swift DiagnosticCodes.swift
+│   │   ├── Logging/                 LoggerProtocol.swift RateLimitedLogger.swift Redaction.swift
+│   │   ├── Crypto/                  MD5.swift Base64.swift CRC32.swift
+│   │   ├── Net/                     HTTPTransporting.swift Credential.swift
+│   │   └── Stats/                   StreamStatistics.swift RingBuffer.swift
+│   ├── VigilBitstream/              NAL/ H264/ H265/ Records/ Convert/
+│   ├── VigilRTSP/                   Message/ Auth/ SDP/ Machine/ URLs/
+│   ├── VigilRTP/                    Packet/ Depacketize/ Jitter/ RTCP/ Stats/
+│   ├── VigilISAPI/                  Client/ XML/ Endpoints/ Models/ Events/
+│   ├── VigilDiscovery/              SADP/ WSDiscovery/ Sweep/ Merge/
+│   ├── VigilTestKit/                Synthetic/ Generators/ Harness/ Fixtures/ Doubles/
+│   ├── VigilTransport/              RTSPConnection.swift UDPMediaSocketPair.swift TLS/ Multicast/
+│   ├── VigilVideo/                  Decode/ Format/ Budget/ Audio/ Snapshot/
+│   ├── VigilRender/
+│   │   ├── Shaders/                 VideoPass.metal Overlay.metal (compiled to default.metallib)
+│   │   ├── Metal/                   MetalContext.swift VideoRenderer.swift TextureCache.swift
+│   │   ├── Views/                   VideoTileView.swift VideoTileRepresentable.swift
+│   │   └── Interaction/             ZoomPanController.swift PTZDragController.swift
+│   ├── VigilCore/
+│   │   ├── Model/                   Camera.swift CameraGroup.swift Layout.swift Events.swift
+│   │   ├── Persistence/             ConfigStore.swift LibraryDocument.swift Migrations/
+│   │   ├── Security/                CredentialStore.swift
+│   │   ├── Streaming/               StreamController.swift StreamCoordinator.swift RetryPolicy.swift
+│   │   ├── Recording/               ClipRecorder.swift PreRollBuffer.swift
+│   │   ├── Diagnostics/             HealthMonitor.swift StreamDoctor.swift DiagnosticsBundle.swift
+│   │   ├── Intents/                 AppIntents + URL scheme
+│   │   └── Logging/                 OSLogLogger.swift
+│   ├── VigilUI/
+│   │   ├── Theme/                   VTheme.swift Colors.swift Typography.swift Motion.swift
+│   │   ├── Components/              V*.swift
+│   │   ├── Screens/                 MainWindow/ Playback/ Discovery/ Settings/ VideoWall/
+│   │   ├── Resources/               Assets.xcassets, AppIcon.iconset
+│   │   └── Localizations/           en.lproj/ ru.lproj/
+│   └── Vigil/                       main.swift VigilApp.swift Menus.swift WindowManagement.swift
+│
+├── Tests/
+│   ├── VigilProtocolsTests/ … VigilPipelineTests/ (each with Fixtures/)
+│   └── Fixtures/Clips/              shared .vgclip golden clips (git-lfs NOT used; keep < 2 MB each)
+│
+└── docs/                            ARCHITECTURE.md DESIGN.md UX.md FEATURES.md spec-*.md
+```
+
+Directory rules: one type per file, filename == type name; grouping directories are for humans and do
+not affect module boundaries; no file exceeds **600 lines** (split by `MARK` boundaries into
+`Type+Feature.swift` extensions instead).
+
+---
+
+## 12. Build
+
+### 12.1 `Scripts/build-app.sh` — the contract
+
+`Scripts/build-app.sh` is the only supported way to produce a runnable `Vigil.app`. Its behaviour is
+part of the architecture, not an implementation detail.
+
+**Invocation**
+
+```
+Scripts/build-app.sh [--configuration debug|release] [--arch arm64|x86_64|universal]
+                     [--sign IDENTITY|-] [--entitlements PATH] [--sandbox on|off]
+                     [--version X.Y.Z] [--build N] [--dmg] [--notarize] [--output DIR]
+```
+
+**Defaults:** `--configuration release --arch universal --sign - --sandbox on --output dist`.
+Version defaults to the value in `Info.plist`; build number defaults to
+`$(git rev-list --count HEAD)`.
+
+**Behaviour, in order (each step must be idempotent and must fail the script on error via `set -euo pipefail`):**
+
+| Step | Action | Failure |
+|---|---|---|
+| 1 | Verify toolchain: `swift --version` ≥ 6.0, `xcrun --sdk macosx --show-sdk-version` ≥ 14 | exit 2 |
+| 2 | Verify no SPM dependencies: `Package.resolved` has an empty pin list | exit 3 |
+| 3 | `swift build -c $CONFIG --arch arm64 --arch x86_64 --product Vigil` (one command produces the universal binary; a single `--arch` for non-universal) | exit 4 |
+| 4 | Create `$OUTPUT/Vigil.app/Contents/{MacOS,Resources,Frameworks,Resources/*.lproj}` | exit 5 |
+| 5 | Copy the executable to `Contents/MacOS/Vigil`; `chmod 755` | exit 5 |
+| 6 | Copy `Info.plist` to `Contents/Info.plist`; substitute `$(VIGIL_VERSION)`, `$(VIGIL_BUILD)` with `/usr/libexec/PlistBuddy` | exit 6 |
+| 7 | Write `Contents/PkgInfo` containing exactly `APPL????` | exit 6 |
+| 8 | Copy SwiftPM resource bundles (`.build/**/Vigil_VigilUI.bundle`, `Vigil_VigilRender.bundle`) into `Contents/Resources/` — **these carry `Assets.car`, `default.metallib` and the `.lproj` folders; forgetting them yields an app with no icons and no shaders** | exit 7 |
+| 9 | `actool` is **not** invoked directly — SwiftPM already compiled the catalog into the bundle. The app icon is additionally emitted as `Contents/Resources/AppIcon.icns` via `Scripts/make-icon.sh` because `CFBundleIconFile` needs a real `.icns` for the Dock on first launch before the catalog is registered | exit 7 |
+| 10 | Choose entitlements: `--entitlements` if given, else `Vigil.entitlements` when `--sandbox on`, else `Vigil-Dev.entitlements` | exit 8 |
+| 11 | `codesign --force --sign "$IDENTITY" --options runtime --timestamp --entitlements "$ENT" --generate-entitlement-der "$APP"` (nested bundles signed inside-out first) | exit 9 |
+| 12 | `codesign --verify --deep --strict --verbose=2 "$APP"` and `spctl --assess --type execute` (non-fatal warning for ad-hoc `-`) | exit 9 |
+| 13 | If `--dmg`: `hdiutil create -volname Vigil -srcfolder "$APP" -ov -format UDZO "$OUTPUT/Vigil-$VERSION.dmg"` | exit 10 |
+| 14 | If `--notarize`: `xcrun notarytool submit --wait --keychain-profile VigilNotary`, then `xcrun stapler staple` | exit 11 |
+| 15 | Print a summary: path, size, arch list from `lipo -info`, signing identity, entitlements digest, and the `codesign -d --entitlements -` dump | — |
+
+**Guarantees the script must provide:**
+
+* Running it twice in a row produces a byte-identical bundle apart from the signature and timestamp.
+* It never requires network access unless `--notarize` is passed.
+* With `--sign -` (the default) the produced app **launches on the build machine** — ad-hoc signing plus
+  hardened runtime is sufficient for local use; it just will not pass Gatekeeper elsewhere.
+* It emits a machine-readable `$OUTPUT/build-manifest.json` (version, build, commit, arch, entitlements
+  file, signing identity, timestamps) for the release process.
+
+### 12.2 CI commands
+
+```yaml
+# .github/workflows/linux.yml (container: swift:6.1-noble)
+- run: swift build --product VigilPure -Xswiftc -warnings-as-errors
+- run: swift build --product VigilTestKit -Xswiftc -warnings-as-errors
+- run: swift build -Xswiftc -warnings-as-errors          # proves the #if guards compile everywhere
+- run: swift test --parallel                              # macOS-only targets contribute 0 tests
+- run: Scripts/test-linux.sh                              # asserts non-zero test counts per pure target
+```
+
+```yaml
+# .github/workflows/macos.yml (runs-on: macos-14)
+- run: swift build -c debug -Xswiftc -warnings-as-errors
+- run: swift test --parallel --enable-code-coverage
+- run: Scripts/coverage.sh                                # 90% pure / 70% macOS floors
+- run: Scripts/lint.sh
+- run: Scripts/build-app.sh --configuration release --arch universal
+- run: Scripts/bench.sh --smoke                           # synthetic-camera latency smoke test
+```
+
+### 12.3 `Info.plist` keys
+
+| Key | Value | Why |
+|---|---|---|
+| `CFBundleIdentifier` | `com.vigil.app` | matches the OSLog subsystem and the `UserDefaults` suite |
+| `CFBundleName` | `Vigil` | |
+| `CFBundleDisplayName` | `Vigil` | |
+| `CFBundleExecutable` | `Vigil` | |
+| `CFBundlePackageType` | `APPL` | |
+| `CFBundleShortVersionString` | `$(VIGIL_VERSION)` | e.g. `1.0.0` |
+| `CFBundleVersion` | `$(VIGIL_BUILD)` | git commit count |
+| `CFBundleIconFile` | `AppIcon` | `.icns` in Resources (§12.1 step 9) |
+| `CFBundleIconName` | `AppIcon` | asset-catalog name |
+| `LSMinimumSystemVersion` | `14.0` | must match `platforms: [.macOS(.v14)]` |
+| `LSApplicationCategoryType` | `public.app-category.video` | |
+| `NSHumanReadableCopyright` | `© 2026 Vigil` | |
+| `NSPrincipalClass` | `NSApplication` | |
+| `NSHighResolutionCapable` | `true` | Retina; without it Metal layers render at 1× |
+| `NSSupportsAutomaticTermination` | `false` | we hold live network sessions |
+| `NSSupportsSuddenTermination` | `false` | recordings must be finalised on quit |
+| **`NSLocalNetworkUsageDescription`** | `Vigil finds and connects to cameras on your local network. It never sends video anywhere else.` | macOS 15+ prompts for local network access; without this string the prompt shows a generic message and discovery silently fails on first run if denied |
+| **`NSAppTransportSecurity`** | dict, below | Hikvision ISAPI is plain HTTP on port 80 by default and TLS certs are self-signed |
+| `NSMicrophoneUsageDescription` | `Vigil uses your microphone for two-way audio with cameras that support it.` | required by the two-way-audio feature |
+| `NSCameraUsageDescription` | *omitted* | we never open a local camera |
+| `CFBundleURLTypes` | one entry, scheme `vigil` | deep links (`vigil://camera/<uuid>`) |
+| `CFBundleDocumentTypes` | see below | `.vigilconfig` import/export, plus read-only viewing of `.mp4`/`.mov` clips |
+| `UTExportedTypeDeclarations` | `com.vigil.config` conforming to `public.json`, extension `vigilconfig` | our export format |
+| `NSUserActivityTypes` | `com.vigil.app.viewCamera` | Handoff-less, but used by App Intents/Spotlight |
+| `ITSAppUsesNonExemptEncryption` | `false` | we use MD5 for Digest auth and TLS from the OS only; no custom crypto exported |
+
+```xml
+<key>NSAppTransportSecurity</key>
+<dict>
+    <!-- Cameras are LAN devices. ATS's public-CA requirements cannot apply to a 192.168.x.y box. -->
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <!-- We do NOT set NSAllowsArbitraryLoads. Non-local plain HTTP stays blocked, which is a real
+         safety property: a mistyped public host cannot silently exfiltrate credentials in the clear. -->
+</dict>
+```
+
+```xml
+<key>CFBundleDocumentTypes</key>
+<array>
+    <dict>
+        <key>CFBundleTypeName</key><string>Vigil Configuration</string>
+        <key>CFBundleTypeRole</key><string>Editor</string>
+        <key>LSHandlerRank</key><string>Owner</string>
+        <key>LSItemContentTypes</key><array><string>com.vigil.config</string></array>
+    </dict>
+    <dict>
+        <key>CFBundleTypeName</key><string>Video Clip</string>
+        <key>CFBundleTypeRole</key><string>Viewer</string>
+        <key>LSHandlerRank</key><string>Alternate</string>
+        <key>LSItemContentTypes</key>
+        <array><string>public.mpeg-4</string><string>com.apple.quicktime-movie</string></array>
+    </dict>
+</array>
+```
+
+**RTSP is not registered as a URL scheme handler.** Claiming `rtsp://` system-wide would hijack other
+apps' links; users add cameras inside Vigil.
+
+### 12.4 `project.yml` (XcodeGen)
+
+The primary Xcode workflow is "open `Package.swift`" — that already works and needs no project. A
+`project.yml` exists only for engineers who want a `.xcodeproj` with schemes, a run destination and a
+signing team configured in the UI. It defines **one** target, the app, which links the local SwiftPM
+package; it does **not** duplicate the source file lists.
+
+```yaml
+name: Vigil
+options:
+  bundleIdPrefix: com.vigil
+  deploymentTarget: { macOS: "14.0" }
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+packages:
+  Vigil: { path: . }
+targets:
+  Vigil:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Vigil
+    dependencies:
+      - package: Vigil
+        product: VigilApp
+    info:
+      path: Info.plist
+    entitlements:
+      path: Vigil.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vigil.app
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        CODE_SIGN_ENTITLEMENTS: Vigil.entitlements
+schemes:
+  Vigil:
+    build: { targets: { Vigil: all } }
+    run: { config: Debug }
+    test: { config: Debug, gatherCoverageData: true }
+```
+
+`.xcodeproj` is git-ignored (§11). Regenerate with `Scripts/gen-xcode.sh`. **No hand-written
+`.pbxproj` may ever be committed.**
+
+---
+
+## 13. Sandbox, entitlements and hardened runtime
+
+### 13.1 The sandbox decision — explicit justification
+
+**Decision: the shipping app is sandboxed (`com.apple.security.app-sandbox = true`).**
+
+Reasoning, weighed honestly:
+
+*For sandboxing*
+1. Vigil connects to untrusted-by-construction devices and parses **attacker-controllable byte streams**
+   (RTSP headers, SDP, RTP payloads, SPS/PPS bitstreams, ISAPI XML) with code we wrote ourselves. A
+   parsing bug in `VigilBitstream` is the app's most likely serious vulnerability. The sandbox is the
+   single highest-leverage mitigation available: it turns "arbitrary code execution reads your
+   documents and phones home" into "arbitrary code execution inside a container with network-client
+   access and no file access beyond user-selected folders".
+2. Distribution optionality: sandboxing is mandatory for the Mac App Store. Choosing it now costs
+   little; retrofitting it later is expensive because file access patterns leak everywhere.
+3. It forces the security-scoped-bookmark discipline for recording/snapshot folders (§9.1), which is
+   also the correct UX (an explicit folder grant) rather than writing wherever we like.
+
+*Against sandboxing (and how each objection is answered)*
+1. **Multicast.** `com.apple.developer.networking.multicast` is a *managed* entitlement requiring a
+   provisioning profile. An ad-hoc-signed local build cannot use it. → We ship two entitlement files
+   (§13.3, §13.4): the sandboxed shipping one, and `Vigil-Dev.entitlements` for local builds. And,
+   critically, **discovery degrades gracefully**: without multicast, SADP and WS-Discovery are skipped
+   and the targeted subnet sweep plus Bonjour browse still find cameras (`spec-discovery.md`). The user
+   sees an informational row — "Fast discovery unavailable; scanning your subnet instead (this takes
+   about 20 seconds)" — not an error.
+2. **Arbitrary local file access.** We do not need it. Snapshots and recordings go to user-selected
+   folders held as security-scoped bookmarks; imports/exports go through `NSOpenPanel`/`NSSavePanel`.
+3. **UDP listening for RTP.** Covered by `com.apple.security.network.server`, which is compatible with
+   the sandbox.
+4. **Second-display video wall, PiP, menu-bar extra.** No sandbox interaction.
+
+*Rejected alternative:* unsandboxed + hardened runtime + notarisation. It would remove the multicast
+provisioning-profile friction, but it gives up the only meaningful containment we have around
+network-fed parsers. That trade is wrong for this app. The friction is handled with a second
+entitlements file instead.
+
+### 13.2 Local-network permission flow (macOS 15+)
+
+Even sandboxed with `network.client`, macOS 15 gates *local* network access behind a user prompt tied
+to `NSLocalNetworkUsageDescription`. Cross-cutting requirements:
+
+* The prompt appears on the **first outbound local connection**, not at launch. We therefore trigger it
+  deliberately at a moment the user understands: when they press "Scan for cameras" in onboarding, not
+  during a background health check.
+* If denied, every connection fails with an `NWError` that we map to
+  `TransportError.localNetworkDenied` → severity fatal, disposition `retryAfterUserAction`, remedy
+  "Open System Settings → Privacy & Security → Local Network and enable Vigil." Do **not** retry on a
+  backoff schedule; it produces a permanent failing loop with no explanation.
+* `StreamDoctor` probes this explicitly and reports it as its own distinct cause.
+
+### 13.3 `Vigil.entitlements` (shipping, sandboxed)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Containment. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Outbound TCP/UDP to cameras: RTSP 554, ISAPI 80/443, SADP/ONVIF, sweeps. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Inbound: UDP RTP/RTCP port pairs when transport is UDP, and the WS-Discovery/SADP
+         response socket (replies arrive from arbitrary source ports to our bound port). -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- Multicast/broadcast for SADP (239.255.255.250:37020) and ONVIF WS-Discovery (:3702).
+         MANAGED ENTITLEMENT: requires an Apple-issued provisioning profile. If the profile is
+         absent the app still runs; discovery falls back to the subnet sweep (§13.1). -->
+    <key>com.apple.developer.networking.multicast</key>
+    <true/>
+
+    <!-- Recording/snapshot folders and config import/export, via NSOpenPanel + security-scoped
+         bookmarks. This is the ONLY file-system entitlement we take. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Two-way audio push-to-talk. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- Deliberately NOT taken, and why:
+         files.downloads.read-write         — no reason to touch Downloads
+         files.all                          — defeats the sandbox
+         network.server on a fixed port     — n/a, ports are OS-assigned
+         cs.allow-jit / cs.disable-library-validation / cs.allow-unsigned-executable-memory
+                                            — we run no JIT and load no third-party code
+         cs.debugger                        — never in a shipping build
+         automation.apple-events            — we EXPOSE AppleScript, we do not send events
+         print, camera, location, contacts, calendars, photos, bluetooth, usb — unused
+    -->
+</dict>
+</plist>
+```
+
+### 13.4 `Vigil-Dev.entitlements` (local development only)
+
+Used by `Scripts/build-app.sh --sandbox off`. Never shipped; `Scripts/build-app.sh` prints a loud
+warning and stamps `VigilDevBuild=true` into `Info.plist` so the About window shows it.
+
+```xml
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>   <!-- debugger attach; MUST be absent from any distributed build -->
+</dict>
+```
+
+Note: unsandboxed **does not** grant multicast on macOS 15 either — the local-network prompt still
+applies — but it removes the provisioning-profile requirement for the managed entitlement, which is
+what unblocks day-to-day SADP work on a laptop.
+
+### 13.5 Hardened runtime
+
+* Always on: `codesign --options runtime`.
+* Required exceptions: **none**. We use no JIT, load no plug-ins, allocate no unsigned executable
+  memory, and read no DYLD environment variables. If a future change needs a hardened-runtime
+  exception, that is a design smell and must be justified in this document first.
+* `--timestamp` is always passed (required for notarisation).
+* `--generate-entitlement-der` is passed for macOS 12+ compatibility of the DER entitlement blob.
+* Library validation stays enabled; SwiftPM resource bundles are data, not code, so they do not need
+  signing exceptions — but they **are** inside the bundle and therefore must be present *before*
+  `codesign` runs (§12.1 orders steps 8 and 11 accordingly).
+* Notarisation is required for distribution outside the machine that built it. Ad-hoc `-` signing is
+  the default for local builds and is expected to be blocked by Gatekeeper elsewhere.
+
+---
+
+## 14. Swift style rules (repo-wide, mandatory)
+
+Enforced by `swift format lint --strict` (config `.swift-format`), plus greps in `Scripts/lint.sh`.
+Review rejects violations; there is no "style is subjective" discussion in this repo.
+
+### 14.1 File header
+
+Every file, exactly this shape, no more, no less:
+
+```swift
+//
+//  RTSPSessionMachine.swift
+//  VigilRTSP
+//
+//  Transport-agnostic RTSP 1.0 client state machine. Pure: no sockets, no clock reads, no Task.
+//  See docs/spec-rtsp.md §6 for the state table.
+//
+```
+
+Line 4+ is a one-to-three-line purpose statement and, where one exists, a `docs/` reference. No author
+names, no dates, no copyright block (the licence lives in `LICENSE`), no Xcode template junk.
+macOS-only files add the guard note from §4.3.
+
+### 14.2 Formatting
+
+| Rule | Value |
+|---|---|
+| Indentation | 4 spaces, never tabs |
+| Line length | **110 columns**, hard limit; the formatter wraps, and lint fails on over-length lines it cannot wrap (long string literals must be split with `+` or moved to a constant) |
+| Trailing whitespace | forbidden |
+| File length | ≤ 600 lines |
+| Function length | ≤ 60 lines; parsers may reach 120 with a `// RATIONALE:` note (bitstream syntax follows the spec's structure and splitting it hurts reviewability against the ITU document) |
+| Braces | K&R, opening brace on the same line |
+| One statement per line; no `;` | |
+| Import order | `Foundation` first, then other system frameworks alphabetically, then Vigil modules alphabetically, one blank line between groups |
+| Blank lines | one between members, two before a `// MARK: -` |
+| Trailing commas in multi-line literals | required |
+| Trailing closure | used only for the last closure argument and only when the label adds nothing |
+
+### 14.3 `MARK` structure
+
+Types longer than 40 lines use this order, and only these headings:
+
+```swift
+// MARK: - Nested Types
+// MARK: - Stored Properties
+// MARK: - Computed Properties
+// MARK: - Initialisation
+// MARK: - Public API          (or `Package API` / `Internal API`)
+// MARK: - Private Helpers
+// MARK: - Conformances        (one `// MARK: - <Protocol>` per extension)
+```
+
+Protocol conformances go in extensions, one per protocol, with a `MARK`. `Codable` conformance with
+custom keys always shows `CodingKeys` explicitly — never rely on synthesised key names for anything
+persisted (§9.3 depends on stable keys).
+
+### 14.4 Access control
+
+| Level | When |
+|---|---|
+| `private` | default for everything; start here |
+| `fileprivate` | only when two types in one file genuinely share state |
+| `internal` (implicit) | module-internal API; never write the keyword |
+| `package` | **use this** for API that other Vigil targets need but that is not part of a documented module contract. It keeps the public surface small while allowing cross-target use. |
+| `public` | only for the types and members listed in a module spec's "public API" section |
+| `open` | forbidden. We subclass nothing across module boundaries |
+
+`final` on every class unless it is deliberately subclassed within the module. `struct` over `class`
+unless identity or reference semantics are required. `enum` with no cases for pure namespaces
+(`enum VTheme { enum Color { … } }`), never a `struct` with a private `init`.
+
+### 14.5 Naming
+
+* Types `UpperCamelCase`; members `lowerCamelCase`; no `_` prefixes; no Hungarian notation.
+* No abbreviations except this closed list, used in canonical casing:
+  `RTSP RTP RTCP SDP NAL SPS PPS VPS SEI IDR IRAP AU PTS DTS FPS SAR GOP MTU PTZ ISAPI SADP ONVIF
+  URL URI ID UUID JSON XML HTTP HTTPS TCP UDP TLS DNS IP MAC CIDR MD5 CRC AAC PCM YUV RGB HDR EDR
+  UI OSD NVR DVR`.
+  Acronyms at the **start** of a member name are lowercased whole: `rtspPort`, `urlComponents`,
+  `sdpDescription`. Elsewhere they stay uppercase: `parseRTSPResponse`, `makeSDPParser`.
+* Booleans read as assertions: `isKeyframe`, `hasParameterSets`, `shouldReconnect`, `canPan`.
+  Never `flag`, `enabled` (use `isEnabled`), or negatives (`isNotReady` is forbidden).
+* Functions that can fail return `throws`, not `Bool`. Functions returning a value name the value, not
+  the act: `var displaySize` not `getDisplaySize()`.
+* Factory statics are `make…`: `RTSPRequest.makeDescribe(url:cseq:)`.
+* Units are in the name when not obvious: `timeoutSeconds`, `bitrateKbps`, `jitterMilliseconds`,
+  `deadlineNanos`. A bare `timeout: Duration` is fine because `Duration` carries the unit.
+* Test names describe behaviour: `func markerBitUnreliable_stillSplitsAccessUnitsCorrectly()`.
+
+### 14.6 Force-unwrap, force-try, force-cast
+
+**Forbidden in `Sources/`:** `!` postfix unwrap, `try!`, `as!`, `unsafeBitCast`,
+`fatalError` (except §7.4's narrow case), `preconditionFailure`, `array[i]` where `i` is not provably
+in range, `String(cString:)` on non-null-terminated bytes.
+
+**Allowed in `Tests/` and `Sources/VigilTestKit/`.** Tests are meant to crash loudly.
+
+The one exception in `Sources/`: a `!` on a statically exhaustive dictionary built in the same file from
+a `CaseIterable` enum (as in `OSLogLogger.loggers`, §8.2), which must carry a
+`// swift-format-ignore` plus a comment naming the invariant.
+
+Replacements to use instead:
+
+```swift
+// Instead of `array[i]`
+guard let byte = bytes.dropFirst(offset).first else { throw BitstreamError.truncated(atBit: offset * 8) }
+
+// Instead of `dict[key]!`
+guard let track = tracks[trackID] else { throw RTSPError.sessionNotFound }
+
+// Instead of `Int(string)!`
+guard let cseq = Int(value), cseq >= 0 else { throw RTSPError.malformedResponse }
+```
+
+### 14.7 Error handling style
+
+* **Typed throws in the pure layer.** Where the error set is closed, use Swift 6 typed throws so
+  callers cannot forget a case:
+  ```swift
+  public mutating func parse(_ data: Data) throws(BitstreamError) -> H264SPS
+  ```
+  At module boundaries and in `VigilCore`, widen to `throws(VigilError)`. Only `VigilUI` and `Vigil`
+  use untyped `throws`.
+* `try?` is allowed **only** where the failure is genuinely uninteresting *and* a comment says so:
+  `try? FileManager.default.removeItem(at: staleTemp)  // best effort cleanup`.
+  Swallowing an error silently anywhere else is a review rejection.
+* Never `catch {}`. Never `catch { print(error) }`. Every catch either handles, logs at ≥ `warning`
+  with the `diagnosticCode`, or rethrows.
+* `Result` is not used as a return type. Use `throws`. `Result` appears only inside
+  `AsyncThrowingStream` element types where the API demands it.
+* Errors are values: no `NSError` construction, no `NSException`, no `assertionFailure` as
+  error handling.
+* Integer overflow: arithmetic that is *expected* to wrap (RTP sequence numbers, 32-bit timestamps)
+  uses `&+`/`&-` **with a comment naming the wrap width**. Everywhere else, plain `+` so a trap
+  surfaces the bug. Never `Int(exactly:)!`; use `guard let`.
+
+### 14.8 Documentation comments
+
+* Every `public` and `package` declaration has a `///` comment. Lint fails otherwise.
+* Shape: one summary sentence ending in a period, a blank `///` line, then detail; then
+  `- Parameters:` (only for 2+ parameters), `- Returns:`, `- Throws:` (naming the concrete error type),
+  and `- Complexity:` for anything worse than O(n).
+* Cite the specification: `/// - Note: ITU-T H.264 (08/2021) §7.3.2.1.1.` Every bitstream and protocol
+  parser function names its clause. This is how a reviewer checks correctness without guessing.
+* `- Warning:` on anything with a concurrency or lifetime precondition ("Must be called from the
+  owning actor", "The returned buffer is valid until the next `push`").
+* No commented-out code. Ever. Git has history.
+* `// TODO:` is **forbidden in `Sources/`**. Unfinished work is a tracked issue, not a comment; a
+  shipped `TODO` is a lie about the state of the code. `Scripts/lint.sh` fails on it.
+
+### 14.9 Cryptography and hashing
+
+`CryptoKit` is **not available on Linux**, so the pure layer cannot use it, and we need MD5 for HTTP/RTSP
+Digest authentication on both platforms. Decision: **implement MD5 in `VigilProtocols`** (~120 lines,
+RFC 1321), unit-tested against the RFC 1321 test suite plus the RFC 2617 Digest example vectors.
+Also in `VigilProtocols`: `CRC32` (for fixture checksums) and a small `Base64` wrapper over
+Foundation's.
+
+MD5 is used **only** where a protocol mandates it (Digest auth). It is never used for anything
+security-bearing of our own choosing. `SHA-256`, when needed for TLS certificate fingerprint display,
+comes from `CryptoKit` in a **macOS-only** target. `Scripts/lint.sh` fails on `import CryptoKit`
+outside `VigilTransport` and `VigilCore`.
+
+### 14.10 Miscellaneous hard rules
+
+| Rule | Reason |
+|---|---|
+| No `print`, `debugPrint`, `dump` in `Sources/` | use the logger; lint fails |
+| No `NSLog` | ditto |
+| No global mutable state; no `static var` that is not `let` | Swift 6 rejects most of it anyway; the rest is a race |
+| No `nonisolated(unsafe)` | if you need it, you have modelled ownership wrong |
+| No `@preconcurrency import` | if a framework needs it, wrap it in a small isolated adapter instead |
+| No `DispatchSemaphore`, `NSLock`, `pthread_mutex`, `objc_sync_enter` | use actors or `OSAllocatedUnfairLock` (§5.7) |
+| No `Thread.sleep`, `usleep`, `RunLoop.current.run(until:)` | use `clock.sleep(for:)` |
+| No `unsafeDowncast`, no `Unmanaged` outside the two documented CF bridges | |
+| `withUnsafeBytes` blocks may not escape the pointer; every use has a `// SAFETY:` comment naming the lifetime | |
+| No string-keyed magic: RTSP header names, ISAPI paths, plist keys, `UserDefaults` keys and log metadata keys are `static let` constants in one place per module | typos are otherwise silent |
+| No `Date()` in the pure layer | §5.10 |
+| Localised strings via `String(localized:)`/`LocalizedStringResource` with explicit keys; **never** a bare English literal in a view | Russian localisation is a P0 requirement |
+| Every `AsyncStream` has a documented buffering policy at the creation site | unbounded default is a memory leak |
+| `Data` slices: never store a `Data` slice long-term without `Data(slice)` — slices retain the parent buffer | a 1 MB read retained by a 12-byte header slice is a real leak |
+
+---
+
+## Appendix A — CI workflow skeletons
+
+```yaml
+# .github/workflows/linux.yml
+name: linux
+on: [push, pull_request]
+jobs:
+  pure:
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove zero dependencies
+        run: test "$(grep -c '\.package(' Package.swift)" -eq 0
+      - name: Build pure product
+        run: swift build --product VigilPure -Xswiftc -warnings-as-errors
+      - name: Build test fixtures
+        run: swift build --product VigilTestKit -Xswiftc -warnings-as-errors
+      - name: Build everything (proves #if os(macOS) guards)
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Test
+        run: swift test --parallel
+      - name: Assert pure targets actually ran tests
+        run: Scripts/test-linux.sh
+```
+
+```yaml
+# .github/workflows/macos.yml
+name: macos
+on: [push, pull_request]
+jobs:
+  full:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build -c debug -Xswiftc -warnings-as-errors
+      - run: swift test --parallel --enable-code-coverage
+      - run: Scripts/coverage.sh
+      - run: Scripts/lint.sh
+      - run: Scripts/build-app.sh --configuration release --arch universal
+      - uses: actions/upload-artifact@v4
+        with: { name: Vigil.app, path: dist/Vigil.app }
+```
+
+## Appendix B — Performance budget allocated per module
+
+FEATURES.md owns the headline numbers; this table allocates them so each module has a target it can
+test against in isolation.
+
+| Budget | Total | Allocation |
+|---|---|---|
+| Glass-to-glass latency, TCP, LAN | ≤ 250 ms | camera encode + network 60 ms · jitter buffer 120 ms (low-latency preset) · depacketize ≤ 2 ms · decode ≤ 12 ms · present ≤ 8 ms · display refresh ≤ 17 ms · slack 31 ms |
+| Cold launch → first frame (1 camera, cached credentials) | ≤ 1200 ms | process + SwiftUI 250 ms · config load 5 ms · Keychain 2 ms · TCP+RTSP handshake 4 RTT ≈ 120 ms · first keyframe wait (GOP-bound) ≤ 700 ms · decode+present 25 ms |
+| 16 × 1080p substream CPU | ≤ 35 % of an M-series package | RTP+depacketize ≤ 6 % · VideoToolbox HW ≤ 12 % · Metal composite ≤ 8 % · SwiftUI/AppKit ≤ 5 % · everything else ≤ 4 % |
+| Memory, 16 streams | ≤ 900 MB RSS | pixel-buffer pools 16 × 3 × 3.1 MB ≈ 150 MB · encoded queues 16 × 8 × 120 KB ≈ 15 MB · textures ≈ 100 MB · app+UI ≤ 300 MB · slack |
+| UI frame time p99 | ≤ 8 ms (120 Hz) | overlays and chrome only; video layers are never re-laid-out during animation (DESIGN.md) |
+| Per-camera task count | 9 | §5.4 |
+| Allocations per decoded frame | **0** steady-state | pixel buffers from a `CVPixelBufferPool`, stats in preallocated rings, `EncodedFrame.data` reusing capacity |
+
+## Appendix C — Implementer checklist (per module)
+
+Before a module is considered done:
+
+- [ ] Public API matches its `docs/spec-*.md` exactly; any deviation updated the spec in the same commit.
+- [ ] Imports match the §4.5 allow-list; the target still appears in `VigilPure` (if pure) and builds on Linux.
+- [ ] Every file has the §14.1 header; macOS-only files have the §4.3 guard.
+- [ ] No `!`, `try!`, `as!`, `print`, `TODO`, `Thread.sleep`, `DispatchSemaphore`.
+- [ ] Typed throws where the error set is closed; every error case has a `diagnosticCode`, `userMessage`, `disposition`.
+- [ ] Logging goes through the injected `LoggerProtocol`; nothing in §8.6 can reach a log.
+- [ ] Pure types take an injected clock and `RandomSource`; no `Date()` or system RNG.
+- [ ] Actors only where §5.2 lists them; new actors were added to §5.2 by the same commit.
+- [ ] Every queue and buffer has a documented bound and a drop counter in `StreamStatistics`.
+- [ ] ≥ 90 % line coverage (pure) / 70 % (macOS); the relevant rows of the §10.2 matrix pass.
+- [ ] `swift format lint --strict` and `Scripts/lint.sh` are clean; `swift build -Xswiftc -warnings-as-errors` is clean on both platforms.
+
+## Appendix D — Glossary
+
+| Term | Meaning here |
+|---|---|
+| AU | Access unit — one coded picture's worth of NALs; what an `EncodedFrame` holds |
+| IRAP | Intra random access point — H.265 NAL types 16…23; the H.265 analogue of an IDR |
+| Pure layer | The Foundation-only, Linux-testable targets: `VigilProtocols`, `VigilBitstream`, `VigilRTSP`, `VigilRTP`, `VigilISAPI`, `VigilDiscovery`, `VigilTestKit` |
+| Quirk | A named, reproducible misbehaviour of a real camera or network, injectable by `VigilTestKit` |
+| Substream | Hikvision's lower-resolution second stream (`/Streaming/Channels/x02`), used for grid tiles |
+| Glass-to-glass | Photon at the camera sensor → photon on the user's display |
+| Ground truth | What `SyntheticRTSPServer` intended to send; the oracle for pipeline assertions |

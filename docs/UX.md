@@ -20,13 +20,13 @@ Hard rules that apply to this whole document:
 1. **The video is the hero.** Chrome is transient. No control may permanently cover video except
    the 1px tile border and the name chip (which is dismissible via View ▸ Tile Overlays).
 2. **Nothing in the UI ever blocks on the network.** Every affordance renders from local state
-   within one frame (8.3 ms at 120 Hz) and reconciles asynchronously (§16).
+   within one frame (8.3 ms at 120 Hz) and reconciles asynchronously (§15).
 3. **No layout reflow after content arrives.** Sizes are committed before the first byte
-   (§16.1). A tile that becomes live must not move, resize, or re-letterbox.
-4. **Keyboard-first.** Every action in §12 is reachable without the mouse and appears in the menu
+   (§15.1). A tile that becomes live must not move, resize, or re-letterbox.
+4. **Keyboard-first.** Every action in §11 is reachable without the mouse and appears in the menu
    bar. Anything reachable only by hover is a bug.
 5. **Strings are keys.** No literal user-facing string in Swift source; all strings come from
-   `Localizable.xcstrings` with the key structure of §15.
+   `Localizable.xcstrings` with the key structure of §14.
 
 ---
 
@@ -49,7 +49,7 @@ Library (one per user, ~/Library/Application Support/Vigil/library.json)
 Rules:
 
 - A camera exists in exactly one place in the data model and is *referenced* everywhere else.
-  Deleting a camera from **Cameras** deletes it everywhere (destructive confirm, §15 key
+  Deleting a camera from **Cameras** deletes it everywhere (destructive confirm, §14 key
   `confirm.deleteCamera.*`). Removing it from **Live** only clears a Stage cell.
 - **Live** is not a container of cameras; it is a view of the *current Layout*. Dragging a camera
   to Live assigns it to the first empty cell (or replaces the focused cell if none is empty).
@@ -133,8 +133,8 @@ public enum InspectorTab: String, CaseIterable, Codable, Sendable {
 | Sidebar visibility / rail / width, inspector visibility + tab | `@SceneStorage` per window | ✅ | per-window, not global |
 | Window frames | AppKit autosave (`NSWindow.setFrameAutosaveName`) via scene id | ✅ | see §2.4 |
 | Search text, filter, palette query, toasts, focus | in-memory `AppModel` | ❌ | intentionally volatile |
-| Preferences (§14) | `UserDefaults` (`@AppStorage`, suite `com.vigil.app`) | ✅ | exported by diagnostics, redacted |
-| Shortcut overrides | `UserDefaults` key `shortcuts.overrides` (JSON) | ✅ | §12.4 |
+| Preferences (§13) | `UserDefaults` (`@AppStorage`, suite `com.vigil.app`) | ✅ | exported by diagnostics, redacted |
+| Shortcut overrides | `UserDefaults` key `shortcuts.overrides` (JSON) | ✅ | §11.4 |
 | Playback window scrub position | `@SceneStorage` per playback window | ✅ | restores to the same instant |
 
 ---
@@ -163,7 +163,7 @@ struct VigilApp: App {
         .defaultSize(width: 1440, height: 900)
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
-        .commands { VigilCommands(app: app, env: env) }   // §12.3
+        .commands { VigilCommands(app: app, env: env) }   // §11.2
 
         // ── 2. Playback: value-driven WindowGroup, one window per request ─────────
         WindowGroup(id: SceneID.playback, for: PlaybackRequest.self) { $request in
@@ -271,7 +271,7 @@ struct MainWindowView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(id: "main") { MainToolbar() }          // customizable toolbar
-        .overlay { CommandPaletteOverlay() }            // §11
+        .overlay { CommandPaletteOverlay() }            // §10
         .overlay(alignment: .bottomTrailing) { ToastStack() }
         .background(WindowAccessor { configure($0) })   // traffic-light inset, tabbing off
     }
@@ -311,7 +311,7 @@ morph the thumbnail between the two widths (`VTheme.Motion.standard`).
 | Playback | 1280×760, top-trailing cascade +24pt | 900×560 | — | `.contentMinSize` | frame + day + scrub instant + zoom level |
 | Discovery | 780×600 | 720×520 | 1100×900 | `.contentMinSize` | frame only; the flow always restarts at step 1 |
 | Video Wall | fills target screen | 640×360 | — | free | target screen id + layout preset |
-| Settings | content-sized per pane (see §14) | — | — | `.contentSize` | last pane (`@AppStorage("settings.lastPane")`) |
+| Settings | content-sized per pane (see §13) | — | — | `.contentSize` | last pane (`@AppStorage("settings.lastPane")`) |
 | About | 420×320 | = | = | `.contentSize` | — |
 
 Restoration policy:
@@ -327,7 +327,7 @@ Restoration policy:
   Dock icon or `applicationShouldHandleReopen` reopens `main`.
 - **Launch is never blocked by restoration**: the window renders its full chrome from
   `library.json` (already read synchronously, < 8 ms for ≤ 512 cameras) and every tile enters the
-  connecting state (§16) in the same frame.
+  connecting state (§15) in the same frame.
 
 ### 2.5 Cinema mode vs. tile fullscreen
 
@@ -421,7 +421,7 @@ must be stable and learnable).
 |---|---|---|---|---|
 | 1 | **LIVE** | one row: "Current Layout" + the layout glyph; selecting it clears camera selection and focuses the Stage | — | never empty |
 | 2 | **GROUPS** | disclosure rows; header has a `＋` to create a group (inline text field, default name "New Group") | member count | row "No groups — drag cameras together to make one" |
-| 3 | **CAMERAS** | camera rows (§4.2), sorted by `orderIndex`; header `＋` opens the add menu (Discover…, Add Manually…, Import CSV…) | live/total | `VEmptyState` (§13.2) |
+| 3 | **CAMERAS** | camera rows (§4.2), sorted by `orderIndex`; header `＋` opens the add menu (Discover…, Add Manually…, Import CSV…) | live/total | `VEmptyState` (§12.2) |
 | 4 | **RECORDINGS** | one row → opens Playback for the focused camera (or the multi-select) | local clip count | "No recordings yet" |
 | 5 | **EVENTS** | one row → Events feed in the Stage | unread count, accent pill, clears on view | "No events" |
 | 6 | **BOOKMARKS** | expands to bookmark rows (camera colour dot + title + time) | count | "No bookmarks — press B while reviewing" |
@@ -467,7 +467,7 @@ Live video keeps running behind the feed at 0.5× thumbnail rate so returning is
 | Drag row → outside window | no-op (never a file promise; use File ▸ Export Configuration) |
 | Drag 2+ selected rows onto Group header `＋` | create a new group containing them, inline-rename active |
 | ↩ on a selected row | begin inline rename (a `VTextField` replaces the name in place; ↩ commits, `Esc` reverts, empty name reverts, duplicate names are allowed but a "(2)" suffix is suggested) |
-| ⌫ | delete with confirm (§15 `confirm.deleteCamera.*`) |
+| ⌫ | delete with confirm (§14 `confirm.deleteCamera.*`) |
 | Space | toggle enable/disable (a disabled camera is never connected; row dims to 45%) |
 | `/` or ⌘F-free focus | move focus to the search field |
 | ↑/↓ | move selection; ←/→ collapse/expand a Group row |
@@ -506,7 +506,7 @@ Delete Camera…                   ⌫
 
 ### 4.4 Search & filter
 
-- Search matches, in priority order: name (fuzzy, §11.3 scorer), group name, host/IP (prefix),
+- Search matches, in priority order: name (fuzzy, §10.3 scorer), group name, host/IP (prefix),
   model, serial (exact suffix ≥ 4 chars). Results keep the section structure but hide non-matching
   rows; matched substrings highlight with `VTheme.Color.accent` at semibold.
 - The field is a `VSearchField` with a leading `magnifyingglass`, a trailing filter chip
@@ -618,7 +618,7 @@ appears at the Stage's bottom-trailing corner and opens a popover listing them.
 | Top-trailing | `● REC` + elapsed | while recording, always | red dot pulses 1 s |
 | Bottom-leading | recording elapsed / digital-zoom factor (`2.4×`) / patrol countdown | contextual | at most one at a time, priority: REC > zoom > patrol |
 | Bottom-trailing | 7 action buttons, 24×24 pt hit target 28 pt, 4 pt spacing | on hover / on focus | order fixed left→right: Mute, Snapshot, Record, PTZ, Quality, Fit/Fill, Close |
-| Centre | connecting narration / error card / retry countdown | state-driven (§13) | |
+| Centre | connecting narration / error card / retry countdown | state-driven (§12) | |
 | Overlay | motion boxes, privacy-mask preview, PTZ direction glyph | event-driven | drawn by `VigilRender`, see `spec-render.md` |
 
 Hover-chrome timing: fade in over 90 ms on pointer enter (`VTheme.Motion.micro`); auto-hide after
@@ -643,7 +643,7 @@ Button behaviours:
 
 Dashed 1 pt `stroke/subtle` rounded rect, centred `plus.viewfinder` 22 pt at 40% + label
 `stage.emptyCell.title` ("Add camera"). Click (or ⏎ when focused) opens a **camera picker popover**:
-a 280 pt-wide fuzzy list of unassigned cameras (same scorer as §11.3), ↑↓ + ⏎ to choose, ⌘⏎ to
+a 280 pt-wide fuzzy list of unassigned cameras (same scorer as §10.3), ↑↓ + ⏎ to choose, ⌘⏎ to
 choose and advance to the next empty cell. Drop target for sidebar drags and for tile drags.
 
 ### 5.5 Cycle / patrol mode (⌘Y)
@@ -805,7 +805,7 @@ update at 1 Hz. This is a hard performance rule: the Inspector must cost < 0.4 m
 │                             │
 │  PRESETS                 ＋ │   3-column grid of 64×36 thumbnails, number badge 1..255,
 │  ┌────┐┌────┐┌────┐         │   name below (Caption2, 1 line). Click = go (optimistic,
-│  │ 1  ││ 2  ││ 3  │         │   §16.3). ⇧-click = overwrite (confirm). Right-click menu:
+│  │ 1  ││ 2  ││ 3  │         │   §15.3). ⇧-click = overwrite (confirm). Right-click menu:
 │  └────┘└────┘└────┘         │   Go · Rename… · Update Thumbnail · Set to Current · Delete
 │  ┌────┐┌────┐┌ ＋ ┐         │   Thumbnails are captured on save and cached at
 │  │ 4  ││ 5  ││    │         │   ~/Library/Caches/Vigil/presets/<cam>/<n>.jpg
@@ -824,12 +824,12 @@ update at 1 Hz. This is a hard performance rule: the Inspector must cost < 0.4 m
 - If `DeviceCapabilities.ptz == false` the whole tab shows a `VEmptyState`:
   `inspector.ptz.unsupported.title` = "This camera has no PTZ." with body naming the model. The tab
   icon dims but remains selectable (predictable IA beats disappearing tabs).
-- Every control is optimistic (§16.3) with a 1.2 s failure window.
+- Every control is optimistic (§15.3) with a 1.2 s failure window.
 
 ### 6.4 Image
 
 All controls write through ISAPI with a 250 ms trailing debounce and apply **instantly** to the
-local Metal render path so the user sees the change in the same frame (§16.4).
+local Metal render path so the user sees the change in the same frame (§15.4).
 
 | Control | Type | Range | ISAPI |
 |---|---|---|---|
@@ -862,7 +862,7 @@ local Metal render path so the user sees the change in the same frame (§16.4).
 | Local recording | Big `Start/Stop` (⌘R) with elapsed; current file name; pre-roll indicator `"5 s pre-roll armed"`; `Reveal in Finder`; today's clip list (name, duration, size) |
 | Auto-record | toggle "Record on motion", pre-buffer (0–15 s, default 5), post-buffer (5–120 s, default 15), cooldown (default 20 s), max clip length (default 5 min) |
 | Schedule | 7×24 grid; drag to paint; three brushes: Off, Continuous (blue), Motion (amber); ⌥-drag erases; `Copy day ▸` menu; presets "Always", "Nights & weekends", "Work hours" |
-| Destination | folder path (`NSOpenPanel` picker, sandbox-free app so a plain path is fine), format MP4/MOV, filename template with live preview (§14.3) |
+| Destination | folder path (`NSOpenPanel` picker, sandbox-free app so a plain path is fine), format MP4/MOV, filename template with live preview (§13.3) |
 | Storage | this camera's local usage, retention policy (keep N days / cap N GB / never delete), and `"Oldest clip: 12 Jul"`; a 6 pt bar with the disk's free space and a warn threshold marker |
 | Device storage | NVR/SD status (read-only mirror of Info ▸ Storage) with `Search Recordings…` → Playback |
 
@@ -1419,7 +1419,7 @@ tile, **S** = sidebar focused, **L** = timeline focused, **K** = palette open.
 |---|---|---|
 | ⌘K | G | Open command palette |
 | ⌘, | G | Settings |
-| ⌘Q | G | Quit (confirms if recording, §15 `confirm.quitWhileRecording.*`) |
+| ⌘Q | G | Quit (confirms if recording, §14 `confirm.quitWhileRecording.*`) |
 | ⌘H / ⌥⌘H | G | Hide / Hide others |
 | ⌘W | G | Close window |
 | ⌥⌘W | G | Close all windows |
