@@ -72,8 +72,8 @@ public struct VideoTile: NSViewRepresentable {
     ///     SwiftUI creates or destroys the view.
     ///   - options: fit policy and corner radius.
     ///   - logger: injected diagnostics; defaults to `NullLogger`.
-    ///   - onKeyframeNeeded: called on the main actor when the display layer needs a flush and a
-    ///     fresh keyframe to resume decoding. Ignoring it leaves the last picture frozen on screen.
+    ///   - onKeyframeNeeded: called when the video renderer needs a flush and a fresh keyframe to
+    ///     resume decoding. Ignoring it leaves the last picture frozen on screen.
     public init(cameraID: CameraID,
                 frames: FrameStreamHandle,
                 options: TileRenderOptions = TileRenderOptions(),

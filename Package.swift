@@ -133,7 +133,10 @@ let package = Package(
 
         .target(
             name: "VigilTransport",
-            dependencies: ["VigilProtocols", "VigilRTSP", "VigilDiscovery"],
+            // VigilDiscovery was listed here but no file imports it, which meant the target could
+            // not build in isolation. The discovery sockets that would need it are a later wave;
+            // add the edge back when a file actually imports the module.
+            dependencies: ["VigilProtocols", "VigilRTSP"],
             path: "Sources/VigilTransport",
             swiftSettings: apple
         ),

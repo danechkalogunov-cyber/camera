@@ -108,13 +108,16 @@ public final class VideoTileView: NSView {
         didSet { applyOptions(from: oldValue) }
     }
 
-    /// Called on the main actor when the display layer reports it needs a flush before it can
-    /// resume decoding. The owner must ask the camera for a fresh keyframe; without one the layer
-    /// stays on the last displayed picture indefinitely.
+    /// Called when the video renderer reports it needs a flush before it can resume decoding. The
+    /// owner must ask the camera for a fresh keyframe; without one the layer stays on the last
+    /// displayed picture indefinitely.
+    ///
+    /// Delivered on whichever thread AVFoundation posts the notification on — see the note in this
+    /// agent's report; AVFoundation does not document it and it has not been observed on hardware.
     public var onKeyframeNeeded: (() -> Void)?
 
-    /// Called on the main actor when the layer posts `failedToDecodeNotification`. `VigilRender`
-    /// deliberately does not decide what to do: the reconnect state machine in `VigilCore` does.
+    /// Called when the renderer posts `didFailToDecodeNotification`. `VigilRender` deliberately
+    /// does not decide what to do: the reconnect state machine in `VigilCore` does.
     ///
     /// The error is passed through untyped because `VigilProtocols.RenderError` has no case for a
     /// sample-buffer decode failure — see the uncertainty list in this agent's report.
@@ -300,10 +303,13 @@ public final class VideoTileView: NSView {
         //   extension AVSampleBufferDisplayLayer {
         //       var sampleBufferRenderer: AVSampleBufferVideoRenderer { get }
         //   }
-        // The layer's own `enqueue(_:)` is deprecated from macOS 14; the renderer is the supported
-        // surface (docs/spec-render.md §13.2).
-        sampleBuffers.adopt(displayLayer.sampleBufferRenderer)
-        observeLayerNotifications(displayLayer)
+        // The layer's own `enqueue(_:)` is deprecated from macOS 15 and the header forbids mixing
+        // the two surfaces; the renderer is the supported one (docs/spec-render.md §13.2). It is
+        // also the object that posts the decode notifications this view must not miss, so the same
+        // reference is used for both.
+        let renderer = displayLayer.sampleBufferRenderer
+        sampleBuffers.adopt(renderer)
+        observeRendererNotifications(renderer)
         state.setBackend(.sampleBufferLayer)
         updateScaleAndBackingSize()
     }

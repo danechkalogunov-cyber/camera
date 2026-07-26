@@ -28,10 +28,11 @@ import VigilVideo
 /// two: the handle pushes the current view in on the main actor, and the frame path reads it under
 /// a lock held for the duration of a pointer copy.
 ///
-/// **Why not a conformance on `VideoTileView`.** `VigilRender` does not declare `VideoSink`
-/// conformance (its author reported the omission: `VigilVideo` had no `VideoSink` yet when the tile
-/// was written). Declaring it retroactively from the app would break the moment `VigilRender`
-/// declares it properly, and it would still not solve the lifetime problem above.
+/// **Why not just hand the tile to the pipeline.** `VigilRender` does now declare the conformance
+/// (`Tile/VideoTileView+VideoSink.swift`, landed after this file was written), so `VideoTileView`
+/// *is* a `VideoSink`. That still does not solve the lifetime problem above: `DecodePipeline` binds
+/// one sink for its whole life, and the view it would bind to is replaced whenever SwiftUI rebuilds
+/// the hierarchy. This object is the indirection that survives that.
 ///
 /// **Isolation.** `OSAllocatedUnfairLock` is `Sendable` and owns its state, so this type needs
 /// neither `@unchecked Sendable` — the repo's census of those is closed at three (R-52) — nor

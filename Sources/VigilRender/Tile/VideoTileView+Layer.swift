@@ -263,7 +263,7 @@ extension VideoTileView {
     private func rendererFailedToDecode(_ note: Notification) {
         let key = AVSampleBufferVideoRenderer.didFailToDecodeNotificationErrorKey
         let failure = note.userInfo?[key] as? any Error
-        logger.error(.render, "display layer failed to decode",
+        logger.error(.render, "video renderer failed to decode",
                      ["camera": cameraID.short,
                       "error": failure.map { String(describing: $0) } ?? "unspecified"])
         if let failure {
