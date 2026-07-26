@@ -725,7 +725,13 @@ public actor RTSPConnection {
                 // retryable timeout — accurate about the policy, useless about the cause. The
                 // cause is `ECONNRESET`, and that is what the user's bug report needs.
                 deliverFailure(error)
-                feedConnectionClosed(reason: Self.describe(error))
+                // `describe(_:)` takes an `NWError`; by this point the platform error has already
+                // been mapped, so the machine is told the diagnostic code — which is the stable,
+                // greppable form and is what a bug report quotes. (This line read
+                // `Self.describe(error)` and did not compile: the read loop's `.failed` carries a
+                // `VigilError`, not an `NWError`. Found by shadow-compiling this file on Linux
+                // against a stub of Network.framework, which is the only compiler it gets here.)
+                feedConnectionClosed(reason: error.diagnosticCode)
                 return
 
             case .torndown:
