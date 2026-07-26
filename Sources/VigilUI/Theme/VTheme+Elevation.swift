@@ -433,21 +433,10 @@ extension View {
             }
     }
 
-    /// The focus ring, drawn once so that no component reimplements it (§9.28).
-    ///
-    /// `focusRing` clears 3:1 against every layer, including overlay glass (4.76:1) and a video
-    /// well (6.86:1). Under `increaseContrast` the ring thickens to 3 pt and the glow is dropped,
-    /// because a glow reduces edge definition (§10.4). Outset is 3 pt normally and 2 pt on a video
-    /// tile, where the ring is drawn inside so it is never clipped by the neighbouring tile.
-    ///
-    /// Every custom control also applies `.focusEffectDisabled()` so the system ring never
-    /// double-draws with ours.
-    @MainActor
-    package func vFocusRing(_ isFocused: Bool,
-                            radius: CGFloat,
-                            outset: CGFloat = 3) -> some View {
-        modifier(VFocusRing(isFocused: isFocused, radius: radius, outset: outset))
-    }
+    // The focus ring (§9.28) is deliberately **not** here: the manifest gives
+    // `Components/FocusRing.swift` ownership of `vFocusRing(_:radius:outset:)`, and it draws with
+    // `VTheme.Color.Semantic.focusRing`, `VTheme.Border.focus` / `.focusIncreased` and
+    // `VTheme.Motion.micro`, all of which this token layer already publishes.
 }
 
 // MARK: - VElevation
@@ -525,41 +514,6 @@ package struct VElevation: ViewModifier {
         let none = VTheme.Elevation.Shadow(alpha: 0, radius: 0, y: 0)
         guard backdrop == .chrome, contrast != .increased else { return none }
         return level.shadow(index, scheme) ?? none
-    }
-}
-
-// MARK: - VFocusRing
-
-/// The modifier behind ``SwiftUI/View/vFocusRing(_:radius:outset:)``.
-@MainActor
-package struct VFocusRing: ViewModifier {
-
-    package let isFocused: Bool
-    package let radius: CGFloat
-    package let outset: CGFloat
-
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    package func body(content: Content) -> some View {
-        content.overlay {
-            VTheme.Radius.shape(radius + outset)
-                .strokeBorder(VTheme.Color.Semantic.focusRing, lineWidth: width)
-                .padding(-outset)
-                .shadow(color: glow, radius: contrast == .increased ? 0 : 3)
-                .opacity(isFocused ? 1 : 0)
-                .scaleEffect(isFocused ? 1.0 : 1.06)
-                .allowsHitTesting(false)
-        }
-        .animation(VTheme.Motion.micro, value: isFocused)
-    }
-
-    /// 2 pt normally, 3 pt under `increaseContrast` and Full Keyboard Access (§10.2 item 8).
-    private var width: CGFloat {
-        contrast == .increased ? VTheme.Border.focusIncreased : VTheme.Border.focus
-    }
-
-    private var glow: SwiftUI.Color {
-        contrast == .increased ? .clear : VTheme.Color.Semantic.focusRing.opacity(0.30)
     }
 }
 
