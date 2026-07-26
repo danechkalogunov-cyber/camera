@@ -353,8 +353,12 @@ public struct PipelineHarness {
 
     /// Builds the RTP receiver from the SDP the camera advertised.
     ///
-    /// This is the "six-line adapter" API_CONTRACT §4.4 says lives in the fixture on Linux: it turns
-    /// an `SDPMediaDescription` into an `RTPTrackFormat` so `VigilRTP` never has to know about RTSP.
+    /// The SDP → `RTPTrackFormat` mapping is `RTPTrackFormatAdapter`'s, in `VigilRTP`, and this
+    /// calls it rather than keeping a private copy: a fixture that maps the fields its own way
+    /// proves the pipeline works with the fixture's adapter and says nothing about the app's.
+    /// The RTSP-typed overloads live in `VigilCore`, which a pure fixture cannot import, so the
+    /// field-by-field entry point is the one used here.
+    ///
     /// Doing it by re-parsing the advertised SDP rather than reading it out of the session machine
     /// keeps the fixture independent of the machine's track representation, and exercises the real
     /// SDP parser on the real bytes into the bargain.
@@ -373,12 +377,12 @@ public struct PipelineHarness {
         }
         let format: RTPTrackFormat
         do {
-            format = try RTPTrackFormat(payloadType: video.payloadType,
-                                        encodingName: video.encodingName,
-                                        clockRate: video.clockRate,
-                                        channels: video.channels,
-                                        fmtp: video.fmtp,
-                                        parameterSets: video.parameterSets)
+            format = try RTPTrackFormatAdapter.make(payloadType: video.payloadType,
+                                                    encodingName: video.encodingName,
+                                                    clockRate: video.clockRate,
+                                                    channels: video.channels,
+                                                    fmtp: video.fmtp,
+                                                    parameterSets: video.parameterSets)
         } catch {
             report.setupFailure = "RTPTrackFormat rejected the SDP media description: \(error)"
             return

@@ -285,12 +285,10 @@ extension StreamController {
             return
         }
         do {
-            let format = try RTPTrackFormat(payloadType: track.payloadType,
-                                            encodingName: track.encodingName,
-                                            clockRate: Int32(clamping: track.clockRate),
-                                            channels: track.channelCount.map { Int32(clamping: $0) },
-                                            fmtp: track.fmtpParameters,
-                                            parameterSets: track.parameterSets)
+            // The field-by-field mapping is `RTPTrackFormatAdapter`'s (API_CONTRACT §4.7): it is
+            // what normalises the `a=fmtp` keys, applies the payload format's fixed clock rate when
+            // the SDP omitted one, and decodes `sprop-*` when the parser did not.
+            let format = try RTPTrackFormatAdapter.make(from: track)
             let receiver = try RTPTrackReceiver(format: format,
                                                 reorderMode: .passthrough,
                                                 latency: camera.latencyPreset,
@@ -312,13 +310,7 @@ extension StreamController {
     /// Seeds a receiver's presentation clock from `RTP-Info`.
     func seed(_ timing: RTSPTrackTiming) {
         guard var receiver = receivers[timing.trackID] else { return }
-        receiver.seed(RTSPTrackTimingSeed(clockRate: timing.clockRate,
-                                          initialSequence: timing.initialSequence,
-                                          initialRTPTimestamp: timing.initialRTPTimestamp,
-                                          absoluteStart: timing.absoluteStart,
-                                          scale: timing.scale,
-                                          isRateControlDisabled: timing.isRateControlDisabled,
-                                          playResponseInstant: timing.playResponseInstant))
+        receiver.seed(RTPTrackFormatAdapter.seed(from: timing))
         receivers[timing.trackID] = receiver
     }
 

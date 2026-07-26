@@ -12,6 +12,7 @@
 import SwiftUI
 
 import VigilCore
+import VigilProtocols
 import VigilRender
 import VigilUI
 

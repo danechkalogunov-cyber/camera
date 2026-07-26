@@ -180,7 +180,19 @@ let package = Package(
         ),
         .executableTarget(
             name: "Vigil",
-            dependencies: ["VigilUI", "VigilCore"],
+            // SwiftPM puts only *direct* dependencies on a target's import search path, so every
+            // module the app target `import`s must appear here even when a listed dependency
+            // already depends on it. This list was [VigilUI, VigilCore] while the wiring imported
+            // VigilProtocols, VigilRender and VigilVideo as well — and the Linux build stayed green
+            // the whole time, because every file in this target is inside `#if os(macOS)` and the
+            // imports were therefore never active. It would have failed on the first Mac build.
+            dependencies: [
+                "VigilUI",
+                "VigilCore",
+                "VigilProtocols",
+                "VigilRender",
+                "VigilVideo",
+            ],
             path: "Sources/Vigil",
             swiftSettings: apple
         ),

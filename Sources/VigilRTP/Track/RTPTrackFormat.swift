@@ -13,10 +13,11 @@ import VigilProtocols
 
 /// One RTP track's negotiated format.
 ///
-/// This is `VigilRTP`'s **own** input struct, not an SDP type. The six-line adapter from
-/// `VigilRTSP.SDPMediaDescription` lives in `VigilTransport` on macOS and in the fixture on Linux,
-/// never here, because `VigilRTP` must stay usable for UDP, file replay and unit fixtures with no
-/// RTSP session at all.
+/// This is `VigilRTP`'s **own** input struct, not an SDP type. `RTPTrackFormatAdapter`, in this
+/// module, builds one from the fields a media section carries; the overloads that take
+/// `VigilRTSP.SDPMediaDescription` and `RTSPTrack` live in `VigilCore`, the only shipping module
+/// that imports both. Nothing RTSP-shaped is declared here, because `VigilRTP` must stay usable for
+/// UDP, file replay and unit fixtures with no RTSP session at all.
 public struct RTPTrackFormat: Sendable, Hashable {
 
     // MARK: - Stored Properties

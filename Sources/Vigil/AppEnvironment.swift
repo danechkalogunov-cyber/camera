@@ -30,13 +30,15 @@ enum AppEnvironment {
     /// app target deliberately has no say in which implementation of each protocol is used and a
     /// test can substitute the whole set without touching this file.
     ///
-    /// The one deliberate exception is the logger. `CoreDependencies.live` uses `NullLogger`
-    /// because `VigilCore/Logging/OSLogLogger.swift` is W4 and has not landed; when it does, this
-    /// becomes `CoreDependencies.live.withLogger(OSLogLogger())` and the app starts writing to
-    /// `com.vigil.app`'s subsystem. Until then the slice runs with logging off, which is worth
-    /// saying out loud: a first-light failure on the customer's Mac will leave no trace in Console.
+    /// The one deliberate override is the logger. `CoreDependencies.live` ships `NullLogger`
+    /// because `VigilCore/Logging/OSLogLogger.swift` is W4 and has not landed, and a slice whose
+    /// only acceptance test is "launch it and see whether video appears" must not fail silently.
+    /// `withLogger` is `VigilCore`'s named accessor for exactly this substitution — it rebuilds the
+    /// session factory with the new logger, which a memberwise re-spelling here would not.
+    /// When `OSLogLogger` lands, this becomes `.withLogger(OSLogLogger())` and
+    /// `Sources/Vigil/ConsoleLogger.swift` is deleted.
     static func bootstrap() -> CoreDependencies {
-        CoreDependencies.live
+        CoreDependencies.live.withLogger(ConsoleLogger())
     }
 }
 

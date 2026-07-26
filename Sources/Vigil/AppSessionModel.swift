@@ -9,7 +9,6 @@
 
 #if os(macOS)
 
-import AppKit
 import Foundation
 import Observation
 
@@ -265,8 +264,21 @@ final class AppSessionModel {
     func perform(_ remedy: ConnectRemedy) {
         switch remedy {
         case .checkAddress, .updatePassword:
-            // `ConnectFormView` has already moved the cursor; it forwards these so the app can log.
-            dependencies.logger.debug(.ui, "remedy \(remedy) handled by the form")
+            // On the form, `ConnectFormView` has already moved the cursor and forwards these only
+            // so the app can log. From the video screen they mean "let me edit that", which makes
+            // them the way back — and the only one the slice has, because `LiveVideoView` exposes
+            // no disconnect affordance of its own.
+            guard phase == .live else {
+                dependencies.logger.debug(.ui, "remedy \(remedy) handled by the form")
+                return
+            }
+            stopSession()
+            if let diagnosis {
+                present(diagnosis)
+            } else {
+                phase = .connect
+                form.isConnecting = false
+            }
         case .retry:
             connect(form.request)
         case .switchToTCP:

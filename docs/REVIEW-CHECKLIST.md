@@ -287,3 +287,36 @@ reason — three in flight would be six failed logins against a device that lock
    a stalled stream surfaces only through the session's own data-idle timer.
 7. Keyframe requests use only the RTSP `SET_PARAMETER` fallback; the ISAPI primary does not exist
    yet, and whether Hikvision honours the fallback is unconfirmed.
+
+## Vigil, the app target (`impl:app`)
+
+**The app has never been launched.** No window drawn, no camera contacted, no frame displayed.
+
+Its most useful contribution was refusing to guess: it waited for the sibling modules and rewrote
+against their landed code, which caught three signatures that would each have been a compile error
+on the first Mac build — `StreamEvent.firstFrameDecoded` does not exist (it is
+`firstFrameAssembled(afterStart:)`, and it means "access unit assembled", not "picture on screen");
+`stateChanged(detail:)` carries a non-optional detail; and `Camera.validate()` is really
+`validated() throws(CameraValidationError)`.
+
+**Fixed by the supervisor, since the manifest is not an agent's to edit:** the `Vigil` target
+declared `["VigilUI", "VigilCore"]` while the wiring necessarily imports `VigilProtocols`,
+`VigilRender` and `VigilVideo` as well. SwiftPM puts only *direct* dependencies on a target's import
+search path, so this was a guaranteed "no such module" on the first Mac build — and the Linux build
+stayed green throughout, because every file in the target sits inside `#if os(macOS)` and the
+imports were never active. Now declared; build re-verified.
+
+**Known gaps, deliberate**
+
+- No IDR request path: `StreamController` has no `requestKeyframe(reason:)`, so a decoder asking for
+  a keyframe triggers a rate-limited restart instead — two or three seconds of held last frame.
+- Three remedies cannot be performed and say so on screen rather than doing nothing: the ONVIF
+  fallback, Stream Doctor, and camera activation (which opens the device's web page instead).
+- No disconnect control on the video screen; the only route back to the form is through a failure
+  remedy.
+- `rtspPathOverride` is borrowed to carry the probe ladder's winner across launches until the real
+  config document lands.
+
+**Unverifiable specifics:** the traffic-light inset deltas and when they must be re-applied,
+`NSApplication.activate()`'s macOS 14 form, `@State` on an `App` with a custom `@MainActor init()`,
+and `OSAllocatedUnfairLock`.

@@ -11,9 +11,6 @@
 
 import SwiftUI
 
-import VigilCore
-import VigilUI
-
 // MARK: - SceneID
 
 /// Stable scene identifiers.
