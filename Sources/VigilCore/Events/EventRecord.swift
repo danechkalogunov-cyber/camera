@@ -135,7 +135,7 @@ public struct EventBounds: Sendable, Hashable {
     ///
     /// Not inside a generic type, so the `static let` is legal on macOS (see
     /// docs/BUILD-VERIFICATION.md on `static` stored properties in generics).
-    public static let defaultCoalesceWindowSeconds: Double = 30.0
+    public static let defaultCoalesceWindowSeconds: Double = 3.0
 
     /// Default clock-skew tolerance, in seconds, in one place, for the same reason.
     public static let defaultClockSkewToleranceSeconds: Double = 60

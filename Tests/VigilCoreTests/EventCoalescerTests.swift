@@ -124,6 +124,19 @@ struct EventCoalescerDedupeTests {
         #expect(h.records.allSatisfy { $0.count == 3 })
     }
 
+    /// The gap rule on its own, with no other signal available to split the rows.
+    ///
+    /// `activePostCount` climbs straight through 1…6, so the episode-restart rule cannot fire and the
+    /// coalescing window is the only thing that can separate the two bursts. The test above, which
+    /// restarts the count, passes for two independent reasons; this one isolates the window.
+    @Test func eventCoalescerSplitsOnTheGapAloneWithoutACountRestart() {
+        var h = EventCoalescerHarness()
+        for tick in 0..<3 { _ = h.ingest(at: Double(tick), activePostCount: tick + 1) }
+        for tick in 0..<3 { _ = h.ingest(at: 10 + Double(tick), activePostCount: tick + 4) }
+        #expect(h.records.count == 2)
+        #expect(h.coalescer.counters.episodeRestarts == 0)
+    }
+
     /// The window's exact edge. Just inside 3.0 s extends; at and beyond 3.0 s starts a new record.
     ///
     /// This is the assertion that pins the threshold: it fails if anybody widens or narrows the
