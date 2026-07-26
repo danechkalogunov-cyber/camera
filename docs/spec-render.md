@@ -2231,6 +2231,31 @@ path. It is the right default for 1-up and 2×2.
 
 ### 13.2 ASBDL configuration
 
+> ## ⚠️ §13.2 is wrong on four counts — corrected during the step-4 review
+>
+> Verified against the real `AVSampleBufferDisplayLayer.h` and `AVSampleBufferVideoRenderer.h`
+> headers and Apple's Swift API index, not from memory. Do not follow this section as written.
+>
+> 1. **The notification names are not members of the layer.** They are declared `NSString *const`,
+>    not `NSNotificationName`, so they import as static members of `NSNotification.Name` —
+>    `NSNotification.Name.AVSampleBufferDisplayLayerFailedToDecode` and
+>    `…RequiresFlushToResumeDecodingDidChange`. The nested spellings this section uses name nothing.
+> 2. **The error key is a global**, `AVSampleBufferDisplayLayerFailedToDecodeNotificationErrorKey`,
+>    not a nested member.
+> 3. **Observe the renderer, not the layer.** The header says outright: *"Do not use
+>    AVSampleBufferDisplayLayer's AVQueuedSampleBufferRendering functions when using
+>    sampleBufferRenderer"*, and `layer.requiresFlushToResumeDecoding` carries
+>    `API_DEPRECATED(macos(11.0, 15.0))`. Observing the layer while enqueuing on the renderer means
+>    recovery never fires and the picture freezes on its last frame — a symptom indistinguishable
+>    from a network stall. Use `AVSampleBufferVideoRenderer`'s
+>    `requiresFlushToResumeDecodingDidChangeNotification`, `didFailToDecodeNotification` and
+>    `didFailToDecodeNotificationErrorKey`, all macOS 14.0+ and none deprecated.
+> 4. **`preventsAutomaticBackgroundingDuringVideoPlayback` does not exist on macOS.** It is
+>    `API_AVAILABLE(visionos(1.0)) API_UNAVAILABLE(macos, …)`. Setting it, as this section instructs,
+>    would not compile. `preventsDisplaySleepDuringVideoPlayback` is real and is macOS 10.15+, not
+>    11.0 as stated.
+
+
 ```swift
 let l = AVSampleBufferDisplayLayer()
 l.videoGravity = .resizeAspect                       // .resizeAspectFill / .resize per options

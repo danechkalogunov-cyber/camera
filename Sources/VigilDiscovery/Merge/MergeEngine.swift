@@ -325,8 +325,10 @@ public struct MergeEngine: Sendable {
         entries[destination].isForeign = entries[destination].isForeign && entries[source].isForeign
         entries[source].isAlive = false
 
-        // Re-point every key that stood for the absorbed record.
-        for (root, record) in recordOfRoot where record == source { recordOfRoot[root] = destination }
+        // Re-point every key that stood for the absorbed record. The roots are collected first: the
+        // dictionary must not be mutated while it is being iterated.
+        let staleRoots = recordOfRoot.compactMap { $0.value == source ? $0.key : nil }
+        for root in staleRoots { recordOfRoot[root] = destination }
     }
 
     /// Appends URLs that are not already present, preserving order.

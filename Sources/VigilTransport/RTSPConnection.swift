@@ -286,6 +286,7 @@ public actor RTSPConnection {
     private var eventSink: AsyncStream<RTSPConnectionEvent>.Continuation?
     private var hasReportedFailure = false
     private var closeTask: Task<Void, Never>?
+    private var drops = RTSPConnectionEventDrops()
 
     // MARK: - Initialisation
 
@@ -350,15 +351,47 @@ public actor RTSPConnection {
     /// batch would open a suspension point exactly where the machine's ordering guarantee lives.
     /// `Broadcaster`'s own documentation says frames do not travel through it for the same reason.
     ///
-    /// Buffering is `.bufferingNewest(512)`, matching R-27's standing capacity for RTP packets. A
-    /// consumer that cannot keep up loses its oldest events; the fix for a consumer that cannot
-    /// keep up is `pauseReads()`, which stops the camera at the TCP window instead.
+    /// Buffering is **`.bufferingOldest(512)`**, and the choice of *oldest* rather than *newest* is
+    /// the whole point.
+    ///
+    /// `.bufferingNewest` evicts the oldest element when the buffer fills, and it does so without
+    /// caring what that element is. The events this connection emits first are `.track`,
+    /// `.timing` and `.ready` — exactly the ones `VigilCore` needs in order to build a receiver at
+    /// all — and the events that arrive in bulk afterwards are media. A consumer that stalls for
+    /// half a second at `PLAY` would therefore have had its `.track` pushed out by the very media
+    /// that `.track` exists to describe, leaving `handleMedia` with no receiver for the channel:
+    /// **no video and no error**, which is the worst shape a failure can take.
+    ///
+    /// `.bufferingOldest` cannot do that. Nothing that has been enqueued is ever evicted, so a
+    /// control event that got in is delivered, full stop. What is refused instead is the *newest*
+    /// element — and when that element is media, refusing it is correct: a dropped RTP packet is a
+    /// loss the depacketizer already handles, and it is now **counted** (see ``eventDrops``)
+    /// rather than silent, which is what R-27 asks for.
+    ///
+    /// The residual, stated plainly rather than papered over: a control event arriving when 512
+    /// unread events are already queued is still dropped. That means the consumer has read nothing
+    /// for the whole buffer's depth, so it is logged at `.error` and counted separately. The
+    /// designed remedy for a consumer that cannot keep up remains `pauseReads()`, which stops the
+    /// camera at the TCP window rather than at this buffer.
+    ///
+    /// The stream also closes the connection if its consumer goes away: a cancelled `for await`
+    /// would otherwise leave this actor reading a socket with nowhere to put what it reads.
+    /// Only `.cancelled` triggers that — `.finished` is what `finish()` produces, and `finish()`
+    /// is called by this very method and by `finishClose`, neither of which should recurse.
     public func events() -> AsyncStream<RTSPConnectionEvent> {
         eventSink?.finish()
-        let made = AsyncStream<RTSPConnectionEvent>.makeStream(bufferingPolicy: .bufferingNewest(512))
+        let made = AsyncStream<RTSPConnectionEvent>
+            .makeStream(bufferingPolicy: .bufferingOldest(Self.eventBufferCapacity))
+        made.continuation.onTermination = { [weak self] termination in
+            guard case .cancelled = termination else { return }
+            Task { await self?.close() }
+        }
         eventSink = made.continuation
         return made.stream
     }
+
+    /// Events that never reached the consumer, by kind. Zero on a healthy session.
+    public var eventDrops: RTSPConnectionEventDrops { drops }
 
     // MARK: - Connecting
 
@@ -380,22 +413,46 @@ public actor RTSPConnection {
     public func connect() async throws(VigilError) {
         try vigilRequire(lifecycle == .idle, "RTSPConnection.connect() called twice")
 
-        // R-71, stage one: an IP literal is classified before a socket exists, and a refused one
-        // never gets one. A DNS name that only a resolver can classify passes here and is re-checked
-        // in `socketStateChanged(.ready)`; see `enforceResolvedEgress`. The `guard` spells out what
-        // `EgressGuard.requirePermitted(_:)` would throw, so that this function's typed
-        // `throws(VigilError)` needs no error conversion.
-        guard EgressGuard.classify(config.url.host) != .refused else {
+        // R-71. Every destination is classified **before a socket exists**, and one that is not on
+        // the local network never gets one. Three shapes, three answers:
+        //
+        //   `.refused`         an IP literal outside the LAN. Thrown here, no socket, no DNS query.
+        //   `.permitted`       a LAN literal, `localhost`, a single label, or `*.local`. Connected
+        //                      to as written — a name in this class cannot resolve off the link,
+        //                      and `*.local` in particular wants Network.framework's own mDNS
+        //                      resolver rather than ours.
+        //   `.unresolvedName`  an ordinary multi-label name such as `nvr.example.internal`. We
+        //                      resolve it ourselves, classify every address it returns, and then
+        //                      connect to a **literal**. See `resolvePermittedAddress`.
+        //
+        // The third case is the one that changed. It used to be allowed through to a socket and
+        // re-checked from `NWConnection.currentPath?.remoteEndpoint` once ready — which failed
+        // *open* if the platform reported the name back instead of an address, and whether it does
+        // is not something this code can verify. A stated product property must not rest on an
+        // unverifiable framework behaviour, so the check is now ours end to end and fails closed.
+        // (Supervisor ruling, review of finding 6.)
+        let classification = EgressGuard.classify(config.url.host)
+        guard classification != .refused else {
             throw VigilError.transport(.egressBlocked(host: config.url.host))
         }
         let port = try endpointPort()
 
         lifecycle = .connecting
 
+        let hostText: String
+        switch classification {
+        case .refused:
+            throw VigilError.transport(.egressBlocked(host: config.url.host))
+        case .permitted:
+            hostText = Self.endpointHostText(config.url.host)
+        case .unresolvedName:
+            hostText = try await resolvePermittedAddress()
+        }
+
         // NWEndpoint.Host:
         //   public init(_ string: String)
         // Reads an IPv4 literal, an IPv6 literal (with an optional %zone) or a DNS name.
-        let host = NWEndpoint.Host(config.url.host)
+        let host = NWEndpoint.Host(hostText)
 
         // NWProtocolTCP.Options:
         //   public init()
@@ -419,16 +476,7 @@ public actor RTSPConnection {
         logger.info(.transport, "connecting", ["url": config.url.description])
 
         if let failure = await waitForReady(created) {
-            lifecycle = .closed
-            // public func cancel()
-            created.cancel()
-            socket = nil
-            logger.failure(.transport, failure)
-            // A caller that took an event stream before connecting must see it end, or its
-            // `for await` waits for a session that never started.
-            eventSink?.finish()
-            eventSink = nil
-            throw failure
+            throw abortConnect(failure)
         }
 
         lifecycle = .running
@@ -508,23 +556,37 @@ public actor RTSPConnection {
     private func socketStateChanged(_ state: NWConnection.State) {
         switch state {
         case .ready:
-            // R-71, stage two. Nothing has been written yet — `connect()` starts the write drain
-            // only after this resumes — so a name that resolved off the LAN costs one TCP handshake
-            // and not one byte of RTSP.
+            // R-71's belt-and-braces check. The guarantee no longer rests here — `connect()`
+            // resolves the name itself and connects to a classified address literal — so this is
+            // an assertion that the platform went where it was told, not the enforcement point.
             if let failure = enforceResolvedEgress() {
                 terminate(with: failure, reason: "egress blocked after resolution")
                 return
             }
+            hasBecomeReady = true
             finishConnect(with: nil)
 
         case .waiting(let error):
-            // **`.waiting` is terminal**, per docs/spec-discovery.md §5.9 and the supervisor's
-            // ruling on docs/INTEGRATION-TODO.md item 5. Network.framework reports connection
-            // refusal and `EHOSTUNREACH` as `.waiting(POSIXError)` and would otherwise retry behind
-            // it forever, so waiting for the connect watchdog turns "nothing is listening" into
-            // "timed out" five seconds later — the vaguer of the two diagnoses, where
-            // docs/REQUIREMENTS-CUSTOMER.md §R1.5 promises the specific one. The watchdog stays for
-            // the case it is actually for: a handshake that hangs with no state change at all.
+            // **`.waiting` is terminal only before `.ready`.**
+            //
+            // Before: Network.framework reports connection refusal and `EHOSTUNREACH` as
+            // `.waiting(POSIXError)` and would retry behind it forever, so deferring to the connect
+            // watchdog turns "nothing is listening" into "timed out" five seconds later — the
+            // vaguer of the two diagnoses, where docs/REQUIREMENTS-CUSTOMER.md §R1.5 promises the
+            // specific one. That is what docs/spec-discovery.md §5.9 and the ruling on
+            // docs/INTEGRATION-TODO.md item 5 are about, and it still holds.
+            //
+            // After: a *playing* session is a different case and the same rule gives a worse
+            // answer. A Wi-Fi roam or a brief route change puts a healthy connection into
+            // `.waiting` for a moment, and Network.framework recovers from it by itself; killing
+            // the stream there trades a hiccup for a full reconnect. Post-`.ready` it is a
+            // transient degradation, and the session's own data-idle and keepalive timers decide
+            // whether the stream is really gone. (Supervisor ruling, review of finding 7.)
+            guard !hasBecomeReady else {
+                logger.notice(.transport, "path temporarily unsatisfied; not terminal while playing",
+                              ["reason": Self.describe(error)])
+                return
+            }
             terminate(with: Self.mapped(error), reason: Self.describe(error))
 
         case .failed(let error):
@@ -1062,8 +1124,38 @@ public actor RTSPConnection {
 
     private func emit(_ event: RTSPConnectionEvent) {
         // `AsyncStream.Continuation.yield` is documented as safe to call from any context and never
-        // blocks, which is what lets `execute(_:)` stay synchronous.
-        eventSink?.yield(event)
+        // blocks, which is what lets `execute(_:)` stay synchronous. It also *returns* what it did
+        // with the element, which is how a drop gets counted instead of vanishing.
+        guard let sink = eventSink else { return }
+        switch sink.yield(event) {
+        case .enqueued:
+            break
+
+        case .dropped(let lost):
+            // Under `.bufferingOldest` the refused element is the one just offered, so `lost` is
+            // `event` — matched anyway rather than assumed, because the policy is a one-word edit
+            // away from meaning something else.
+            if lost.isMedia {
+                drops.media += 1
+                // One line per power-of-two, not one per packet: a stalled consumer would
+                // otherwise turn a dropped-frame log into its own performance problem.
+                if drops.media & (drops.media - 1) == 0 {
+                    logger.notice(.rtp, "event stream full; media dropped",
+                                  ["dropped": String(drops.media)])
+                }
+            } else {
+                drops.control += 1
+                logger.error(.transport, "event stream full; a CONTROL event was dropped",
+                             ["dropped": String(drops.control),
+                              "mediaDropped": String(drops.media)])
+            }
+
+        case .terminated:
+            break
+
+        @unknown default:
+            break
+        }
     }
 
     // MARK: - Failure and close
