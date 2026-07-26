@@ -5,12 +5,15 @@
 # Implements the build contract in docs/ARCHITECTURE.md §12.1, the entitlement rules in §13, and
 # the multicast-fallback requirement in docs/spec-discovery.md §9.5.
 #
-#   Scripts/build-app.sh [--configuration debug|release] [--arch arm64|x86_64|universal]
+#   Scripts/build-app.sh [--configuration debug|release] [--arch native|arm64|x86_64|universal]
 #                        [--sign IDENTITY|-] [--entitlements PATH] [--sandbox on|off]
 #                        [--version X.Y.Z] [--build N] [--output DIR] [--dmg] [--notarize]
 #
-# Defaults: --configuration release --arch universal --sign "$CODESIGN_IDENTITY" (else ad-hoc "-")
+# Defaults: --configuration release --arch native --sign "$CODESIGN_IDENTITY" (else ad-hoc "-")
 #           --sandbox on --output dist
+#
+# `--arch native` is the default because it is the only value that works with just the Command Line
+# Tools. `universal` needs the full Xcode — see the note at the ARCH assignment below.
 #
 # Signing degrades on purpose. With no identity the bundle is ad-hoc signed, which is enough to
 # launch on the machine that built it; it will not pass Gatekeeper anywhere else. If codesign
@@ -85,7 +88,15 @@ version_ge() {
 # MARK: - Arguments
 
 CONFIGURATION="release"
-ARCH="universal"
+# `native`, not `universal`. A universal binary needs `--arch arm64 --arch x86_64`, which SwiftPM can
+# only do through XCBuild — and XCBuild.framework ships inside Xcode.app, NOT in the Command Line
+# Tools. So the old default made the very first build on a CLT-only Mac fail with
+#   error: xcbuild executable at '/Library/Developer/SharedFrameworks/XCBuild.framework/...'
+#          does not exist or is not executable
+# before compiling a single file, while `ЗАПУСК.md` promises `xcode-select --install` is enough.
+# Someone running the app on their own Mac needs one architecture; two are for distribution, which is
+# what `--arch universal` is now for, and it checks for Xcode before trying.
+ARCH="native"
 SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 ENTITLEMENTS=""
 SANDBOX="on"
@@ -100,7 +111,8 @@ usage() {
 Scripts/build-app.sh — assemble a runnable Vigil.app from swift build output.
 
   --configuration debug|release   default: release
-  --arch arm64|x86_64|universal   default: universal
+  --arch native|arm64|x86_64|universal
+                                 default: native (this Mac). 'universal' needs the full Xcode.
   --sign IDENTITY|-               default: $CODESIGN_IDENTITY, else "-" (ad-hoc)
   --entitlements PATH             default: chosen from --sandbox
   --sandbox on|off                default: on
@@ -138,8 +150,8 @@ case "$CONFIGURATION" in
     *) die 2 "--configuration must be 'debug' or 'release', got '$CONFIGURATION'." ;;
 esac
 case "$ARCH" in
-    arm64|x86_64|universal) ;;
-    *) die 2 "--arch must be 'arm64', 'x86_64' or 'universal', got '$ARCH'." ;;
+    native|arm64|x86_64|universal) ;;
+    *) die 2 "--arch must be 'native', 'arm64', 'x86_64' or 'universal', got '$ARCH'." ;;
 esac
 case "$SANDBOX" in
     on|off) ;;
@@ -210,17 +222,40 @@ step "Building the Vigil executable ($CONFIGURATION, $ARCH)"
 # `--triple arm64-apple-macosx14.0` build per slice followed by `lipo -create`.
 SWIFT_ARGS="build -c $CONFIGURATION --product Vigil"
 case "$ARCH" in
-    universal) SWIFT_ARGS="$SWIFT_ARGS --arch arm64 --arch x86_64" ;;
-    *)         SWIFT_ARGS="$SWIFT_ARGS --arch $ARCH" ;;
+    native)
+        # No `--arch` at all: SwiftPM builds for the host and uses its own native build system, so a
+        # Mac with only the Command Line Tools can build. This is the default and the tested path.
+        ;;
+    universal)
+        # Two architectures in one invocation is an XCBuild-only feature, and XCBuild.framework is
+        # part of Xcode.app. Check for it and say so, rather than letting SwiftPM fail with a path
+        # nobody can act on.
+        if ! xcodebuild -version >/dev/null 2>&1; then
+            die 4 "A universal binary needs the full Xcode, and only the Command Line Tools are installed." \
+                  "SwiftPM builds two architectures in one pass through XCBuild, which ships inside" \
+                  "Xcode.app rather than with the Command Line Tools." \
+                  "" \
+                  "Either drop the flag — 'Scripts/build-app.sh' alone builds for this Mac and is all" \
+                  "you need to run Vigil here — or install Xcode from the App Store and retry."
+        fi
+        SWIFT_ARGS="$SWIFT_ARGS --arch arm64 --arch x86_64"
+        ;;
+    *)
+        SWIFT_ARGS="$SWIFT_ARGS --arch $ARCH"
+        ;;
 esac
 
 # Word splitting of $SWIFT_ARGS is intended here: the values are ours, fixed, and space-free.
 # shellcheck disable=SC2086
 swift $SWIFT_ARGS || \
     die 4 "swift build failed." \
-          "The macOS-only targets (VigilTransport, VigilVideo, VigilRender, VigilCore, VigilUI)" \
-          "are never compiled in the Linux development container, so this is the first compiler" \
-          "they meet. See docs/BUILD-VERIFICATION.md."
+          "If the errors above name missing methods or types in VigilTransport, VigilVideo," \
+          "VigilRender, VigilCore or VigilUI, that is expected and useful: those targets are never" \
+          "compiled in the Linux development container, so this is the first compiler they meet." \
+          "Send the whole output. See docs/BUILD-VERIFICATION.md." \
+          "" \
+          "If instead the error names a missing tool or SDK, the code is not the problem — the" \
+          "toolchain is. Check 'swift --version' and 'xcode-select -p'."
 
 # --show-bin-path must be given the same configuration and architecture flags, or it reports a
 # different products directory than the one just built into. UNVERIFIED: that a multi-`--arch`
