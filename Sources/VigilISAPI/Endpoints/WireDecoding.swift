@@ -49,19 +49,6 @@ extension XMLValue {
     }
 }
 
-// MARK: - Node helpers
-
-extension XMLNode {
-
-    /// The child list at `path`, or an empty array. Never throws: a device that omits a list
-    /// entirely and a device that sends `<list/>` mean the same thing.
-    func list(_ path: String) -> [XMLNode] { nodes(path) }
-
-    /// Reads an attribute by its lowercased name. Attribute keys are lowercased on parse, values
-    /// are verbatim, so `opt="G.711ulaw,AAC"` survives intact.
-    func attribute(_ name: String) -> String? { attributes[name.lowercased()] }
-}
-
 // MARK: - Wire units
 
 /// The unit conversions between Hikvision's wire encoding and the numbers a person reads.
@@ -142,10 +129,5 @@ public enum ISAPIVocabulary {
             }
         }
         return out.lowercased()
-    }
-
-    /// True when `raw` normalises to a value that starts with `prefix` (already normalised).
-    public static func hasNormalizedPrefix(_ raw: String, _ prefix: String) -> Bool {
-        normalize(raw).hasPrefix(prefix)
     }
 }
