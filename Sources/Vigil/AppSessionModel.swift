@@ -115,6 +115,11 @@ final class AppSessionModel {
     /// Whether the launch-time resume has already been attempted.
     private var hasResumed = false
 
+    /// The RTSP path the probe ladder settled on for the current camera, once it has reported one.
+    /// Persisted only after a frame arrives, so a path that resolved but never produced video is
+    /// not the one we start from next time.
+    private var resolvedPath: String?
+
     // MARK: - Computed Properties
 
     /// Whether the connect form's primary button should fire.
@@ -279,7 +284,10 @@ final class AppSessionModel {
                        remedy: "Enter it again.")
                 return
             }
-            let camera = try makeCamera(host: remembered.host, ref: remembered.credentialRef)
+            let camera = try makeCamera(host: remembered.host,
+                                        ref: remembered.credentialRef,
+                                        rtspPath: remembered.rtspPath)
+            resolvedPath = remembered.rtspPath
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
             // Nothing is on screen yet, so the honest result is the form plus an explanation.
@@ -298,8 +306,13 @@ final class AppSessionModel {
     /// `validated()` supplies the name (`"Camera <host>"`), strips IPv6 brackets, and throws
     /// `.invalidHost` when the user pasted a URL rather than an address — which is exactly the
     /// mistake the form invites, so the message must reach them.
-    private func makeCamera(host: String, ref: CredentialRef) throws -> Camera {
-        try Camera(host: host, credentialRef: ref).validated()
+    private func makeCamera(host: String, ref: CredentialRef, rtspPath: String? = nil) throws
+        -> Camera {
+        // `rtspPathOverride` carries the ladder's winner from the last successful run, so R1.2's
+        // "the probe happens exactly once per device, ever" holds across launches. In W4 this is
+        // `capabilities.resolvedRTSPPath` read back from `library.json`; the slice has no library,
+        // and skipping four `DESCRIBE` round-trips is worth this much borrowing of the field.
+        try Camera(host: host, credentialRef: ref, rtspPathOverride: rtspPath).validated()
     }
 
     /// Builds the controller, subscribes to its events, and starts it. The only place a
@@ -365,11 +378,15 @@ final class AppSessionModel {
             // field — has no reason to exist.
             password = ""
             if let activeRef {
-                LastConnection(host: host, account: account, credentialRef: activeRef)
-                    .save(to: defaults)
+                LastConnection(host: host, account: account, credentialRef: activeRef,
+                               rtspPath: resolvedPath).save(to: defaults)
             }
             // The R1.7 number, in the log where the acceptance checklist can read it.
             dependencies.logger.info(.app, "first frame assembled after \(afterStart)")
+        case .pathResolved(let candidate, _):
+            // Remembered at the first frame, not here: a path that answers `DESCRIBE` but never
+            // delivers video is not the one to start from next time.
+            resolvedPath = candidate.path
         case .error(let error, let isFatal):
             report(streamError: error)
             if error.code.forbidsColdRetry {

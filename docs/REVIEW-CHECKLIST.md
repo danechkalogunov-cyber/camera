@@ -170,3 +170,45 @@ checked, so every type error in these files is still present — framework-relat
    could block on the write task, and the 250 ms watchdog is the only mitigation.
 9. Ruling R-27 requires every drop to be counted, but `AsyncStream` does not report drops, so
    event-stream drops are **not** counted. Acknowledged rather than papered over.
+
+## VigilVideo (`impl:video`)
+
+This agent reduced its own unverified surface rather than only reporting it: it mirrored every
+pure-layer construct its code uses into a scratch package — with a fake standing in for
+`CMSampleBuffer` — and type-checked that on Linux under Swift 6 with `ExistentialAny`. That retired
+the structural worries, which were the ones most likely to be wrong:
+
+- The recursive parameter-set pin is legal Swift. The specification's version used a recursive local
+  function with `defer`-popped `inout` arrays — exactly the pattern that trips "declaration closing
+  over non-escaping parameter may allow it to escape". Same algorithm, accumulators passed by value.
+- `throws(DecodeError)` propagation, and `catch` inferring the typed error (SE-0413).
+- An actor handing a non-`Sendable` class synchronously to a `nonisolated` member of an
+  `AnyObject, Sendable` protocol — including with a `@MainActor` conformer, which is what the tile
+  view is.
+
+**Remaining uncertainty, highest first**
+
+1. Argument labels on the CoreMedia constructors — `CMBlockBufferCreateWithMemoryBlock`'s first
+   label is `structureAllocator` in C and assumed to import as `allocator:`; same doubt for
+   `CMBlockBufferReplaceDataBytes`. A wrong label is a loud compile error, not silent wrongness.
+2. `nalUnitHeaderLength:` — the C parameter is `NALUnitHeaderLength` and the importer is assumed to
+   lowercase the acronym.
+3. `kCFBooleanTrue` assumed to import as `CFBoolean!`.
+4. `unsafeBitCast` of a `CFArrayGetValueAtIndex` result — the standard idiom, but the exact
+   optionality of the return type in the current SDK is unconfirmed.
+5. Two `OSStatus` values written as numeric literals (`-12704`, `-12731`) because the symbol
+   spellings were not worth betting on. Both are on paths the callers already exclude, so a wrong
+   number makes a log line misleading and nothing else.
+6. `CMVideoFormatDescription` assumed to be a typealias of `CMFormatDescription`. If they are
+   distinct in Swift, three call sites need a cast.
+
+**Design decisions worth keeping**
+
+- The block buffer **copies** rather than retaining the `Data` through a custom block source. That is
+  what makes a dangling block buffer — the failure that shows as garbled frames rather than a crash —
+  structurally impossible instead of merely avoided.
+- `generation` is counted locally and monotonically rather than taken from `ParameterSetStore`,
+  whose counter returns to zero on reset. A repeating generation number is worse than none to a sink
+  whose only use for it is telling stale buffers apart.
+- `PartialSync` for H.265 CRA/BLA and `IsDependedOnByOthers` are deliberately absent rather than
+  guessed at.

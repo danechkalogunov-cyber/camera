@@ -65,8 +65,12 @@ package enum VFieldTrigger: Sendable, Hashable {
 /// The message row below the field is **always** 16 pt tall, occupied or not, so that an error
 /// appearing cannot push the rest of the form down — the single most common layout jump in a form
 /// and one UX.md §15.4 bans outright.
+///
+/// Focus is owned by the **form**, not by the field: a diagnosis that says "check the password"
+/// has to be able to put the cursor there (UX.md §8.4), which a private `@FocusState` inside the
+/// field could not do. `FocusValue` is therefore the form's own field enum.
 @MainActor
-package struct VTextField: View {
+package struct VTextField<FocusValue: Hashable>: View {
 
     // MARK: - Kind
 
@@ -113,13 +117,18 @@ package struct VTextField: View {
     /// The value.
     @Binding package var text: String
 
+    /// The form's focus state.
+    package let focus: FocusState<FocusValue?>.Binding
+
+    /// The value ``focus`` takes while this field has the cursor.
+    package let focusValue: FocusValue
+
     /// Called when the field wants its contents checked. See ``VFieldTrigger``.
     package let onValidate: (VFieldTrigger) -> Void
 
     /// Called when the user presses `Return`.
     package let onSubmit: () -> Void
 
-    @FocusState private var isFocused: Bool
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.vMotionEnabled) private var motionEnabled
     @State private var isHovering = false
@@ -136,6 +145,8 @@ package struct VTextField: View {
     ///   - text: the bound value.
     ///   - kind: plain, monospaced or secure.
     ///   - validation: the state to render; the form owns the rules.
+    ///   - focus: the form's focus state.
+    ///   - focusValue: the value ``focus`` takes while this field has the cursor.
     ///   - onValidate: called on the three triggers of §9.5 — never per keystroke.
     ///   - onSubmit: called on `Return`.
     package init(_ label: LocalizedStringKey,
@@ -143,6 +154,8 @@ package struct VTextField: View {
                  text: Binding<String>,
                  kind: Kind = .plain,
                  validation: VFieldValidation = .idle,
+                 focus: FocusState<FocusValue?>.Binding,
+                 focusValue: FocusValue,
                  onValidate: @escaping (VFieldTrigger) -> Void = { _ in },
                  onSubmit: @escaping () -> Void = {}) {
         self.label = label
@@ -150,6 +163,8 @@ package struct VTextField: View {
         self._text = text
         self.kind = kind
         self.validation = validation
+        self.focus = focus
+        self.focusValue = focusValue
         self.onValidate = onValidate
         self.onSubmit = onSubmit
     }
@@ -164,11 +179,16 @@ package struct VTextField: View {
             well
             message
         }
-        .onChange(of: isFocused) { _, focused in
-            if !focused { onValidate(.focusLost) }
+        .onChange(of: focus.wrappedValue) { previous, _ in
+            if previous == focusValue { onValidate(.focusLost) }
         }
         .task(id: text) { await debounceValidation() }
         .task(id: validation) { await holdValidTick() }
+    }
+
+    /// Whether this field currently has the cursor.
+    private var isFocused: Bool {
+        focus.wrappedValue == focusValue
     }
 
     // MARK: - The well
@@ -219,7 +239,7 @@ package struct VTextField: View {
         // and a second copy beside the field is what `.labelsHidden()` exists to prevent.
         .labelsHidden()
         .textFieldStyle(.plain)
-        .focused($isFocused)
+        .focused(focus, equals: focusValue)
         .focusEffectDisabled()
         .vType(typeStep)
         .foregroundStyle(isEnabled ? VTheme.Color.Text.primary : VTheme.Color.Text.disabled)
@@ -358,13 +378,17 @@ private struct VTextFieldPreview: View {
     @State private var host = "192.168.1.64"
     @State private var user = "admin"
     @State private var password = ""
+    @FocusState private var focus: ConnectField?
 
     var body: some View {
         VStack(alignment: .leading, spacing: VTheme.Space.md) {
-            VTextField("Address", placeholder: "192.168.1.64", text: $host, kind: .monospaced)
-            VTextField("User name", placeholder: "admin", text: $user)
+            VTextField("Address", placeholder: "192.168.1.64", text: $host,
+                       kind: .monospaced, focus: $focus, focusValue: ConnectField.host)
+            VTextField("User name", placeholder: "admin", text: $user,
+                       focus: $focus, focusValue: ConnectField.username)
             VTextField("Password", placeholder: "Required", text: $password, kind: .secure,
-                       validation: .invalid("Enter the camera's password."))
+                       validation: .invalid("Enter the camera's password."),
+                       focus: $focus, focusValue: ConnectField.password)
         }
         .frame(width: 320)
         .padding(VTheme.Space.xl)

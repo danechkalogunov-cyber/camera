@@ -60,11 +60,20 @@ struct LastConnection: Sendable, Hashable {
     /// Opaque Keychain handle for the password. Useless on its own.
     var credentialRef: CredentialRef
 
+    /// The RTSP path that actually produced video last time, or `nil` if none has yet.
+    ///
+    /// R1.2 requires the `DESCRIBE` ladder to run **once per device, ever**. Persisting the winner
+    /// is what makes the second launch skip four candidate probes, and it is the largest single
+    /// saving available against R1.7's ten seconds. In W4 this belongs on
+    /// `Camera.capabilities.resolvedRTSPPath` in `library.json`; here it rides along.
+    var rtspPath: String?
+
     // MARK: Private Helpers
 
     private static let hostKey = "vigil.lastConnection.host"
     private static let accountKey = "vigil.lastConnection.account"
     private static let refKey = "vigil.lastConnection.credentialRef"
+    private static let pathKey = "vigil.lastConnection.rtspPath"
 
     // MARK: API
 
@@ -82,7 +91,11 @@ struct LastConnection: Sendable, Hashable {
         else {
             return nil
         }
-        return LastConnection(host: host, account: account, credentialRef: CredentialRef(uuid))
+        let path = defaults.string(forKey: pathKey)
+        return LastConnection(host: host,
+                              account: account,
+                              credentialRef: CredentialRef(uuid),
+                              rtspPath: path?.isEmpty == false ? path : nil)
     }
 
     /// Stores this connection as the one to resume on the next launch.
@@ -90,6 +103,11 @@ struct LastConnection: Sendable, Hashable {
         defaults.set(host, forKey: Self.hostKey)
         defaults.set(account, forKey: Self.accountKey)
         defaults.set(credentialRef.rawValue.uuidString, forKey: Self.refKey)
+        if let rtspPath, !rtspPath.isEmpty {
+            defaults.set(rtspPath, forKey: Self.pathKey)
+        } else {
+            defaults.removeObject(forKey: Self.pathKey)
+        }
     }
 
     /// Forgets the remembered connection. Called when its credential no longer opens the camera, so
@@ -98,6 +116,7 @@ struct LastConnection: Sendable, Hashable {
         defaults.removeObject(forKey: hostKey)
         defaults.removeObject(forKey: accountKey)
         defaults.removeObject(forKey: refKey)
+        defaults.removeObject(forKey: pathKey)
     }
 }
 

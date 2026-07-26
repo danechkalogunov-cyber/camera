@@ -277,7 +277,7 @@ package enum ConnectHost {
     /// eight groups, and an optional trailing IPv4 form for the mapped notation.
     package static func isPlausibleIPv6(_ candidate: String) -> Bool {
         // A zone index (`fe80::1%en0`) is legal and is not ours to validate.
-        let address = candidate.split(separator: "%", maxSplits: 1).first.map(String.init)
+        let address = candidate.split(separator: "%", maxSplits: 1).first.map { String($0) }
             ?? candidate
         guard !address.isEmpty, address.contains(":") else { return false }
         guard address.components(separatedBy: "::").count <= 2 else { return false }
