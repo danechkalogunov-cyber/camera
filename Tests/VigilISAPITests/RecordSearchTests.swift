@@ -575,7 +575,8 @@ enum SearchFixtures {
         #expect(ISO8601Duration.seconds("P1M") == 2_592_000)
         #expect(ISO8601Duration.seconds("P1Y") == 31_536_000)
         // The `M` before `T` is months; after `T` it is minutes. That is the whole trap.
-        #expect(ISO8601Duration.seconds("P1MT1M") == 2_592_000 + 60)
+        let monthAndMinute = ISO8601Duration.seconds("P1MT1M")
+        #expect(monthAndMinute == 2_592_060.0)
         #expect(ISO8601Duration.seconds(nil) == nil)
         #expect(ISO8601Duration.seconds("") == nil)
         #expect(ISO8601Duration.seconds("30 days") == nil)
