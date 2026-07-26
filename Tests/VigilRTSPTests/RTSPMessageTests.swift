@@ -64,8 +64,9 @@ import VigilProtocols
         var authenticator = RTSPAuthenticator(credential: MessageLayerFixtures.cameraCredential,
                                               random: SplitMix64RandomSource(seed: 4))
         authenticator.absorb(MessageLayerFixtures.cameraChallenge)
-        let authorization = try #require(
-            authenticator.authorization(for: .describe, uri: MessageLayerFixtures.cameraBase))
+        let authorizationProduced = authenticator.authorization(for: .describe,
+                                                                uri: MessageLayerFixtures.cameraBase)
+        let authorization = try #require(authorizationProduced)
 
         let builder = RTSPRequestBuilder()
         let request = builder.build(method: .describe, uri: MessageLayerFixtures.cameraBase, cseq: 3,

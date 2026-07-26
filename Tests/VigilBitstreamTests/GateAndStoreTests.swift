@@ -152,7 +152,11 @@ private extension ParameterSetChange {
         var store = ParameterSetStore()
         _ = store.ingest(ParameterSets(codec: .h264, sps: [StoreVector.data(StoreVector.v1)],
                                        pps: [StoreVector.data(StoreVector.p1)]))
-        _ = store.ingest(ParameterSets(codec: .h264, sps: [Data([0x67, 0xFF, 0xFF, 0xFF])]))
+        let junk = Data([0x67, 0xFF, 0xFF, 0xFF])
+        _ = store.ingest(ParameterSets(codec: .h264, sps: [junk]))
+        // The unparseable re-send replaces the set it supersedes rather than accumulating beside
+        // it — a decoder handed both would be given one good SPS and one it must reject.
+        #expect(store.sets?.sps == [junk])
         #expect(store.format?.codedWidth == 1920)   // last good geometry beats no geometry
         #expect(store.h264SPS == nil)
     }

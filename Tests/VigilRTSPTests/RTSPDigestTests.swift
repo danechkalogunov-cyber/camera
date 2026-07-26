@@ -80,8 +80,8 @@ import VigilProtocols
         var authenticator = RTSPAuthenticator(credential: MessageLayerFixtures.cameraCredential,
                                               random: SplitMix64RandomSource(seed: 1))
         authenticator.absorb(MessageLayerFixtures.cameraChallenge)
-        let header = try #require(authenticator.authorization(for: .describe,
-                                                              uri: MessageLayerFixtures.cameraBase))
+        let headerProduced = authenticator.authorization(for: .describe, uri: MessageLayerFixtures.cameraBase)
+        let header = try #require(headerProduced)
         let expected = "Digest username=\"admin\", realm=\"IP Camera(52491)\", "
             + "nonce=\"3a2f5c8e1b7d4906f2e5a8c1d4b70e93\", "
             + "uri=\"rtsp://192.168.1.64:554/Streaming/Channels/101\", "
@@ -102,8 +102,8 @@ import VigilProtocols
         #expect(authenticator.lastOutcome == .retry)
         #expect(authenticator.failureCount == 0)
 
-        let header = try #require(authenticator.authorization(for: .describe,
-                                                              uri: MessageLayerFixtures.cameraBase))
+        let headerProduced = authenticator.authorization(for: .describe, uri: MessageLayerFixtures.cameraBase)
+        let header = try #require(headerProduced)
         #expect(header.contains("nonce=\"9d1c7b3e5f2a48061c8e0b9a7d3f6520\""))
         #expect(header.contains("response=\"7e59f57bd7e98d245ea2633e2b19d7b1\""))
     }
@@ -183,8 +183,8 @@ import VigilProtocols
         authenticator.absorb(RTSPChallenge.parseAll(
             "Digest realm=\"DS-7608NI-K2(24680)\", nonce=\"b7c41e0a9d3f625814ae7c0b6d29f4e1\", "
             + "qop=\"auth\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\""))
-        let header = try #require(authenticator.authorization(for: .describe,
-                                                              uri: MessageLayerFixtures.nvrBase))
+        let headerProduced = authenticator.authorization(for: .describe, uri: MessageLayerFixtures.nvrBase)
+        let header = try #require(headerProduced)
         #expect(header.hasSuffix("opaque=\"5ccc069c403ebaf9f0171e9517f40e41\""))
     }
 
@@ -205,8 +205,8 @@ import VigilProtocols
         authenticator.absorb(RTSPChallenge.parseAll(
             "Digest realm=\"IP Camera(52491)\", nonce=\"3a2f5c8e1b7d4906f2e5a8c1d4b70e93\", "
             + "algorithm=MD5-sess"))
-        let header = try #require(authenticator.authorization(for: .describe,
-                                                              uri: MessageLayerFixtures.cameraBase))
+        let headerProduced = authenticator.authorization(for: .describe, uri: MessageLayerFixtures.cameraBase)
+        let header = try #require(headerProduced)
         #expect(header.contains("algorithm=MD5-sess"))
         let expected = RTSPDigest.response(
             ha1: "8e02847dbbf1e8b0643c4dc284808c30",
@@ -226,8 +226,9 @@ import VigilProtocols
                                                   random: SplitMix64RandomSource(seed: 2),
                                                   allowBasicOverPlaintext: true)
             authenticator.absorb(RTSPChallenge.parseAll("Basic realm=\"IP Camera(52491)\""))
-            let header = try #require(authenticator.authorization(for: .describe,
-                                                                  uri: MessageLayerFixtures.cameraBase))
+            let headerProduced = authenticator.authorization(for: .describe,
+                                                             uri: MessageLayerFixtures.cameraBase)
+            let header = try #require(headerProduced)
             #expect(header == expected)
         }
     }
@@ -332,12 +333,14 @@ import VigilProtocols
         var authenticator = RTSPAuthenticator(credential: MessageLayerFixtures.nvrCredential,
                                               random: SplitMix64RandomSource(seed: 23))
         authenticator.absorb(MessageLayerFixtures.nvrChallenge)
-        let first = try #require(authenticator.authorization(for: .describe, uri: playback))
+        let firstProduced = authenticator.authorization(for: .describe, uri: playback)
+        let first = try #require(firstProduced)
         #expect(first.contains("uri=\"\(playback)\""))
 
         authenticator.absorb(MessageLayerFixtures.nvrChallenge)
         #expect(authenticator.lastOutcome == .retryWithURIFallback(rung: 1))
-        let second = try #require(authenticator.authorization(for: .describe, uri: playback))
+        let secondProduced = authenticator.authorization(for: .describe, uri: playback)
+        let second = try #require(secondProduced)
         #expect(second.contains("uri=\"rtsp://192.168.1.200:554/Streaming/tracks/301\""))
         #expect(!second.contains("starttime"))
     }

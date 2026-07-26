@@ -126,26 +126,4 @@ public enum NALHeader {
             throw BitstreamError.unsupportedSyntax("MJPEG has no NAL units")
         }
     }
-
-    /// Decodes the full header of a NAL unit of either codec into a `NALUnitRef` over `range`.
-    ///
-    /// `range` is used verbatim for the reference and is expected to index `nal`'s own buffer; only
-    /// the first one or two bytes of `nal` are read.
-    public static func reference(
-        _ nal: UnsafeRawBufferPointer, codec: VideoCodec, range: Range<Int>
-    ) throws(BitstreamError) -> NALUnitRef {
-        switch codec {
-        case .h264:
-            guard nal.count >= 1 else { throw BitstreamError.emptyNALUnit }
-            let decoded = try decodeH264(nal[0])
-            return NALUnitRef(range: range, typeCode: decoded.type)
-        case .h265:
-            guard nal.count >= 2 else { throw BitstreamError.emptyNALUnit }
-            let decoded = try decodeHEVC(nal[0], nal[1])
-            return NALUnitRef(range: range, typeCode: decoded.type,
-                              layerID: decoded.layerID, temporalID: decoded.temporalID)
-        case .mjpeg:
-            throw BitstreamError.unsupportedSyntax("MJPEG has no NAL units")
-        }
-    }
 }

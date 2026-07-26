@@ -218,8 +218,10 @@ import VigilProtocols
         var state = RTPSourceState(clockRate: 90_000)
         state.restart(ssrc: 0x1234, sequence: 1000)
         #expect(state.isInProbation)
-        #expect(state.update(sequence: 1000) == false)     // first packet: still on probation
-        #expect(state.update(sequence: 1001))              // second consecutive packet validates it
+        let firstPacket = state.update(sequence: 1000)     // still on probation
+        let secondPacket = state.update(sequence: 1001)    // validates the source
+        #expect(firstPacket == false)
+        #expect(secondPacket)
         #expect(state.isInProbation == false)
         #expect(state.received == 1)
         #expect(state.extendedHighestSequence == 1001)
@@ -252,10 +254,12 @@ import VigilProtocols
         _ = state.update(sequence: 1000)
         _ = state.update(sequence: 1001)
         // A jump far outside the dropout window is not believed on its first packet.
-        #expect(state.update(sequence: 40_000) == false)
+        let unconfirmed = state.update(sequence: 40_000)
+        #expect(unconfirmed == false)
         #expect(state.extendedHighestSequence == 1001)
         // The confirming packet restarts the counting run.
-        #expect(state.update(sequence: 40_001))
+        let confirmed = state.update(sequence: 40_001)
+        #expect(confirmed)
         #expect(state.extendedHighestSequence == 40_001)
         #expect(state.expected == 1)
     }

@@ -154,9 +154,13 @@ import VigilProtocols
                                     at: DepacketizerFixture.instant(0)).events
         events += depacketizer.push(DepacketizerFixture.packet(slice, sequence: 2, timestamp: 900),
                                     at: DepacketizerFixture.instant(1)).events
-        let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+        // The next timestamp closes the access unit, which is where its events surface.
+        let closing = depacketizer.push(DepacketizerFixture.packet(slice, sequence: 3,
+                                                                   timestamp: 4500),
+                                        at: DepacketizerFixture.instant(40))
+        events += closing.events
 
-        let frame = try #require(frames.first)
+        let frame = try #require(closing.frames.first)
         #expect(frame.nalCount == 3)
         let nals = try #require(DepacketizerFixture.splitLengthPrefixed(frame.data))
         #expect(nals == [DepacketizerFixture.h264SPS, DepacketizerFixture.h264PPS, slice])
@@ -312,8 +316,8 @@ import VigilProtocols
             var payload = [UInt8]()
             payload.reserveCapacity(length)
             for _ in 0..<length { payload.append(UInt8(truncatingIfNeeded: next())) }
-            let out = depacketizer.push(DepacketizerFixture.packet(payload,
-                                                                   sequence: UInt16(truncatingIfNeeded: index),
+            let sequence = UInt16(truncatingIfNeeded: index)
+            let out = depacketizer.push(DepacketizerFixture.packet(payload, sequence: sequence,
                                                                    timestamp: UInt32(index)),
                                         at: DepacketizerFixture.instant(index))
             for frame in out.frames {

@@ -127,11 +127,16 @@ import VigilProtocols
         var events: [DepacketizerEvent] = []
         events += depacketizer.push(DepacketizerFixture.packet(ap, sequence: 1, timestamp: 900),
                                     at: DepacketizerFixture.instant(0)).events
-        _ = depacketizer.push(DepacketizerFixture.packet(slice, sequence: 2, timestamp: 900),
-                              at: DepacketizerFixture.instant(1))
-        let frames = depacketizer.flush(at: DepacketizerFixture.instant(40))
+        events += depacketizer.push(DepacketizerFixture.packet(slice, sequence: 2, timestamp: 900),
+                                    at: DepacketizerFixture.instant(1)).events
+        // The next timestamp closes the access unit, which is where its events surface.
+        let closing = depacketizer.push(DepacketizerFixture.packet(slice, sequence: 3,
+                                                                   timestamp: 4500),
+                                        at: DepacketizerFixture.instant(40))
+        events += closing.events
 
-        let nals = try #require(DepacketizerFixture.splitLengthPrefixed(try #require(frames.first).data))
+        let frame = try #require(closing.frames.first)
+        let nals = try #require(DepacketizerFixture.splitLengthPrefixed(frame.data))
         #expect(nals == [DepacketizerFixture.h265VPS, DepacketizerFixture.h265SPS,
                          DepacketizerFixture.h265PPS, slice])
         let sets = try #require(DepacketizerFixture.parameterSetChanges(events).last)
@@ -151,12 +156,11 @@ import VigilProtocols
                            0x05, 0x00, 0x04, 0x44, 0x01, 0xC1, 0x72]
         #expect(ap.count == 30)
 
-        let events = depacketizer.push(DepacketizerFixture.packet(ap, sequence: 1, timestamp: 900),
+        var events = depacketizer.push(DepacketizerFixture.packet(ap, sequence: 1, timestamp: 900),
                                        at: DepacketizerFixture.instant(0)).events
-        _ = depacketizer.push(DepacketizerFixture.packet(DepacketizerFixture.h265Slice(type: 19,
-                                                                                        firstSlice: true),
-                                                         sequence: 2, timestamp: 4500),
-                              at: DepacketizerFixture.instant(40))
+        let slice = DepacketizerFixture.h265Slice(type: 19, firstSlice: true)
+        events += depacketizer.push(DepacketizerFixture.packet(slice, sequence: 2, timestamp: 4500),
+                                    at: DepacketizerFixture.instant(40)).events
         let sets = try #require(DepacketizerFixture.parameterSetChanges(events).last)
         #expect(sets.vps == [Data(DepacketizerFixture.h265VPS)])
         #expect(sets.sps == [Data(DepacketizerFixture.h265SPS)])

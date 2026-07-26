@@ -285,9 +285,6 @@ public struct PipelineHarness {
 
             case let .reconnect(url, _):
                 report.actionTrace.append("reconnect(\(url.host))")
-
-            default:
-                report.actionTrace.append("other")
             }
         }
     }
@@ -322,13 +319,11 @@ public struct PipelineHarness {
         }
         report.frames.append(contentsOf: result.frames)
         report.events.append(contentsOf: result.events)
+        // Outbound RTCP goes back through the session machine rather than straight onto the wire,
+        // so the `$` framing under test is the real one and not the harness's own.
         for payload in result.outboundRTCP {
-            var framed = Data([0x24, server.videoChannel &+ 1])
-            let length = UInt16(clamping: payload.count)
-            framed.append(UInt8(truncatingIfNeeded: length >> 8))
-            framed.append(UInt8(truncatingIfNeeded: length))
-            framed.append(payload)
-            clientToServer.append(framed)
+            apply(machine.handle(.sendRTCP(channel: server.videoChannel &+ 1, payload: payload),
+                                 now: instant))
         }
     }
 

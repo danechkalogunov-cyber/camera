@@ -204,11 +204,18 @@ public struct ParameterSetStore: Sendable {
                 out[index] = candidate                      // byte-identical: nothing to do
                 continue
             }
-            if let id = ParameterSetStore.identifier(of: candidate, codec: codec, kind: kind),
-               let index = out.firstIndex(where: {
-                   ParameterSetStore.identifier(of: $0, codec: codec, kind: kind) == id
-               }) {
+            let candidateID = ParameterSetStore.identifier(of: candidate, codec: codec, kind: kind)
+            if let candidateID, let index = out.firstIndex(where: {
+                ParameterSetStore.identifier(of: $0, codec: codec, kind: kind) == candidateID
+            }) {
                 out[index] = candidate                      // same id, new bytes: replace in place
+            } else if out.count == 1, incoming.count == 1, candidateID == nil
+                        || ParameterSetStore.identifier(of: out[0], codec: codec,
+                                                        kind: kind) == nil {
+                // One set replacing one set, with at least one id unrecoverable. A stream with two
+                // simultaneous sets of a type is vanishingly rare, and a camera whose re-sent SPS
+                // our parser rejects must not leave a stale set behind for the decoder to choke on.
+                out[0] = candidate
             } else {
                 out.append(candidate)
             }

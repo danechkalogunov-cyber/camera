@@ -29,6 +29,13 @@ private enum HEVCVector {
     /// **Synthesised for this test** by mutating the RBSP at bit 188 — not a camera capture.
     static let rpsCountTooLarge = "QgEBAWAAAAMAsAAAAwAAAwB7oAPAgBDlll5JG2AhQA=="
 
+    /// W1's prefix followed by a hand-written chain of three short-term reference picture sets:
+    /// set 0 explicit with `NumDeltaPocs == 2`, set 1 inter-predicted from set 0, set 2
+    /// inter-predicted from set 1. **Synthesised for this test** — no published vector chains
+    /// inter-predicted sets, and the chain is what proves the `NumDeltaPocs` bookkeeping is real
+    /// rather than a one-deep special case. No VUI, so the parse ends right after the RPS section.
+    static let chainedRPS = "QgEBAWAAAAMAsAAAAwAAAwB7oAPAgBDlll5JG2I/32xk"
+
     static func bytes(_ base64: String) -> [UInt8] {
         [UInt8](Data(base64Encoded: base64) ?? Data())
     }
@@ -166,6 +173,28 @@ private func parseHEVCPPS(_ base64: String) throws -> H265PPS {
         #expect(sps.minSpatialSegmentationIDC == 4)
         #expect(sps.debugBitsConsumed == 339)
         #expect(sps.debugBitsAvailable == 344)
+    }
+
+    @Test func h265SPSFollowsAChainOfInterPredictedRefPicSets() throws {
+        // Set 1 is predicted from set 0 (NumDeltaPocs 2 → 3 flag groups → 3), and set 2 from set 1
+        // (NumDeltaPocs 3 → 4 flag groups, one of which sets neither used_by_curr_pic_flag nor
+        // use_delta_flag → 3). A parser that returns NumDeltaPocs[RefRpsIdx] unchanged, or that
+        // counts flag groups instead of contributing indices, reads the wrong number of bits from
+        // set 2 and desynchronises everything after the RPS section.
+        let sps = try parseHEVCSPS(HEVCVector.chainedRPS)
+        #expect(sps.numShortTermRefPicSets == 3)
+        #expect(sps.numDeltaPocs == [2, 3, 3])
+        // The three flags immediately after the RPS section are where a desynchronised loop first
+        // shows up, so they are the assertion that matters.
+        #expect(!sps.longTermRefPicsPresent)
+        #expect(sps.temporalMVPEnabled)
+        #expect(sps.strongIntraSmoothingEnabled)
+        #expect(!sps.vuiPresent)
+        #expect(sps.frameRate == nil)
+        #expect(sps.codedWidth == 1920)
+        #expect(sps.codedHeight == 1080)
+        #expect(sps.debugBitsConsumed == 221)
+        #expect(sps.debugBitsAvailable == 224)
     }
 
     @Test func h265SPSHandlesTheSubLayerLoopInProfileTierLevel() throws {

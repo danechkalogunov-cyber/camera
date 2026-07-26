@@ -425,10 +425,11 @@ public struct RTPTrackReceiver: Sendable {
                     || goodbye.sources.contains { $0 == currentSSRC }
                 guard isOurs else { break }
                 result.events.append(.bye(reason: goodbye.reason))
-                var flushed = flush(at: now)
+                // A BYE is the end of the stream, so anything still held is emitted now rather
+                // than waiting for a timer that will never see another packet.
+                let flushed = flush(at: now)
                 result.frames += flushed.frames
                 result.events += flushed.events
-                flushed.outboundRTCP.removeAll()
             case .receiverReport, .unhandled:
                 break
             }
@@ -621,9 +622,9 @@ public struct RTPTrackReceiver: Sendable {
         _ = packetTimestamps.extend(packet.timestamp)
 
         guard !packet.payload.isEmpty else {
-            let error = RTPError.shortPacket(length: 0)
+            // Legal on the wire, so it is not a parse failure — but there is nothing to
+            // depacketize, and a depacketizer must not be handed a zero-length payload.
             parseFailures.emptyPayload &+= 1
-            result.parseFailures.append(error)
             emitLimited(.emptyPayload, at: now, into: &result)
             return
         }

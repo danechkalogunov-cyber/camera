@@ -39,9 +39,23 @@ import VigilTestKit
 
         // Frames actually came out, and the first one the decoder could use is a keyframe.
         let summary = report.diagnosticSummary
-        #expect(report.frames.count >= 100,
-                "expected roughly 8 s at 25 fps, got \(report.frames.count): \(summary)")
+        #expect(report.frames.count >= 40,
+                "almost nothing survived 2 % loss: \(summary)")
         #expect(report.firstFrameIsKeyframe, "first frame was not a keyframe: \(summary)")
+
+        // The control: the same three non-loss quirks with no loss must cost nothing at all, which
+        // is what makes the frames missing above attributable to the injected loss and to nothing
+        // else. Without this the budget assertion below could be satisfied by a broken pipeline.
+        var control = PipelineHarness(profile: SyntheticCameraProfile.hevcCamera().adding([
+            .markerNeverSet, .sequenceWrapSoon, .unpaddedSpropBase64,
+        ]))
+        let clean = control.run(forVirtualTime: .seconds(8))
+        #expect(clean.failure == nil, "loss-free control failed: \(clean.diagnosticSummary)")
+        #expect(clean.undeliveredFrameCount <= 1,
+                "marker/wrap/base64 alone cost frames: \(clean.diagnosticSummary)")
+        let controlSummary = clean.diagnosticSummary
+        #expect(clean.frames.count >= 190,
+                "control delivered \(clean.frames.count) of ~200: \(controlSummary)")
 
         // Correctly *bounded*: no picture split, no picture merged, no duplicate.
         #expect(report.hasMonotonicPTS,
@@ -72,8 +86,11 @@ import VigilTestKit
         var harness = PipelineHarness(profile: profile)
         let report = harness.run(forVirtualTime: .seconds(8))
         #expect(report.failure == nil, "session failed: \(report.diagnosticSummary)")
-        #expect(report.frames.count >= 80,
-                "expected roughly 8 s at 20 fps: \(report.diagnosticSummary)")
+        #expect(report.frames.count >= 20,
+                "almost nothing survived 2 % loss: \(report.diagnosticSummary)")
+        let allowed = report.groundTruth.expectedRecoverableFrameLosses
+        #expect(report.undeliveredFrameCount <= allowed + 3,
+                "lost more than the loss can explain: \(report.diagnosticSummary)")
         #expect(report.firstFrameIsKeyframe, "\(report.diagnosticSummary)")
         #expect(report.hasMonotonicPTS, "\(report.diagnosticSummary)")
         #expect(report.duplicatePTSCount == 0, "\(report.diagnosticSummary)")

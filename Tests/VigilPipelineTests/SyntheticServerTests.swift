@@ -341,7 +341,9 @@ private enum ServerFixture {
         #expect(a == b)
         let text = SyntheticRTSPServer(profile: .hevcCamera().adding(.unpaddedSpropBase64))
             .advertisedSDP
-        #expect(!text.contains("="), "no base64 padding should survive the quirk")
+        let fmtp = try #require(text.split(separator: "\r\n").first { $0.hasPrefix("a=fmtp:") })
+        #expect(!fmtp.contains("=="), "the quirk must strip base64 padding from sprop values")
+        #expect(fmtp.contains("sprop-vps="))
     }
 
     @Test func serverSDPOmitsSpropUnderParameterSetsOnlyInBand() throws {

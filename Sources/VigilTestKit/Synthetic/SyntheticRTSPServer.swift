@@ -107,6 +107,9 @@ public struct SyntheticRTSPServer: Sendable {
     /// Requests that carried an `Authorization` header the camera rejected, with the reason.
     public private(set) var rejections: [String] = []
 
+    /// Interleaved frames the client sent back, which on this session means RTCP receiver reports.
+    public private(set) var receivedInterleavedCount: Int = 0
+
     /// The SDP the camera answers DESCRIBE with. Stable for the life of the server.
     public let advertisedSDP: String
 
@@ -239,7 +242,19 @@ public struct SyntheticRTSPServer: Sendable {
     // MARK: Request framing
 
     /// Pulls one complete request out of `inputBuffer`, or returns `nil` if more bytes are needed.
+    ///
+    /// A client on a TCP-interleaved session sends RTCP receiver reports back inside `$` frames on
+    /// the same connection. Those are consumed here and counted, never parsed as requests — a
+    /// server that mistook them for text would desynchronise, which is a bug the fixture must not
+    /// have while it is busy testing the client for the same fault.
     private mutating func takeRequest() -> SyntheticRTSPRequest? {
+        while let first = inputBuffer.first, first == 0x24 {
+            guard inputBuffer.count >= 4 else { return nil }
+            let length = Int(inputBuffer[2]) << 8 | Int(inputBuffer[3])
+            guard inputBuffer.count >= 4 + length else { return nil }
+            receivedInterleavedCount += 1
+            inputBuffer.removeFirst(4 + length)
+        }
         guard let terminator = Self.findDoubleCRLF(inputBuffer) else { return nil }
         let headerBytes = Array(inputBuffer[0..<terminator])
         let text = String(decoding: headerBytes, as: UTF8.self)
