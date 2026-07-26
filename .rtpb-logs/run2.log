@@ -1,0 +1,51 @@
+Building for debugging...
+[0/39] Write sources
+[4/39] Write swift-version--67B1AD778A6B9081.txt
+[6/36] Compiling VigilBitstream LengthPrefixed.swift
+[7/36] Emitting module VigilBitstream
+[9/37] Compiling VigilRTP AccessUnitBuilder.swift
+/home/user/camera/Sources/VigilRTP/Track/AccessUnitBuilder.swift:162:16: warning: variable 'open' was never mutated; consider changing to 'let' constant
+160 |         }
+161 | 
+162 |         if var open = pending {
+    |                `- warning: variable 'open' was never mutated; consider changing to 'let' constant
+163 |             let timestampChanged = open.rtpTimestamp != packet.timestamp
+164 |             let prefixAfterSlices = descriptor.isPrefix && open.sawVCL
+[10/37] Emitting module VigilRTP
+[11/42] Compiling VigilRTP Depacketizer.swift
+[12/42] Compiling VigilRTP RTPTrackFormat.swift
+[13/42] Compiling VigilRTP RTPTrackReceiver.swift
+[14/42] Compiling VigilRTP H264Depacketizer.swift
+[15/42] Compiling VigilRTP H265Depacketizer.swift
+[16/43] Wrapping AST for VigilRTP for debugging
+[17/43] Write Objects.LinkFileList
+[18/44] Archiving libVigilPure.a
+[20/51] Emitting module VigilCore
+[21/51] Write Objects.LinkFileList
+[22/51] Linking Vigil
+[24/51] Compiling VigilTestKit SyntheticBitWriter.swift
+[25/51] Compiling VigilTestKit SyntheticCameraProfile.swift
+[26/51] Compiling VigilTestKit HarnessReport.swift
+[27/51] Compiling VigilTestKit PipelineHarness.swift
+[28/53] Emitting module VigilTestKit
+[29/53] Compiling VigilTestKit RecordingLogger.swift
+[30/53] Compiling VigilTestKit GroundTruth.swift
+[31/53] Compiling VigilTestKit SyntheticParameterSets.swift
+[32/53] Compiling VigilTestKit SyntheticRTSPServer.swift
+[34/58] Emitting module VigilUITests
+[35/59] Emitting module VigilVideoTests
+[36/60] Emitting module VigilCoreTests
+[40/60] Emitting module VigilTransportTests
+[42/66] Emitting module VigilRenderTests
+[44/93] Emitting module VigilPipelineTests
+[45/93] Compiling VigilPipelineTests PipelineHeadlineTests.swift
+[46/93] Compiling VigilPipelineTests PipelineProfileTests.swift
+[47/93] Compiling VigilPipelineTests PipelineQuirkTests.swift
+[49/94] Emitting module VigilISAPITests
+[51/94] Emitting module VigilRTSPTests
+[53/95] Emitting module VigilDiscoveryTests
+[54/96] Wrapping AST for VigilTestKit for debugging
+[56/96] Compiling VigilProtocolsTests BitReaderTests.swift
+[57/96] Compiling VigilProtocolsTests ByteReaderTests.swift
+[58/97] Emitting module VigilRTPTests
+[59/97] Emitting module VigilBitstreamTests

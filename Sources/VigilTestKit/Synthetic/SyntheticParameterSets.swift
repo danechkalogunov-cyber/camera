@@ -20,13 +20,22 @@ import VigilProtocols
 /// tests assert the parsed display size, and a fixture that quietly rounded would hide a real bug.
 public struct SyntheticGeometry: Sendable, Hashable {
 
+    /// Width the decoder should present, after cropping.
     public let displayWidth: Int
+
+    /// Height the decoder should present, after cropping.
     public let displayHeight: Int
+
+    /// Width actually coded, rounded up to the codec's block size.
     public let codedWidth: Int
+
+    /// Height actually coded, rounded up to the codec's block size.
     public let codedHeight: Int
 
-    /// Crop offsets in *chroma* units, which is how both specs code them for 4:2:0.
+    /// Columns cropped from the right, in chroma units — how both specs code the offset for 4:2:0.
     public let cropRightUnits: Int
+
+    /// Rows cropped from the bottom, in chroma units.
     public let cropBottomUnits: Int
 
     /// Rounds `width`/`height` up to a multiple of `alignment` and derives the crop offsets.
@@ -54,19 +63,24 @@ public struct SyntheticGeometry: Sendable, Hashable {
 /// Assembles the parameter-set NAL units for one profile.
 public struct SyntheticParameterSetBuilder: Sendable {
 
-    /// Display geometry to encode.
+    /// Display picture width in luma samples.
     public let width: Int
+
+    /// Display picture height in luma samples.
     public let height: Int
 
     /// Frames per second, encoded into the VUI timing info as `time_scale / (2 · num_units_in_tick)`
     /// for H.264 and `vui_time_scale / vui_num_units_in_tick` for H.265.
     public let frameRate: Double
 
+    /// Which syntax to emit: H.264 SPS/PPS, or H.265 VPS/SPS/PPS.
     public let codec: VideoCodec
 
     /// `num_units_in_tick`, fixed at 1000 so any frame rate expressible to three decimals is exact.
     private static let unitsInTick: UInt32 = 1_000
 
+    /// Creates a builder. A dimension below 16 is clamped to 16 and a frame rate at or below
+    /// zero becomes 25, so a malformed profile still yields a parseable parameter set.
     public init(width: Int, height: Int, frameRate: Double, codec: VideoCodec) {
         self.width = Swift.max(width, 16)
         self.height = Swift.max(height, 16)

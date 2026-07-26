@@ -56,10 +56,12 @@ public struct RecordingLogger: LoggerProtocol {
         self.minimumLevel = minimumLevel
     }
 
+    /// `true` for any category at or above ``minimumLevel``; the category is never consulted.
     public func isEnabled(_ level: LogLevel, _: LogCategory) -> Bool {
         level >= minimumLevel
     }
 
+    /// Appends `event` unless it is below ``minimumLevel``. Never drops for capacity.
     public func log(_ event: LogEvent) {
         guard event.level >= minimumLevel else { return }
         storage.append(event)

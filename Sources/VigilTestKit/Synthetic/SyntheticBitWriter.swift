@@ -29,6 +29,7 @@ public struct SyntheticBitWriter: Sendable {
     /// How many bits of `partial` are occupied, always in `0..<8`.
     private var bitsUsed: Int = 0
 
+    /// An empty writer positioned at bit zero.
     public init() {}
 
     /// The bits written so far, zero-padded to a byte boundary.

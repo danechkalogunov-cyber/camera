@@ -404,3 +404,10 @@ macro expansion #require:1:62: warning: no calls to throwing functions occur wit
 [49/98] Wrapping AST for VigilRTSPTests for debugging
 [50/98] Wrapping AST for VigilPipelineTests for debugging
 [51/98] Wrapping AST for VigilCoreTests for debugging
+[56/98] Emitting module VigilBitstreamTests
+[59/99] Wrapping AST for VigilBitstreamTests for debugging
+[64/99] Emitting module VigilRTPTests
+error: input file '/home/user/camera/Tests/VigilRTPTests/AudioDepacketizerTests.swift' was modified during the build
+error: input file '/home/user/camera/Tests/VigilRTPTests/AudioDepacketizerTests.swift' was modified during the build
+error: fatalError
+EXIT=1

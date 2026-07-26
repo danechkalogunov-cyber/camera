@@ -67,6 +67,7 @@ public struct HarnessReport: Sendable {
     /// `true` when the session machine reported the transport closed.
     public var transportClosed = false
 
+    /// An empty report. Populated by ``PipelineHarness``; tests only read one.
     public init() {}
 
     // MARK: Convenience predicates

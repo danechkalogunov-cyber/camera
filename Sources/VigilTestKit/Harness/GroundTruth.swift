@@ -105,6 +105,7 @@ public struct GroundTruth: Sendable {
     /// Display and coded geometry, and the nominal frame rate.
     public var geometry: SyntheticGeometry = SyntheticGeometry(width: 16, height: 16, alignment: 16)
 
+    /// Nominal frames per second the camera encoded at.
     public var frameRate: Double = 25
 
     /// RTP sequence numbers the loss injector actually discarded.
@@ -120,6 +121,7 @@ public struct GroundTruth: Sendable {
     /// the stream byte for byte.
     public var seed: UInt64 = 0
 
+    /// An empty oracle, filled in by ``record(_:unwrappedTicks:)`` as the stream is generated.
     public init() {}
 
     // MARK: Derived expectations

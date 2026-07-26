@@ -16,7 +16,10 @@ import VigilProtocols
 
 /// One header field as received, preserving the case the client sent.
 public struct SyntheticHeaderField: Sendable, Hashable {
+    /// The field name exactly as the client wrote it, case included.
     public var name: String
+
+    /// The field value with surrounding linear whitespace removed.
     public var value: String
 }
 
@@ -27,10 +30,20 @@ public struct SyntheticHeaderField: Sendable, Hashable {
 /// itself from the assertion that is meant to catch it.
 public struct SyntheticRTSPRequest: Sendable, Hashable {
 
+    /// The method token verbatim, so a lower-cased or unknown method is still observable.
     public var method: String
+
+    /// The request-line URI verbatim. Digest verification uses the client's `uri` parameter,
+    /// so a mismatch between the two shows up as a rejected credential rather than silently.
     public var uri: String
+
+    /// The version token, e.g. `RTSP/1.0`.
     public var version: String
+
+    /// Header fields in the order received, duplicates preserved.
     public var headers: [SyntheticHeaderField]
+
+    /// The entity body, empty when `Content-Length` was absent or zero.
     public var body: Data
 
     /// The first header with `name`, matched ASCII-case-insensitively, or `nil`.

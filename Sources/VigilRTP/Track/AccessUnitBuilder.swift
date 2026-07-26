@@ -159,7 +159,7 @@ struct AccessUnitAssembler: Sendable {
             }
         }
 
-        if var open = pending {
+        if let open = pending {
             let timestampChanged = open.rtpTimestamp != packet.timestamp
             let prefixAfterSlices = descriptor.isPrefix && open.sawVCL
             let newPicture = descriptor.isVCL && open.sawVCL && descriptor.isFirstSliceOfPicture
@@ -167,7 +167,6 @@ struct AccessUnitAssembler: Sendable {
                 closeAccessUnit(early: false, into: &out)
                 startAccessUnit(packet: packet, into: &out)
             } else {
-                pending = open
                 noteContribution(packet)
             }
         } else {

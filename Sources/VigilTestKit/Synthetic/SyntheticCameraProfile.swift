@@ -55,6 +55,7 @@ public struct SyntheticCameraProfile: Sendable, Hashable {
 
     // MARK: Identity
 
+    /// Device class. Decides the default RTSP path shape and the label in failure messages.
     public var model: Model
 
     /// Advertised firmware string. Affects the SDP `s=` line and the `Server` header only.
@@ -65,6 +66,7 @@ public struct SyntheticCameraProfile: Sendable, Hashable {
 
     // MARK: Media
 
+    /// Video codec the camera encodes in, which selects the whole packetization path.
     public var videoCodec: VideoCodec
 
     /// Coded picture width in luma samples, before any cropping/conformance window.
@@ -90,8 +92,12 @@ public struct SyntheticCameraProfile: Sendable, Hashable {
     /// Path of the requested stream, without host or scheme.
     public var streamPath: String
 
+    /// How the camera challenges: none, Basic, RFC 2069 Digest or RFC 2617 `qop=auth` Digest.
     public var authMode: SyntheticAuthMode
+    /// The account the camera will accept. Anything else is answered with `401`.
     public var username: String
+
+    /// The secret the camera will accept. Present in the fixture only; never a real credential.
     public var password: String
 
     /// `timeout=` advertised in the `Session` header of the SETUP response.
@@ -103,6 +109,7 @@ public struct SyntheticCameraProfile: Sendable, Hashable {
 
     // MARK: Faults and determinism
 
+    /// Faults in force. Each is individually switchable and each has its own pipeline test.
     public var quirks: Set<Quirk>
 
     /// Drives every pseudorandom decision in the fixture. **Print this on failure.**
