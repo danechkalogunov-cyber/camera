@@ -177,6 +177,7 @@ public actor DecodePipeline {
                 return
             }
             awaitingKeyframe = false
+            keyframeRequested = false
         }
 
         // A frame with a lost or truncated NAL decodes into visible corruption that persists until
@@ -231,6 +232,7 @@ public actor DecodePipeline {
         estimator.reset()
         estimator.nominalFrameRate = nil
         awaitingKeyframe = true
+        keyframeRequested = false
         sink.streamDidReset()
     }
 
@@ -317,9 +319,11 @@ public actor DecodePipeline {
 
     // MARK: - Private: bookkeeping
 
-    /// Stops decoding until an IDR/IRAP arrives, and asks for one.
+    /// Stops decoding until an IDR/IRAP arrives, and asks for one — at most once per wait.
     private func waitForKeyframe() {
         awaitingKeyframe = true
+        guard !keyframeRequested else { return }
+        keyframeRequested = true
         requestKeyframe()
     }
 
