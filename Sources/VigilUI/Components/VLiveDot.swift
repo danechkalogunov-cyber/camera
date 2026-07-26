@@ -195,6 +195,9 @@ package struct VLiveDot: View {
                 .fill(status.colour)
                 .frame(width: Self.dotSize, height: Self.dotSize)
                 .overlay {
+                    // Literal white, and correctly so: §10.5 specifies "a 1.5 pt white slash", and
+                    // it must read against `danger` in **both** appearances, which no ink token
+                    // does — `Text.inverse` is near-black in dark.
                     Capsule()
                         .fill(SwiftUI.Color.white)
                         .frame(width: Self.dotSize + 1, height: VTheme.Border.ring)

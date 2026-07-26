@@ -2,8 +2,8 @@
 //  RootView.swift
 //  Vigil
 //
-//  The window's content: the connect form, then live video. The single place in the app target
-//  that names a `VigilUI` screen.
+//  The window's content: the connect form, then live video. The one place the app names a
+//  `VigilUI` screen or a `VigilRender` surface.
 //  macOS-only. See docs/API_CONTRACT.md §4.12, .vigil/STEP3.md §3.5–§3.6 and REQUIREMENTS §R1.
 //
 
@@ -12,6 +12,7 @@
 import SwiftUI
 
 import VigilCore
+import VigilRender
 import VigilUI
 
 // MARK: - RootView
@@ -22,23 +23,23 @@ import VigilUI
 /// that narrates its own progress. There is no wizard, no discovery list, no channel picker and no
 /// transport choice, because every one of those is a question R1 forbids us to ask.
 ///
-/// **Why the screens come from `VigilUI` and the state lives here.** `VigilUI` cannot see the app
-/// target, so its views take plain values and closures; the model that owns the `StreamController`
-/// has to live above them, which is this module. Keeping every reference to those two views in one
-/// file is deliberate: when their signatures settle, exactly one file changes.
+/// **Why the screens come from `VigilUI` and the state lives above them.** `VigilUI` cannot see the
+/// app target, so its views take values and closures; the object that owns the `StreamController`
+/// has to live here. `LiveVideoView` goes further and takes the picture itself as a `ViewBuilder`,
+/// so that `VigilRender`'s display layer is injected at the app layer and the screen stays
+/// previewable — which is why this file is where `VideoTile` is named.
 struct RootView: View {
 
     // MARK: - Stored Properties
 
-    /// The app-level model. `@Bindable` because the form writes back into `host`, `account` and
-    /// `password`.
+    /// The app-level model. `@Bindable` because `ConnectFormView` writes back into `form`.
     @Bindable var session: AppSessionModel
 
     // MARK: - Body
 
     var body: some View {
         ZStack {
-            // The window's own background is `layer.canvas` too (WindowChrome), so a live resize
+            // The window's own background is `layer.canvas` too (`WindowChrome`), so a live resize
             // never shows white behind either screen.
             VTheme.Color.Layer.canvas
                 .ignoresSafeArea()
@@ -59,55 +60,50 @@ struct RootView: View {
     private var content: some View {
         switch session.phase {
         case .connect:
-            connectForm
+            ConnectFormView(state: $session.form,
+                            onConnect: { session.connect($0) },
+                            onRemedy: { session.perform($0) })
         case .live:
             liveVideo
         }
     }
 
-    /// The connect form.
+    /// The video screen, with the renderer injected.
     ///
-    /// ASSUMED SIGNATURE — `VigilUI` had not landed its screens when this was written. What this
-    /// call assumes exists:
-    ///
-    ///     @MainActor public struct ConnectFormView: View {
-    ///         public init(host: Binding<String>, account: Binding<String>,
-    ///                     password: Binding<String>, isConnecting: Bool, message: String?,
-    ///                     onSubmit: @escaping () -> Void)
-    ///     }
-    ///
-    /// The bindings are what make "the password is the only thing typed" measurable: the form owns
-    /// no state of its own, so nothing it collects can be lost on the way here.
-    private var connectForm: some View {
-        ConnectFormView(host: $session.host,
-                        account: $session.account,
-                        password: $session.password,
-                        isConnecting: session.isConnecting,
-                        message: session.failureBanner,
-                        onSubmit: { session.connect() })
+    /// The tile is mounted in **every** connection state, which is what lets the offline overlay dim
+    /// a held last frame instead of fading the layer — the black-flash rule (DESIGN.md §3.6 rule 6).
+    /// `frames` is the app's single `FrameStreamHandle`: `VideoTile.makeNSView` attaches the view it
+    /// creates to it, so the decode pipeline never learns that SwiftUI rebuilt anything.
+    private var liveVideo: some View {
+        LiveVideoView(camera: identity,
+                      state: session.liveState,
+                      attemptStartedAt: session.attemptStartedAt,
+                      onRetry: { session.perform(.retry) },
+                      onRemedy: { session.perform($0) },
+                      video: {
+                          VideoTile(cameraID: cameraID,
+                                    frames: session.frames,
+                                    onKeyframeNeeded: { session.recoverStalledPicture() })
+                      })
     }
 
-    /// The video surface and its status line.
-    ///
-    /// ASSUMED SIGNATURE — as above:
-    ///
-    ///     @MainActor public struct LiveVideoView: View {
-    ///         public init(controller: StreamController?, status: String, message: String?,
-    ///                     isReceivingMedia: Bool, onDisconnect: @escaping () -> Void)
-    ///     }
-    ///
-    /// The controller is passed rather than a frame handle because `VigilUI` is the only module
-    /// that can see both `VigilCore` and `VigilRender`, so attaching the display layer to the
-    /// stream belongs there (docs/API_CONTRACT.md §4.10, `FrameStreamHandle`). `controller` is
-    /// optional so the view can render its own empty state during the gap between pressing Return
-    /// and the actor existing — a gap of one `await`, but a real one.
-    private var liveVideo: some View {
-        LiveVideoView(controller: session.controller,
-                      status: session.statusLine,
-                      message: session.failureBanner,
-                      isReceivingMedia: session.isReceivingMedia,
-                      onDisconnect: { session.disconnect() })
+    /// Name, address and identity colour for the chip over the video.
+    private var identity: LiveCameraIdentity {
+        let camera = session.camera
+        return LiveCameraIdentity(id: cameraID.rawValue,
+                                  name: camera?.displayName ?? session.form.request.host,
+                                  host: camera?.host ?? session.form.request.host)
     }
+
+    /// The camera's identifier, or a stable placeholder for the moment between pressing Return and
+    /// the record existing. `VideoTile` uses it only for its identity colour and its log lines.
+    private var cameraID: CameraID {
+        session.camera?.id ?? Self.pendingCameraID
+    }
+
+    /// One placeholder id for the life of the process, so the tile does not change identity — and
+    /// therefore does not get rebuilt — between the connect press and the camera record.
+    private static let pendingCameraID = CameraID()
 }
 
 #endif  // os(macOS)

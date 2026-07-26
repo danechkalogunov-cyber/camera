@@ -41,8 +41,19 @@ enum ControllerTimer: Hashable, Sendable {
 
 extension StreamController {
 
-    /// TCP connect budget (spec-core §7.4).
+    /// TCP connect budget (spec-core §7.4). Handed to the session so **it** owns the deadline.
     static let connectTimeout: Duration = .seconds(4)
+
+    /// The controller's own backstop around `connect()`, deliberately one second longer than the
+    /// budget the session was given.
+    ///
+    /// `RTSPConnection.connect()` awaits a bare `CheckedContinuation` — cancelling the task that
+    /// awaits it does **not** resume it, and only the connection's own watchdog does. A backstop
+    /// shorter than that watchdog would therefore not save any time; it would only make this side
+    /// wait for the other side's timer with the cancellation already delivered. One second of
+    /// grace keeps the backstop meaningful for a session factory whose implementation never times
+    /// out at all.
+    static let connectDeadline: Duration = .seconds(5)
 
     /// The whole connect sequence, from `resolving` to `playing`.
     static let overallWatchdog: Duration = .seconds(20)

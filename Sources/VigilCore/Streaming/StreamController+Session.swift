@@ -88,7 +88,7 @@ extension StreamController {
         emit(.connectAttemptStarted(attempt: attempt,
                                     endpoint: "\(url.host):\(url.port)\(url.path)"))
 
-        let connectOutcome = await withDeadline(Self.connectTimeout, clock: clock) {
+        let connectOutcome = await withDeadline(Self.connectDeadline, clock: clock) {
             () -> StreamError? in
             do {
                 try await newSession.connect()

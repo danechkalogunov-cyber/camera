@@ -56,10 +56,12 @@ public actor StreamProbe {
     ///
     /// - Parameters:
     ///   - dependencies: clock, logger, randomness and the session factory.
-    ///   - candidateTimeout: how long one candidate may take from connect to SDP. Four seconds:
-    ///     long enough for a busy NVR over Wi-Fi, short enough that the ladder cannot eat R1.7's
-    ///     ten-second budget to first picture.
-    public init(dependencies: CoreDependencies, candidateTimeout: Duration = .seconds(4)) {
+    ///   - candidateTimeout: how long one candidate may take, end to end. Eight seconds, because it
+    ///     has to cover the session's own four-second connect budget **and** the round trips after
+    ///     it; a shorter deadline here would fire while the socket was still legitimately
+    ///     connecting, and — since `connect()` awaits a continuation that cancellation does not
+    ///     resume — would not even save the time it appeared to.
+    public init(dependencies: CoreDependencies, candidateTimeout: Duration = .seconds(8)) {
         self.dependencies = dependencies
         self.candidateTimeout = candidateTimeout
     }
@@ -219,11 +221,21 @@ enum ProbeResult: Sendable {
 
 // MARK: - ProbeRun
 
-/// One `DESCRIBE`-only session against one candidate URL.
+/// One session against one candidate URL, run only as far as it takes to know whether the path is
+/// the right one.
 ///
-/// `RTSPCommand.describeOnly` is the machine's probe primitive: no `OPTIONS`, no `SETUP`, no
-/// `PLAY`, and a clean close as soon as the SDP has been parsed. A path-shaped rejection closes
-/// with `.ladderAdvance`, which is exactly the signal this run turns into "try the next rung".
+/// **Deviation, and the reason for it.** `RTSPSessionMachine` has a probe primitive —
+/// `RTSPCommand.describeOnly`, which sends `DESCRIBE` alone and closes as soon as the SDP parses —
+/// and this is what it exists for. The landed `VigilTransport.RTSPConnection` issues `.start`
+/// itself the moment the socket is ready (it must: `transportReady` sends nothing, .vigil/STEP3.md
+/// §3.1 finding 1), so by the time this actor could ask for `describeOnly` the machine is already
+/// running the full `OPTIONS → DESCRIBE → SETUP → PLAY` sequence and the command would only add a
+/// second `DESCRIBE`. This run therefore listens rather than commands, and treats `.ready` — an
+/// actual successful `PLAY` — as proof the path works.
+///
+/// The cost is one extra session on the **winning** candidate only: every losing rung is refused at
+/// `DESCRIBE`, before `SETUP`. If a probe mode reaches `RTSPConnection`, this becomes
+/// `perform(.describeOnly)` and the `.ready` case goes away.
 actor ProbeRun {
 
     private let session: any RTSPSessionDriving
@@ -234,7 +246,7 @@ actor ProbeRun {
         self.logger = logger
     }
 
-    /// Connects, asks for the SDP, and reports what came back.
+    /// Connects and reports what the device said about this path.
     func run() async -> ProbeResult {
         let stream = await session.events()
         do {
@@ -242,7 +254,6 @@ actor ProbeRun {
         } catch {
             return .abort(StreamError.from(anyError: error))
         }
-        await session.perform(.describeOnly)
 
         var videoCodec: VideoCodec?
         var sawVideoTrack = false
@@ -254,6 +265,13 @@ actor ProbeRun {
                     sawVideoTrack = true
                     videoCodec = codec
                 }
+            case let .ready(description):
+                // `PLAY` succeeded: the strongest possible answer to "is this the path?".
+                let codec = description.tracks
+                    .first { $0.kind == .video }?
+                    .codec?
+                    .video
+                return .success(codec ?? videoCodec)
             case let .closed(reason):
                 switch reason {
                 case .normal:
@@ -271,7 +289,7 @@ actor ProbeRun {
                 }
             case let .failed(error):
                 return Self.classify(error)
-            case .state, .timing, .media, .ready, .reconnect:
+            case .state, .timing, .media, .reconnect:
                 continue
             }
         }

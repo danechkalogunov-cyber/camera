@@ -20,14 +20,21 @@ import VigilProtocols
 ///
 /// The slice keeps this to the one thing the contract names: producing the `CoreDependencies`
 /// value that every actor below is handed. There is no service locator and no global — the value
-/// is created once in `VigilApp.init()` and passed down by reference-free copy.
+/// is created once in `VigilApp.init()` and passed down by copy.
 enum AppEnvironment {
 
-    /// Builds the live dependency set: system clock, `OSLog` logger, real Keychain, real sockets.
+    /// Builds the live dependency set: system monotonic clock, real Keychain, system randomness and
+    /// real sockets (`VigilTransport.RTSPConnection`).
     ///
-    /// `CoreDependencies.live` is `VigilCore`'s single wiring point (docs/spec-core.md §2); the app
-    /// target deliberately has no say in which implementation of each protocol is used, so that a
+    /// `CoreDependencies.live` is `VigilCore`'s single wiring point (docs/spec-core.md §2), so the
+    /// app target deliberately has no say in which implementation of each protocol is used and a
     /// test can substitute the whole set without touching this file.
+    ///
+    /// The one deliberate exception is the logger. `CoreDependencies.live` uses `NullLogger`
+    /// because `VigilCore/Logging/OSLogLogger.swift` is W4 and has not landed; when it does, this
+    /// becomes `CoreDependencies.live.withLogger(OSLogLogger())` and the app starts writing to
+    /// `com.vigil.app`'s subsystem. Until then the slice runs with logging off, which is worth
+    /// saying out loud: a first-light failure on the customer's Mac will leave no trace in Console.
     static func bootstrap() -> CoreDependencies {
         CoreDependencies.live
     }

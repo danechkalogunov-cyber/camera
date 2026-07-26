@@ -139,6 +139,13 @@ public actor StreamController: Identifiable {
     /// How many times this attempt has nudged the camera for a keyframe before giving up.
     var firstFrameNudges = 0
 
+    /// Events waiting to reach the broadcaster, oldest first. Drained by one task at a time, which
+    /// is what keeps them in order.
+    var eventQueue: [StreamEvent] = []
+
+    /// Whether the event drain is running.
+    var isDrainingEvents = false
+
     // MARK: Initialisation
 
     /// Builds a controller. Nothing happens until `start()`.
@@ -399,13 +406,31 @@ public actor StreamController: Identifiable {
         emit(.stateChanged(from: previous, to: state, detail: detail))
     }
 
-    /// Publishes an event to every observer.
+    /// Publishes an event to every observer, in order.
     ///
-    /// Fire-and-forget: the broadcaster is an actor with a bounded buffering policy, so this cannot
-    /// apply back-pressure to the media path.
+    /// Never suspends, so it can be called from anywhere in the media path without opening a
+    /// suspension point where ordering matters. Events queue here and one drain task hands them to
+    /// the broadcaster.
+    ///
+    /// The queue exists because ordering is not optional: `Broadcaster.yield` is actor-isolated, so
+    /// the obvious `Task { await broadcaster.yield(event) }` spawns one unordered task per event
+    /// and two state changes emitted in the same batch can arrive reversed — which would leave the
+    /// UI showing "Connecting…" after the picture appeared. The broadcaster's own buffering policy
+    /// is bounded, so this queue cannot apply back-pressure to the media path either.
     func emit(_ event: StreamEvent) {
-        let broadcaster = broadcaster
-        Task { await broadcaster.yield(event) }
+        eventQueue.append(event)
+        guard !isDrainingEvents else { return }
+        isDrainingEvents = true
+        Task { [weak self] in await self?.drainEvents() }
+    }
+
+    /// Hands queued events to the broadcaster, oldest first.
+    private func drainEvents() async {
+        while !eventQueue.isEmpty {
+            let next = eventQueue.removeFirst()
+            await broadcaster.yield(next)
+        }
+        isDrainingEvents = false
     }
 }
 

@@ -130,8 +130,14 @@ package struct ConnectFormView: View {
         }
     }
 
+    /// The hero glyph.
+    ///
+    /// `VTheme.Symbol.camera` and not ``VTheme/Symbol/brandMark``: the brand mark is the custom
+    /// `vigil.aperture` symbol, and `VigilUI/Resources/Symbols.xcassets` does not exist yet. An
+    /// unresolved `Image(systemName:)` renders as nothing, and a blank hero is the first thing the
+    /// customer would see. Swap it back when the asset catalogue ships (DESIGN.md §8.5, §9.18).
     private var hero: some View {
-        VTheme.Symbol.brandMark.image()
+        VTheme.Symbol.camera.image()
             .vIcon(size: VTheme.Icon.hero, weight: VTheme.Icon.Weight.hero)
             .foregroundStyle(VTheme.Color.Semantic.accent)
             .frame(width: Self.heroSize, height: Self.heroSize)
@@ -198,26 +204,32 @@ package struct ConnectFormView: View {
     private var actions: some View {
         HStack(spacing: VTheme.Space.sm) {
             Spacer(minLength: 0)
-            VButton("Connect",
-                    style: .primary,
-                    size: .lg,
-                    isLoading: state.isConnecting) {
-                submit()
-            }
-                .disabled(!state.canSubmit)
-                .keyboardShortcut(.defaultAction)
+            connectButton
         }
     }
 
-    @ViewBuilder
-    private var diagnosisSection: some View {
-        if let diagnosis = state.diagnosis {
-            ConnectDiagnosisCard(diagnosis: diagnosis) { handle($0) }
-                .padding(.top, VTheme.Space.lg)
-                .transition(.opacity)
-                .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: reduceMotion),
-                           value: state.failureCount)
+    /// `Return` submits from any field: `.defaultAction` is declared on the button rather than on
+    /// the form, so the menu bar can mirror it later without a second source of truth (§9.1).
+    private var connectButton: some View {
+        VButton("Connect", style: .primary, size: .lg, isLoading: state.isConnecting) {
+            submit()
         }
+        .disabled(!state.canSubmit)
+        .keyboardShortcut(.defaultAction)
+    }
+
+    /// The failure card. The animation lives on the **container** so that the card's `.transition`
+    /// has a transaction to run in when `diagnosis` becomes non-nil.
+    private var diagnosisSection: some View {
+        VStack(spacing: 0) {
+            if let diagnosis = state.diagnosis {
+                ConnectDiagnosisCard(diagnosis: diagnosis) { handle($0) }
+                    .padding(.top, VTheme.Space.lg)
+                    .transition(.opacity)
+            }
+        }
+        .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: reduceMotion),
+                   value: state.diagnosis)
     }
 
     // MARK: - Behaviour

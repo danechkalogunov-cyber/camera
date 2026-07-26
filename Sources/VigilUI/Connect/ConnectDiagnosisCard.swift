@@ -83,7 +83,7 @@ package struct ConnectDiagnosisCard: View {
             ForEach(diagnosis.remedies.indices, id: \.self) { index in
                 // The form's Connect button is the one primary on screen, so the first remedy is
                 // `secondary` rather than `primary` (§9.1: one primary per container).
-                VButton(diagnosis.remedies[index],
+                VButton(diagnosis.remedies[index].title,
                         style: index == 0 ? .secondary : .ghost,
                         size: .sm) {
                     onRemedy(diagnosis.remedies[index])

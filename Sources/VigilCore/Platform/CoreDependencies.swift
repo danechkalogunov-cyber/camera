@@ -81,7 +81,8 @@ public struct CoreDependencies: Sendable {
                            clock: SystemMonotonicClock(),
                            random: SystemRandomSource(),
                            logger: NullLogger(),
-                           shortID: shortID)
+                           shortID: shortID,
+                           connectTimeout: StreamController.connectTimeout)
         })
 
     /// A dependency set with a different logger, keeping everything else.
@@ -102,7 +103,8 @@ public struct CoreDependencies: Sendable {
                                                    clock: clock,
                                                    random: random,
                                                    logger: logger,
-                                                   shortID: shortID)
+                                                   shortID: shortID,
+                                                   connectTimeout: StreamController.connectTimeout)
                                 })
     }
 }

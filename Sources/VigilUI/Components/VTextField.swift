@@ -17,7 +17,12 @@ import SwiftUI
 ///
 /// The field renders this; the form computes it. Copy is specific and actionable — "Port must be
 /// between 1 and 65535", never "Invalid input" (DESIGN.md §9.5).
-package enum VFieldValidation: Sendable, Hashable {
+///
+/// `Equatable` and nothing more, deliberately: it carries a `LocalizedStringKey`, whose `Hashable`
+/// and `Sendable` conformances are not something this container can verify. `Equatable` is all
+/// `.task(id:)` and `.animation(_:value:)` require, and the type never leaves the main actor —
+/// the *reason* for a problem crosses actors as ``ConnectFieldProblem``, which is a plain enum.
+package enum VFieldValidation: Equatable {
 
     /// Nothing to say. The message row is still reserved, so nothing below the field moves when
     /// this becomes ``invalid(_:)``.

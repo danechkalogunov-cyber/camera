@@ -75,8 +75,7 @@ struct VigilApp: App {
         // that resumes the last camera starts in the same run loop turn as the first frame of UI —
         // it is the difference between R1's ten seconds starting now and starting after the window
         // has drawn.
-        let dependencies = AppEnvironment.bootstrap()
-        _session = State(initialValue: AppSessionModel(dependencies: dependencies))
+        _session = State(initialValue: AppSessionModel(dependencies: AppEnvironment.bootstrap()))
     }
 
     // MARK: - Body

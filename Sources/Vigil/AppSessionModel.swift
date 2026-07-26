@@ -15,7 +15,9 @@ import Observation
 
 import VigilCore
 import VigilProtocols
+import VigilRender
 import VigilUI
+import VigilVideo
 
 // MARK: - AppSessionModel
 
@@ -99,11 +101,26 @@ final class AppSessionModel {
     /// When media was last flowing, for the offline card's "Last seen" line.
     private(set) var lastSeen: Date?
 
-    private let services: AppServices
+    /// The attach point the video screen's tile registers with. One per window, not one per
+    /// session: SwiftUI keeps the tile mounted across a reconnect, and so must its frame source.
+    let frames = FrameStreamHandle()
+
+    private let dependencies: CoreDependencies
     private let credentials: CredentialStore
     private let defaults: UserDefaults
+    private let tileSink = TileVideoSink()
     private var sessionTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
+    private var decodeTask: Task<Void, Never>?
+    private var frameContinuation: AsyncStream<EncodedFrame>.Continuation?
+    private var pipeline: DecodePipeline?
+
+    /// When the current connect attempt began, for the video screen's elapsed counter.
+    private(set) var attemptStartedAt: Date?
+
+    /// When a keyframe recovery was last forced, so a decoder that keeps asking cannot put the
+    /// session into a restart loop.
+    private var lastRecoveryAt: Date?
 
     /// Keychain handle of the camera currently being connected, so the first frame can be
     /// remembered against the right item.
@@ -167,17 +184,21 @@ final class AppSessionModel {
 
     // MARK: - Initialisation
 
-    /// Creates the model over an already-bootstrapped service set.
+    /// Creates the model over an already-bootstrapped dependency set.
     ///
     /// - Parameters:
-    ///   - services: the process-wide clock, logger, keychain and transport factory from
-    ///     `AppEnvironment.bootstrap()`.
+    ///   - dependencies: the process-wide clock, logger, Keychain, randomness and RTSP session
+    ///     factory from `AppEnvironment.bootstrap()`.
     ///   - defaults: where the remembered connection lives. Injected so a test can pass a scratch
     ///     suite instead of the real one.
-    init(services: AppServices, defaults: UserDefaults = .standard) {
-        self.services = services
+    init(dependencies: CoreDependencies, defaults: UserDefaults = .standard) {
+        self.dependencies = dependencies
         self.defaults = defaults
-        self.credentials = CredentialStore(keychain: services.keychain, logger: services.logger)
+        self.credentials = CredentialStore(keychain: dependencies.keychain,
+                                           logger: dependencies.logger)
+        // The sink follows the handle for the life of the process, so a tile that SwiftUI rebuilds
+        // mid-stream starts receiving again without the decode pipeline knowing anything happened.
+        tileSink.follow(frames)
     }
 
     // MARK: - Public API
@@ -227,8 +248,15 @@ final class AppSessionModel {
         eventTask = nil
         sessionTask?.cancel()
         sessionTask = nil
+        // Finishing the continuation ends the decode task's loop after the frames already queued,
+        // so nothing is torn down under the pipeline mid-frame.
+        frameContinuation?.finish()
+        frameContinuation = nil
+        decodeTask = nil
         let outgoing = controller
+        let outgoingPipeline = pipeline
         controller = nil
+        pipeline = nil
         activeRef = nil
         phase = .connect
         form.isConnecting = false
@@ -237,13 +265,17 @@ final class AppSessionModel {
         streamState = .idle
         retryInSeconds = nil
         firstFrameLatency = nil
+        attemptStartedAt = nil
         if forget {
             LastConnection.clear(in: defaults)
         }
-        guard let outgoing else { return }
-        // Graceful TEARDOWN on its own task: `stop` is safe to await from a cancelled task, and the
-        // UI must not wait 1.5 s to go back to the form.
-        Task { await outgoing.stop(reason: .userRequested) }
+        // The tile keeps its last picture on purpose — no flush, no blanking (R-36, §4.9).
+        Task {
+            await outgoingPipeline?.stop(reason: .stopped)
+            // Graceful TEARDOWN: `stop` is safe to await from a cancelled task, and the UI must not
+            // wait 1.5 s to go back to the form, so it happens here rather than inline.
+            await outgoing?.stop(reason: .userRequested)
+        }
     }
 
     /// Performs one of the remedies the diagnosis card offered.
@@ -256,13 +288,13 @@ final class AppSessionModel {
         switch remedy {
         case .checkAddress, .updatePassword:
             // `ConnectFormView` has already moved the cursor; it forwards these so the app can log.
-            services.logger.debug(.ui, "remedy \(remedy) handled by the form")
+            dependencies.logger.debug(.ui, "remedy \(remedy) handled by the form")
         case .retry:
             connect(form.request)
         case .switchToTCP:
             // The slice is TCP-interleaved and nothing else (`.vigil/SLICE.md`), so this is a
             // retry — the transport it asks for is already the one in use.
-            services.logger.notice(.core, "already TCP-interleaved; retrying")
+            dependencies.logger.notice(.core, "already TCP-interleaved; retrying")
             connect(form.request)
         case .tryAlternateRTSPPort:
             rtspPort = Self.alternateRTSPPort
@@ -276,6 +308,24 @@ final class AppSessionModel {
         case .runStreamDoctor:
             unavailable("Stream Doctor is not in this build yet.")
         }
+    }
+
+    /// Recovers a frozen picture, when the display layer or the decoder says it needs a keyframe.
+    ///
+    /// `StreamController` in this slice has no IDR request path — `requestKeyframe(reason:)` and
+    /// the ISAPI `requestKeyFrame` chain (R-24) are W4 — so the only lever available is a full
+    /// session restart, which costs two or three seconds of held last frame. That is a real cost,
+    /// so it is rate-limited: a decoder that asks continuously must not put the session into a
+    /// restart loop, and the controller's own `noKeyframe` watchdog is already trying.
+    func recoverStalledPicture() {
+        let now = Date()
+        if let lastRecoveryAt, now.timeIntervalSince(lastRecoveryAt) < Self.recoveryInterval {
+            return
+        }
+        lastRecoveryAt = now
+        guard let controller else { return }
+        dependencies.logger.notice(.video, "no keyframe; restarting the session to recover")
+        Task { await controller.restart() }
     }
 
     // MARK: - Private Helpers
@@ -351,24 +401,50 @@ final class AppSessionModel {
                    rtspPathOverride: rtspPath).validated()
     }
 
-    /// Builds the controller, subscribes to its events, and starts it. The only place a
-    /// `StreamController` is created in the app.
+    /// Builds the decode chain and the controller, subscribes to its events, and starts it.
+    ///
+    /// This is the whole column, in the order the bytes travel: socket (`CoreDependencies`
+    /// `makeRTSPSession`) → `StreamController` → `EncodedFrame` → `DecodePipeline` →
+    /// `TileVideoSink` → `VideoTileView`'s `AVSampleBufferDisplayLayer`.
     private func stream(camera: Camera, ref: CredentialRef) async {
         self.camera = camera
         activeRef = ref
+        attemptStartedAt = Date()
         let store = credentials
         // Called by the controller on every connect attempt, so the password is read from the
         // Keychain each time and never captured in the closure (docs/spec-core.md §2).
         let provider: @Sendable () async throws -> Credential? = {
             try await store.credential(for: ref)
         }
+        let logger = dependencies.logger
+        let pipeline = DecodePipeline(
+            sink: tileSink,
+            pacing: .live,
+            requestKeyframe: { [weak self] in
+                Task { @MainActor in self?.recoverStalledPicture() }
+            },
+            onError: { error in
+                // Never swallowed: "no video, no error" is the worst failure we could ship.
+                logger.error(.video, "decode: \(error)")
+            })
+        self.pipeline = pipeline
+        // One ordered hop from the controller's isolation to the pipeline actor. A `Task` per frame
+        // would preserve neither order nor allocation budget; a single-consumer stream does both,
+        // and its bounded buffer drops the oldest frames rather than growing without limit (R-27).
+        let (frameStream, continuation) = AsyncStream<EncodedFrame>.makeStream(
+            of: EncodedFrame.self, bufferingPolicy: .bufferingNewest(64))
+        frameContinuation = continuation
+        decodeTask = Task {
+            for await frame in frameStream {
+                await pipeline.submit(frame)
+            }
+        }
         let controller = StreamController(camera: camera,
                                           credentialProvider: provider,
-                                          quality: .main,
-                                          makeTransport: services.makeTransport,
-                                          frameSink: services.frameSink,
-                                          clock: services.clock,
-                                          logger: services.logger)
+                                          initialQuality: .main,
+                                          initialPriority: .focused,
+                                          dependencies: dependencies,
+                                          frameSink: { continuation.yield($0) })
         self.controller = controller
         // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so the
         // subscription is established before `start()` and cannot miss the first transition.
@@ -409,7 +485,7 @@ final class AppSessionModel {
             form.password = ""
             rememberThisCamera()
             // The R1.7 number, in the log where the acceptance checklist can read it.
-            services.logger.info(.app, "first frame assembled after \(afterStart)")
+            dependencies.logger.info(.app, "first frame assembled after \(afterStart)")
         case .pathResolved(let candidate, _):
             // Remembered at the first frame, not here: a path that answers `DESCRIBE` but never
             // delivers video is not the one to start from next time.
@@ -452,7 +528,7 @@ final class AppSessionModel {
         diagnosis = named
         phase = .connect
         form.fail(named)
-        services.logger.error(.app, "connect failed: \(error)")
+        dependencies.logger.error(.app, "connect failed: \(error)")
     }
 
     /// Turns an error raised on the app's own half of the connect path into a named cause.
@@ -493,7 +569,7 @@ final class AppSessionModel {
     /// refuses the delete changes nothing they can act on. The failure is logged, not shown.
     private func deleteRejectedCredential(_ ref: CredentialRef) {
         let store = credentials
-        let logger = services.logger
+        let logger = dependencies.logger
         Task {
             do {
                 try await store.delete(ref)
@@ -519,7 +595,7 @@ final class AppSessionModel {
         let named = ConnectDiagnosis.undiagnosed(host: host, detail: sentence)
         diagnosis = named
         form.fail(named)
-        services.logger.notice(.ui, sentence)
+        dependencies.logger.notice(.ui, sentence)
     }
 
     /// Whole seconds from now until `date`, or `nil` when there is no countdown.
@@ -530,6 +606,9 @@ final class AppSessionModel {
 
     /// The port Hikvision devices use when 554 is taken or disabled (R1.5 "RTSP port closed").
     private static let alternateRTSPPort = 8554
+
+    /// The shortest gap between two forced keyframe recoveries.
+    private static let recoveryInterval: TimeInterval = 10
 }
 
 #endif  // os(macOS)

@@ -60,7 +60,10 @@ package enum LiveConnectionState: Sendable, Hashable {
         case .live: return .live
         case .degraded: return .degraded
         case .offline(let detail):
-            return detail.diagnosis?.fieldToFocus == .password ? .authFailed : .offline
+            // A credential failure gets its own dot — red with a slash — because it is the one
+            // offline state Vigil will never retry out of on its own (UX.md §12.7).
+            guard let diagnosis = detail.diagnosis else { return .offline }
+            return diagnosis.fieldToFocus == .password ? .authFailed : .offline
         }
     }
 

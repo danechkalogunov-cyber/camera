@@ -128,7 +128,7 @@ package struct OfflineOverlay: View {
     private var actions: some View {
         HStack(spacing: VTheme.Space.sm) {
             if let diagnosis = detail.diagnosis {
-                ForEach(Array(diagnosis.remedies.enumerated()), id: \.element) { _, remedy in
+                ForEach(diagnosis.remedies, id: \.self) { remedy in
                     VButton(remedy.title, style: .ghost, size: .sm) {
                         onRemedy(remedy)
                     }
