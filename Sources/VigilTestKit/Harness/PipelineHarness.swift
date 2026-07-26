@@ -135,11 +135,16 @@ public struct PipelineHarness {
         return finishedReport()
     }
 
-    /// Opens the session: the machine believes a transport just connected.
+    /// Opens the session: the machine believes a transport just connected, then is told to start.
+    ///
+    /// `transportReady` alone produces nothing — it only resets per-connection nonce state — so the
+    /// `.start` command is what actually puts OPTIONS on the wire. That is the driver's job in
+    /// production and the harness's job here.
     private mutating func start() {
         guard !started else { return }
         started = true
         apply(machine.transportReady(isTLS: false, now: instant))
+        apply(machine.handle(.start, now: instant))
         apply(machine.step(now: instant))
         pump()
     }
@@ -380,7 +385,7 @@ public struct PipelineHarness {
 
     // MARK: Finishing
 
-    private mutating func finishedReport() -> HarnessReport {
+    private func finishedReport() -> HarnessReport {
         var out = report
         out.groundTruth = server.groundTruth
         out.requests = server.receivedRequests

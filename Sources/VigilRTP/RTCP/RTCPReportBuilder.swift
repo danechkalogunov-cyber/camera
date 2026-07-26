@@ -48,7 +48,7 @@ public struct RTCPReportBuilder: Sendable {
     ///
     /// Never zero: RFC 3550 reserves it in practice, and a camera that sees a zero SSRC in a report
     /// block cannot match it to anything.
-    public init(cname: String, tool: String? = "Vigil/1.0", random: inout some RandomSource) {
+    public init(cname: String, tool: String? = "Vigil/1.0", random: inout any RandomSource) {
         let drawn = UInt32(truncatingIfNeeded: random.next())
         self.ourSSRC = drawn == 0 ? 1 : drawn
         self.cname = cname
@@ -59,7 +59,7 @@ public struct RTCPReportBuilder: Sendable {
 
     /// Adopts a new SSRC after a collision (an inbound packet carrying our own SSRC), per
     /// RFC 3550 §8.2.
-    public mutating func regenerateSSRC(random: inout some RandomSource) {
+    public mutating func regenerateSSRC(random: inout any RandomSource) {
         var drawn = UInt32(truncatingIfNeeded: random.next())
         if drawn == 0 { drawn = 1 }
         ourSSRC = drawn
@@ -208,7 +208,7 @@ public struct RTCPSchedule: Sendable {
     }
 
     /// Arms the next deadline from `now`, drawing the RFC 3550 randomisation from `random`.
-    public mutating func schedule(after now: MediaInstant, random: inout some RandomSource) {
+    public mutating func schedule(after now: MediaInstant, random: inout any RandomSource) {
         let base = isInitial
             ? Swift.max(minimumInitialInterval.milliseconds, baseInterval.milliseconds / 2)
             : baseInterval.milliseconds

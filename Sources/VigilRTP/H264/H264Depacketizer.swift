@@ -110,6 +110,12 @@ public struct H264Depacketizer: Depacketizer {
             report(.forbiddenBitSet, at: now, into: &out)
             return out
         }
+        // A fragment run cannot span a timestamp change (RFC 6184 §5.8). Clearing it here rather
+        // than waiting for the next fragment stops a stray continuation splicing itself into the
+        // following picture when the intervening packets were not fragments at all.
+        if let open = fragment, open.timestamp != packet.timestamp {
+            abandonFragment(.incompleteFragmentAtAUEnd, at: now, into: &out)
+        }
 
         switch first & 0x1F {
         case PacketType.stapA:
@@ -259,7 +265,8 @@ public struct H264Depacketizer: Depacketizer {
             report(.nestedPacketization, at: now, into: &out)
             return
         }
-        let descriptor = describe(header: header, probe: probeBytes(header: header, body: body))
+        let probe = probeBytes(header: header, body: body)
+        let descriptor = describe(header: header, probe: probe)
         let announced = assembler.beginNAL(descriptor, packet: context, into: &out)
         fragment = FragmentState(header: header, typeCode: typeCode, pieces: [body],
                                  byteCount: body.count, timestamp: packet.timestamp,
@@ -364,11 +371,14 @@ public struct H264Depacketizer: Depacketizer {
             firstSlice = probe.withUnsafeBytes { raw in
                 SliceHeader.isFirstSliceOfPicture(nalUnit: raw, codec: .h264)
             }
-            if configuration.treatRecoveryPointAsKeyframe {
+            // `sliceType` unescapes a prefix and therefore allocates, so it is read only inside an
+            // access unit that already announced a recovery point — the one place it changes an
+            // outcome (docs/spec-rtp.md §5.6).
+            if configuration.treatRecoveryPointAsKeyframe, assembler.openAccessUnitSawRecoveryPoint {
                 let sliceType = probe.withUnsafeBytes { raw in
                     SliceHeader.sliceType(nalUnit: raw, codec: .h264)
                 }
-                isISlice = sliceType.map { [2, 4, 7, 9].contains($0) } ?? false
+                isISlice = sliceType.map(SliceHeader.isIntraSliceType) ?? false
             }
         }
         let kind: ParameterSetKind? = type == 7 ? .sps : (type == 8 ? .pps : nil)

@@ -127,7 +127,7 @@ public struct RTSPSessionConfig: Sendable {
     public var closesOnGetParameter = false
 
     /// Limits handed to the framing decoder.
-    public var decoderLimits = RTSPInterleavedDecoder.Limits()
+    public var decoderLimits = RTSPWireDecoder.Limits()
 
     // MARK: Initialisation
 

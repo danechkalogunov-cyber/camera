@@ -24,7 +24,8 @@ extension BitstreamError {
         case .negativeSkip:
             return .negativeSkip
         case let .unsupportedWidth(width):
-            return .valueOutOfRange(field: "bit width", value: UInt64(UInt32(bitPattern: Int32(clamping: width))))
+            let reported = UInt64(UInt32(bitPattern: Int32(clamping: width)))
+            return .valueOutOfRange(field: "bit width", value: reported)
         }
     }
 }

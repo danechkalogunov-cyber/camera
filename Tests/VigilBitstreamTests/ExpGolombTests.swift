@@ -159,10 +159,12 @@ struct ExpGolombTests {
     @Test func rbspBitReaderValidatesTrailingBits() throws {
         var good = try RBSPBitReader(rbsp: [0b1010_1000])
         try good.skip(4)
-        #expect(good.checkRBSPTrailingBits())
+        let goodTrailing = good.checkRBSPTrailingBits()
+        #expect(goodTrailing)
 
         var bad = try RBSPBitReader(rbsp: [0b1010_0100])
         try bad.skip(4)
-        #expect(bad.checkRBSPTrailingBits() == false)
+        let badTrailing = bad.checkRBSPTrailingBits()
+        #expect(badTrailing == false)
     }
 }

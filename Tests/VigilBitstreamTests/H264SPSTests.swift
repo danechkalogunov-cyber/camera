@@ -332,11 +332,9 @@ struct H264SPSTests {
         let h265Type = try h265.withUnsafeBytes { try NALHeader.typeCode($0, codec: .h265) }
         #expect(h264Type == 7)
         #expect(h265Type == 32)
-        let empty = [UInt8]()
-        empty.withUnsafeBytes { raw in
-            #expect(throws: BitstreamError.emptyNALUnit) {
-                _ = try NALHeader.typeCode(raw, codec: .h264)
-            }
+        #expect(throws: BitstreamError.emptyNALUnit) {
+            let empty = [UInt8]()
+            _ = try empty.withUnsafeBytes { try NALHeader.typeCode($0, codec: .h264) }
         }
     }
 

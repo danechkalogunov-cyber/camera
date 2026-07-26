@@ -75,7 +75,9 @@ public enum RBSP {
     ///
     /// Diagnostics only — it answers "how much of this NAL is escaping overhead". Returns 0 for a
     /// buffer shorter than `header`, rather than failing, because a diagnostic must never throw.
-    public static func escapeByteCount(_ nal: UnsafeRawBufferPointer, skippingHeaderBytes header: Int) -> Int {
+    public static func escapeByteCount(
+        _ nal: UnsafeRawBufferPointer, skippingHeaderBytes header: Int
+    ) -> Int {
         guard header >= 0, nal.count > header else { return 0 }
         var count = 0
         var zeroRun = 0

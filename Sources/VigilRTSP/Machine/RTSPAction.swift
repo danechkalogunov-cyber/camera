@@ -251,7 +251,10 @@ public struct RTSPSessionDescription: Sendable, Hashable {
 // MARK: - RTSPSessionStatistics
 
 /// Counters for the diagnostics pane and for the bug reports that arrive without them.
-public struct RTSPSessionStatistics: Sendable, Hashable {
+///
+/// `Equatable` rather than `Hashable`, because the decoder's counters are: nothing hashes a
+/// statistics snapshot, and tests only ever compare them.
+public struct RTSPSessionStatistics: Sendable, Equatable {
 
     /// Requests written, including retries after `401`.
     public var requestsSent = 0
@@ -293,7 +296,7 @@ public struct RTSPSessionStatistics: Sendable, Hashable {
     public var preplayFramesDropped = 0
 
     /// The framing decoder's own counters.
-    public var decoder = RTSPInterleavedStatistics()
+    public var decoder = DecoderStatistics()
 
     /// Builds an all-zero counter set.
     public init() {}

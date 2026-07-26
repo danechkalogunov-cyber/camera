@@ -125,6 +125,12 @@ public struct H265Depacketizer: Depacketizer {
             return out
         }
         let type = (b0 >> 1) & 0x3F
+        // A fragment run cannot span a timestamp change (RFC 7798 §4.4.3). Clearing it here rather
+        // than waiting for the next fragment stops a stray continuation splicing itself into the
+        // following picture when the intervening packets were not fragments at all.
+        if let open = fragment, open.timestamp != packet.timestamp {
+            abandonFragment(.incompleteFragmentAtAUEnd, at: now, into: &out)
+        }
 
         switch type {
         case PacketType.aggregation:

@@ -118,6 +118,13 @@ struct AccessUnitAssembler: Sendable {
     /// True when a fragmented NAL has been announced but not yet completed.
     var hasUncommittedNAL: Bool { pendingDescriptor != nil }
 
+    /// True when the open access unit already carries a recovery-point SEI.
+    ///
+    /// The H.264 front end reads it before deciding whether a slice's `slice_type` is worth the
+    /// unescaping pass: outside an access unit that announced a recovery point, the answer never
+    /// changes anything, and the read is the only allocation on the per-NAL path.
+    var openAccessUnitSawRecoveryPoint: Bool { pending?.sawRecoveryPoint ?? false }
+
     /// The instant at which the open access unit must be force-closed, or `nil` when none is open.
     var timeoutDeadline: MediaInstant? {
         pending.map { $0.lastArrival + configuration.accessUnitTimeout }

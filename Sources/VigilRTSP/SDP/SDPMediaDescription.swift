@@ -12,16 +12,15 @@ import VigilProtocols
 
 // MARK: - SDPText
 
-/// ASCII-only text helpers for the SDP and framing layers.
+/// ASCII-only text helpers for the SDP layer and the session machine.
 ///
 /// Unicode case folding is deliberately not used: `İ` must not fold to `i`, or a hostile session
-/// name could make two different attribute names compare equal (docs/spec-rtsp.md §2.2).
+/// name could make two different attribute names compare equal (docs/spec-rtsp.md §2.2). That rule
+/// is already implemented once, in `VigilProtocols.ASCII`, so this only forwards to it.
 enum SDPText {
 
     /// Lowercases `A...Z` and nothing else.
-    static func lowercasedASCII(_ text: String) -> String {
-        String(decoding: text.utf8.map { $0 >= 0x41 && $0 <= 0x5A ? $0 &+ 0x20 : $0 }, as: UTF8.self)
-    }
+    static func lowercasedASCII(_ text: String) -> String { ASCII.lowercased(text) }
 
     /// Trims spaces and horizontal tabs from both ends. Does not touch CR/LF: the line splitter
     /// has already removed those, and a stray CR inside a value is data, not whitespace.

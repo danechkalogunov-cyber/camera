@@ -38,7 +38,7 @@ public enum G711 {
     public static func decode(_ bytes: Data, law: Law) -> Data {
         let table = law == .aLaw ? aLawTable : muLawTable
         var out = Data(count: bytes.count * 2)
-        out.withUnsafeMutableBytes { raw in
+        out.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
             var offset = 0
             for byte in bytes {
                 let sample = UInt16(bitPattern: table[Int(byte)])
@@ -112,7 +112,7 @@ public enum G711 {
         let mask: UInt8 = value < 0 ? 0x7F : 0xFF
         if value < 0 { value = -value }
         value = min(value, 8159) + (0x84 >> 2)
-        let segment = self.segment(value, boundaries: muLawSegmentEnds)
+        let segment = segmentIndex(value, boundaries: muLawSegmentEnds)
         guard segment < 8 else { return 0x7F ^ mask }
         let code = UInt8(truncatingIfNeeded: segment << 4)
             | UInt8(truncatingIfNeeded: (value >> Int32(segment + 1)) & 0x0F)
@@ -125,7 +125,7 @@ public enum G711 {
         let mask: UInt8 = value >= 0 ? 0xD5 : 0x55
         if value < 0 { value = -value - 1 }
         value = min(value, 4095)
-        let segment = self.segment(value, boundaries: aLawSegmentEnds)
+        let segment = segmentIndex(value, boundaries: aLawSegmentEnds)
         guard segment < 8 else { return 0x7F ^ mask }
         let shift = Int32(segment < 2 ? 1 : segment)
         let code = UInt8(truncatingIfNeeded: segment << 4)
@@ -144,7 +144,7 @@ public enum G711 {
         [0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF]
 
     /// The index of the first segment whose upper bound is at least `value`, or 8.
-    @usableFromInline static func segment(_ value: Int32, boundaries: [Int32]) -> Int {
+    @usableFromInline static func segmentIndex(_ value: Int32, boundaries: [Int32]) -> Int {
         for (index, bound) in boundaries.enumerated() where value <= bound { return index }
         return boundaries.count
     }

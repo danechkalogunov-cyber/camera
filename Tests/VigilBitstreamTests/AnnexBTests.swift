@@ -41,6 +41,18 @@ struct AnnexBTests {
         AnnexB.nalRanges(bytes).map { Array(bytes[$0]) }
     }
 
+    private func unescape(_ bytes: [UInt8], header: Int = 0) throws -> [UInt8] {
+        try bytes.withUnsafeBytes { try RBSP.unescape($0, skippingHeaderBytes: header) }
+    }
+
+    private func escapeCount(_ bytes: [UInt8], header: Int) -> Int {
+        bytes.withUnsafeBytes { RBSP.escapeByteCount($0, skippingHeaderBytes: header) }
+    }
+
+    private func validate(_ bytes: [UInt8]) -> Bool {
+        bytes.withUnsafeBytes { LengthPrefixed.validate($0) }
+    }
+
     // MARK: - T-AB-1: the scanner
 
     @Test func annexBFindsAThreeByteStartCode() {
@@ -184,9 +196,7 @@ struct AnnexBTests {
         #expect(throws: BitstreamError.truncatedLengthPrefix(atOffset: 0)) {
             _ = try AnnexB.fromLengthPrefixed(Data(bytes))
         }
-        bytes.withUnsafeBytes { raw in
-            #expect(LengthPrefixed.validate(raw) == false)
-        }
+        #expect(validate(bytes) == false)
     }
 
     @Test func lengthPrefixedRejectsAZeroLengthNAL() {
@@ -215,12 +225,8 @@ struct AnnexBTests {
     }
 
     @Test func lengthPrefixedValidatesAWellFormedStream() {
-        AnnexBTests.specWorkedExampleLengthPrefixed.withUnsafeBytes { raw in
-            #expect(LengthPrefixed.validate(raw))
-        }
-        [UInt8]().withUnsafeBytes { raw in
-            #expect(LengthPrefixed.validate(raw))       // no NAL units is degenerate, not corrupt
-        }
+        #expect(validate(AnnexBTests.specWorkedExampleLengthPrefixed))
+        #expect(validate([]))                           // no NAL units is degenerate, not corrupt
     }
 
     @Test func lengthPrefixedEnumerateReportsRangesAndTypeCodes() throws {
@@ -258,9 +264,7 @@ struct AnnexBTests {
     ])
     func rbspEscapeMatchesSpecTable(raw: [UInt8], onWire: [UInt8]) throws {
         #expect(RBSP.escape(raw) == onWire)
-        let recovered = try onWire.withUnsafeBytes { buffer in
-            try RBSP.unescape(buffer, skippingHeaderBytes: 0)
-        }
+        let recovered = try unescape(onWire)
         #expect(recovered == raw)
     }
 
@@ -273,9 +277,7 @@ struct AnnexBTests {
          [0x65, 0x88, 0x84, 0x04, 0xBF, 0x00, 0x00, 0x01]),
     ])
     func rbspUnescapeMatchesSpecTable(onWire: [UInt8], raw: [UInt8]) throws {
-        let recovered = try onWire.withUnsafeBytes { buffer in
-            try RBSP.unescape(buffer, skippingHeaderBytes: 0)
-        }
+        let recovered = try unescape(onWire)
         #expect(recovered == raw)
     }
 
@@ -283,7 +285,7 @@ struct AnnexBTests {
     /// a NAL may not end in `0x00`, so unescaping drops it even with no byte following.
     @Test func rbspUnescapeDropsATrailingEmulationByte() throws {
         let nal: [UInt8] = [0x65, 0x88, 0x00, 0x00, 0x03]
-        let rbsp = try nal.withUnsafeBytes { try RBSP.unescape($0, skippingHeaderBytes: 1) }
+        let rbsp = try unescape(nal, header: 1)
         #expect(rbsp == [0x88, 0x00, 0x00])
     }
 
@@ -292,7 +294,7 @@ struct AnnexBTests {
     /// non-conforming firmware rather than repair it.
     @Test func rbspUnescapeKeepsAnEmulationByteFollowedByAHighByte() throws {
         let nal: [UInt8] = [0x65, 0x00, 0x00, 0x03, 0x04]
-        let rbsp = try nal.withUnsafeBytes { try RBSP.unescape($0, skippingHeaderBytes: 1) }
+        let rbsp = try unescape(nal, header: 1)
         #expect(rbsp == [0x00, 0x00, 0x03, 0x04])
     }
 
@@ -306,41 +308,28 @@ struct AnnexBTests {
         ]
         let found = ranges(stream)
         #expect(found == [[0x65, 0x88, 0x00, 0x00, 0x03, 0x01], [0x41, 0xBB]])
-        let rbsp = try found[0].withUnsafeBytes { try RBSP.unescape($0, skippingHeaderBytes: 1) }
+        let rbsp = try unescape(found[0], header: 1)
         #expect(rbsp == [0x88, 0x00, 0x00, 0x01])
     }
 
     @Test func rbspCountsEmulationBytesWithoutAllocating() {
         let nal: [UInt8] = [0x67, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x01]
-        nal.withUnsafeBytes { raw in
-            #expect(RBSP.escapeByteCount(raw, skippingHeaderBytes: 1) == 2)
-            #expect(RBSP.escapeByteCount(raw, skippingHeaderBytes: 99) == 0)
-        }
+        #expect(escapeCount(nal, header: 1) == 2)
+        #expect(escapeCount(nal, header: 99) == 0)
     }
 
     // MARK: - Hostile NAL sizes
 
     @Test func rbspUnescapeRejectsAZeroLengthNAL() {
-        [UInt8]().withUnsafeBytes { raw in
-            #expect(throws: BitstreamError.emptyNALUnit) {
-                _ = try RBSP.unescape(raw, skippingHeaderBytes: 0)
-            }
-        }
+        #expect(throws: BitstreamError.emptyNALUnit) { _ = try unescape([]) }
         // A NAL that is nothing but its own header has no RBSP either.
-        let headerOnly: [UInt8] = [0x67]
-        headerOnly.withUnsafeBytes { raw in
-            #expect(throws: BitstreamError.emptyNALUnit) {
-                _ = try RBSP.unescape(raw, skippingHeaderBytes: 1)
-            }
-        }
+        #expect(throws: BitstreamError.emptyNALUnit) { _ = try unescape([0x67], header: 1) }
     }
 
     @Test func rbspUnescapeRefusesANALAboveTheSizeCap() {
         let huge = [UInt8](repeating: 0xAA, count: Limits.maxUnescapeBytes + 1)
-        huge.withUnsafeBytes { raw in
-            #expect(throws: BitstreamError.tooLarge(bytes: Limits.maxUnescapeBytes + 1)) {
-                _ = try RBSP.unescape(raw, skippingHeaderBytes: 1)
-            }
+        #expect(throws: BitstreamError.tooLarge(bytes: Limits.maxUnescapeBytes + 1)) {
+            _ = try unescape(huge, header: 1)
         }
     }
 }
