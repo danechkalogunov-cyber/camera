@@ -60,6 +60,8 @@ public struct VideoTile: NSViewRepresentable {
     private let options: TileRenderOptions
     private let logger: any LoggerProtocol
     private let onKeyframeNeeded: (() -> Void)?
+    private let onDecodeFailure: ((String) -> Void)?
+    private let onFramesDropped: ((Int, String) -> Void)?
 
     // MARK: - Lifecycle
 
@@ -74,16 +76,27 @@ public struct VideoTile: NSViewRepresentable {
     ///   - logger: injected diagnostics; defaults to `NullLogger`.
     ///   - onKeyframeNeeded: called when the video renderer needs a flush and a fresh keyframe to
     ///     resume decoding. Ignoring it leaves the last picture frozen on screen.
+    ///   - onDecodeFailure: called with a diagnostic string — `NSError` domain, numeric code and
+    ///     localised description — when the video renderer fails to decode a sample. The decision
+    ///     about reconnecting belongs to `VigilCore`; this only delivers the fact. Leaving it `nil`
+    ///     means a decode failure reaches the log and nothing else.
+    ///   - onFramesDropped: called with a count and a raw reason string when frames are dropped,
+    ///     either upstream in `VigilVideo` or by this module when the renderer will not take a
+    ///     sample. Leaving it `nil` makes display-path judder look like a network problem.
     public init(cameraID: CameraID,
                 frames: FrameStreamHandle,
                 options: TileRenderOptions = TileRenderOptions(),
                 logger: any LoggerProtocol = NullLogger(),
-                onKeyframeNeeded: (() -> Void)? = nil) {
+                onKeyframeNeeded: (() -> Void)? = nil,
+                onDecodeFailure: ((String) -> Void)? = nil,
+                onFramesDropped: ((Int, String) -> Void)? = nil) {
         self.cameraID = cameraID
         self.frames = frames
         self.options = options
         self.logger = logger
         self.onKeyframeNeeded = onKeyframeNeeded
+        self.onDecodeFailure = onDecodeFailure
+        self.onFramesDropped = onFramesDropped
     }
 
     // MARK: - NSViewRepresentable
@@ -92,6 +105,8 @@ public struct VideoTile: NSViewRepresentable {
     public func makeNSView(context: Context) -> VideoTileView {
         let view = VideoTileView(cameraID: cameraID, options: options, logger: logger)
         view.onKeyframeNeeded = onKeyframeNeeded
+        view.onDecodeFailure = onDecodeFailure
+        view.onFramesDropped = onFramesDropped
         frames.attach(view)
         return view
     }
@@ -103,6 +118,8 @@ public struct VideoTile: NSViewRepresentable {
             nsView.options = options
         }
         nsView.onKeyframeNeeded = onKeyframeNeeded
+        nsView.onDecodeFailure = onDecodeFailure
+        nsView.onFramesDropped = onFramesDropped
     }
 
     /// Detaches the view from the frame handle so the producer stops delivering into a view SwiftUI

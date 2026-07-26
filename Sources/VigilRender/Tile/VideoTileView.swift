@@ -119,9 +119,24 @@ public final class VideoTileView: NSView {
     /// Called when the renderer posts `didFailToDecodeNotification`. `VigilRender` deliberately
     /// does not decide what to do: the reconnect state machine in `VigilCore` does.
     ///
-    /// The error is passed through untyped because `VigilProtocols.RenderError` has no case for a
-    /// sample-buffer decode failure — see the uncertainty list in this agent's report.
-    public var onDecodeFailure: ((any Error) -> Void)?
+    /// **The payload is a diagnostic string, not the error object.** Two reasons, both binding.
+    /// `VigilProtocols.RenderError` has no case for a sample-buffer decode failure — it wants
+    /// `sampleBufferDecodeFailed(String)`, which this module does not own and must not invent — and
+    /// `any Error` is not `Sendable`, so it cannot cross from the thread AVFoundation posts on to
+    /// the main actor. The string carries the `NSError` domain, numeric code and localised
+    /// description, which is everything §6.5's `kVTVideoDecoderBadDataErr` rule needs, and it drops
+    /// straight into that enum case when it lands.
+    public var onDecodeFailure: ((String) -> Void)?
+
+    /// Called when frames are dropped, with the count in this report and the reason as a stable raw
+    /// string.
+    ///
+    /// Both origins arrive here, which is the point: drops `VigilVideo` reports through
+    /// `VideoSink.didDropFrames(_:reason:)`, and this module's own refusals when the video renderer
+    /// will not take a sample. Without this the second kind reached a private counter and stopped
+    /// there, so routine display-path judder was indistinguishable from a network problem. See the
+    /// comment on `SampleBufferBackend.enqueue` for the mechanism fix that is still owed.
+    public var onFramesDropped: ((Int, String) -> Void)?
 
     /// Diagnostics. Never used on the per-sample path except behind `isEnabled`.
     let logger: any LoggerProtocol
@@ -332,11 +347,29 @@ public final class VideoTileView: NSView {
 
     /// Publishes an ingest outcome to `state`, but only when something changed that a status line
     /// would want to show. The per-sample path must not schedule a main-actor hop per frame.
+    ///
+    /// A refusal publishes *and* reports, in the one hop it was already taking.
     private nonisolated func publishIfNoteworthy(_ outcome: SampleBufferBackend.Outcome) {
         guard outcome.isFirstSinceFlush || !outcome.accepted else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             state.absorb(outcome)
+            if let refusal = outcome.refusal {
+                onFramesDropped?(1, refusal.rawValue)
+            }
+        }
+    }
+
+    /// Folds a drop that happened upstream of this tile into the published counters and reports it.
+    ///
+    /// `nonisolated` because `VideoSink.didDropFrames(_:reason:)` is, and the witness in
+    /// `VideoTileView+VideoSink.swift` is the only caller. `reason` is already a raw string so that
+    /// this file needs nothing from `VigilVideo`.
+    nonisolated func reportUpstreamDrop(_ count: Int, reason: String) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            state.absorbUpstreamDrop(count, reason: reason)
+            onFramesDropped?(count, reason)
         }
     }
 

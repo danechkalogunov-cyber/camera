@@ -31,8 +31,8 @@ import Foundation
 /// `@MainActor` class from `nonisolated` code with "non-sendable type 'SampleBufferBackend' of
 /// property 'sampleBuffers' cannot exit nonisolated(unsafe) context", at all three ingest entry
 /// points. R-52's slot 3 (`LatestFrameBox`, `VigilRender`) is the Metal path's latest-frame slot
-/// and is not built in this slice, so the repo-wide count is unchanged — but the *name* in R-52's
-/// table is wrong for the slice and the supervisor must reconcile the two.
+/// and is not built in this slice, so the repo-wide count is unchanged; the supervisor has accepted
+/// this type into slot 3 for as long as the Metal path is unbuilt.
 ///
 /// `NSLock` rather than `OSAllocatedUnfairLock` for the same reason `LatestFrameBox` uses it
 /// (R-52, row 3): the lock is taken on VideoToolbox's thread, and spinning on a thread that may be
@@ -52,11 +52,25 @@ final class SampleBufferBackend: @unchecked Sendable {
         case resumeDecoding
     }
 
+    /// Why a sample was refused, when it was.
+    ///
+    /// Carried out of `enqueue` so the refusal can be *reported* rather than only counted. A drop
+    /// that lands in a private counter and nowhere else is the silent-failure class this project
+    /// designs out; see `VideoTileView.onFramesDropped`.
+    enum Refusal: String, Sendable {
+        /// `isReadyForMoreMediaData` was false — the renderer's own shallow queue is full.
+        case rendererNotReady
+        /// No display layer has been adopted yet, so there is nowhere to put the sample.
+        case noRenderer
+    }
+
     /// What one `enqueue` did. `Sendable` so it can be carried to the main actor for publication
     /// without touching the sample buffer.
     struct Outcome: Sendable {
         /// The sample reached the renderer.
         var accepted: Bool
+        /// Why it did not, when `accepted` is `false`. Always `nil` when `accepted` is `true`.
+        var refusal: Refusal?
         /// This was the first sample accepted since the last flush — the "video is live again"
         /// edge a status line wants.
         var isFirstSinceFlush: Bool
@@ -129,7 +143,8 @@ final class SampleBufferBackend: @unchecked Sendable {
         defer { lock.unlock() }
 
         guard let renderer = self.renderer else {
-            return Outcome(accepted: false, isFirstSinceFlush: false, flushedFirst: false,
+            return Outcome(accepted: false, refusal: .noRenderer, isFirstSinceFlush: false,
+                           flushedFirst: false,
                            totalEnqueued: enqueuedCount,
                            totalDroppedNotReady: droppedNotReadyCount)
         }
@@ -154,9 +169,17 @@ final class SampleBufferBackend: @unchecked Sendable {
             flushedFirst = true
         }
 
+        // PROPER FIX OWED (docs/spec-video-pipeline.md §6.4): dropping on the renderer's readiness
+        // flag is not where backpressure belongs. That flag goes false at roughly three queued
+        // samples on a real-time layer, so a bursty decoder loses frames here in normal operation,
+        // not only under overload. §6.4 puts the drop decision in a six-deep ring in front of the
+        // renderer, drained by `requestMediaDataWhenReady(on:using:)`. Restructuring that is not
+        // slice work; until then every refusal is reported through `VideoTileView.onFramesDropped`
+        // so the judder is attributable instead of being blamed on the network.
         guard renderer.isReadyForMoreMediaData else {
             droppedNotReadyCount &+= 1
-            return Outcome(accepted: false, isFirstSinceFlush: false, flushedFirst: flushedFirst,
+            return Outcome(accepted: false, refusal: .rendererNotReady, isFirstSinceFlush: false,
+                           flushedFirst: flushedFirst,
                            totalEnqueued: enqueuedCount,
                            totalDroppedNotReady: droppedNotReadyCount)
         }
@@ -166,7 +189,8 @@ final class SampleBufferBackend: @unchecked Sendable {
         enqueuedCount &+= 1
         let isFirst = !hasDeliveredSinceFlush
         hasDeliveredSinceFlush = true
-        return Outcome(accepted: true, isFirstSinceFlush: isFirst, flushedFirst: flushedFirst,
+        return Outcome(accepted: true, refusal: nil, isFirstSinceFlush: isFirst,
+                       flushedFirst: flushedFirst,
                        totalEnqueued: enqueuedCount,
                        totalDroppedNotReady: droppedNotReadyCount)
     }

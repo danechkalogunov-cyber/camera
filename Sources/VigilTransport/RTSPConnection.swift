@@ -431,18 +431,17 @@ public actor RTSPConnection {
         // is not something this code can verify. A stated product property must not rest on an
         // unverifiable framework behaviour, so the check is now ours end to end and fails closed.
         // (Supervisor ruling, review of finding 6.)
-        let classification = EgressGuard.classify(config.url.host)
-        guard classification != .refused else {
-            throw VigilError.transport(.egressBlocked(host: config.url.host))
-        }
         let port = try endpointPort()
 
         lifecycle = .connecting
 
         let hostText: String
-        switch classification {
+        switch EgressGuard.classify(config.url.host) {
         case .refused:
-            throw VigilError.transport(.egressBlocked(host: config.url.host))
+            // Through `abortConnect` rather than a bare `throw`, which is also a small fix: the
+            // bare version left the event stream open, so a caller that had already taken one and
+            // then had its `connect()` refused waited on a `for await` that would never end.
+            throw abortConnect(.transport(.egressBlocked(host: config.url.host)))
         case .permitted:
             hostText = Self.endpointHostText(config.url.host)
         case .unresolvedName:
@@ -484,6 +483,164 @@ public actor RTSPConnection {
         startWriteDrain()
         startReadLoop()
         openSession()
+    }
+
+    /// Tears down a connection attempt that never got going, and hands back the failure to throw.
+    ///
+    /// One place, because there are now two ways to fail before the socket is ready — the resolver
+    /// and the handshake — and both owe the caller the same cleanup. A caller that took an event
+    /// stream before connecting must see it end, or its `for await` waits for a session that never
+    /// started.
+    private func abortConnect(_ failure: VigilError) -> VigilError {
+        lifecycle = .closed
+        // public func cancel()
+        socket?.cancel()
+        socket = nil
+        logger.failure(.transport, failure)
+        eventSink?.finish()
+        eventSink = nil
+        return failure
+    }
+
+    // MARK: - Egress, stage one: resolving before connecting
+
+    /// Resolves the configured name and returns the address literal to connect to (R-71).
+    ///
+    /// Fails closed in every direction: a name that resolves anywhere outside the local network is
+    /// `.egressBlocked` before a socket exists, a name that does not resolve is `.hostUnreachable`,
+    /// and a resolver that does not answer inside the connect budget is `.connectTimeout`.
+    private func resolvePermittedAddress() async throws(VigilError) -> String {
+        logger.debug(.transport, "resolving", ["host": config.url.host])
+        switch await resolveWithinBudget(config.url.host) {
+        case .permitted(let literal):
+            logger.debug(.transport, "resolved to a local address", ["host": config.url.host])
+            return literal
+        case .blocked:
+            logger.warning(.transport, "destination resolves outside the local network",
+                           ["host": config.url.host])
+            throw abortConnect(.transport(.egressBlocked(host: config.url.host)))
+        case .unresolvable:
+            throw abortConnect(.transport(.hostUnreachable))
+        case .timedOut:
+            throw abortConnect(.transport(.connectTimeout))
+        case .cancelled:
+            throw abortConnect(.cancelled)
+        }
+    }
+
+    /// Runs the system resolver off the actor, giving up on it after the connect budget.
+    ///
+    /// `getaddrinfo` blocks its thread until the system resolver answers and cannot be cancelled,
+    /// so two things follow. It must not run on a cooperative thread — hence the hop onto the
+    /// connection's own dispatch queue, which is idle at this point because no socket exists yet —
+    /// and a timeout can only *abandon* the lookup, not stop it. `finishResolve` latches for that
+    /// reason: whichever of the two arrives first wins, and the loser resumes nothing.
+    private func resolveWithinBudget(_ host: String) async -> ResolveOutcome {
+        let watchdog = Task { [clock, connectTimeout] in
+            do {
+                try await clock.sleep(for: connectTimeout)
+            } catch {
+                return                                   // cancelled: the resolver answered first
+            }
+            self.finishResolve(with: .timedOut)          // already on the actor; see `waitForReady`
+        }
+
+        let outcome: ResolveOutcome = await withCheckedContinuation { continuation in
+            resolveContinuation = continuation
+            // actor → GCD, and one of this file's sanctioned uses of it. Nothing from
+            // Network.framework is named in here, so the closure is `Sendable` whatever the SDK
+            // turns out to say about `NWConnection`.
+            queue.async { [weak self] in
+                let outcome = RTSPConnection.resolveSynchronously(host)
+                // GCD → actor.
+                Task { await self?.finishResolve(with: outcome) }
+            }
+        }
+
+        watchdog.cancel()
+        return outcome
+    }
+
+    /// Resumes the resolve continuation exactly once.
+    private func finishResolve(with outcome: ResolveOutcome) {
+        guard let continuation = resolveContinuation else { return }
+        resolveContinuation = nil
+        continuation.resume(returning: outcome)
+    }
+
+    /// The blocking half: one `getaddrinfo`, every answer classified.
+    ///
+    /// POSIX rather than Network.framework, deliberately. Network has no resolver this code can
+    /// call and verify — the only address it offers is `currentPath?.remoteEndpoint` *after* a
+    /// connection exists, which is both too late to fail closed and a shape this file cannot
+    /// check. `getaddrinfo`/`getnameinfo` are POSIX, need no dependency, and are spelled
+    /// identically on Darwin and Glibc, so every line here is type-checked by the Linux shadow
+    /// build. (`ai_socktype` and `ai_protocol` are deliberately left at zero: `SOCK_STREAM` is
+    /// `Int32` on Darwin but `__socket_type` on Glibc, and `IPPROTO_TCP` is `Int32` against `Int`.
+    /// Setting them would put the only two unverifiable lines in this function. The cost is a few
+    /// duplicate entries per address, which classification does not care about.)
+    ///
+    /// **Fail closed**: one address outside the LAN blocks the whole destination, rather than the
+    /// connection quietly using whichever answer happens to be local. A name that resolves to both
+    /// a private and a public address is not a camera we should be talking to.
+    ///
+    /// - Note: `nonisolated`, and touches no actor state, because it runs on the dispatch queue.
+    private nonisolated static func resolveSynchronously(_ host: String) -> ResolveOutcome {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+
+        var list: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &list) == 0, let head = list else {
+            return .unresolvable
+        }
+        defer { freeaddrinfo(head) }
+
+        var first: String?
+        var cursor: UnsafeMutablePointer<addrinfo>? = head
+        while let entry = cursor {
+            cursor = entry.pointee.ai_next
+            guard let literal = numericHost(of: entry.pointee) else { continue }
+            // The literal is classified by the very same code that classifies a hand-typed one,
+            // so there is one definition of "local" in this module rather than two.
+            guard EgressGuard.classify(literal) == .permitted else { return .blocked }
+            if first == nil { first = literal }
+        }
+        guard let first else { return .unresolvable }
+        return .permitted(literal: first)
+    }
+
+    /// One `addrinfo` rendered as a numeric address, in the spelling `NWEndpoint.Host` reads.
+    ///
+    /// `getnameinfo` with `NI_NUMERICHOST` never consults the resolver, so this cannot turn into a
+    /// reverse lookup. An IPv6 scope comes back as `fe80::1%en0` — the kernel's spelling, which is
+    /// what `NWEndpoint.Host` wants and what `EgressGuard` strips before classifying.
+    private nonisolated static func numericHost(of entry: addrinfo) -> String? {
+        guard let address = entry.ai_addr else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(address, entry.ai_addrlen, &buffer, socklen_t(buffer.count),
+                          nil, 0, NI_NUMERICHOST) == 0 else {
+            return nil
+        }
+        let text = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+                          as: UTF8.self)
+        return text.isEmpty ? nil : text
+    }
+
+    /// The text `NWEndpoint.Host` is given for a destination taken straight from the URL.
+    ///
+    /// `RTSPURL.host` stores the authority as written, so an IPv6 zone id arrives in the URI form
+    /// of RFC 6874 — `fe80::1%25en0`, in which `%25` *is* the escape for `%`. `NWEndpoint.Host`
+    /// wants the zone as the kernel spells it, `fe80::1%en0`; handed the escaped form it reads the
+    /// whole string as a DNS name, and the connect fails with a resolution error that names
+    /// nothing useful. The stored form is deliberately left alone — it is what the request line
+    /// and the Digest `uri=` have to reproduce byte for byte — so the decoding happens here, at
+    /// the one point where the string stops being a URI component and becomes an address.
+    ///
+    /// Guarded on `:` so an ordinary DNS name is never touched. `%` is not legal in a host label,
+    /// so there is nothing else this can affect.
+    private static func endpointHostText(_ host: String) -> String {
+        guard host.contains(":") else { return host }
+        return host.replacingOccurrences(of: "%25", with: "%")
     }
 
     /// Converts the URL's port into an `NWEndpoint.Port`.
@@ -644,19 +801,22 @@ public actor RTSPConnection {
 
     // MARK: - Egress, stage two
 
-    /// Re-checks the destination against the address the resolver actually returned (R-71).
+    /// Checks the address the connection actually reached against the LAN rule (R-71).
     ///
-    /// A DNS name cannot be classified before it resolves, so `connect()` lets one through and this
-    /// is where the LAN-only rule is actually enforced for it. The check runs for every destination,
-    /// literal or name: an IP literal simply agrees with itself, and running it unconditionally
-    /// means there is one enforcement point rather than two behaviours to keep in step.
+    /// **This is belt and braces, not the guarantee.** It used to be the enforcement point for
+    /// every DNS name, and that was wrong in a way worth recording: it runs after the handshake, so
+    /// it cannot fail closed, and it depends on `NWConnection.currentPath?.remoteEndpoint`
+    /// reporting a *resolved* address rather than echoing back the name it was given — which is
+    /// not something this code can verify. When the endpoint came back as `.name`, the check
+    /// skipped itself and the LAN-only property silently reduced to nothing at all for exactly the
+    /// hosts that needed it most. `connect()` now resolves and classifies before a socket exists
+    /// and connects to a literal, so by the time this runs the destination has already been
+    /// approved.
     ///
-    /// **What this does not prevent.** The TCP handshake to a name that resolves off the LAN has
-    /// already happened by the time `.ready` arrives — that is inherent in classifying after
-    /// resolution. No RTSP byte is written, because `connect()` starts the write drain only after
-    /// this returns; a public destination therefore sees a connect and a disconnect and learns
-    /// nothing else. Closing even that gap means resolving the name ourselves before connecting,
-    /// which the slice does not do.
+    /// It is kept because it is nearly free and it catches the one thing the pre-check cannot: the
+    /// platform connecting somewhere other than where it was told. Nothing has been written when it
+    /// runs — `connect()` starts the write drain only after `.ready` resumes it — so a refusal here
+    /// still costs no RTSP byte.
     ///
     /// - Returns: the failure to end the connection with, or `nil` when the destination is
     ///   permitted or when the platform did not give an address to check.
@@ -1194,6 +1354,9 @@ public actor RTSPConnection {
         wakeWriteDrain()
         wakeReadLoop()
         finishConnect(with: .cancelled)
+        // A close during the pre-connect lookup must not wait for the system resolver's own
+        // timeout, which is neither ours nor short.
+        finishResolve(with: .cancelled)
         closeTask = Task { await self.finishClose() }
     }
 

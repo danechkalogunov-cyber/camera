@@ -154,7 +154,7 @@ public enum FingerprintCodec {
         let realm = challenge?.params["realm"]
         let methods = (scan.header("public") ?? "")
             .split(separator: ",")
-            .map { $0.trimmedASCII().uppercased() }
+            .map { String($0).trimmedASCII().uppercased() }
             .filter { !$0.isEmpty }
         let vendorFromRealm = realm.map(vendorForRealm) ?? .unknown
         let server = scan.header("server")

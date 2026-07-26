@@ -61,13 +61,29 @@ final class TileVideoSink: VideoSink {
     ///
     /// Call once, on the main actor, before the pipeline starts. Reads the handle's current sink
     /// first so that a view attached before this call is not missed.
+    ///
+    /// - Parameters:
+    ///   - handle: the attach point every `VideoTile` for this window registers with.
+    ///   - onRenderState: the mounted tile's ``VigilRender/TileRenderState``, or `nil` when none is
+    ///     mounted. `FrameStreamHandle.onSinkChange` is a **single** closure slot, so this method
+    ///     owns it and fans out rather than letting a second consumer overwrite it. The frame path
+    ///     does not use the render state; the status line does, which is why it is handed out here
+    ///     instead of being read through `attached` (that lock is on the ingest path and must stay
+    ///     a pointer copy).
     @MainActor
-    func follow(_ handle: FrameStreamHandle) {
+    func follow(_ handle: FrameStreamHandle,
+                onRenderState: @escaping @Sendable (TileRenderState?) -> Void = { _ in }) {
         let slot = attached
+        // This closure is checked as `nonisolated`, because `onSinkChange`'s type is not isolated —
+        // so it may touch only `Sendable` things. `slot` is a lock and `view?.state` is an immutable
+        // `let` of `Sendable` type on a `@MainActor` class, which SE-0434 makes readable from here;
+        // publishing it onto the main actor is `onRenderState`'s job, not this closure's.
         handle.onSinkChange = { view in
             slot.withLock { $0 = view }
+            onRenderState(view?.state)
         }
         slot.withLock { $0 = handle.sink }
+        onRenderState(handle.sink?.state)
     }
 
     /// Stops delivering. The tile keeps its last picture, which is the correct thing to leave on

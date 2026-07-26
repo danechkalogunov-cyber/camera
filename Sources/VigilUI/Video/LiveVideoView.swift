@@ -103,9 +103,12 @@ package struct LiveVideoView<Video: View>: View {
         // hairlines, and no materials or shadows anywhere (§2.3, §6.3).
         .vOnVideo()
         .vMotionEnabled(!reduceMotion)
-        // Inverted colours must never be applied to footage — an inverted street at night is
-        // unreadable and is not what the operator asked for (§10.7).
-        .accessibilityIgnoresInvertColors(true)
+        // §10.7 asks that inverted colours never reach footage — an inverted street at night is
+        // unreadable. There is deliberately no code for it: `accessibilityIgnoresInvertColors` is
+        // the UIKit-only opt-out (`UIView.accessibilityIgnoresInvertColors`), and AppKit has no
+        // equivalent because macOS applies Invert Colors as a display-wide WindowServer filter
+        // rather than per view. Nothing an app can do exempts a layer from it, so the rule is
+        // unimplementable here rather than unimplemented.
         .onHover { isHovering = $0 }
         .task(id: state.isConnecting) { await runChoreography() }
         .task(id: isDegraded) { await debounceDegradedBanner() }

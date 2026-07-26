@@ -16,30 +16,13 @@
 import Foundation
 import VigilProtocols
 
-// MARK: - Lanes
-
-/// Which connection pool a request belongs to.
-///
-/// The device runs a small HTTP worker pool, so a burst of grid thumbnails must not be able to
-/// starve a PTZ stop; separating the lanes is what guarantees it (docs/spec-isapi.md §4.2).
-/// `.ptz` is `.control` with the documented one-slot over-subscription — a dropped stop command
-/// leaves a camera spinning, which is the worst failure this module has.
-public enum ISAPILane: String, Sendable, Hashable, CaseIterable {
-    /// Ordinary configuration reads and writes. Concurrency 3 per device.
-    case control
-    /// PTZ writes. `.control` plus one over-subscribed slot, and a 2 s timeout.
-    case ptz
-    /// Recording search. `.control` with the longer 15 s budget.
-    case search
-    /// JPEG snapshots. Concurrency 2 per device, 6 app-wide, excess dropped not queued.
-    case snapshot
-    /// Long-lived reads: the alert stream and device-to-client audio.
-    case stream
-    /// The chunked two-way-audio upload.
-    case audio
-}
-
 // MARK: - ISAPIRequesting
+
+// Lanes are `VigilProtocols.HTTPLane` — `.control`, `.snapshot`, `.stream`, `.audio`. PTZ and
+// recording search are **not** separate lanes: they are `.control` with a different budget, which
+// the client derives from the resource path (a 2 s PTZ timeout, a 15 s search timeout, and the
+// documented one-slot over-subscription for `/PTZCtrl/`). Endpoint families therefore say
+// `.control` and let the client apply the policy, rather than each one re-deciding it.
 
 /// Everything an endpoint family needs from the HTTP client.
 ///
@@ -56,27 +39,27 @@ public protocol ISAPIRequesting: Sendable {
     ///   - query: percent-encoded by the conformance; `+` must survive as `%2B`.
     ///   - lane: the connection pool to use.
     func getDocument(_ resource: String, query: [URLQueryItem],
-                     lane: ISAPILane) async throws(ISAPIError) -> ISAPIDocument
+                     lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument
 
     /// `GET` a resource whose body is not XML — the JPEG snapshot path.
     ///
     /// The body is returned verbatim, including when the device mislabels its `Content-Type`;
     /// content sniffing is the caller's job (docs/spec-isapi.md §12.5).
     func getBytes(_ resource: String, query: [URLQueryItem],
-                  lane: ISAPILane) async throws(ISAPIError) -> Data
+                  lane: HTTPLane) async throws(ISAPIError) -> Data
 
     /// `PUT` an XML body. Pass `nil` for the empty-bodied verbs (`/goto`, `/start`, `/open`),
     /// which must still carry an explicit `Content-Length: 0`.
     func putDocument(_ resource: String, body: Data?, query: [URLQueryItem],
-                     lane: ISAPILane) async throws(ISAPIError) -> ISAPIDocument?
+                     lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument?
 
     /// `POST` an XML body; the response must parse as XML (`CMSearchResult`, distributions).
     func postDocument(_ resource: String, body: Data?, query: [URLQueryItem],
-                      lane: ISAPILane) async throws(ISAPIError) -> ISAPIDocument
+                      lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument
 
     /// `DELETE` a resource. Returns the `ResponseStatus` document when the device sends one.
     func deleteDocument(_ resource: String, query: [URLQueryItem],
-                        lane: ISAPILane) async throws(ISAPIError) -> ISAPIDocument?
+                        lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument?
 
     /// Opens a long-lived response and yields its body as it arrives.
     ///
@@ -118,20 +101,20 @@ public extension ISAPIRequesting {
     /// `PUT` a body built with `XMLBuilder`, on a caller-chosen lane.
     @discardableResult
     func put(_ resource: String, _ builder: XMLBuilder,
-             lane: ISAPILane = .control) async throws(ISAPIError) -> ISAPIDocument? {
+             lane: HTTPLane = .control) async throws(ISAPIError) -> ISAPIDocument? {
         try await putDocument(resource, body: builder.data(), query: [], lane: lane)
     }
 
     /// `PUT` with no body at all — the `/goto`, `/start`, `/stop`, `/open`, `/close` verbs.
     @discardableResult
     func putEmpty(_ resource: String,
-                  lane: ISAPILane = .control) async throws(ISAPIError) -> ISAPIDocument? {
+                  lane: HTTPLane = .control) async throws(ISAPIError) -> ISAPIDocument? {
         try await putDocument(resource, body: nil, query: [], lane: lane)
     }
 
     /// `POST` a body built with `XMLBuilder`.
     func post(_ resource: String, _ builder: XMLBuilder,
-              lane: ISAPILane = .search) async throws(ISAPIError) -> ISAPIDocument {
+              lane: HTTPLane = .control) async throws(ISAPIError) -> ISAPIDocument {
         try await postDocument(resource, body: builder.data(), query: [], lane: lane)
     }
 }

@@ -55,8 +55,7 @@ public enum IPv4HostOrder {
     /// router's neighbour on another network cannot smuggle a foreign address into the plan.
     /// Every returned address is inside `subnet` and usable (network and broadcast excluded for
     /// `/30` and wider), and no address appears twice.
-    public static func order(subnet: IPv4Subnet,
-                             hints: some Sequence<IPv4Address> = EmptyCollection<IPv4Address>(),
+    public static func order(subnet: IPv4Subnet, hints: [IPv4Address] = [],
                              gateway: IPv4Address? = nil) -> [IPv4Address] {
         let hostCount = subnet.usableHostCount
         guard hostCount > 0 else { return [] }
@@ -117,15 +116,13 @@ public enum IPv4HostOrder {
     /// The order for several subnets, concatenated in the order given and de-duplicated across them.
     /// Overlapping subnets are legal input (two interfaces on one LAN) and each address is swept
     /// once — one connect per (host, port) per run is a politeness rule, not an optimisation (§6.10).
-    public static func order(subnets: [IPv4Subnet],
-                             hints: some Sequence<IPv4Address> = EmptyCollection<IPv4Address>(),
+    public static func order(subnets: [IPv4Subnet], hints: [IPv4Address] = [],
                              gateways: [IPv4Address] = []) -> [IPv4Address] {
-        let hintList = Array(hints)
         var seen: Set<UInt32> = []
         var result: [IPv4Address] = []
         for subnet in subnets {
             let gateway = gateways.first { subnet.contains($0) }
-            for address in order(subnet: subnet, hints: hintList, gateway: gateway)
+            for address in order(subnet: subnet, hints: hints, gateway: gateway)
             where seen.insert(address.rawValue).inserted {
                 result.append(address)
             }

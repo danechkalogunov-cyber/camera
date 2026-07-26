@@ -176,7 +176,18 @@ extension AppSessionModel {
         let (frameStream, continuation) = AsyncStream<EncodedFrame>.makeStream(
             of: EncodedFrame.self, bufferingPolicy: .bufferingNewest(64))
         frameContinuation = continuation
-        decodeTask = Task {
+        // ⛔ `Task.detached`, and it must stay detached. `Task { }` carries
+        // `@_inheritActorContext`, so a plain `Task` started from this `@MainActor` method would run
+        // its `for await` loop **on the main actor** — every access unit would hop onto the UI
+        // thread and back out again on its way to the pipeline actor. That is the media path
+        // crossing the main thread once per frame, which DESIGN.md §7.9 forbids outright and which
+        // works directly against the 250 ms glass-to-glass budget (REQUIREMENTS §R3). It is
+        // invisible on one camera and ruinous on a sixteen-tile grid, so it would never be found
+        // later. Detached is not an optimisation here; a plain `Task` is the bug.
+        //
+        // Nothing in the loop needs main-actor state: `frameStream` is `Sendable` because
+        // `EncodedFrame` is, and `pipeline` is an actor.
+        decodeTask = Task.detached {
             for await frame in frameStream {
                 await pipeline.submit(frame)
             }

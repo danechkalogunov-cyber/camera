@@ -51,8 +51,8 @@ public actor PTZController {
     public private(set) var keepAliveSendCount = 0
 
     /// - Parameters:
-    ///   - requests: the HTTP surface; PTZ writes go on the `.ptz` lane, which is `.control` plus
-    ///     the one documented over-subscribed slot and a 2 s timeout.
+    ///   - requests: the HTTP surface; PTZ writes go on `.control`, which the client gives a 2 s
+    ///     budget and one over-subscribed slot when the resource is under `/PTZCtrl/`.
     ///   - channel: the **video input** channel.
     ///   - capabilities: from `/PTZCtrl/channels/{ch}/capabilities`, or `.absent`.
     ///   - clock: the only time source; the keep-alive and the stop spacing both use it.
@@ -150,7 +150,7 @@ public actor PTZController {
                                + duration.components.attoseconds / 1_000_000_000_000_000)
         try await requests.put(ISAPIResource.ptzMomentary(channel),
                                velocity.momentaryBody(durationMilliseconds: milliseconds),
-                               lane: .ptz)
+                               lane: .control)
     }
 
     /// Moves to an absolute position, clamped into the channel's advertised ranges.
@@ -159,12 +159,12 @@ public actor PTZController {
             throw ISAPIError.notSupported(resource: ISAPIResource.ptzAbsolute(channel))
         }
         try await requests.put(ISAPIResource.ptzAbsolute(channel),
-                               position.body(clampedTo: capabilities), lane: .ptz)
+                               position.body(clampedTo: capabilities), lane: .control)
     }
 
     /// Moves by a relative offset in device steps.
     public func relative(_ move: PTZRelativeMove) async throws(ISAPIError) {
-        try await requests.put(ISAPIResource.ptzRelative(channel), move.body, lane: .ptz)
+        try await requests.put(ISAPIResource.ptzRelative(channel), move.body, lane: .control)
     }
 
     /// Drag-to-zoom, or click-to-centre when the box is a point.
@@ -176,7 +176,7 @@ public actor PTZController {
         guard capabilities.supportsPosition3D else {
             throw ISAPIError.notSupported(resource: ISAPIResource.ptzPosition3D(channel))
         }
-        try await requests.put(ISAPIResource.ptzPosition3D(channel), box.body, lane: .ptz)
+        try await requests.put(ISAPIResource.ptzPosition3D(channel), box.body, lane: .control)
     }
 
     // MARK: Presets
@@ -192,7 +192,7 @@ public actor PTZController {
     /// Recalls a preset. Reserved numbers are allowed here — invoking 94 really does reboot the
     /// camera, which is why the UI confirms first — but never written.
     public func gotoPreset(_ n: Int) async throws(ISAPIError) {
-        try await requests.putEmpty(ISAPIResource.ptzPresetGoto(channel, n), lane: .ptz)
+        try await requests.putEmpty(ISAPIResource.ptzPresetGoto(channel, n), lane: .control)
     }
 
     /// Stores the current position in a preset slot.
@@ -242,7 +242,7 @@ public actor PTZController {
 
     /// Recalls the configured home position.
     public func gotoHome() async throws(ISAPIError) {
-        try await requests.putEmpty(ISAPIResource.ptzHomeGoto(channel), lane: .ptz)
+        try await requests.putEmpty(ISAPIResource.ptzHomeGoto(channel), lane: .control)
     }
 
     /// Reads the current absolute position. Never cached.
@@ -253,18 +253,18 @@ public actor PTZController {
     /// Continuous focus, −100…100, zero to stop. Note the path: focus lives under the video input.
     public func setFocus(_ velocity: Int) async throws(ISAPIError) {
         try await requests.put(ISAPIResource.focus(channel), PTZLensCommand.focus(velocity),
-                               lane: .ptz)
+                               lane: .control)
     }
 
     /// Continuous iris, −100…100, zero to stop.
     public func setIris(_ velocity: Int) async throws(ISAPIError) {
         try await requests.put(ISAPIResource.iris(channel), PTZLensCommand.iris(velocity),
-                               lane: .ptz)
+                               lane: .control)
     }
 
     /// Switches an auxiliary output such as a light or wiper.
     public func auxiliary(_ aux: PTZAuxiliary, id: Int = 1, on: Bool) async throws(ISAPIError) {
-        try await requests.put(ISAPIResource.ptzAux(channel), aux.body(id: id, on: on), lane: .ptz)
+        try await requests.put(ISAPIResource.ptzAux(channel), aux.body(id: id, on: on), lane: .control)
     }
 
     /// Replaces the capability snapshot, after a re-probe.
@@ -276,7 +276,7 @@ public actor PTZController {
 
     /// One `PUT .../continuous` with the given triple.
     private func send(_ velocity: PTZVelocity) async throws(ISAPIError) {
-        try await requests.put(ISAPIResource.ptzContinuous(channel), velocity.body, lane: .ptz)
+        try await requests.put(ISAPIResource.ptzContinuous(channel), velocity.body, lane: .control)
     }
 
     /// (Re)arms the keep-alive for `velocity`, replacing any previous one.

@@ -65,6 +65,16 @@ public final class TileRenderState {
     /// a rising number here means the display path is behind, not that data was lost upstream.
     public private(set) var totalDroppedNotReady: UInt64 = 0
 
+    /// Frames `VigilVideo` reported dropping *before* they reached this tile, counted from
+    /// `VideoSink.didDropFrames(_:reason:)`. Distinct from `totalDroppedNotReady`, which is this
+    /// module's own refusals — the two have different remedies and must not be summed blindly.
+    public private(set) var totalDroppedUpstream: UInt64 = 0
+
+    /// The reason for the most recent dropped frame, whatever its origin, as a stable raw string:
+    /// a `FrameDropReason` raw value for upstream drops, or `SampleBufferBackend.Refusal`'s for
+    /// this module's own. `nil` until something is dropped.
+    public private(set) var lastDropReason: String?
+
     // MARK: - Lifecycle
 
     /// Creates an empty state. Only `VideoTileView` should need this.
@@ -86,9 +96,18 @@ public final class TileRenderState {
     func absorb(_ outcome: SampleBufferBackend.Outcome) {
         totalEnqueued = outcome.totalEnqueued
         totalDroppedNotReady = outcome.totalDroppedNotReady
+        if let refusal = outcome.refusal {
+            lastDropReason = refusal.rawValue
+        }
         if outcome.isFirstSinceFlush {
             isReceivingFrames = true
         }
+    }
+
+    /// Folds in a drop `VigilVideo` reported upstream of this tile.
+    func absorbUpstreamDrop(_ count: Int, reason: String) {
+        totalDroppedUpstream &+= UInt64(max(0, count))
+        lastDropReason = reason
     }
 
     /// The stream was reset or the layer was flushed: nothing has been shown since.

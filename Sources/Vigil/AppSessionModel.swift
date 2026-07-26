@@ -85,10 +85,22 @@ final class AppSessionModel {
     /// for a keyframe" in the connecting narration.
     var hasFirstPacket: Bool = false
 
-    /// Whether a complete access unit has been assembled. See `StreamEvent.firstFrameAssembled`:
-    /// the decoder reports the *picture* separately, and the tile's own `TileRenderState` is the
-    /// authority on when pixels appear.
+    /// Whether a complete access unit has been assembled. See `StreamEvent.firstFrameAssembled`.
+    ///
+    /// ⛔ This is **not** "the user can see the camera", and it must never be what says `Live`:
+    /// an access unit that assembled can still fail to decode, and the difference on screen is a
+    /// black well wearing a `Live` chip with no narration — the exact failure DESIGN.md §3.6 exists
+    /// to prevent. ``renderState`` is the authority on pixels; this drives the narration ladder and
+    /// the R1.7 latency number.
     var isReceivingMedia: Bool = false
+
+    /// The mounted tile's own render state, or `nil` while no tile is mounted.
+    ///
+    /// Published by `TileVideoSink.follow(_:onRenderState:)` when `VideoTile.makeNSView` attaches a
+    /// view. `TileRenderState` is `@Observable`, so reading ``isDisplayingPicture`` during a body
+    /// evaluation subscribes to it and the overlay clears on the frame the picture actually appears.
+    /// The `nil` → non-`nil` transition is itself observed, because this property is tracked.
+    var renderState: TileRenderState?
 
     /// The latest 1 Hz telemetry, used for the degraded banner's measured cause.
     var statistics = StreamStatistics()
@@ -159,7 +171,8 @@ final class AppSessionModel {
         case .settingUp:
             return .connecting(.opening)
         case .playing:
-            if isReceivingMedia { return .live }
+            // `isDisplayingPicture`, not `isReceivingMedia`: `Live` is a claim about the screen.
+            if isDisplayingPicture { return .live }
             return .connecting(hasFirstPacket ? .waitingForKeyframe : .waitingForVideo)
         case .degraded:
             return .degraded(degradedCause)
@@ -170,6 +183,19 @@ final class AppSessionModel {
                                           isPersistent: attempt >= 5,
                                           diagnosis: diagnosis))
         }
+    }
+
+    /// Whether a picture is actually on the glass.
+    ///
+    /// `TileRenderState.isReceivingFrames` goes true when a sample buffer reaches the display layer
+    /// and false again on a flush, which is exactly the fact the status line needs.
+    ///
+    /// The fallback is deliberate and is the safe direction: with no tile mounted there is no render
+    /// state to ask, so we fall back to the assembled-access-unit fact rather than narrating
+    /// "connecting" over a stream that is running. A tile that *is* mounted and is not showing
+    /// anything is the case worth catching, and this reports it.
+    var isDisplayingPicture: Bool {
+        renderState?.isReceivingFrames ?? isReceivingMedia
     }
 
     /// The measured reason the stream is degraded.
@@ -202,7 +228,13 @@ final class AppSessionModel {
                                            logger: dependencies.logger)
         // The sink follows the handle for the life of the process, so a tile that SwiftUI rebuilds
         // mid-stream starts receiving again without the decode pipeline knowing anything happened.
-        tileSink.follow(frames)
+        // The same attach notification carries the tile's render state up, so `liveState` can say
+        // `Live` about pixels rather than about assembled access units.
+        tileSink.follow(frames) { [weak self] state in
+            // One hop, on attach only — never per frame. `onSinkChange` is checked as nonisolated,
+            // so this is where the value crosses onto the main actor.
+            Task { @MainActor in self?.renderState = state }
+        }
     }
 
     // MARK: - Public API

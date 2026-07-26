@@ -171,15 +171,18 @@ package struct ConnectingOverlay: View {
         }
     }
 
-    /// `1.4 s`, formatted by `Measurement` so the unit and the decimal separator are the locale's
-    /// and not ours (UX.md §14.1 rule 9).
+    /// `1.4 s`.
+    ///
+    /// The **number** is formatted by `FormatStyle`, so the decimal separator is the locale's — a
+    /// Russian reader sees `1,4` (UX.md §14.1 rule 9). The **unit** is part of the localised key
+    /// rather than a `Measurement`, because `Measurement<UnitDuration>`'s `.abbreviated` width
+    /// spells seconds `sec` and its `.narrow` width spells them `1.4s` with no space; UX.md §12.6
+    /// specifies `1.4 s`, and neither width produces it. A translator moves or replaces the unit by
+    /// editing this one key, which is the outcome §14.2 asks for anyway.
     private func elapsedText(at now: Date) -> Text {
         let seconds = Swift.max(0, now.timeIntervalSince(startedAt))
-        let value = Measurement(value: seconds, unit: UnitDuration.seconds)
-            .formatted(.measurement(width: .abbreviated,
-                                    usage: .asProvided,
-                                    numberFormatStyle: .number.precision(.fractionLength(1))))
-        return Text(verbatim: value)
+        let value = seconds.formatted(.number.precision(.fractionLength(1)))
+        return Text("\(value) s", bundle: .module)
     }
 
     /// Shown at 3.5 s. This row does add height — deliberately, because at three and a half

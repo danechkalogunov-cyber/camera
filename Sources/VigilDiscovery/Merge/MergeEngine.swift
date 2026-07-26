@@ -296,7 +296,7 @@ public struct MergeEngine: Sendable {
         for key in DeviceFieldKey.allCases {
             guard let stamp = donor.provenance[key] else { continue }
             guard let value = value(of: key, in: donor) else { continue }
-            if shouldOverwrite(existing: target.provenance[key], incoming: stamp) {
+            if Self.shouldOverwrite(existing: target.provenance[key], incoming: stamp) {
                 assign(value, key: key, to: &target, source: stamp.source)
                 target.provenance[key] = stamp
             }
@@ -439,7 +439,8 @@ public struct MergeEngine: Sendable {
                     changed.insert(.mac)
                 }
             default:
-                guard shouldOverwrite(existing: device.provenance[key], incoming: stamp) else {
+                guard Self.shouldOverwrite(existing: device.provenance[key],
+                                           incoming: stamp) else {
                     continue
                 }
                 let before = self.value(of: key, in: device)
@@ -511,7 +512,8 @@ public struct MergeEngine: Sendable {
                 device.provenance[.mac] = stamp
                 return true
             }
-            guard !isHint, shouldOverwrite(existing: device.provenance[.mac], incoming: stamp) else {
+            guard !isHint,
+                  Self.shouldOverwrite(existing: device.provenance[.mac], incoming: stamp) else {
                 return false
             }
             device.mac = mac

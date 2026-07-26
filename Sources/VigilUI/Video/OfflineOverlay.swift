@@ -117,11 +117,12 @@ package struct OfflineOverlay: View {
         guard let seconds = detail.retryInSeconds else {
             return Text("Waiting for the network.", bundle: .module)
         }
-        let interval = Measurement(value: Double(seconds), unit: UnitDuration.seconds)
-            .formatted(.measurement(width: .abbreviated,
-                                    usage: .asProvided,
-                                    numberFormatStyle: .number.precision(.fractionLength(0))))
-        return Text("Reconnecting in \(interval) (attempt \(detail.attempt)).", bundle: .module)
+        // The unit is inside the key rather than produced by `Measurement`: its `.abbreviated` width
+        // spells seconds `sec` and its `.narrow` width drops the space, and UX.md §12.6 specifies
+        // "Reconnecting in 4 s (attempt 3)." One key with both arguments, so a translator can
+        // reorder the whole sentence — which a `Measurement` interpolated into it could not be
+        // (§14.2, "Never concatenate").
+        return Text("Reconnecting in \(seconds) s (attempt \(detail.attempt)).", bundle: .module)
     }
 
     @ViewBuilder

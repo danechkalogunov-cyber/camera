@@ -38,11 +38,12 @@ import VigilVideo
 ///                                     generation: UInt32)
 ///     public nonisolated func streamDidReset()
 ///
-/// Every other member — `willChangeFormat`, `didChangeFormat`, `streamDidEnd`, `didDropFrames`,
-/// `didStall`, `didRecover` — takes the no-op default from `VigilVideo`'s protocol extension, which
-/// is what the slice wants: the tile learns about a stall from its own layer, and it must do
-/// nothing at all on a format change, because "keep showing the current image" is the
-/// no-black-flash rule.
+/// `didDropFrames(_:reason:)` is witnessed below rather than defaulted, because the default is a
+/// no-op and a dropped frame that reaches nothing is the silent failure this project keeps designing
+/// out. The remaining members — `willChangeFormat`, `didChangeFormat`, `streamDidEnd`, `didStall`,
+/// `didRecover` — take the no-op default from `VigilVideo`'s protocol extension, which is what the
+/// slice wants: the tile learns about a stall from its own layer, and it must do nothing at all on a
+/// format change, because "keep showing the current image" is the no-black-flash rule.
 ///
 /// **Why a `@MainActor` class may conform to an `AnyObject, Sendable` protocol.** A class isolated
 /// to a global actor is implicitly `Sendable`, and `NSView` is itself `@MainActor` in the SDK, so
@@ -54,6 +55,17 @@ import VigilVideo
 /// **Why this is a separate file.** `VideoTileView.swift` imports no `VigilVideo`: the view is
 /// written against AppKit, AVFoundation and `VigilProtocols` alone, and keeping the dependency in
 /// one small file makes it plain that the conformance costs the render layer nothing but an import.
-extension VideoTileView: VideoSink {}
+extension VideoTileView: VideoSink {
+
+    /// Folds an upstream drop into the tile's published counters and reports it to the owner.
+    ///
+    /// This file is the only one in the module that can name `FrameDropReason`, so the enum is
+    /// flattened to its raw value here and everything downstream works in strings. `VideoTileView`'s
+    /// own refusals are reported through the same `onFramesDropped` callback, so a consumer sees one
+    /// channel with two attributable origins.
+    public nonisolated func didDropFrames(_ count: Int, reason: FrameDropReason) {
+        reportUpstreamDrop(count, reason: reason.rawValue)
+    }
+}
 
 #endif  // os(macOS)

@@ -240,15 +240,58 @@ extension VideoTileView {
         updateScaleAndBackingSize()
     }
 
+    // MARK: - Renderer notification handlers
+    //
+    // Both AVFoundation handlers are `nonisolated`, and that is a correctness requirement rather
+    // than a style choice. Under Swift 6 the Objective-C thunk of a `@MainActor` member carries a
+    // dynamic isolation check (SE-0423) that *traps* — a hard crash, not a data race — when the
+    // method is invoked off the main actor. AVFoundation does not document which thread posts these
+    // two notifications, and `sampleBufferRenderer` exists precisely so that clients may drive it
+    // from a background thread, so assuming main-thread delivery is betting the process on an
+    // undocumented detail.
+    //
+    // The rule these two obey: nothing from the `Notification` crosses the hop. Everything needed
+    // is reduced to `Sendable` values synchronously, on whatever thread posted, and only those are
+    // captured. `Notification` and `any Error` are both non-`Sendable`; neither leaves this scope.
+    //
+    // `backingPropertiesDidChange` above is deliberately *not* `nonisolated`: AppKit posts window
+    // and screen notifications on the main thread, and keeping it isolated keeps the geometry write
+    // synchronous with the layout pass that caused it.
+
     /// The renderer stopped decoding — app suspension, a GPU reset, a stream interruption.
     ///
+    /// The flag is not read here. `requiresFlushToResumeDecoding` only clears when *we* flush, so it
+    /// cannot go stale across the hop, and reading it on the main actor from the layer's own renderer
+    /// avoids casting `note.object` and avoids touching AVFoundation state off-thread.
+    @objc
+    nonisolated private func requiresFlushToResumeDecodingDidChange(_ note: Notification) {
+        Task { @MainActor [weak self] in self?.resumeDecodingIfFlushRequired() }
+    }
+
+    /// The renderer failed to decode a sample. Reported, never swallowed; the decision about
+    /// reconnecting belongs to `VigilCore`.
+    ///
+    /// The `NSError` is reduced to a diagnostic string here, on the posting thread, because
+    /// `any Error` cannot cross to the main actor. Domain and numeric code are kept: §6.5's rule
+    /// keys on `kVTVideoDecoderBadDataErr`, and a message with the status stripped is the "no video,
+    /// no error" failure `.vigil/STEP3.md` rule 3 exists to prevent.
+    @objc
+    nonisolated private func rendererFailedToDecode(_ note: Notification) {
+        let key = AVSampleBufferVideoRenderer.didFailToDecodeNotificationErrorKey
+        let diagnostic = Self.diagnostic(for: note.userInfo?[key])
+        // `logger` and `cameraID` are immutable and `Sendable`, so a nonisolated context may read
+        // them; this line therefore survives even if the hop below is cancelled.
+        logger.error(.render, "video renderer failed to decode",
+                     ["camera": cameraID.short, "error": diagnostic])
+        Task { @MainActor [weak self] in self?.onDecodeFailure?(diagnostic) }
+    }
+
     /// Recovery is a `flush()` plus a fresh keyframe. It is **not** `flush(removingDisplayedImage:)`:
     /// the picture on screen is the last good frame and it stays there until a new one replaces it.
     ///
-    /// The flag is read from the renderer, not the layer: the layer's copy is deprecated at
-    /// macOS 15 in favour of this one, and mixing the two surfaces is what the header forbids.
-    @objc
-    private func requiresFlushToResumeDecodingDidChange(_ note: Notification) {
+    /// The flag comes from the renderer, not the layer: the layer's copy is deprecated at macOS 15
+    /// in favour of this one, and mixing the two surfaces is what the header forbids.
+    private func resumeDecodingIfFlushRequired() {
         guard let renderer = displayLayer?.sampleBufferRenderer else { return }
         guard renderer.requiresFlushToResumeDecoding else { return }
         logger.notice(.render, "video renderer requires a flush to resume decoding",
@@ -257,18 +300,12 @@ extension VideoTileView {
         onKeyframeNeeded?()
     }
 
-    /// The renderer failed to decode a sample. Reported, never swallowed; the decision about
-    /// reconnecting belongs to `VigilCore`.
-    @objc
-    private func rendererFailedToDecode(_ note: Notification) {
-        let key = AVSampleBufferVideoRenderer.didFailToDecodeNotificationErrorKey
-        let failure = note.userInfo?[key] as? any Error
-        logger.error(.render, "video renderer failed to decode",
-                     ["camera": cameraID.short,
-                      "error": failure.map { String(describing: $0) } ?? "unspecified"])
-        if let failure {
-            onDecodeFailure?(failure)
-        }
+    /// Reduces a notification's error payload to a `Sendable` string that can cross to the main
+    /// actor. `nonisolated static` so it can run on the posting thread.
+    nonisolated static func diagnostic(for payload: Any?) -> String {
+        guard let error = payload as? any Error else { return "unspecified" }
+        let ns = error as NSError
+        return "\(ns.domain) \(ns.code): \(ns.localizedDescription)"
     }
 }
 

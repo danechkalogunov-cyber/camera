@@ -157,11 +157,11 @@ public enum SweepPlanner {
             }
         }
 
+        // A plan with nothing to sweep is still returned rather than failed: `refusedSubnets` and the
+        // diagnostics are the only way the UI can explain *why* a large network was skipped, and
+        // multicast may still find everything. Only a machine with no eligible interface at all is a
+        // failure. The caller decides whether an empty `hostOrder` should end the run.
         let sweeps = configuration.mode.includesSweep
-        guard !sweepSubnets.isEmpty || !sweeps else {
-            return .failure(.noEligibleInterfaces)
-        }
-
         let hostOrder: [IPv4Address] = sweeps
             ? IPv4HostOrder.order(subnets: sweepSubnets, hints: arp.map(\.address),
                                   gateways: kept.compactMap(\.likelyGateway))
