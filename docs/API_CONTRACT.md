@@ -5083,6 +5083,14 @@ agents in parallel** (crypto + everything else) and merged before W2 starts.
 | `UDPMediaSocketPair.swift` | Even/odd ports 51000–51998, RTP + RTCP | 300 | — | W3 |
 | `MulticastResponder.swift` | `NWListener` on 37020 / 3702 | 220 | — | W3 |
 | `RTPTrackFormatAdapter.swift` | `SDPMediaDescription` → `RTPTrackFormat`, `RTSPTrackTiming` → seed | 90 | VigilRTP | W3 |
+
+> **Superseded.** This row is wrong and cannot be built as written: it places the adapter in
+> `VigilTransport` with a `VigilRTP` dependency that `Package.swift` does not give that target, and
+> the mistake is invisible on Linux because the file would sit inside `#if os(macOS)`. The pure
+> logic now lives in `Sources/VigilRTP/Track/RTPTrackFormatAdapter.swift`, where it has 26 tests,
+> and the RTSP-typed overloads in `Sources/VigilCore/Streaming/RTPTrackFormatAdapter+RTSP.swift` —
+> `VigilCore` being the only shipping target that imports both.
+
 | `TLS/ServerTrustEvaluator.swift` | TOFU SPKI-256 leaf pinning shared by RTSP and ISAPI | 280 | SHA256 | W3 |
 | `TLS/CertificateSummary.swift` | Chain summary for the UI; `SecTrustEvaluateWithError` diagnostics only | 160 | — | W3 |
 | `FileDescriptorBudget.swift` | `setrlimit` to `min(4096, rlim_max)` at launch | 70 | — | W3 |
