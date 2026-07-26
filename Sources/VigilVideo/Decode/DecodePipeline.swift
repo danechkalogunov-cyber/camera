@@ -110,6 +110,11 @@ public actor DecodePipeline {
     /// frame the decoder cannot be trusted to have survived.
     private var awaitingKeyframe = true
 
+    /// True once a keyframe has been asked for and not yet arrived. Without it a stream that sends
+    /// corrupt access units continuously would ask the camera for an IDR **once per frame**, which
+    /// is a denial of service against the camera dressed up as error handling.
+    private var keyframeRequested = false
+
     /// True once `stop()` has run. A late `submit` after teardown is ignored rather than reviving
     /// the stream.
     private var isStopped = false

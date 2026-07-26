@@ -360,6 +360,10 @@ public actor RTSPConnection {
             created.cancel()
             socket = nil
             logger.failure(.transport, failure)
+            // A caller that took an event stream before connecting must see it end, or its
+            // `for await` waits for a session that never started.
+            eventSink?.finish()
+            eventSink = nil
             throw failure
         }
 
@@ -597,6 +601,9 @@ public actor RTSPConnection {
                 // a failure of its own.
                 logger.info(.transport, "peer closed the connection")
                 feedConnectionClosed(reason: nil)
+                // Unconditional, and not redundant: a machine that has already terminated returns
+                // no actions at all, and the socket would otherwise stay open with nobody reading.
+                beginClose()
                 return
 
             case .failed(let error):
@@ -874,8 +881,13 @@ public actor RTSPConnection {
     }
 
     /// Starts the teardown. Never suspends, so it is safe to call from `execute(_:)`.
+    ///
+    /// `.idle` is included: closing a connection that was built and never connected must still end
+    /// the event stream, or an owner that took one and then gave up waits forever.
     private func beginClose() {
-        guard lifecycle == .connecting || lifecycle == .running else { return }
+        guard lifecycle == .idle || lifecycle == .connecting || lifecycle == .running else {
+            return
+        }
         lifecycle = .closing
         isWriteClosed = true
         disarmAllTimers()
@@ -931,7 +943,7 @@ public actor RTSPConnection {
     /// Maps one `RTSPLogEvent` onto the injected logger.
     ///
     /// The message is the event's reflected form, deliberately: these are structured records whose
-    /// payloads are already named, and re-writing twenty-two of them by hand is twenty-two chances
+    /// payloads are already named, and re-writing twenty-one of them by hand is twenty-one chances
     /// to drop the field a bug report needs. It still goes through `Redact.secrets` — a request URI
     /// is credential-free by construction, but this path must not be the one place that assumes so.
     private func record(_ event: RTSPLogEvent) {

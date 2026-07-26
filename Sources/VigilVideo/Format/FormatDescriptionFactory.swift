@@ -113,7 +113,8 @@ public enum FormatDescriptionFactory {
         case .h265:
             return try makeHEVC(sets: sets)
         case .mjpeg:
-            throw DecodeError.unsupportedFormat(codec: .mjpeg, detail: "unreachable")
+            throw DecodeError.unsupportedFormat(
+                codec: .mjpeg, detail: "rejected at entry; this branch only keeps the switch total")
         }
     }
 

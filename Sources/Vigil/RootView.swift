@@ -83,7 +83,7 @@ struct RootView: View {
                         account: $session.account,
                         password: $session.password,
                         isConnecting: session.isConnecting,
-                        message: session.failure,
+                        message: session.failureBanner,
                         onSubmit: { session.connect() })
     }
 
@@ -104,7 +104,7 @@ struct RootView: View {
     private var liveVideo: some View {
         LiveVideoView(controller: session.controller,
                       status: session.statusLine,
-                      message: session.failure,
+                      message: session.failureBanner,
                       isShowingPicture: session.isShowingPicture,
                       onDisconnect: { session.disconnect() })
     }

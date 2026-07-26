@@ -80,11 +80,16 @@ final class AppSessionModel {
     /// R1.7 measurement and written to the log; the UI may show it and may ignore it.
     private(set) var firstFrameLatency: Duration?
 
-    /// A single user-facing sentence for the current failure, or `nil` when nothing is wrong.
+    /// One sentence naming what went wrong, or `nil` when nothing is wrong.
     ///
-    /// The slice has no Stream Doctor, so this is the localized description of the underlying
-    /// `StreamError`. R1.5's nine named diagnoses are a W4 obligation and are **not** met here.
+    /// Always `StreamError.message` or `VigilFailure.userMessage` — never a status code, never
+    /// `localizedDescription` of an `NWError`. The slice has no Stream Doctor, so this is a cause
+    /// and not yet a diagnosis: R1.5's nine named diagnoses are a W4 obligation and are **not** met
+    /// here.
     private(set) var failure: String?
+
+    /// One imperative sentence saying what to do about `failure`, when there is something to do.
+    private(set) var failureRemedy: String?
 
     /// The live controller, handed to the video view so it can attach its display layer.
     private(set) var controller: StreamController?
@@ -102,6 +107,9 @@ final class AppSessionModel {
     /// frame can be remembered against the right item without re-reading `UserDefaults`.
     private var activeRef: CredentialRef?
 
+    /// Whether the launch-time resume has already been attempted.
+    private var hasResumed = false
+
     // MARK: - Computed Properties
 
     /// Whether the connect form's primary button should fire.
@@ -110,6 +118,18 @@ final class AppSessionModel {
             && !account.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !password.isEmpty
             && !isConnecting
+    }
+
+    /// Cause and remedy as the one string a view can show without knowing which it has.
+    ///
+    /// Two properties, one sentence pair: R1.5's rule is that a failure never appears without a
+    /// next action, and joining them here means a view cannot show the first and forget the second.
+    var failureBanner: String? {
+        switch (failure, failureRemedy) {
+        case (nil, _): return nil
+        case (let message?, nil): return message
+        case (let message?, let remedy?): return "\(message) \(remedy)"
+        }
     }
 
     // MARK: - Initialisation
@@ -139,6 +159,10 @@ final class AppSessionModel {
     /// later launch a zero-input path to video (R1.4). When nothing is remembered, or the Keychain
     /// no longer holds that password, the form is shown with whatever we do know pre-filled.
     func resumeOrPrompt() {
+        // `.task` fires again if the window is closed and reopened; resuming twice would build a
+        // second controller for the same camera and leak the first.
+        guard !hasResumed else { return }
+        hasResumed = true
         guard let remembered = LastConnection.load(from: defaults) else { return }
         host = remembered.host
         account = remembered.account
@@ -154,11 +178,13 @@ final class AppSessionModel {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAccount = account.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else {
-            failure = "Enter the camera's address, for example 192.168.1.64."
+            report(failure: "Vigil needs the camera's address.",
+                   remedy: "Type its IP address, for example 192.168.1.64.")
             return
         }
         guard !trimmedAccount.isEmpty, !password.isEmpty else {
-            failure = "Enter the camera's password."
+            report(failure: "Vigil needs the camera's password.",
+                   remedy: "Type the password you set on the camera.")
             return
         }
         host = trimmedHost
@@ -203,6 +229,7 @@ final class AppSessionModel {
 
     private func beginConnecting() {
         failure = nil
+        failureRemedy = nil
         isConnecting = true
         isShowingPicture = false
         firstFrameLatency = nil
@@ -243,9 +270,7 @@ final class AppSessionModel {
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
             // Nothing is on screen yet, so the honest result is the form plus an explanation.
-            phase = .connect
-            isConnecting = false
-            failure = Self.sentence(for: error)
+            fail(with: error)
         }
     }
 
@@ -311,7 +336,7 @@ final class AppSessionModel {
             streamState = to
             statusLine = isShowingPicture ? "" : (detail?.narration ?? Self.narration(for: to))
             if let underlying = detail?.underlying {
-                failure = Self.sentence(for: underlying)
+                report(streamError: underlying)
             }
         case .firstFrameDecoded(let afterStart):
             isShowingPicture = true
@@ -319,6 +344,9 @@ final class AppSessionModel {
             firstFrameLatency = afterStart
             statusLine = ""
             failure = nil
+            failureRemedy = nil
+            // The Keychain has the password now, so the copy in memory — and in the form's secure
+            // field — has no reason to exist.
             password = ""
             if let activeRef {
                 LastConnection(host: host, account: account, credentialRef: activeRef)
@@ -326,14 +354,19 @@ final class AppSessionModel {
             }
             dependencies.logger.info(.app, "first frame after \(afterStart)")
         case .error(let error, let isFatal):
-            failure = Self.sentence(for: error)
-            if isFatal {
+            report(streamError: error)
+            if error.code.forbidsColdRetry {
+                // Terminal, and only the user can fix it. Back to the form, and stop remembering a
+                // password the camera rejects: retrying it on every launch is precisely how a
+                // Hikvision account gets locked out (R-25, R1.5 "Account locked").
+                disconnect(forget: true)
+            } else if isFatal {
                 isConnecting = false
-                statusLine = "Not connected."
+                statusLine = error.message
             }
         case .ended(let reason):
             isConnecting = false
-            statusLine = "Stream ended (\(reason))."
+            statusLine = "The stream ended (\(reason))."
         default:
             break
         }
@@ -342,13 +375,39 @@ final class AppSessionModel {
     private func fail(with error: any Error) {
         isConnecting = false
         phase = .connect
-        failure = Self.sentence(for: error)
+        applyDescription(of: error)
         dependencies.logger.error(.app, "connect failed: \(error)")
     }
 
-    private static func sentence(for error: any Error) -> String {
-        let described = error.localizedDescription
-        return described.isEmpty ? "The camera could not be reached." : described
+    private func report(streamError: StreamError) {
+        report(failure: streamError.message, remedy: streamError.fix)
+    }
+
+    private func report(failure message: String, remedy: String?) {
+        failure = message
+        failureRemedy = remedy
+    }
+
+    /// Turns any error on the connect path into the cause/remedy pair the UI shows.
+    ///
+    /// Three sources, in the order they can occur: the address the user typed, the Keychain, and
+    /// everything else. `localizedDescription` is the last resort and never the first, because for
+    /// a `POSIXError` or an `NWError` it produces exactly the raw text R1.5 forbids.
+    private func applyDescription(of error: any Error) {
+        switch error {
+        case let streamError as StreamError:
+            report(streamError: streamError)
+        case is CameraValidationError:
+            // `CameraValidationError.description` is a redacted log line, not a sentence for a
+            // person, so the user-facing copy is written here.
+            report(failure: "That does not look like a camera address.",
+                   remedy: "Type just the address — no rtsp://, no user name and no path.")
+        case let failure as any VigilFailure:
+            report(failure: failure.userMessage, remedy: failure.userRemedy)
+        default:
+            report(failure: "Vigil could not reach the camera.",
+                   remedy: "Check that the address is right and the camera is powered on.")
+        }
     }
 
     /// Fallback narration for the states the controller has not described for us.

@@ -26,8 +26,10 @@ import VigilProtocols
 /// order.
 public struct RTSPPathCandidate: Sendable, Hashable {
 
-    /// The firmware generation this path belongs to.
-    public var template: RTSPPathTemplate
+    /// The firmware generation this path belongs to, or `nil` when the path did not come from a
+    /// template — a user override, or a URL ONVIF handed us. A `nil` template is never persisted as
+    /// one, because re-rendering it for another channel or quality would produce a wrong path.
+    public var template: RTSPPathTemplate?
 
     /// The absolute path, ready to go into an `RTSPURL`.
     public var path: String
@@ -38,7 +40,7 @@ public struct RTSPPathCandidate: Sendable, Hashable {
     public var order: Int
 
     /// Builds a candidate.
-    public init(template: RTSPPathTemplate, path: String, order: Int) {
+    public init(template: RTSPPathTemplate?, path: String, order: Int) {
         self.template = template
         self.path = path
         self.order = order
@@ -102,10 +104,11 @@ public extension RTSPPathCandidate {
     /// The candidate for a path the user typed into `Camera.rtspPathOverride`.
     ///
     /// It is not part of the ladder — an override is honoured, not probed against alternatives —
-    /// but it is carried in the same shape so the connect path has one type to reason about.
+    /// but it is carried in the same shape so the connect path has one type to reason about. Its
+    /// template is `nil`: the path is whatever the user wrote and must never be re-rendered.
     static func override(_ path: String) -> RTSPPathCandidate {
         let absolute = path.hasPrefix("/") ? path : "/" + path
-        return RTSPPathCandidate(template: .streamingChannelsWithQuality, path: absolute, order: 0)
+        return RTSPPathCandidate(template: nil, path: absolute, order: 0)
     }
 }
 

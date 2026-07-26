@@ -64,3 +64,63 @@ reference and the test records why it disagrees with the document.
 - **G.726 byte-exactness.** `spec-rtp.md` §15.6 has no ITU vectors for it, so the codec is
   implemented from the standard's prose and its output is **not** checked against a known-good
   encoder. It is out of the slice, but if two-way audio ever sounds wrong, start here.
+
+---
+
+# The macOS layer — nothing below has been compiled
+
+Everything in this section was written against framework documentation and never seen by a compiler.
+The Linux build proves only that the `#if os(macOS)` guards are correct.
+
+## VigilRender (`impl:render`)
+
+**Might not compile**
+
+1. Six `NSView` overrides live in an `extension`. Swift permits overriding `@objc`-inherited members
+   from an extension and rejects non-`@objc` ones; all six are ObjC `NSView` methods. If the
+   compiler disagrees they move into the class body unchanged.
+2. `AVSampleBufferDisplayLayer.failedToDecodeNotificationErrorKey` — the exact Swift spelling is
+   uncertain.
+3. `preventsDisplaySleepDuringVideoPlayback` — believed macOS 11+.
+   `preventsAutomaticBackgroundingDuringVideoPlayback` was deliberately omitted because its
+   existence on macOS could not be confirmed.
+4. `required init?(coder:)` returning nil before `super.init`, and `deinit` removing an observer
+   from a `@MainActor` class — both believed legal under Swift 6, neither compiled.
+
+**Might compile and still be wrong — these are the expensive ones**
+
+5. `sampleBufferRenderer` is used off the main thread from the decode thread under one `NSLock`.
+   `AVQueuedSampleBufferRendering` documents *serialized* access, not main-thread access — but that
+   reading is unverified.
+6. **Highest-value item to check on real hardware.** The code observes the *layer's*
+   `requiresFlushToResumeDecodingDidChangeNotification` and `failedToDecodeNotification` rather than
+   the macOS 14 `AVSampleBufferVideoRenderer` equivalents. If the layer stops posting these once
+   samples go through the renderer, resume-decoding recovery never fires and **the picture freezes
+   on a held frame** — which looks like a network stall, not a render bug.
+7. Whether `contentsScale` on an `AVSampleBufferDisplayLayer` affects video sharpness at all, or
+   only layer-drawn content.
+8. `layerContentsRedrawPolicy = .duringViewResize` comes from the Metal path of the spec. With an
+   empty `updateLayer()` it should be inert; if a stale-content stretch appears while resizing,
+   `.never` is the alternative.
+9. The main-actor state-publication hop fires per refused sample when the renderer is not ready, so
+   sustained backpressure produces a burst of tasks. Not measured.
+
+**Contract conflicts found while implementing**
+
+10. `VigilProtocols.RenderError` has **no case** for an `AVSampleBufferDisplayLayer` decode failure —
+    every case is Metal or atlas related. Needs `sampleBufferDecodeFailed(String)`.
+11. **A real integration decision, unresolved:** API_CONTRACT §4.9 says `VigilVideo` exclusively
+    creates every display layer and hands one over; `spec-render.md` §5.2 has the view create it in
+    `makeBackingLayer()`. The implementation follows spec-render. If §4.9 wins, the view needs an
+    `adopt(_ layer:)` path.
+12. API_CONTRACT §4.10 declares `FrameStreamHandle: @unchecked Sendable`, but ruling R-52 fixes the
+    census at exactly three such types and this is not one. Resolved as `@MainActor`.
+13. `spec-render.md` §5.1's `override public var canDrawConcurrently: Bool { false }` **cannot
+    compile** — the property is read-write, so a get-only override is an error. Assigned in `init`.
+
+**Open seam**
+
+14. `VideoSink` conformance is not declared, because `VigilVideo` had not landed `VideoSink`,
+    `VideoFrame`, `StreamEndReason` or `FrameDropReason` when this was written. The two members that
+    exist already use the contract's exact spellings, so landing the conformance is a one-line
+    extension — but it is an integration task, not a finished one.
