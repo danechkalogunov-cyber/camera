@@ -345,20 +345,10 @@ public final class VideoTileView: NSView {
 // MARK: - VideoSink
 
 // `VideoTileView` is the one implementer of `VigilVideo.VideoSink` (docs/API_CONTRACT.md §2 R-51).
-// The conformance is NOT declared in the slice, because `VigilVideo` does not yet declare the
-// protocol, `VideoFrame`, `StreamEndReason` or `FrameDropReason`, and a conformance to a type that
-// does not exist would break the macOS build for every other agent.
-//
-// The two members above are already the exact `VideoSink` spellings, and need nothing from
-// `VigilVideo`:
-//
-//   nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
-//                            generation: UInt32)
-//   nonisolated func streamDidReset()
-//
-// Landing the conformance is then a one-line extension plus the members that need `VigilVideo`
-// types: `enqueue(_ frame: VideoFrame)` (the pixel-buffer path, which requires the Metal backend
-// and therefore cannot be honoured by this file), `streamDidEnd(reason:)`, and the six
-// observability members, which have no-op defaults.
+// The conformance itself is declared in `VideoTileView+VideoSink.swift`, which is the only file in
+// this module that imports `VigilVideo`; the two members above are the witnesses and need nothing
+// from that module to compile. The pixel-buffer requirement `enqueue(_ frame: VideoFrame)` is not
+// part of the protocol in the slice — it belongs to the Metal backend, which the slice does not
+// build — so this file honours the whole of `VideoSink` as it currently stands.
 
 #endif
