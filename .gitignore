@@ -7,3 +7,8 @@ dist/
 *.xcworkspace/
 .DS_Store
 .build-progress.log
+
+# design harness
+design/node_modules
+.vigil/mock/
+design/shots/_smoke.png
