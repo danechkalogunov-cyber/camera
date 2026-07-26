@@ -130,6 +130,62 @@ def check_trailing_whitespace(path: pathlib.Path, lines: list[str]) -> list[Viol
             for n, raw in enumerate(lines, 1) if raw.rstrip("\n") != raw.rstrip()]
 
 
+GENERIC_DECL = re.compile(
+    r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
+    r"(?:public |package |internal |private |fileprivate |open )?"
+    r"(?:final )?(?:struct|class|enum|actor)\s+(\w+)\s*<([^>]+)>")
+
+STATIC_STORED = re.compile(
+    r"^\s*(?:public |package |internal |private |fileprivate )?static\s+(let|var)\s+(\w+)")
+
+
+def check_static_stored_in_generic(path: pathlib.Path, lines: list[str]) -> list[Violation]:
+    """Swift forbids static STORED properties in a generic type. Computed ones are fine.
+
+    This is here because the compiler that would catch it does not run in this container. Every
+    generic type in the macOS-only targets lives inside `#if os(macOS)`, so on Linux the declaration
+    preprocesses away and `swift build` is perfectly happy. The first machine to see it is the
+    customer's Mac, where it is a hard error:
+
+        error: static stored properties not supported in generic types
+
+    That is exactly what happened to `VTextField<FocusValue>`, whose three `static let`s stopped the
+    very first real build. The fix is a separate non-generic namespace; the rule is here so the next
+    one is caught on Linux instead.
+    """
+    out: list[Violation] = []
+    rel = str(path.relative_to(ROOT))
+    stack: list[tuple[str, int]] = []      # (type name, brace depth at its opening line)
+    depth = 0
+    for n, raw in enumerate(lines, 1):
+        code = strip_comments_and_strings(raw)
+        m = GENERIC_DECL.match(raw)
+        if m and "{" in code:
+            stack.append((m.group(1), depth))
+        depth += code.count("{") - code.count("}")
+        while stack and depth <= stack[-1][1]:
+            stack.pop()
+        if not stack:
+            continue
+        s = STATIC_STORED.match(raw)
+        if not s:
+            continue
+        kind, name = s.groups()
+        # `static var x: T { ... }` with no `=` is computed, which is legal. Anything with an
+        # initialiser is stored, and so is a `let` without a body.
+        if "=" not in code:
+            if kind == "var" and "{" in code:
+                continue
+            if kind == "let":
+                continue
+        out.append((rel, n, "generic-static",
+                    f"static {kind} {name} is a stored property inside generic type "
+                    f"{stack[-1][0]}<>; Swift rejects this on macOS with 'static stored properties "
+                    f"not supported in generic types'. Move it to a non-generic namespace enum, or "
+                    f"make it a computed 'static var {name}: T {{ ... }}'"))
+    return out
+
+
 def check_duplicate_test_names() -> list[Violation]:
     """Defect 4: two agents choosing the same obvious @Test name break the whole target.
 
@@ -211,11 +267,13 @@ def main() -> int:
         violations += check_line_length(path, lines)
         violations += check_trailing_whitespace(path, lines)
         violations += check_file_header(path, lines)
+        violations += check_static_stored_in_generic(path, lines)
 
     for path in swift_files("Tests"):
         lines = path.read_text().splitlines()
         violations += check_line_length(path, lines)
         violations += check_trailing_whitespace(path, lines)
+        violations += check_static_stored_in_generic(path, lines)
 
     violations += check_duplicate_test_names()
     violations += check_plists()

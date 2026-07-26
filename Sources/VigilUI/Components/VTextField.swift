@@ -63,6 +63,34 @@ package enum VFieldTrigger: Sendable, Hashable {
     case submitted
 }
 
+// MARK: - VTextFieldMetrics
+
+/// `VTextField`'s fixed geometry and timings (§9.5).
+///
+/// A separate, **non-generic** namespace on purpose. These began as `static let`s inside
+/// `VTextField`, which does not compile: Swift does not allow static *stored* properties in a generic
+/// type, and `VTextField` is generic over `FocusValue`. The error is invisible on Linux, where this
+/// whole file preprocesses away, so it surfaced on the first real Mac build.
+///
+/// Two other spellings were considered and rejected. Computed `static var`s inside the generic type
+/// do compile, but they make every reference read `VTextField<Focus>.messageRowHeight` from outside,
+/// which forces callers to name a generic argument that has nothing to do with a 16-point row. A
+/// `VTheme` token is wrong too — these are one component's internals, not design tokens shared
+/// across the app, and §9.5 owns them.
+package enum VTextFieldMetrics {
+
+    /// The reserved height of the message row beneath the field.
+    ///
+    /// Reserved whether occupied or not — an error appearing must not push the rest of the form down.
+    package static let messageRowHeight: CGFloat = 16
+
+    /// How long typing must have stopped before validation runs: 400 ms.
+    package static let validationDebounce: Double = 0.400
+
+    /// How long a confirmed-valid checkmark stays before it fades.
+    package static let validDwell: Double = 2.0
+}
+
 // MARK: - VTextField
 
 /// A labelled text field with inline validation.
@@ -92,17 +120,6 @@ package struct VTextField<FocusValue: Hashable>: View {
         /// A password. Concealed by default, with a reveal control at the trailing edge.
         case secure
     }
-
-    // MARK: - Geometry and timing
-
-    /// The reserved height of the message row beneath the field (§9.5).
-    package static let messageRowHeight: CGFloat = 16
-
-    /// How long typing must have stopped before validation runs: 400 ms (§9.5).
-    package static let validationDebounce: Double = 0.400
-
-    /// How long a confirmed-valid checkmark stays before it fades (§9.5).
-    package static let validDwell: Double = 2.0
 
     // MARK: - Stored Properties
 
@@ -314,7 +331,7 @@ package struct VTextField<FocusValue: Hashable>: View {
             }
         }
         .foregroundStyle(VTheme.Color.Semantic.danger)
-        .frame(height: Self.messageRowHeight, alignment: .leading)
+        .frame(height: VTextFieldMetrics.messageRowHeight, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .offset(y: validation.isInvalid ? 0 : -VTheme.Space.xxs)
         .opacity(validation.isInvalid ? 1 : 0)
@@ -354,7 +371,7 @@ package struct VTextField<FocusValue: Hashable>: View {
     /// typist never sees the check fire (§9.5).
     private func debounceValidation() async {
         guard !text.isEmpty else { return }
-        try? await Task.sleep(for: .seconds(Self.validationDebounce))
+        try? await Task.sleep(for: .seconds(VTextFieldMetrics.validationDebounce))
         guard !Task.isCancelled else { return }
         onValidate(.typingStopped)
     }
@@ -366,7 +383,7 @@ package struct VTextField<FocusValue: Hashable>: View {
             return
         }
         showsValidTick = true
-        try? await Task.sleep(for: .seconds(Self.validDwell))
+        try? await Task.sleep(for: .seconds(VTextFieldMetrics.validDwell))
         guard !Task.isCancelled else { return }
         showsValidTick = false
     }
