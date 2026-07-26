@@ -369,7 +369,7 @@ import VigilTestKit
     }
 
     @Test func rtpGeneratorSenderReportParsesAsRTCP() {
-        var generator = RTPStreamGenerator(profile: .hevcCamera(), ssrc: 0xDEAD_BEEF,
+        let generator = RTPStreamGenerator(profile: .hevcCamera(), ssrc: 0xDEAD_BEEF,
                                            startSequence: 0)
         let report = generator.senderReport(ntpSeconds: 3_900_000_000, ntpFraction: 0,
                                             rtpTimestamp: 90_000, cname: "test@example")

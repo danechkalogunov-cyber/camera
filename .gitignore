@@ -16,3 +16,7 @@ design/shots/_smoke.png
 .vigil/swift
 .build-*/
 
+
+# agent scratch logs
+.rtpb-logs/
+.*-logs/
