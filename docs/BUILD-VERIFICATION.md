@@ -243,3 +243,56 @@ passes its tests on a real toolchain. It proves the module graph and the `#if os
 everything else. It proves nothing about the roughly one third of the code inside those guards, which
 preprocesses to nothing here and meets a compiler for the first time on the customer's Mac. That
 distinction is stated in `ЗАПУСК.md` in plain words rather than left for the customer to discover.
+
+---
+
+## First real launch: `Bundle.module` is a `fatalError` on the app's startup path
+
+The app compiled, signed, verified, launched — and died the instant SwiftUI evaluated the connect
+form:
+
+```
+_assertionFailure(_:_:file:line:flags:)
+closure #1 in variable initialization expression of static NSBundle.module
+    (resource_bundle_accessor.swift:12)
+closure #1 in ConnectFormView.content.getter    (ConnectFormView.swift:113)
+```
+
+**Not a missing file — a layout disagreement between two components that are each correct.** SwiftPM's
+synthesised accessor looks for `Vigil_VigilUI.bundle` beside `Bundle.main.bundleURL`, which for an
+`.app` is the bundle **root**. Apple's layout puts resources in `Contents/Resources/`, which is where
+`build-app.sh` places them and where `codesign` requires them. Moving the bundle to the root to
+satisfy the accessor would create unsealed top-level content and break signing instead, so the
+accessor is what had to change.
+
+`Bundle.vigilUI` now searches six plausible locations and falls back to `Bundle.main`. It cannot
+crash. That matters more than the lookup: in this module every `LocalizedStringKey` *is* its English
+text, so a missing `.strings` file costs nothing at all — the interface renders correctly with no
+bundle present. Trading that for a process death is indefensible.
+
+### The lint rule that should have caught it, and why it could not
+
+`Scripts/lint.py` bans `fatalError` in `Sources/` precisely because every one is a crash on a machine
+we cannot reproduce. This `fatalError` was **generated at build time by SwiftPM**, so it never existed
+in `Sources/` for the rule to see. Worth stating plainly as a general limit: a source-text lint cannot
+see synthesised code, and `Bundle.module` is the one piece of synthesised code in this project that can
+terminate the process.
+
+### Where the failures actually landed
+
+Six defects surfaced between "compiles on Linux" and "runs on a Mac", and only two were in Swift code:
+
+| # | Failure | Class |
+|---|---|---|
+| 1 | `--arch universal` needs XCBuild, absent from the Command Line Tools | build script default |
+| 2 | `static let` in a generic type (`VTextField<FocusValue>`) | Swift, caught by a new lint rule |
+| 3 | main-actor read inside a `@Sendable` `withLock` closure | Swift concurrency |
+| 4 | empty resource bundles are unsignable | packaging |
+| 5 | a managed entitlement makes the app unlaunchable, not unsignable | packaging |
+| 6 | `Bundle.module`'s synthesised `fatalError` | packaging, surfaced at runtime |
+
+Four of six were packaging and build-script defects rather than program logic — which is worth
+recording, because the project's whole verification effort went into the Swift and none into the
+scripts, on the assumption that a shell script is easy to get right. `Scripts/build-app.sh` still
+carries the header "THIS SCRIPT HAS NEVER BEEN EXECUTED", and that line predicted the distribution of
+failures better than any of the code review did.

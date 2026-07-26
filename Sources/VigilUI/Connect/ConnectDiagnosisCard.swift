@@ -107,7 +107,7 @@ package struct ConnectDiagnosisCard: View {
                         .vIcon(size: VTheme.Icon.xs, weight: VTheme.Icon.Weight.xs)
                         // §8.3: the disclosure chevron **rotates**, it is never swapped.
                         .rotationEffect(.degrees(showsDetails ? 90 : 0))
-                    Text("Details", bundle: .module)
+                    Text("Details", bundle: .vigilUI)
                         .vType(VTheme.Typography.caption1)
                 }
                 .foregroundStyle(VTheme.Color.Text.tertiary)

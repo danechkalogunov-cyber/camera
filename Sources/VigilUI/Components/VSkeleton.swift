@@ -78,7 +78,7 @@ package struct VSkeleton: View {
                 guard motionEnabled else { return }
                 withAnimation(VTheme.Motion.shimmer) { offset = 1 }
             }
-            .accessibilityLabel(Text("Loading", bundle: .module))
+            .accessibilityLabel(Text("Loading", bundle: .vigilUI))
     }
 
     // MARK: - Private Helpers

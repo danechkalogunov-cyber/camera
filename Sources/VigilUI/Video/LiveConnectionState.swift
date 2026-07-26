@@ -116,19 +116,19 @@ package enum ConnectingPhase: Sendable, Hashable, CaseIterable {
     package func narration(host: String) -> Text {
         switch self {
         case .resolving:
-            return Text("Looking up \(host)…", bundle: .module)
+            return Text("Looking up \(host)…", bundle: .vigilUI)
         case .connecting:
-            return Text("Connecting…", bundle: .module)
+            return Text("Connecting…", bundle: .vigilUI)
         case .authenticating:
-            return Text("Signing in…", bundle: .module)
+            return Text("Signing in…", bundle: .vigilUI)
         case .negotiating:
-            return Text("Negotiating stream…", bundle: .module)
+            return Text("Negotiating stream…", bundle: .vigilUI)
         case .opening:
-            return Text("Opening video channel…", bundle: .module)
+            return Text("Opening video channel…", bundle: .vigilUI)
         case .waitingForVideo:
-            return Text("Waiting for video…", bundle: .module)
+            return Text("Waiting for video…", bundle: .vigilUI)
         case .waitingForKeyframe:
-            return Text("Waiting for a keyframe…", bundle: .module)
+            return Text("Waiting for a keyframe…", bundle: .vigilUI)
         }
     }
 }
@@ -182,19 +182,19 @@ package enum DegradedCause: Sendable, Hashable {
         switch self {
         case .packetLoss(let fraction):
             let value = fraction.formatted(.percent.precision(.fractionLength(1)))
-            return Text("\(value) packet loss — video may stutter.", bundle: .module)
+            return Text("\(value) packet loss — video may stutter.", bundle: .vigilUI)
         case .jitter(let milliseconds):
             let value = Measurement(value: milliseconds, unit: UnitDuration.milliseconds)
                 .formatted(.measurement(width: .abbreviated, usage: .asProvided))
-            return Text("\(value) of jitter — video may stutter.", bundle: .module)
+            return Text("\(value) of jitter — video may stutter.", bundle: .vigilUI)
         case .decodeQueue(let frames):
-            return Text("\(frames) frames waiting to decode — video may lag.", bundle: .module)
+            return Text("\(frames) frames waiting to decode — video may lag.", bundle: .vigilUI)
         case .lowFrameRate(let fps, let negotiated):
             let shown = fps.formatted(.number.precision(.fractionLength(0)))
             let expected = negotiated.formatted(.number.precision(.fractionLength(0)))
-            return Text("Showing \(shown) of \(expected) frames per second.", bundle: .module)
+            return Text("Showing \(shown) of \(expected) frames per second.", bundle: .vigilUI)
         case .switchedToTCP:
-            return Text("Switched to TCP for stability.", bundle: .module)
+            return Text("Switched to TCP for stability.", bundle: .vigilUI)
         }
     }
 }

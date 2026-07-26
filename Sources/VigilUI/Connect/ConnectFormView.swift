@@ -110,7 +110,7 @@ package struct ConnectFormView: View {
         VStack(alignment: .leading, spacing: 0) {
             hero
             Spacer().frame(height: VTheme.Space.xl)
-            Text("Connect to a camera", bundle: .module)
+            Text("Connect to a camera", bundle: .vigilUI)
                 .vType(VTheme.Typography.title1)
                 .foregroundStyle(VTheme.Color.Text.primary)
                 .accessibilityAddTraits(.isHeader)
@@ -118,7 +118,7 @@ package struct ConnectFormView: View {
             Text("""
                 Vigil needs the camera's address and the password it was set up with. \
                 Nothing leaves your network.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
                 .vType(VTheme.Typography.body)
                 .foregroundStyle(VTheme.Color.Text.secondary)
                 .fixedSize(horizontal: false, vertical: true)

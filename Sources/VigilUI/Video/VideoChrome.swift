@@ -72,12 +72,12 @@ package struct ConnectionStatusChip: View {
         VPulseClock {
             VChip(.onVideo) {
                 VLiveDot(state.dot)
-                Text(state.statusWord, bundle: .module)
+                Text(state.statusWord, bundle: .vigilUI)
                     .vType(VTheme.Typography.caption2)
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(state.statusWord, bundle: .module))
+        .accessibilityLabel(Text(state.statusWord, bundle: .vigilUI))
     }
 }
 

@@ -203,7 +203,7 @@ package struct VButton: View {
                     .vIcon(size: size.control.icon, weight: symbol.weight)
             }
             if let title {
-                Text(title, bundle: .module)
+                Text(title, bundle: .vigilUI)
                     .vType(typeStep)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -225,10 +225,10 @@ package struct VButton: View {
 
     private var accessibilityText: Text {
         if let accessibilityLabel {
-            return Text(accessibilityLabel, bundle: .module)
+            return Text(accessibilityLabel, bundle: .vigilUI)
         }
         if let title {
-            return Text(title, bundle: .module)
+            return Text(title, bundle: .vigilUI)
         }
         return Text(verbatim: "")
     }

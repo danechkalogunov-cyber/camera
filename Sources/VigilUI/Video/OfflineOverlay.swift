@@ -100,9 +100,9 @@ package struct OfflineOverlay: View {
             return diagnosis.title
         }
         if detail.isPersistent {
-            return Text("Still can't reach this camera.", bundle: .module)
+            return Text("Still can't reach this camera.", bundle: .vigilUI)
         }
-        return Text("Connection lost.", bundle: .module)
+        return Text("Connection lost.", bundle: .vigilUI)
     }
 
     /// The countdown, or the diagnosis's own sentence.
@@ -115,14 +115,14 @@ package struct OfflineOverlay: View {
             return diagnosis.message
         }
         guard let seconds = detail.retryInSeconds else {
-            return Text("Waiting for the network.", bundle: .module)
+            return Text("Waiting for the network.", bundle: .vigilUI)
         }
         // The unit is inside the key rather than produced by `Measurement`: its `.abbreviated` width
         // spells seconds `sec` and its `.narrow` width drops the space, and UX.md §12.6 specifies
         // "Reconnecting in 4 s (attempt 3)." One key with both arguments, so a translator can
         // reorder the whole sentence — which a `Measurement` interpolated into it could not be
         // (§14.2, "Never concatenate").
-        return Text("Reconnecting in \(seconds) s (attempt \(detail.attempt)).", bundle: .module)
+        return Text("Reconnecting in \(seconds) s (attempt \(detail.attempt)).", bundle: .vigilUI)
     }
 
     @ViewBuilder
@@ -154,7 +154,7 @@ package struct OfflineOverlay: View {
         let stamp = elapsed < oneHour
             ? lastSeen.formatted(.relative(presentation: .named))
             : lastSeen.formatted(date: .omitted, time: .shortened)
-        return Text("Last seen \(stamp)", bundle: .module)
+        return Text("Last seen \(stamp)", bundle: .vigilUI)
             .vType(VTheme.Typography.caption2)
             .foregroundStyle(VTheme.Color.Text.tertiary)
     }

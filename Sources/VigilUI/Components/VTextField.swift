@@ -195,7 +195,7 @@ package struct VTextField<FocusValue: Hashable>: View {
 
     package var body: some View {
         VStack(alignment: .leading, spacing: VTheme.Space.xxs) {
-            Text(label, bundle: .module)
+            Text(label, bundle: .vigilUI)
                 .vType(VTheme.Typography.callout)
                 .foregroundStyle(VTheme.Color.Text.secondary)
             well
@@ -249,11 +249,11 @@ package struct VTextField<FocusValue: Hashable>: View {
         Group {
             if kind == .secure, !isRevealed {
                 SecureField(text: $text, prompt: prompt) {
-                    Text(label, bundle: .module)
+                    Text(label, bundle: .vigilUI)
                 }
             } else {
                 TextField(text: $text, prompt: prompt) {
-                    Text(label, bundle: .module)
+                    Text(label, bundle: .vigilUI)
                 }
             }
         }
@@ -277,7 +277,7 @@ package struct VTextField<FocusValue: Hashable>: View {
     /// The placeholder, in `text.tertiary`: it names the *shape* of the value and never repeats
     /// the label (§9.5).
     private var prompt: Text {
-        Text(placeholder, bundle: .module)
+        Text(placeholder, bundle: .vigilUI)
             .foregroundStyle(VTheme.Color.Text.tertiary)
     }
 
@@ -312,8 +312,8 @@ package struct VTextField<FocusValue: Hashable>: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isRevealed
-            ? Text("Hide password", bundle: .module)
-            : Text("Show password", bundle: .module))
+            ? Text("Hide password", bundle: .vigilUI)
+            : Text("Show password", bundle: .vigilUI))
     }
 
     // MARK: - The message row
@@ -325,7 +325,7 @@ package struct VTextField<FocusValue: Hashable>: View {
             if case .invalid(let reason) = validation {
                 VTheme.Symbol.warning.image()
                     .vIcon(size: VTheme.Icon.xs, weight: VTheme.Icon.Weight.xs)
-                Text(reason, bundle: .module)
+                Text(reason, bundle: .vigilUI)
                     .vType(VTheme.Typography.caption1)
                     .lineLimit(1)
             }

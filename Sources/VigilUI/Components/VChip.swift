@@ -186,7 +186,7 @@ package struct VIdentityMark: View {
         }
         VChip(.onVideo, restOpacity: 0.70) {
             VLiveDot(.live)
-            Text("Live", bundle: .module)
+            Text("Live", bundle: .vigilUI)
         }
         VChip(.neutral) { Text(verbatim: "H.265") }
         VChip(.selected) { Text(verbatim: "Offline") }

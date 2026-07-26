@@ -162,25 +162,25 @@ extension ConnectDiagnosis {
     package var title: Text {
         switch self {
         case .notOnThisNetwork:
-            return Text("Can't reach this camera.", bundle: .module)
+            return Text("Can't reach this camera.", bundle: .vigilUI)
         case .cameraNotActivated:
-            return Text("Camera isn't activated.", bundle: .module)
+            return Text("Camera isn't activated.", bundle: .vigilUI)
         case .wrongPassword:
-            return Text("Wrong password.", bundle: .module)
+            return Text("Wrong password.", bundle: .vigilUI)
         case .accountLocked:
-            return Text("Device is locked.", bundle: .module)
+            return Text("Device is locked.", bundle: .vigilUI)
         case .rtspPortClosed:
-            return Text("Video port is closed.", bundle: .module)
+            return Text("Video port is closed.", bundle: .vigilUI)
         case .notHikvisionDevice:
-            return Text("Not a Hikvision device.", bundle: .module)
+            return Text("Not a Hikvision device.", bundle: .vigilUI)
         case .codecUnsupported:
-            return Text("Unsupported video format.", bundle: .module)
+            return Text("Unsupported video format.", bundle: .vigilUI)
         case .noPictureUDPBlocked:
-            return Text("No video is arriving.", bundle: .module)
+            return Text("No video is arriving.", bundle: .vigilUI)
         case .pictureStalls:
-            return Text("The picture has stalled.", bundle: .module)
+            return Text("The picture has stalled.", bundle: .vigilUI)
         case .undiagnosed:
-            return Text("Vigil couldn't finish signing in.", bundle: .module)
+            return Text("Vigil couldn't finish signing in.", bundle: .vigilUI)
         }
     }
 
@@ -198,56 +198,56 @@ extension ConnectDiagnosis {
             return Text("""
                 No response from \(host). Check that it's powered on and on the same network \
                 as this Mac.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .cameraNotActivated(let host):
             return Text("""
                 \(host) is brand new and has no password yet. Set one now to start using it.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .wrongPassword(let host):
             return Text("""
                 \(host) rejected this password. Check it and try again — too many attempts \
                 will lock the device.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .accountLocked(let host, let minutes):
             if let minutes {
                 return Text("""
                     \(host) locked this account after too many failed sign-ins. It usually \
                     unlocks in about \(minutes) minutes.
-                    """, bundle: .module)
+                    """, bundle: .vigilUI)
             }
             return Text("""
                 \(host) locked this account after too many failed sign-ins. It unlocks on its \
                 own, or immediately if you reboot the camera.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .rtspPortClosed(let host, let httpPort, let rtspPort):
             return Text("""
                 Vigil reached \(host) on port \(httpPort), but RTSP port \(rtspPort) refused \
                 the connection.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .notHikvisionDevice(let host):
             return Text("""
                 \(host) answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, \
                 with fewer features.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .codecUnsupported(_, let codec):
             return Text("""
                 This camera streams \(codec). Vigil plays H.265, H.264 and MJPEG.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .noPictureUDPBlocked(let host):
             return Text("""
                 \(host) started the stream but sent no video. Something on the network is \
                 blocking UDP.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .pictureStalls(let host):
             return Text("""
                 \(host) is sending data but no complete picture yet. Vigil has asked it for a \
                 new keyframe.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         case .undiagnosed(let host, _):
             return Text("""
                 \(host) answered, but not in a way Vigil recognises. The device's own reply is \
                 in the details below.
-                """, bundle: .module)
+                """, bundle: .vigilUI)
         }
     }
 

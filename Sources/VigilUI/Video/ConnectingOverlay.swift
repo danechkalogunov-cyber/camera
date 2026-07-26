@@ -105,7 +105,7 @@ package struct ConnectingOverlay: View {
             shimmerEdge
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("Connecting to \(camera.name)", bundle: .module))
+        .accessibilityLabel(Text("Connecting to \(camera.name)", bundle: .vigilUI))
     }
 
     // MARK: - Centre
@@ -182,14 +182,14 @@ package struct ConnectingOverlay: View {
     private func elapsedText(at now: Date) -> Text {
         let seconds = Swift.max(0, now.timeIntervalSince(startedAt))
         let value = seconds.formatted(.number.precision(.fractionLength(1)))
-        return Text("\(value) s", bundle: .module)
+        return Text("\(value) s", bundle: .vigilUI)
     }
 
     /// Shown at 3.5 s. This row does add height — deliberately, because at three and a half
     /// seconds a visible change is the point (UX.md §15.1).
     private var slowRow: some View {
         VStack(spacing: VTheme.Space.xxs) {
-            Text("This is taking longer than usual.", bundle: .module)
+            Text("This is taking longer than usual.", bundle: .vigilUI)
                 .vType(VTheme.Typography.caption1)
                 .foregroundStyle(VTheme.Color.Text.secondary)
             VButton("Diagnose", style: .ghost, size: .sm) {
