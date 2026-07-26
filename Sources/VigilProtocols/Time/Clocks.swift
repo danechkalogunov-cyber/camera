@@ -76,7 +76,11 @@ public struct SystemMonotonicClock: MonotonicClock {
     public init() {}
 
     public func now() -> MediaInstant {
-        MediaInstant(nanoseconds: (SuspendingClock.now - Self.epoch).wholeNanoseconds)
+        // The epoch must be forced *before* the current instant is read: `Self.epoch` is lazily
+        // initialised on first access, and reading it as the right-hand operand would capture it
+        // after `SuspendingClock.now`, making the very first reading slightly negative.
+        let epoch = Self.epoch
+        return MediaInstant(nanoseconds: (SuspendingClock.now - epoch).wholeNanoseconds)
     }
 
     /// - Note: `Task.sleep(for:)` is a *static* suspension, not an unstructured `Task`, so this does

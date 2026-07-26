@@ -9,8 +9,9 @@
 
 #if os(macOS)
 
-import AppKit
 import Foundation
+
+import AppKit
 import SwiftUI
 
 // MARK: - The dynamic-colour bridge

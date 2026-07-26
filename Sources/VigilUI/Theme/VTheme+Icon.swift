@@ -167,144 +167,144 @@ extension VTheme.Symbol {
     public var name: String {
         switch self {
         // App and navigation
-        case .brandMark: "vigil.aperture"
-        case .toggleSidebar: "sidebar.leading"
-        case .toggleInspector: "sidebar.trailing"
-        case .commandPalette: "command"
-        case .search: "magnifyingglass"
-        case .settings: "gearshape"
-        case .help: "questionmark.circle"
-        case .close: "xmark"
-        case .clear: "xmark.circle.fill"
-        case .disclosureCollapsed: "chevron.right"
-        case .disclosureExpanded: "chevron.down"
-        case .menuIndicator: "chevron.up.chevron.down"
-        case .overflow: "ellipsis.circle"
+        case .brandMark: return "vigil.aperture"
+        case .toggleSidebar: return "sidebar.leading"
+        case .toggleInspector: return "sidebar.trailing"
+        case .commandPalette: return "command"
+        case .search: return "magnifyingglass"
+        case .settings: return "gearshape"
+        case .help: return "questionmark.circle"
+        case .close: return "xmark"
+        case .clear: return "xmark.circle.fill"
+        case .disclosureCollapsed: return "chevron.right"
+        case .disclosureExpanded: return "chevron.down"
+        case .menuIndicator: return "chevron.up.chevron.down"
+        case .overflow: return "ellipsis.circle"
 
         // Cameras
-        case .camera: "video"
-        case .cameraOffline: "video.slash"
-        case .addCamera: "plus"
-        case .discover: "antenna.radiowaves.left.and.right"
-        case .device: "externaldrive.connected.to.line.below"
-        case .channel: "rectangle.stack"
-        case .group: "folder"
-        case .newGroup: "folder.badge.plus"
-        case .rename: "pencil"
-        case .delete: "trash"
-        case .reorderHandle: "line.3.horizontal"
-        case .credentials: "key.horizontal"
-        case .locked: "lock"
-        case .insecure: "lock.open.trianglebadge.exclamationmark"
+        case .camera: return "video"
+        case .cameraOffline: return "video.slash"
+        case .addCamera: return "plus"
+        case .discover: return "antenna.radiowaves.left.and.right"
+        case .device: return "externaldrive.connected.to.line.below"
+        case .channel: return "rectangle.stack"
+        case .group: return "folder"
+        case .newGroup: return "folder.badge.plus"
+        case .rename: return "pencil"
+        case .delete: return "trash"
+        case .reorderHandle: return "line.3.horizontal"
+        case .credentials: return "key.horizontal"
+        case .locked: return "lock"
+        case .insecure: return "lock.open.trianglebadge.exclamationmark"
 
         // Layout and stage
-        case .layoutSingle: "square"
-        case .layout2x2: "square.grid.2x2"
-        case .layout3x3: "square.grid.3x3"
-        case .layout4x4: "square.grid.4x3.fill"
-        case .layoutPicker: "rectangle.grid.2x2"
-        case .enterFullscreen: "arrow.up.left.and.arrow.down.right"
-        case .exitFullscreen: "arrow.down.right.and.arrow.up.left"
-        case .cinema: "film"
-        case .pictureInPicture: "pip.enter"
-        case .videoWall: "display.2"
-        case .patrol: "play.square.stack"
-        case .aspectFit: "aspectratio"
-        case .aspectFill: "aspectratio.fill"
-        case .mainstream: "dial.high"
-        case .substream: "dial.low"
+        case .layoutSingle: return "square"
+        case .layout2x2: return "square.grid.2x2"
+        case .layout3x3: return "square.grid.3x3"
+        case .layout4x4: return "square.grid.4x3.fill"
+        case .layoutPicker: return "rectangle.grid.2x2"
+        case .enterFullscreen: return "arrow.up.left.and.arrow.down.right"
+        case .exitFullscreen: return "arrow.down.right.and.arrow.up.left"
+        case .cinema: return "film"
+        case .pictureInPicture: return "pip.enter"
+        case .videoWall: return "display.2"
+        case .patrol: return "play.square.stack"
+        case .aspectFit: return "aspectratio"
+        case .aspectFill: return "aspectratio.fill"
+        case .mainstream: return "dial.high"
+        case .substream: return "dial.low"
 
         // Media actions
-        case .snapshot: "camera"
-        case .snapshotAll: "camera.on.rectangle"
-        case .copy: "doc.on.doc"
-        case .record: "record.circle"
-        case .recording: "record.circle.fill"
-        case .stop: "stop.fill"
-        case .mute: "speaker.slash.fill"
-        case .unmuted: "speaker.wave.2.fill"
-        case .pushToTalk: "mic"
-        case .exportClip: "square.and.arrow.up"
-        case .trim: "scissors"
-        case .importFile: "square.and.arrow.down"
+        case .snapshot: return "camera"
+        case .snapshotAll: return "camera.on.rectangle"
+        case .copy: return "doc.on.doc"
+        case .record: return "record.circle"
+        case .recording: return "record.circle.fill"
+        case .stop: return "stop.fill"
+        case .mute: return "speaker.slash.fill"
+        case .unmuted: return "speaker.wave.2.fill"
+        case .pushToTalk: return "mic"
+        case .exportClip: return "square.and.arrow.up"
+        case .trim: return "scissors"
+        case .importFile: return "square.and.arrow.down"
 
         // Playback
-        case .play: "play.fill"
-        case .pause: "pause.fill"
-        case .back10: "gobackward.10"
-        case .forward10: "goforward.10"
-        case .frameBack: "backward.frame.fill"
-        case .frameForward: "forward.frame.fill"
-        case .speed: "speedometer"
-        case .reverse: "backward.fill"
-        case .jumpToLive: "forward.end.alt.fill"
-        case .datePicker: "calendar"
-        case .clock: "clock"
-        case .uptime: "clock.arrow.circlepath"
-        case .bookmark: "bookmark"
-        case .synchronisedPlayback: "link"
+        case .play: return "play.fill"
+        case .pause: return "pause.fill"
+        case .back10: return "gobackward.10"
+        case .forward10: return "goforward.10"
+        case .frameBack: return "backward.frame.fill"
+        case .frameForward: return "forward.frame.fill"
+        case .speed: return "speedometer"
+        case .reverse: return "backward.fill"
+        case .jumpToLive: return "forward.end.alt.fill"
+        case .datePicker: return "calendar"
+        case .clock: return "clock"
+        case .uptime: return "clock.arrow.circlepath"
+        case .bookmark: return "bookmark"
+        case .synchronisedPlayback: return "link"
 
         // PTZ
-        case .ptzPad: "vigil.ptz.joystick"
-        case .zoomIn: "plus.magnifyingglass"
-        case .zoomOut: "minus.magnifyingglass"
-        case .focusControl: "viewfinder.circle"
-        case .iris: "camera.aperture"
-        case .preset: "star"
-        case .setPreset: "star.square.on.square"
-        case .ptzPatrol: "arrow.triangle.capsulepath"
-        case .homePosition: "house"
-        case .positioning3D: "viewfinder.rectangular"
+        case .ptzPad: return "vigil.ptz.joystick"
+        case .zoomIn: return "plus.magnifyingglass"
+        case .zoomOut: return "minus.magnifyingglass"
+        case .focusControl: return "viewfinder.circle"
+        case .iris: return "camera.aperture"
+        case .preset: return "star"
+        case .setPreset: return "star.square.on.square"
+        case .ptzPatrol: return "arrow.triangle.capsulepath"
+        case .homePosition: return "house"
+        case .positioning3D: return "viewfinder.rectangular"
 
         // Image settings
-        case .imagePanel: "slider.horizontal.3"
-        case .brightness: "sun.max"
-        case .contrast: "circle.lefthalf.filled"
-        case .saturation: "drop"
-        case .sharpness: "camera.filters"
-        case .wideDynamicRange: "sun.haze"
-        case .dayNight: "moon.stars"
-        case .infraredIlluminator: "flashlight.on.fill"
-        case .flip: "arrow.left.and.right.righttriangle.left.righttriangle.right"
+        case .imagePanel: return "slider.horizontal.3"
+        case .brightness: return "sun.max"
+        case .contrast: return "circle.lefthalf.filled"
+        case .saturation: return "drop"
+        case .sharpness: return "camera.filters"
+        case .wideDynamicRange: return "sun.haze"
+        case .dayNight: return "moon.stars"
+        case .infraredIlluminator: return "flashlight.on.fill"
+        case .flip: return "arrow.left.and.right.righttriangle.left.righttriangle.right"
 
         // Events and alarms
-        case .events: "bell"
-        case .newEvents: "bell.badge"
-        case .motionDetection: "figure.walk"
-        case .lineCrossing: "line.diagonal"
-        case .intrusion: "rectangle.dashed"
-        case .tamper: "hand.raised.slash"
-        case .videoLoss: "video.slash"
-        case .diskError: "externaldrive.badge.exclamationmark"
-        case .notificationSettings: "bell.and.waves.left.and.right"
+        case .events: return "bell"
+        case .newEvents: return "bell.badge"
+        case .motionDetection: return "figure.walk"
+        case .lineCrossing: return "line.diagonal"
+        case .intrusion: return "rectangle.dashed"
+        case .tamper: return "hand.raised.slash"
+        case .videoLoss: return "video.slash"
+        case .diskError: return "externaldrive.badge.exclamationmark"
+        case .notificationSettings: return "bell.and.waves.left.and.right"
 
         // Diagnostics and telemetry
-        case .streamDoctor: "stethoscope"
-        case .healthGraph: "waveform.path.ecg"
-        case .hardwareDecode: "bolt.fill"
-        case .softwareDecode: "bolt"
-        case .cpu: "cpu"
-        case .network: "network"
-        case .signal: "wifi"
-        case .packetLoss: "chart.line.downtrend.xyaxis"
-        case .latency: "timer"
-        case .storage: "internaldrive"
-        case .reconnecting: "arrow.triangle.2.circlepath"
-        case .exportDiagnostics: "doc.text.magnifyingglass"
-        case .logLevel: "text.alignleft"
-        case .reset: "arrow.counterclockwise"
+        case .streamDoctor: return "stethoscope"
+        case .healthGraph: return "waveform.path.ecg"
+        case .hardwareDecode: return "bolt.fill"
+        case .softwareDecode: return "bolt"
+        case .cpu: return "cpu"
+        case .network: return "network"
+        case .signal: return "wifi"
+        case .packetLoss: return "chart.line.downtrend.xyaxis"
+        case .latency: return "timer"
+        case .storage: return "internaldrive"
+        case .reconnecting: return "arrow.triangle.2.circlepath"
+        case .exportDiagnostics: return "doc.text.magnifyingglass"
+        case .logLevel: return "text.alignleft"
+        case .reset: return "arrow.counterclockwise"
 
         // Status and feedback
-        case .success: "checkmark.circle.fill"
-        case .warning: "exclamationmark.triangle.fill"
-        case .error: "xmark.octagon.fill"
-        case .info: "info.circle"
-        case .statusDot: "circle.fill"
-        case .authFailure: "lock.trianglebadge.exclamationmark"
-        case .dropTarget: "arrow.down.to.line"
-        case .keyboardShortcuts: "keyboard"
-        case .appearance: "circle.lefthalf.filled"
-        case .launchAtLogin: "power"
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.octagon.fill"
+        case .info: return "info.circle"
+        case .statusDot: return "circle.fill"
+        case .authFailure: return "lock.trianglebadge.exclamationmark"
+        case .dropTarget: return "arrow.down.to.line"
+        case .keyboardShortcuts: return "keyboard"
+        case .appearance: return "circle.lefthalf.filled"
+        case .launchAtLogin: return "power"
         }
     }
 
@@ -317,9 +317,9 @@ extension VTheme.Symbol {
         case .settings, .camera, .cameraOffline, .group, .credentials, .locked, .cinema,
              .patrol, .mainstream, .substream, .snapshot, .saturation, .wideDynamicRange,
              .dayNight, .events, .tamper, .videoLoss, .info, .preset, .bookmark, .pushToTalk:
-            name + ".fill"
+            return name + ".fill"
         default:
-            name
+            return name
         }
     }
 
@@ -330,26 +330,26 @@ extension VTheme.Symbol {
     /// disclosure collapsed ↔ expanded (which **rotates** instead — see §8.3).
     public var alternateName: String? {
         switch self {
-        case .play: "pause.fill"
-        case .pause: "play.fill"
-        case .mute: "speaker.wave.2.fill"
-        case .unmuted: "speaker.slash.fill"
-        case .aspectFit: "aspectratio.fill"
-        case .aspectFill: "aspectratio"
-        case .mainstream: "dial.low"
-        case .substream: "dial.high"
-        case .pictureInPicture: "pip.exit"
-        case .disclosureCollapsed: "chevron.down"
-        case .disclosureExpanded: "chevron.right"
-        case .record: "record.circle.fill"
-        case .hardwareDecode: "bolt"
-        case .softwareDecode: "bolt.fill"
-        case .zoomIn: "minus.magnifyingglass"
-        case .zoomOut: "plus.magnifyingglass"
-        case .preset: "star.fill"
-        case .bookmark: "bookmark.fill"
-        case .pushToTalk: "mic.fill"
-        default: nil
+        case .play: return "pause.fill"
+        case .pause: return "play.fill"
+        case .mute: return "speaker.wave.2.fill"
+        case .unmuted: return "speaker.slash.fill"
+        case .aspectFit: return "aspectratio.fill"
+        case .aspectFill: return "aspectratio"
+        case .mainstream: return "dial.low"
+        case .substream: return "dial.high"
+        case .pictureInPicture: return "pip.exit"
+        case .disclosureCollapsed: return "chevron.down"
+        case .disclosureExpanded: return "chevron.right"
+        case .record: return "record.circle.fill"
+        case .hardwareDecode: return "bolt"
+        case .softwareDecode: return "bolt.fill"
+        case .zoomIn: return "minus.magnifyingglass"
+        case .zoomOut: return "plus.magnifyingglass"
+        case .preset: return "star.fill"
+        case .bookmark: return "bookmark.fill"
+        case .pushToTalk: return "mic.fill"
+        default: return nil
         }
     }
 }
@@ -363,11 +363,11 @@ extension VTheme.Symbol {
         switch self {
         case .commandPalette, .close, .addCamera, .disclosureCollapsed, .disclosureExpanded,
              .menuIndicator, .lineCrossing, .hardwareDecode, .softwareDecode:
-            .semibold
+            return .semibold
         case .brandMark, .ptzPad:
-            .regular
+            return .regular
         default:
-            .medium
+            return .medium
         }
     }
 
@@ -383,11 +383,11 @@ extension VTheme.Symbol {
         case .cameraOffline, .device, .insecure, .videoWall, .snapshotAll, .focusControl, .iris,
              .setPreset, .sharpness, .wideDynamicRange, .dayNight, .diskError,
              .notificationSettings, .cpu, .network, .storage, .exportDiagnostics:
-            .hierarchical
+            return .hierarchical
         case .record, .events, .newEvents:
-            .palette
+            return .palette
         default:
-            .monochrome
+            return .monochrome
         }
     }
 
@@ -398,8 +398,8 @@ extension VTheme.Symbol {
     /// releases.
     public var isCustom: Bool {
         switch self {
-        case .brandMark, .ptzPad: true
-        default: false
+        case .brandMark, .ptzPad: return true
+        default: return false
         }
     }
 
