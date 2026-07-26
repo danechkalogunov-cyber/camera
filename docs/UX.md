@@ -483,7 +483,7 @@ Fullscreen                       ⌘F
 ──────────────────────────────────
 Snapshot                         ⇧⌘S
 Start Recording                  ⌘R
-Two-Way Audio                    ⌥T
+Two-Way Audio                    ⌃⌘T
 ──────────────────────────────────
 Quality ▸  Auto · Main · Sub · Third
 Transport ▸  Auto · TCP · UDP
@@ -495,7 +495,7 @@ Duplicate for Another Channel…
 Move to Group ▸  (groups) · New Group…  · None
 Colour Tag ▸  (6 swatches + None)
 ──────────────────────────────────
-Reconnect Now                    ⌥⌘R
+Reconnect Now                    ⌃⌘R
 Run Stream Doctor…               ⌥⌘D
 Copy RTSP URL          (password redacted as ●●●)
 Copy Diagnostics
@@ -625,7 +625,7 @@ Hover-chrome timing: fade in over 90 ms on pointer enter (`VTheme.Motion.micro`)
 **2400 ms** without pointer movement inside the tile; any movement re-reveals. In cinema mode the
 dwell is 1200 ms and the cursor hides with the chrome (`NSCursor.setHiddenUntilMouseMoves(true)`).
 Chrome is **never** shown on a tile that is not under the pointer, except the focused tile's focus
-ring. Keyboard users get chrome via ⌥⌘H (Show Tile Controls) which pins it for the focused tile.
+ring. Keyboard users get chrome via ⌃⌘H (Show Tile Controls) which pins it for the focused tile.
 
 Button behaviours:
 
@@ -1454,7 +1454,7 @@ tile, **S** = sidebar focused, **L** = timeline focused, **K** = palette open.
 | / | M | Focus the search field |
 | ⌥⌘F | M | Open the sidebar filter menu |
 | ⌥N / ⌥S / ⌥T / ⌥B | M | Toggle overlays: name chip, stats, timestamp, motion boxes |
-| ⌥⌘H | M | Pin tile controls for the focused tile |
+| ⌃⌘H | M | Pin tile controls for the focused tile |
 | ⇧⌘S | T | Snapshot the focused camera |
 | ⌥⇧⌘S | M | Snapshot all live cameras |
 | ⌘R | T | Start/stop recording the focused camera |
@@ -1518,7 +1518,7 @@ Vigil        About Vigil · Check for Updates… · ─ · Settings… ⌘, · �
 
 File         Add Camera… ⌘N · Discover Cameras… ⇧⌘N · Import Cameras from CSV… ⇧⌘I ·
              Export Configuration… ⌥⌘E · ─ · Open Playback ⌥⌘P · Open Recordings Folder ⇧⌘O · ─ ·
-             Save Snapshot ⇧⌘S · Save Snapshot of All Cameras ⌥⇧⌘S · Export Clip… ⌘E · ─ ·
+             Save Snapshot ⇧⌘S · Save Snapshot of All Cameras ⌥⇧⌘S · ─ ·
              Close Window ⌘W · Close All Windows ⌥⌘W
 
 Edit         Undo ⌘Z · Redo ⇧⌘Z · ─ · Cut ⌘X · Copy ⌘C · Paste ⌘V · Delete ⌫ · Select All ⌘A · ─ ·
@@ -1535,7 +1535,7 @@ View         Command Palette ⌘K · ─ ·
              Show Sidebar ⌘L · Sidebar as Icons ⌥⌘L · Show Inspector ⌥⌘I ·
              Inspector Tab ▸ (Info ⌃1 … Recording ⌃6) · ─ ·
              Tile Overlays ▸ (Camera Name ⌥N, Stats ⌥S, Timestamp ⌥T, Motion Boxes ⌥B,
-                              Pin Tile Controls ⌥⌘H) · ─ ·
+                              Pin Tile Controls ⌃⌘H) · ─ ·
              Appearance ▸ (System, Light, Dark) · Customize Toolbar…
 
 Camera       Connect · Disconnect · Reconnect Now ⌃⌘R · ─ ·
@@ -1618,3 +1618,639 @@ public enum RebindResult { case ok, conflict(with: ShortcutAction), reserved(Str
   automatically. The menu item still *displays* the key via a trailing `Text` in its label.
 
 ---
+
+## 12. States
+
+Every state below is a *designed* state with exact copy, timing and recovery. The rule: **the UI
+always tells the user what is happening, what it means, and what to do next.**
+
+### 12.1 First run (no library file)
+
+1. The main window opens at 1440×900 with the full chrome already in place: sidebar (empty
+   sections), an empty `single` Stage, Inspector showing the System view. No modal.
+2. The Stage shows the primary empty state (§12.2) with a subtle 24 s-loop ambient gradient
+   (`reduceMotion` → static).
+3. A one-time 320 pt **welcome card** slides up from the bottom-trailing after 400 ms:
+   `firstRun.welcome.title` / `.body`, buttons `Find Cameras` (primary, opens Discovery) and
+   `Add Manually`. `Esc` dismisses it permanently (recorded in `UserDefaults`).
+4. Choosing `Find Cameras` shows the local-network permission pre-explain (§8.2 step 0) before any
+   multicast is sent.
+5. After the first camera is added, the card never appears again and a 2-step coach overlay runs
+   once: a pointer-following callout on the layout picker ("Change layout — ⌘1 to ⌘8") and on the
+   search field ("Press / to find any camera"). Both dismiss on any click, `Esc`, or after 6 s.
+
+### 12.2 Empty states (`VEmptyState` catalogue)
+
+| Where | Glyph | Title key | Body | Actions |
+|---|---|---|---|---|
+| Stage, no cameras | `video.slash` 44 pt | `empty.cameras.title` | `empty.cameras.body` | `Find Cameras` (primary), `Add Manually` |
+| Sidebar Cameras section | — | `empty.cameras.sidebar` | — | inline `＋` |
+| Sidebar Groups | `folder.badge.plus` 22 pt | `empty.groups.title` | drag hint | — |
+| Events feed | `bell.slash` 44 pt | `empty.events.title` | `empty.events.body` | `Notification Settings` |
+| Recordings | `film.stack` 44 pt | `empty.recordings.title` | `empty.recordings.body` | `Open Recordings Folder` |
+| Playback, day with no recordings | `calendar.badge.exclamationmark` 36 pt | `empty.playbackDay.title` | `empty.playbackDay.body` (names the nearest day that has footage) | `Go to {date}` |
+| Bookmarks | `bookmark.slash` 44 pt | `empty.bookmarks.title` | `"Press B while reviewing footage."` | — |
+| Search with no match | `magnifyingglass` 36 pt | `empty.search.title` | — | `Clear Filters` |
+| Discovery, nothing found | `wifi.exclamationmark` 44 pt | `empty.discovery.title` | `empty.discovery.body` (lists the 3 usual causes) | `Scan Again`, `Add Manually` |
+| Palette, no match | — | `empty.palette.title` | — | — |
+
+Empty states are centred in their region, max 320 pt wide, and never scroll. Titles are Headline,
+bodies Callout/secondary, max 2 lines.
+
+### 12.3 Scanning
+
+Determinate where possible (`n/total` hosts), plus per-probe ticks (§8.2). Never a bare spinner.
+Cancel is always available and takes effect within 200 ms (sockets are cancelled, not awaited).
+
+### 12.4 Connecting
+
+Tile shows: true-black background, name chip, amber breathing dot, a `VSkeleton` shimmer at 6 %
+white sweeping every 1.6 s, and — when we have one — the **cached last frame at 22 % opacity with a
+4 pt blur** behind the shimmer. Centre narration text (Caption1, secondary, `monospacedDigit`
+elapsed after 700 ms) follows `StreamEvent`:
+
+| `StreamController` state | Narration key | Shown from |
+|---|---|---|
+| `resolving` | `connecting.resolving` "Looking up {host}…" | 250 ms |
+| `connecting` | `connecting.connecting` "Connecting…" | 250 ms |
+| `authenticating` | `connecting.auth` "Signing in…" | immediately on entry |
+| `describing` | `connecting.negotiating` "Negotiating stream…" | immediately |
+| `settingUp` | `connecting.opening` "Opening video channel…" | immediately |
+| waiting for first RTP | `connecting.waitingData` "Waiting for video…" | immediately |
+| waiting for keyframe | `connecting.waitingKeyframe` "Waiting for a keyframe…" | immediately |
+| > 3.5 s in any state | `connecting.slow` "This is taking longer than usual." + `Run Stream Doctor` link | 3500 ms |
+| > 8 s | transition to the failure card (§12.7) with the doctor's finding preloaded | 8000 ms |
+
+Timing details are normative — see §15.1.
+
+### 12.5 Degraded
+
+Trigger (from `HealthMonitor`, evaluated on a 3 s sliding window): packet loss > 1.5 %, **or**
+jitter > 80 ms, **or** decode queue > 8 frames, **or** fps < 60 % of the negotiated rate for 3 s.
+
+- Tile: 1 pt `warn` stroke, amber static dot, and a **32 pt bottom banner** inside the tile with the
+  measured cause: `degraded.packetLoss.body` "3.1 % packet loss — video may stutter." plus an
+  action chip when we can act: `Switch to TCP` / `Use sub-stream` / `Dismiss`.
+- Automatic remediation (Settings ▸ Streams ▸ "Recover automatically", default on): after 6 s of
+  degradation on UDP we switch to TCP once and the banner becomes
+  `degraded.switchedToTCP.body` "Switched to TCP for stability." (informational, 4 s, then fades).
+  We never oscillate: at most one automatic transport change per 10 min per camera.
+- Sidebar row: amber dot + amber-stroked badge. Footer aggregate turns amber.
+- The banner is suppressed in the Video Wall (a 4 pt amber corner triangle is used instead) so the
+  wall stays clean.
+
+### 12.6 Offline / reconnecting
+
+```
+┌───────────────────────────────────────┐
+│ ▎Front Door                       ○   │
+│         [ last frame, 30% opacity,    │
+│           4pt blur, grayscale 60% ]   │
+│                                       │
+│            ⚠  Connection lost         │  Headline
+│      Reconnecting in 4 s (attempt 3)  │  Caption1 secondary, monospacedDigit
+│         [ Retry now ]  [ Diagnose ]   │  ghost buttons, 24pt
+│            Last seen 10:14:38         │  Caption2 tertiary
+└───────────────────────────────────────┘
+```
+
+- The countdown is driven by `StreamController`'s backoff (0.5, 1, 2, 4, 8, 15, 30 s ±20 % jitter,
+  `spec-core.md`) and displays whole seconds, updating at 1 Hz — never a spinner.
+- `Retry now` cancels the wait and retries immediately. `Diagnose` runs Stream Doctor in a 420 pt
+  sheet with the step-by-step result list.
+- After 5 consecutive failures the copy changes to `offline.persistent.body` "Still can't reach
+  this camera." and the retry interval pins at 30 s; the tile stays in this state indefinitely
+  (never blank, never removed).
+- Network came back (`NWPathMonitor`): all offline cameras retry immediately, countdowns collapse,
+  and a single toast reads `network.restored.body` "Network back — reconnecting 6 cameras."
+
+### 12.7 Authentication failure
+
+Distinct from offline: red dot with `!`, red 1 pt tile stroke, and **no automatic retry** (retrying
+a wrong password is how devices lock out — this is a deliberate, important behaviour).
+Copy: `error.auth.wrongPassword.title` + body, actions `Update Password…` (a 320 pt inline sheet
+with just the password field and `Save & Reconnect`) and `Diagnose`. When the device reports a lock
+(`userLocked`), copy switches to `error.auth.locked.*` with the remaining time and retry is
+disabled until it elapses (a live countdown).
+
+### 12.8 Storage
+
+| Condition | UI |
+|---|---|
+| Free space < 10 GB | Persistent 28 pt window banner above the Stage: `storage.low.body` "Only 8.2 GB left on Macintosh HD." + `Manage Recordings…` (opens Settings ▸ Recording). Amber. |
+| Free space < 2 GB or write error | Recording stops on all cameras. Red banner `storage.full.title` / `.body`, actions `Reveal Folder`, `Change Folder…`, `Delete Oldest 20 Clips…`. A notification is posted even if the app is inactive. |
+| Retention deleted files | Silent, but Settings ▸ Recording shows "Last cleanup: today, 12 clips (4.1 GB)". |
+| Device (NVR) disk error event | Event feed + notification `event.diskError.*`; the camera's Info ▸ Storage row turns red. |
+
+### 12.9 Decode budget exhausted
+
+When `StreamCoordinator` cannot admit a stream: the tile renders its cached frame (or black) with a
+centred chip `budget.paused.title` "Paused to save power" + Caption2 "Too many streams for
+hardware decode." and actions `Use sub-stream` / `Settings…`. The tile is *not* an error state
+(grey, not amber). Focusing a paused tile promotes it immediately (the lowest-priority tile is
+demoted) — the user's attention always wins.
+
+### 12.10 Inactive, occluded, background
+
+| Situation | Detection | Behaviour |
+|---|---|---|
+| Window inactive (another app in front) | `NSApplication.didBecomeActive/ WillResignActive` | sidebar thumbnails 1 Hz → 0.25 Hz; sparkline redraws 4 Hz → 1 Hz; video keeps running (an operator watching while typing elsewhere is a core use case) |
+| Window occluded / minimised | `NSWindow.occlusionState` lacks `.visible` | all decode paused after 2 s (RTSP sessions stay alive with keepalives); the last frame is retained for instant resume; recording and event handling **continue** |
+| Window closed, app running | scene teardown | streams stop; recordings continue to completion; menu-bar extra shows a live badge |
+| Full screen on another Space | occlusion | same as occluded |
+| Low Power Mode | `ProcessInfo.isLowPowerModeEnabled` | sub-stream everywhere, patrol dwell ×2, thumbnails 0.5 Hz, a one-time toast `power.lowPowerMode.body` |
+| Resume | occlusion regains `.visible` | decode restarts with the cached frame visible; narration is skipped if the first new frame arrives within 400 ms (§15.2) |
+
+### 12.11 Sleep / wake, display and network changes
+
+| Event | Response |
+|---|---|
+| `NSWorkspace.willSleepNotification` | stop all decode, finish `.partial` recordings cleanly, keep the library saved, tear down sockets (do not wait for graceful `TEARDOWN` beyond 300 ms) |
+| `didWakeNotification` | wait 800 ms for the network stack, then reconnect all enabled cameras in priority order with a 120 ms stagger; a single toast `system.wake.body` "Welcome back — reconnecting." |
+| `NWPathMonitor` path change (Wi-Fi → Ethernet, VPN up) | immediate retry for offline cameras; live cameras are left alone unless their socket errors |
+| Interface lost entirely | window banner `network.offline.body` "No network connection." with a live "Retrying…" pip; tiles enter offline state without countdown spam (one countdown in the banner) |
+| Display added / removed | Stage re-layouts; `contentsScale` updated per `spec-render.md`; the Video Wall re-resolves its screen (§2.4) |
+| Screen locked | treated as occluded |
+
+### 12.12 Tile state → visual matrix (normative)
+
+| State | Dot | Stroke | Content | Chrome | Auto-retry |
+|---|---|---|---|---|---|
+| `disabled` | hollow grey | subtle | black + `"Disabled"` chip | Enable button | no |
+| `connecting` | amber breathing | subtle | ghost frame + shimmer + narration | none until live | n/a |
+| `live` | green | subtle (hover: default) | video | on hover | n/a |
+| `degraded` | amber | warn 1 pt | video + banner | on hover + banner | auto TCP once |
+| `reconnecting` | grey | subtle | dimmed last frame + countdown | Retry / Diagnose | yes (backoff) |
+| `authFailed` | red `!` | danger 1 pt | dimmed last frame + card | Update Password / Diagnose | **no** |
+| `unsupported codec` | amber | warn | black + card naming the codec | Open Web UI / Diagnose | no |
+| `budgetPaused` | grey | subtle | last frame + chip | Use sub-stream | n/a |
+| `deviceBusy` | amber | warn | black + card | Use sub-stream / Retry | yes (30 s) |
+
+---
+
+## 13. Settings
+
+`Settings { SettingsView() }` → a `TabView` with 7 panes, `.frame(width: 620)`, each pane a
+`Form(.grouped)` sized to its content (heights 380–620 pt). ⌘, opens the last used pane
+(`@AppStorage("settings.lastPane")`). Every control writes to `UserDefaults` immediately (no OK/
+Apply); destructive actions confirm.
+
+### 13.1 General
+
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| Launch at login | toggle | off | `SMAppService.mainApp.register()`; shows the system error inline on failure |
+| Open at login as | segmented Window / Menu bar only | Window | menu-bar-only hides the Dock icon (`NSApp.setActivationPolicy(.accessory)`) |
+| Appearance | segmented System / Light / Dark | System | applies `NSApp.appearance` |
+| Accent | 6 swatches + "Match system" | Vigil accent | affects focus rings and selection only |
+| Sidebar thumbnails | toggle + rate picker (1 Hz / 0.5 Hz / off) | on, 1 Hz | off saves ~3 % CPU with 64 cameras |
+| Time format | segmented System / 24-hour / 12-hour | System | all timestamps, timeline ruler, exports |
+| Show seconds in overlays | toggle | on | |
+| Units | segmented Auto / Metric / Imperial | Auto | only affects bitrate/size prefixes (Mb/s vs Mbps) and temperature if a device reports it |
+| Language | picker: System / English / Русский | System | requires relaunch; shows `general.language.relaunch` note |
+| Confirm before deleting cameras | toggle | on | |
+| Menu-bar extra | toggle + "Show live count badge" | on / on | |
+| Dock badge | picker None / Event count / Live count | Event count | |
+
+### 13.2 Streams
+
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| Default transport | segmented Auto / TCP / UDP | Auto | Auto = TCP, fall back to UDP on setup failure |
+| Latency preset | segmented **Low / Balanced / Quality** | Balanced | drives the jitter-buffer target: Low = 60 ms, Balanced = 150 ms, Quality = 350 ms (exact values owned by `spec-rtp.md`); the pane shows the resulting target in ms live |
+| Sub-stream in grids | toggle + threshold slider (tile long edge, 240–960 px) | on, 480 px | tiles smaller than the threshold use the sub-stream |
+| Hardware decode | toggle | on | off shows a warning that CPU use will rise sharply |
+| Max concurrent decodes | stepper 1–64 + "Automatic" | Automatic | Automatic = `min(32, cores × 2)` clamped by measured decode headroom |
+| Pause hidden tiles | toggle | on | tiles hidden by solo/fullscreen pause after 2 s |
+| Pause when window is occluded | toggle | on | |
+| Audio | toggle "Play audio from the focused camera only" | on | prevents a wall of noise |
+| Two-way audio input | device picker | System default | |
+| Keepalive interval | stepper 5–120 s | 30 s | RTSP `GET_PARAMETER` / `OPTIONS` |
+| Connect timeout | stepper 2–30 s | 8 s | matches §12.4 |
+| Reconnect | toggle + max backoff picker (15/30/60 s) | on, 30 s | |
+| Multicast | toggle "Prefer multicast when offered" | off | |
+| TLS | toggle "Allow self-signed certificates for pinned devices" | on | pinning is per camera, set during the credential test |
+| Stream quality override per camera | link → the camera list | — | |
+
+### 13.3 Recording
+
+| Setting | Control | Default |
+|---|---|---|
+| Recordings folder | path row + `Choose…` + `Reveal` | `~/Movies/Vigil` |
+| Snapshots folder | path row | `~/Pictures/Vigil` |
+| Container | segmented MP4 / MOV | MP4 |
+| Filename template | text field + token menu + live preview | `{camera}_{yyyy}{MM}{dd}_{HH}{mm}{ss}` |
+| Snapshot format | segmented PNG / JPEG / HEIC + quality slider | JPEG 0.9 |
+| Snapshot destination | segmented File / Clipboard / Both | File |
+| Burn in overlay on snapshots | toggle | off |
+| Pre-roll buffer | slider 0–15 s | 5 s (memory cost shown live: `"≈ 46 MB for 16 cameras"`) |
+| Post-roll | slider 5–120 s | 15 s |
+| Auto-record on motion | toggle + per-camera override link | off |
+| Motion cooldown | stepper 5–300 s | 20 s |
+| Max clip length | picker 1/5/15/60 min | 5 min |
+| Split long recordings | toggle | on (at max clip length, seamless) |
+| Retention | segmented Never delete / Keep N days / Cap N GB + value | Never delete |
+| Cleanup time | time picker | 03:00 |
+| Fragmented MP4 for crash resilience | toggle | on |
+| Free-space guard | stepper 2–100 GB | 10 GB warn / 2 GB stop |
+
+Token menu for the template: `{camera}` `{group}` `{yyyy}` `{MM}` `{dd}` `{HH}` `{mm}` `{ss}`
+`{host}` `{channel}` `{event}` `{n}`. Invalid characters are replaced with `-`; the preview shows
+the resolved name and turns red on collision with an existing file (we then append `_2`).
+
+### 13.4 Notifications
+
+- Master toggle (asks for permission on first enable, with a pre-explain card).
+- Per-type matrix: Motion, Line crossing, Intrusion, Tamper, Video loss, Disk error, Camera offline,
+  Storage full — each with `Notify` / `Sound` / `Thumbnail` checkboxes.
+- Per-camera exceptions list (add/remove; `Snooze until` per camera with a live countdown).
+- Rate limit: per-camera minimum interval (15–600 s, default 60) and hourly cap (default 20).
+- Quiet hours: from/to time pickers + weekday checkboxes; "Still notify for tamper and disk errors".
+- Watch mode: segmented Off / Toast / Overlay + overlay duration (10/20/30 s).
+- `Open System Notification Settings` button and a live status row showing the current authorization.
+
+### 13.5 Shortcuts
+
+- Searchable table: Action · Shortcut (`VKeyCap`) · Scope · Reset. Click a row → "Press the new
+  shortcut" recording state (`onKeyPress` capture, `Esc` cancels, ⌫ clears).
+- Conflicts and reserved keys per §11.4; a footer shows `"3 customised"` and `Reset All…`.
+- Export/Import shortcut sets as JSON (useful for a team of operators).
+
+### 13.6 Advanced
+
+| Setting | Control | Default |
+|---|---|---|
+| Log level | picker Error / Warning / Info / Debug / Trace | Info (Debug and Trace warn about volume) |
+| Log to file | toggle + `Reveal` (`~/Library/Logs/Vigil/`) | on, 7-day rotation, 64 MB cap |
+| Redact in logs | read-only list: passwords, session ids, serials (masked), tokens | — |
+| Export diagnostics… | button → saves `Vigil-Diagnostics-{date}.zip` and reveals it | — |
+| Stream Doctor… | button | — |
+| Show developer overlay | toggle (fps, dropped frames, decode ms, GPU ms per tile) | off |
+| Metal renderer | picker Automatic / Metal / AVSampleBufferDisplayLayer | Automatic |
+| ONVIF fallback | toggle "Try ONVIF for non-Hikvision devices" | on |
+| ISAPI request timeout | stepper 2–30 s | 6 s |
+| Discovery subnet limit | picker /24 /23 /22 | /24 |
+| Reset layout | button (confirm) | — |
+| Reset all settings… | button (confirm, keeps cameras) | — |
+| Delete all data… | destructive button (double confirm, types "delete") | — |
+
+### 13.7 About & updates
+
+Icon, name, version + build, "Copyright", `Release Notes`, `Acknowledgements` (Apple frameworks
+only — we say so proudly: `about.noDependencies.body` "Vigil uses no third-party code."),
+`Check for Updates` (manual only; no telemetry, no auto-download without consent — state this in the
+pane), and a `Report an Issue…` button that pre-fills a diagnostics-attached mail draft.
+
+---
+
+## 14. Copy & tone
+
+### 14.1 Rules
+
+1. **Say what happened, then what to do.** Title = the fact (≤ 6 words). Body = the cause and the
+   next step (≤ 2 sentences, ≤ 140 chars).
+2. **Second person, active voice, present tense.** "Vigil can't reach this camera." not "The camera
+   could not be reached."
+3. **No jargon unless it is the actual fix.** "RTSP port 554 is closed" is fine (it is actionable);
+   "DESCRIBE returned 451" is not — put that in `Details`.
+4. **Numbers are specific.** "3.1 % packet loss", "8.2 GB left", "attempt 3". Never "some", "a lot".
+5. **No blame, no apology, no exclamation marks.** Never "Oops", "Sorry", "Something went wrong".
+6. **Buttons are verbs** naming the outcome: `Update Password`, `Switch to TCP`, `Delete 12 Clips`.
+   Never `OK` where a verb exists; `Cancel` is always `Cancel`.
+7. **Destructive confirmations name the object and the count** and use a destructive-styled verb.
+8. **Sentence case everywhere** except product names (Vigil, Hikvision, ONVIF, ISAPI, Keychain).
+9. **Units**: `Mb/s` for bitrate, `MB`/`GB` for size, `ms` for latency, `%` with a space in Russian
+   (`3,1 %`) and without in English (`3.1%`) — handled by `NumberFormatter`, never hard-coded.
+10. **Never a dead end.** Every error names at least one action, even if it is `Diagnose`.
+11. **Never interrupt live video with a modal.** Errors are inline (tile, banner, toast). Modals are
+    reserved for destructive confirmation and credential entry.
+12. **Time**: relative under 1 hour (`"4 min ago"`), absolute after (`"10:14"`, `"26 Jul 10:14"`),
+    always formatted with `Date.FormatStyle` + the user's locale and 12/24-h preference.
+
+### 14.2 Key structure (localization-ready)
+
+`Localizable.xcstrings` (String Catalog), one file per module, keys in the form:
+
+```
+<surface>.<subject>.<variant>.<part>
+      │        │         │        └── title | body | action | actionSecondary | hint | note
+      │        │         └────────── optional qualifier (wrongPassword, locked, low, full)
+      │        └──────────────────── subject noun (camera, storage, auth, event, layout)
+      └───────────────────────────── surface (error, empty, confirm, toast, state, settings,
+                                     discovery, playback, palette, menu, a11y, unit)
+```
+
+Rules that exist **because Russian is required**:
+
+- **Never concatenate.** Every sentence is one key with positional arguments (`%1$@`, `%2$lld`) so
+  translators can reorder freely.
+- **Every count uses a plural variation** (`.xcstrings` "Vary by plural" with `one / few / many /
+  other` — Russian needs all four; English fills `one / other`).
+  Example `toast.snapshotAll.body`: EN `"Saved %lld snapshots"` → RU `one` "Сохранён %lld снимок",
+  `few` "Сохранено %lld снимка", `many` "Сохранено %lld снимков".
+- **Camera names are inserted only in nominative-safe positions**, always quoted with locale-correct
+  quotes: EN `“Front Door”`, RU `«Вход»`. Never "Snapshot of {name}'s stream" (possessives don't
+  translate).
+- **No embedded markup other than markdown links** in `AttributedString(localized:)`; link targets
+  live in the key (`error.notHikvision.body` contains `[ONVIF](vigil://help/onvif)`).
+- **Layout budget: Russian strings run 20–35 % longer.** Every label, button and empty state is
+  laid out to survive +35 % (verified by the pseudo-localization run, §16.4). Fixed-width numeric
+  columns are exempt because numbers don't translate.
+- Units, dates and numbers never appear inside a translatable string as literals — they are
+  arguments formatted by `Measurement`/`Date.FormatStyle`/`Duration.UnitsFormatStyle`.
+- Accessibility labels are separate keys under `a11y.*` and are translated too.
+
+### 14.3 The 20 most important strings
+
+| # | Key | English |
+|---|---|---|
+| 1 | `empty.cameras.title` / `.body` / `.action` / `.actionSecondary` | **“No cameras yet.”** / “Vigil finds Hikvision cameras and NVRs on your network. It takes about ten seconds.” / “Find Cameras” / “Add Manually” |
+| 2 | `firstRun.welcome.title` / `.body` | **“Welcome to Vigil.”** / “Watch your Hikvision cameras with almost no delay. Nothing leaves your network.” |
+| 3 | `discovery.permission.title` / `.body` / `.action` | **“Vigil needs to see your local network.”** / “macOS will ask for permission so Vigil can find cameras on this network. Vigil never sends anything to the internet.” / “Continue” |
+| 4 | `error.auth.wrongPassword.title` / `.body` / `.action` | **“Wrong password.”** / “%1$@ rejected the password for “%2$@”. Check it and try again — too many attempts will lock the device.” / “Update Password” |
+| 5 | `error.auth.locked.title` / `.body` / `.hint` | **“Device is locked.”** / “%1$@ locked out this account after too many failed sign-ins. It usually unlocks in about %2$lld minutes.” / “Unlock it now from the camera's web page.” |
+| 6 | `error.unreachable.title` / `.body` / `.action` | **“Can't reach this camera.”** / “No response from %1$@. Check that it's powered on and on the same network as this Mac.” / “Diagnose” |
+| 7 | `error.notHikvision.title` / `.body` / `.action` | **“Not a Hikvision device.”** / “%1$@ answered, but it doesn't speak ISAPI. Vigil can still try [ONVIF](vigil://help/onvif), with fewer features.” / “Use ONVIF” |
+| 8 | `error.notActivated.title` / `.body` / `.action` | **“Camera isn't activated.”** / “%1$@ is brand new and has no password yet. Set one now to start using it.” / “Set Password” |
+| 9 | `error.codecUnsupported.title` / `.body` / `.hint` | **“Unsupported video format.”** / “This channel streams %1$@. Vigil plays H.265, H.264 and MJPEG.” / “Change the encoding in the camera's web page.” |
+| 10 | `error.rtspBlocked.title` / `.body` / `.action` | **“Video port is closed.”** / “Vigil reached %1$@ on port %2$lld, but RTSP port %3$lld refused the connection.” / “Try Port 8554” |
+| 11 | `state.connecting.narration` (see §12.4 for the full ladder) | “Connecting…”, “Signing in…”, “Negotiating stream…”, “Waiting for a keyframe…” |
+| 12 | `state.degraded.packetLoss.body` / `.action` | **“%1$@ packet loss — video may stutter.”** / “Switch to TCP” |
+| 13 | `state.offline.title` / `.body` / `.action` / `.hint` | **“Connection lost.”** / “Reconnecting in %1$lld s (attempt %2$lld).” / “Retry Now” / “Last seen %1$@” |
+| 14 | `storage.full.title` / `.body` / `.action` | **“Recording stopped — disk is full.”** / “Less than %1$@ is free on %2$@. Vigil stopped recording to protect your other files.” / “Manage Recordings” |
+| 15 | `storage.low.body` / `.action` | “Only %1$@ left on %2$@.” / “Manage Recordings” |
+| 16 | `confirm.deleteCamera.title` / `.body` / `.action` | **“Delete “%1$@”?”** / “Its saved clips and snapshots stay on your Mac. The camera itself isn't changed.” / “Delete Camera” |
+| 17 | `confirm.quitWhileRecording.title` / `.body` / `.action` / `.actionSecondary` | **“Still recording %1$lld cameras.”** / “Quitting will finish and save the clips first.” / “Finish and Quit” / “Keep Recording” |
+| 18 | `toast.snapshotSaved.body` / `.action` | “Snapshot saved to %1$@.” / “Reveal” |
+| 19 | `toast.recordingSaved.body` / `.action` | “Saved %1$@ · %2$@.” (duration · size) / “Reveal” |
+| 20 | `empty.playbackDay.title` / `.body` / `.action` | **“Nothing recorded on %1$@.”** / “The closest footage is on %2$@.” / “Go to %1$@” |
+
+### 14.4 Additional strings referenced by this document
+
+| Key | English |
+|---|---|
+| `palette.placeholder` | “Search cameras, actions, layouts…” |
+| `stage.emptyCell.title` | “Add camera” |
+| `empty.events.title` / `.body` | “No events yet.” / “Motion detection is %1$@ on this camera.” |
+| `empty.recordings.title` / `.body` | “No recordings yet.” / “Press ⌘R on any camera to start one.” |
+| `empty.discovery.title` / `.body` | “No cameras found.” / “Cameras must be on the same network, powered on, and not blocked by a firewall.” |
+| `empty.search.title` | “No cameras match “%1$@”.” |
+| `empty.palette.title` | “No results.” |
+| `inspector.ptz.unsupported.title` / `.body` | “No PTZ on this camera.” / “%1$@ is a fixed camera. You can still zoom digitally.” |
+| `playback.searchFailed.body` / `.action` | “Couldn't load the recording list from this camera.” / “Retry” |
+| `export.reencodeWarning.body` | “Burning in the overlay re-encodes the video, which takes longer and slightly reduces quality.” |
+| `import.csv.passwordNote.body` | “Passwords go straight to your Keychain. Vigil never copies the file.” |
+| `discovery.added.body` / `.action` | “Added %1$lld cameras.” / “Undo” |
+| `test.ok.body` | “Signed in — %1$@, %2$lld channel(s).” *(plural-varied)* |
+| `network.restored.body` | “Network back — reconnecting %1$lld cameras.” |
+| `network.offline.body` | “No network connection.” |
+| `system.wake.body` | “Welcome back — reconnecting.” |
+| `power.lowPowerMode.body` | “Low Power Mode is on — Vigil switched to sub-streams.” |
+| `budget.paused.title` / `.body` / `.action` | “Paused to save power.” / “Too many streams for hardware decode.” / “Use Sub-Stream” |
+| `wall.screenMissing.body` | “That display is gone — the wall opened on this Mac instead.” |
+| `about.noDependencies.body` | “Vigil uses no third-party code.” |
+| `general.language.relaunch.note` | “Vigil will use this language after you quit and reopen it.” |
+
+### 14.5 Glossary (fixed translations — do not vary)
+
+| English | Русский | Note |
+|---|---|---|
+| Camera | Камера | |
+| NVR | Регистратор (NVR) | keep the acronym in parentheses on first use |
+| Live | Прямой эфир | not «Живое» |
+| Snapshot | Снимок | |
+| Recording (noun) | Запись | |
+| Clip | Фрагмент | |
+| Playback | Просмотр архива | not «Воспроизведение» in navigation |
+| Timeline | Шкала времени | |
+| Layout | Раскладка | |
+| Group | Группа | |
+| Event | Событие | |
+| Motion | Движение | |
+| Preset (PTZ) | Предустановка | |
+| Patrol | Патрулирование | |
+| Sub-stream | Дополнительный поток | |
+| Main stream | Основной поток | |
+| Packet loss | Потеря пакетов | |
+| Hardware decode | Аппаратное декодирование | |
+| Video wall | Видеостена | |
+| Cinema mode | Кинорежим | |
+
+---
+
+## 15. Latency perception & optimistic UI
+
+The app must feel instant even when the network is not. These rules are testable and normative.
+
+### 15.1 Connection choreography
+
+| Elapsed | What the user sees | Why |
+|---|---|---|
+| **0–16 ms** (same frame as the click) | The tile exists at its final size, with the camera name chip, colour tag, amber dot, and true-black background. Layout is committed. | Perceived responsiveness is dominated by whether *something* changed in the first frame. |
+| **16–100 ms** | Cached last frame (JPEG, ≤ 480×270, from `~/Library/Caches/Vigil/lastframe/<uuid>.jpg`) fades in at 22 % opacity with a 4 pt blur; skeleton shimmer starts. **No spinner, no text.** | On a LAN, ~40 % of connections produce a first frame before 250 ms. Text that appears and vanishes reads as jank. |
+| **100–250 ms** | Still no narration. Shimmer only. | Anything shown for < 150 ms is noise. |
+| **250–700 ms** | Narration line appears (`Connecting…` → `Signing in…` → …), Caption1, secondary, cross-fading 120 ms between phrases. | The user now knows work is happening and *what* work. |
+| **700–3500 ms** | Narration plus a `monospacedDigit` elapsed counter (`1.4 s`), and a 2 pt indeterminate progress hairline at the tile's bottom edge. | Duration feedback prevents the "is it stuck?" question. |
+| **3500 ms** | Adds `connecting.slow` + a `Run Stream Doctor` ghost button. Narration keeps updating. | We admit the truth before the user concludes we are broken. |
+| **8000 ms** | Becomes the failure card (§12.6/§12.7) with the doctor's finding already computed in the background. | The first error message the user reads should already contain the cause. |
+
+First-frame handoff (§15.2) must not move anything: the video layer is created at the same frame
+rect as the ghost frame, so the transition is purely a cross-fade.
+
+### 15.2 First-frame handoff
+
+1. `StreamEvent.firstFrame(dimensions:)` arrives on the main actor.
+2. The video layer is inserted **below** the ghost/skeleton layer and given one frame to present.
+3. Ghost + shimmer cross-fade out over **120 ms** (`.easeOut`); the video layer's opacity goes
+   0 → 1 over the same 120 ms. `reduceMotion` → 0 ms (hard cut).
+4. The status dot animates amber → green with a single 300 ms pulse (scale 1 → 1.35 → 1).
+5. The stats chip populates with a 90 ms fade. `fps` shows `—` until 1 s of samples exist; it never
+   shows a wrong number.
+6. If the first frame arrives **within 400 ms** of the connection starting, steps 3–5 collapse into
+   a single 90 ms fade and **no narration is ever shown** — the fast path must look like "it was
+   already on".
+
+Resolution-change and stream-switch (sub → main) handoffs use the identical choreography with a
+60 ms cross-fade, and the tile frame never changes (aspect handling is inside the layer).
+
+### 15.3 Optimistic PTZ
+
+```
+keyDown / press
+  ├─ 0 ms   direction glyph appears on the video (48 pt, 70 % white, 90 ms fade-in);
+  │         the pad sector lights; a 1 pt accent arc shows the speed
+  ├─ 0 ms   ISAPI PUT /ISAPI/PTZCtrl/channels/{n}/continuous  (fire-and-forget, no await in the UI)
+  ├─ 400 ms watchdog re-sends the same continuous command (devices drop commands)
+  ├─ ≤1200 ms if the response is an error → glyph turns amber, 220 ms shake (3 pt),
+  │         toast `error.ptz.refused.body` with the device's reason
+  └─ keyUp  0 ms glyph fades (120 ms); PUT continuous with pan=0,tilt=0,zoom=0; hard stop after 8 s
+            of continuous movement regardless (safety, prevents a runaway camera)
+```
+
+- **Never** await the HTTP round trip before showing feedback; a Hikvision PTZ PUT is 30–150 ms and
+  the user's finger is faster.
+- Preset recall: the preset thumbnail scales 1 → 0.96 → 1 (`micro`) and its number badge fills with
+  accent immediately; a 1.2 s "moving" pip appears over the tile. On failure the badge returns and a
+  toast explains. We do **not** wait for the camera to physically arrive (there is no such event).
+- Two-way audio: the mic level meter appears the instant the key is pressed, before the audio
+  session is confirmed; if the session fails, the meter turns amber with `error.audio.pushFailed`.
+
+### 15.4 Optimistic settings
+
+| Change | Local effect | Remote | Failure handling |
+|---|---|---|---|
+| Image sliders (brightness…sharpness, night boost) | applied in the Metal shader **this frame** | debounced 250 ms trailing PUT, one in flight per camera, latest-wins with a monotonically increasing `revision` | slider springs back over 200 ms, toast names the reason, the local value is kept if "Adjust my view only" is on |
+| Day/Night, WDR, IR, BLC | control flips instantly, a 1.2 s "applying" pip on the control | immediate PUT | revert control + toast |
+| Quality (main/sub/third) | badge changes instantly, tile keeps showing the old stream until the new one has a frame (no black gap) | re-`SETUP` | badge reverts, banner `stream.switchFailed.body` |
+| Transport TCP/UDP | badge changes instantly | reconnect | reverts, banner |
+| Mute / volume | instant (local audio graph) | none | n/a |
+| Camera rename, colour tag, group move | instant everywhere (single source of truth) | `ConfigStore` debounced 500 ms | write failure → toast `error.saveFailed.*` + retry; UI keeps the value in memory |
+| Layout change | instant | none (persisted) | n/a |
+| Recording start | button flips to "recording" and the elapsed timer starts at 0.0 s within one frame | `AVAssetWriter` starts; the first sample may lag by up to one GOP | if the writer fails within 1.5 s: revert, toast with the reason (disk, permission, no keyframe) |
+
+**Anti-patterns (banned):** progress spinners on buttons that complete in < 400 ms; disabling a
+control while a request is in flight (use the optimistic value plus rollback); modal alerts for
+recoverable stream errors; layout shifts when data arrives; any UI that waits on ISAPI before
+rendering.
+
+---
+
+## 16. Accessibility & localization mechanics
+
+### 16.1 VoiceOver
+
+| Element | Label | Value | Traits / actions |
+|---|---|---|---|
+| Video tile | `a11y.tile.label` = “%1$@, camera %2$lld of %3$lld” | `a11y.tile.value` = “Live, H.265, 1920 by 1080, 25 frames per second” / “Connecting” / “Offline, retrying in 4 seconds” | `.isButton`; custom actions: Snapshot, Record, Fullscreen, PTZ, Close |
+| Status dot | — | included in the tile value | `.updatesFrequently` **not** set (we post `.announcement` only on transitions to offline/authFailed) |
+| Sidebar row | camera name | “Live · Perimeter · recording” | `.isSelected`; actions: Rename, Delete, Open Playback |
+| PTZ pad | `a11y.ptz.pad` = “Pan and tilt control” | “Centred” / “Moving up-left at speed 5” | 8 custom actions (Up, Down, …) + Home; arrow keys work with VO on via a “Pan” rotor |
+| Timeline | `a11y.timeline.label` = “Recording timeline for %1$@” | “10:14:38. Motion recording. 4 hours 12 minutes of footage today.” | `.adjustable` (increment = 10 s at the current zoom); custom actions: Next Event, Previous Event, Set In, Set Out |
+| Sparkline | metric name | “Bitrate 4.1 megabits per second, average 3.8, peak 6.2” | `.isStaticText`, hidden children |
+| Command palette | “Command palette” | “%1$lld results. %2$@ selected.” | announces the selected row on ↑↓ via `.accessibilityFocused` |
+| Toast | title + body | — | `.announcement` at `.high` priority for danger, `.default` otherwise |
+
+Rules: video content itself is never described (we don't invent vision); decorative gradients and
+shimmer are `.accessibilityHidden(true)`; every icon-only button has a label and, where the meaning
+is not obvious, an `accessibilityHint`.
+
+### 16.2 Keyboard & focus
+
+Full keyboard access with no traps: `⇥` order is Sidebar → Stage tiles (index order) → Inspector →
+toolbar; `⌃⇥`/`⌃⇧⇥` jumps between regions directly. Focus is always visible (2 pt accent ring,
+never removed on mouse use). `Esc` never traps (§11.1). Every menu action works with no window
+focused where it makes sense (opening Discovery, Settings, Preferences).
+
+### 16.3 Reduce Motion / Increase Contrast / Differentiate Without Color
+
+- `reduceMotion`: springs → 0.12 s `.easeOut` opacity; `matchedGeometryEffect` transitions → cross
+  fade; shimmer → a static 8 % bar; patrol cross-fade → hard cut; scan sweep → static bar; the live
+  dot stops breathing (stays at full opacity).
+- `increaseContrast`: strokes go from `subtle` to `strong`, tile focus ring to 3 pt, text drops
+  `tertiary` in favour of `secondary`, scrims darken from 55 % to 75 %.
+- `differentiateWithoutColor`: status dots gain glyphs (§4.2), the timeline heatmap gains hatch
+  patterns (§7.3), degraded/offline gain leading warning glyphs in banners.
+- `reduceTransparency`: sidebar and palette materials become solid `surface` fills.
+- Minimum hit targets 28×28 pt (tile chrome buttons are 24 pt glyphs in 28 pt targets); 44 pt for
+  anything in a first-run flow.
+
+### 16.4 Localization mechanics
+
+- `Localizable.xcstrings` per module; `String(localized:table:bundle:comment:)` everywhere, with a
+  `comment:` that states the surface and constraints (`"Tile banner, max 40 chars"`).
+- Both English and Russian ship complete (`FEATURES.md` P0). A missing Russian value falls back to
+  English with a build-time warning; CI fails on any untranslated key in a release build.
+- Pseudo-localization run (`-VigilPseudoLoc 1`) wraps every string with `⟦…⟧` and inflates it 35 %;
+  the UI must show no truncation or clipping in the 12 screenshot scenarios listed in §18.
+- Numbers, dates, durations, byte counts: `Date.FormatStyle`, `Duration.UnitsFormatStyle`,
+  `Measurement<UnitInformationStorage>.formatted()`, `.formatted(.number.precision(.fractionLength(1)))`.
+  Bitrate is `Measurement<UnitInformationStorage>` per second, rendered `"4.1 Mb/s"` / `"4,1 Мбит/с"`.
+- Keyboard shortcuts are **not** localized (⌘S stays ⌘S), but their menu titles are.
+- The timeline ruler switches to 24-hour ticks in locales without AM/PM automatically.
+
+---
+
+## 17. VigilUI / Vigil file manifest (for the contract author)
+
+```
+Sources/VigilUI/
+  State/            AppModel.swift  LayoutState.swift  SidebarSelection.swift  InspectorTab.swift
+                    PaletteState.swift  ToastQueue.swift  ShortcutStore.swift  FocusedValues.swift
+  Window/           MainWindowView.swift  MainToolbar.swift  WindowAccessor.swift  CinemaChrome.swift
+  Sidebar/          SidebarView.swift  CameraRow.swift  GroupRow.swift  SidebarFilterBar.swift
+                    SidebarFooter.swift  CameraContextMenu.swift  InlineRenameField.swift
+  Stage/            StageView.swift  StageRouter.swift  LayoutEngine.swift  TileContainer.swift
+                    TileChrome.swift  TileStateOverlay.swift  EmptyCellView.swift
+                    MosaicEditor.swift  PatrolController.swift  TileDropDelegate.swift
+  Inspector/        InspectorView.swift  InfoTab.swift  StreamTab.swift  PTZTab.swift  ImageTab.swift
+                    EventsTab.swift  RecordingTab.swift  SystemOverview.swift  PTZPad.swift
+                    PresetGrid.swift  ScheduleGrid.swift
+  Playback/         PlaybackWindowView.swift  PlaybackModel.swift  TimelineView.swift
+                    TimelineRuler.swift  TimelineHeatmap.swift  TimelineLane.swift
+                    ScrubPreviewCard.swift  TransportBar.swift  ExportSheet.swift  DatePickerPopover.swift
+  Discovery/        DiscoveryRootView.swift  DiscoveryModel.swift  ScanStepView.swift
+                    ResultsListView.swift  CredentialsStepView.swift  ChannelStepView.swift
+                    ManualAddForm.swift  CSVImportSheet.swift  ActivateDeviceSheet.swift
+  Events/           EventsFeedView.swift  EventRow.swift  EventCard.swift  EventFilterBar.swift
+                    WatchModeOverlay.swift
+  Palette/          CommandPaletteOverlay.swift  PaletteIndex.swift  FuzzyMatcher.swift
+                    PaletteRow.swift  PaletteActions.swift
+  Wall/             VideoWallView.swift  ScreenPicker.swift
+  Settings/         SettingsView.swift  GeneralPane.swift  StreamsPane.swift  RecordingPane.swift
+                    NotificationsPane.swift  ShortcutsPane.swift  AdvancedPane.swift  AboutPane.swift
+  Shared/           VEmptyState.swift  VToast.swift  VSkeleton.swift  VKeyCap.swift  VSparkline.swift
+                    VStatPill.swift  StreamDoctorSheet.swift  CheatSheetOverlay.swift
+                    Formatters.swift  Strings.swift (generated key accessors)
+  Resources/        Localizable.xcstrings  (EN + RU)
+Sources/Vigil/
+  VigilApp.swift  VigilCommands.swift  AppEnvironment.swift  MenuBarExtraContent.swift
+  URLSchemeHandler.swift  AppDelegate.swift (sleep/wake, reopen, dock badge)
+```
+
+Deep links (grammar owned by `spec-core.md`) map to UI as follows:
+
+| URL | Effect |
+|---|---|
+| `vigil://camera/<uuid>` | main window, focus that camera's tile (assign if absent) |
+| `vigil://camera/<uuid>?action=snapshot` | snapshot without changing the layout, toast confirms |
+| `vigil://camera/<uuid>/playback?t=2026-07-26T10:14:38Z` | opens a playback window at that instant |
+| `vigil://layout/<name>` | applies a layout preset |
+| `vigil://events` | main window, Events route |
+| `vigil://wall?screen=2` | opens the video wall on screen 2 |
+| `vigil://settings/streams` | opens Settings at the Streams pane |
+
+---
+
+## 18. Acceptance checklist (UX)
+
+1. Cold launch to fully drawn chrome ≤ 400 ms; every tile is in the connecting state in the first
+   frame; no layout shift occurs when frames arrive.
+2. A connection that produces a first frame within 400 ms shows **no** narration text at any point.
+3. Switching layout (⌘1…⌘8) never tears down a decode session for a camera that remains on screen;
+   measured by a decode-session counter in the developer overlay.
+4. Every action in §11.1 is reachable from the menu bar, and the menu shows the same shortcut the
+   registry holds after a rebind.
+5. `Esc` follows the §11.1 precedence chain exactly and never closes the main window.
+6. The palette returns ranked results within 2 ms for 2 000 items and is fully keyboard operable.
+7. Every failure surface names a cause **and** an action; no modal alert appears for any stream
+   error (verified by a UI test that faults each of the 12 conditions in §8.4).
+8. Offline tiles show a live 1 Hz countdown matching the backoff table and a dimmed last-known frame.
+9. Auth failure never auto-retries.
+10. Sidebar thumbnails stop entirely when the window is occluded (verified by an instrument trace
+    showing zero JPEG requests).
+11. Timeline zoom spans exactly the 9 stops of §7.3; pinch anchors at the gesture centroid within
+    1 pt; scrub preview cards never change size.
+12. Multi-camera sync keeps panes within ±40 ms and does not re-seek to correct drift.
+13. Pseudo-localization at +35 % shows no truncation in: main window, sidebar row, tile chrome,
+    inspector Stream tab, playback transport, discovery step 3, export sheet, all 7 settings panes,
+    palette row, toast, empty states, cheat sheet.
+14. VoiceOver can add a camera, assign it to a cell, take a snapshot, start recording, and export a
+    clip without a mouse.
+15. `reduceMotion` removes every spring listed in `DESIGN.md` §Motion; no animation drops video
+    below 60 fps (developer overlay frame-time p99 < 8.3 ms with 16 tiles).
+16. Window frames, sidebar/inspector state, layout, and playback scrub position all restore after
+    quit and relaunch.
+17. Every user-visible string resolves through `Localizable.xcstrings`; a debug assertion fires on
+    any literal string passed to a `Text` in `VigilUI`.
+18. Sleep → wake with the network changed reconnects every camera within 3 s of wake, with exactly
+    one toast.

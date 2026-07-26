@@ -1,0 +1,522 @@
+<title>Vigil — main window</title>
+<meta name="shot-viewport" content="1440x900">
+<style>
+  /* Built from docs/DESIGN.md (tokens, §3–§7) and docs/UX.md (§3.1 wireframe, §4 sidebar,
+     §5.3 tile anatomy, §6.2 inspector).
+     Substitutions forced by the Linux container, and nowhere else:
+       · SF Pro  -> Inter Variable   (near-identical metrics)
+       · SF Mono -> JetBrains Mono
+       · SF Symbols -> hand-drawn inline SVG at the same optical weight
+       · real camera video -> procedural gradient + SVG film grain
+     Every colour, size, radius, stroke and shadow is the specified value. */
+  :root {
+    --canvas:#0B0C0F; --sidebar:#101116; --surface:#16181D; --raised:#1D2026; --overlay:#252932;
+    --text-1:#F2F4F8; --text-2:#A7AEBC; --text-3:#88909D; --text-dis:#4E5563;
+    --accent:#7B61FF; --accent-fill:#6247E8; --focus:#9581FF;
+    --live:#FF2E43; --ok:#32D74B; --warn:#FFD426; --motion:#FF9F0A; --danger:#FF5F52;
+    --continuous:#3B9CFF;
+    --id1:#2FB8E8; --id2:#37D6A0; --id3:#F0DE5C; --id4:#F5674A; --id5:#A867F5; --id6:#7A8BA4;
+    --s-sub:rgba(255,255,255,.06); --s-def:rgba(255,255,255,.10); --s-str:rgba(255,255,255,.18);
+    --s-vid:rgba(255,255,255,.14);
+    --ui:"Inter Variable",Inter,system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#000;font-family:var(--ui);font-size:13px;line-height:18px;color:var(--text-1);
+       -webkit-font-smoothing:antialiased}
+  .win{width:1440px;height:900px;display:grid;
+       grid-template-columns:264px 1fr 320px;grid-template-rows:52px 1fr;
+       background:var(--canvas);overflow:hidden}
+  svg{display:block}
+  .ic{width:15px;height:15px;stroke:currentColor;stroke-width:1.6;fill:none;
+      stroke-linecap:round;stroke-linejoin:round}
+  .ic.sm{width:12px;height:12px;stroke-width:1.8}
+
+  /* ───────────── toolbar (unified, 52 pt) ───────────── */
+  .tb{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:0 14px;
+      background:rgba(22,24,29,.72);backdrop-filter:blur(30px) saturate(1.7);
+      border-bottom:1px solid var(--s-def)}
+  .lights{display:flex;gap:8px;margin-right:8px}
+  .lights i{width:12px;height:12px;border-radius:50%;display:block}
+  .search{display:flex;align-items:center;gap:6px;width:200px;height:28px;padding:0 9px;
+          background:var(--raised);border:1px solid var(--s-def);border-radius:8px;color:var(--text-3)}
+  .search span{font-size:13px}
+  .search kbd{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-dis)}
+  .seg{display:flex;height:28px;padding:2px;background:var(--raised);
+       border:1px solid var(--s-def);border-radius:8px;gap:2px}
+  .seg button{width:30px;height:24px;border:0;border-radius:6px;background:transparent;
+              color:var(--text-3);display:grid;place-items:center;cursor:default}
+  .seg button.on{background:var(--accent-fill);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
+  .tbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;
+        background:transparent;border:1px solid transparent;color:var(--text-2);font-size:13px}
+  .tbtn.bordered{border-color:var(--s-def);background:var(--raised)}
+  .tbtn kbd{font-family:var(--mono);font-size:10px;color:var(--text-3);
+            background:rgba(255,255,255,.06);border:1px solid var(--s-sub);
+            border-radius:4px;padding:1px 4px}
+  .spacer{flex:1}
+  .title{position:absolute;left:50%;transform:translateX(-50%);font-size:13px;font-weight:600;
+         color:var(--text-2);pointer-events:none}
+
+  /* ───────────── sidebar ───────────── */
+  .sb{background:var(--sidebar);border-right:1px solid var(--s-def);
+      display:flex;flex-direction:column;overflow:hidden}
+  .sb-scroll{flex:1;padding:8px 8px 0;overflow:hidden}
+  .sec{display:flex;align-items:center;height:22px;padding:0 6px;margin-top:10px;
+       font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--text-3)}
+  .sec:first-child{margin-top:2px}
+  .sec .add{margin-left:auto;color:var(--text-dis)}
+  .row{display:flex;align-items:center;gap:8px;height:28px;padding:0 6px;border-radius:6px;
+       font-size:13px;color:var(--text-2)}
+  .row.sel{background:#161427;color:var(--text-1)}
+  .row .cnt{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-3)}
+  .row .gtag{width:14px;height:14px;border-radius:4px;display:grid;place-items:center;
+             font-size:8px;font-weight:700;color:#0B0C0F}
+
+  /* camera row, 44 pt */
+  .cam{display:flex;align-items:center;gap:8px;height:44px;padding:0 6px 0 0;border-radius:6px;
+       position:relative;overflow:hidden}
+  .cam.sel{background:#161427}
+  .cam .rail{position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:0 2px 2px 0}
+  .cam .thumb{width:44px;height:30px;margin-left:9px;border-radius:4px;background:#000;
+              border:1px solid var(--s-vid);flex:none;overflow:hidden;position:relative}
+  .cam .meta{flex:1;min-width:0}
+  .cam .nm{display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;color:var(--text-1);
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cam .sub{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:var(--text-3);
+            margin-top:1px}
+  .dot{width:6px;height:6px;border-radius:50%;flex:none}
+  .badge{font-family:var(--mono);font-size:9px;color:var(--text-3);
+         border:1px solid var(--s-sub);border-radius:4px;padding:0 3px;line-height:13px}
+  .spark{width:34px;height:14px;flex:none;opacity:.85}
+
+  .sb-foot{height:32px;display:flex;align-items:center;gap:7px;padding:0 12px;
+           border-top:1px solid var(--s-sub);color:var(--text-3);font-size:11px}
+  .sb-foot b{font-family:var(--mono);font-weight:500;color:var(--text-2)}
+
+  /* ───────────── stage ───────────── */
+  .stage{padding:8px;position:relative;overflow:hidden}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);
+        gap:2px;height:100%}  /* 2 pt gutter per DESIGN.md §5.1, ruling C2 */
+  .tile{position:relative;background:#000;border-radius:14px;overflow:hidden;
+        border:1px solid var(--s-sub)}
+  .tile.big{grid-column:1/3;grid-row:1/3}
+  .tile.focus{border:2px solid var(--accent);box-shadow:0 0 0 1px rgba(149,129,255,.35),
+              0 0 12px rgba(123,97,255,.28)}
+  .vid{position:absolute;inset:0}
+  /* Procedural stand-in for real footage: perspective ground, a lamp pool, low-contrast
+     architecture and a vignette. Present only so the tiles read as camera frames in a still. */
+  .scene{position:absolute;inset:0;overflow:hidden}
+  .scene .ground{position:absolute;left:-20%;right:-20%;bottom:-10%;height:62%;
+    background:linear-gradient(180deg,#0D0E11 0%,#1A1712 38%,#2A2419 72%,#332B1D 100%)}
+  .scene .sky{position:absolute;inset:0 0 42% 0;
+    background:linear-gradient(180deg,#0A0C10,#141A22 70%,#1B1F26)}
+  .scene .pool{position:absolute;left:50%;bottom:-14%;width:78%;height:52%;transform:translateX(-50%);
+    background:radial-gradient(50% 50% at 50% 50%,rgba(255,206,140,.30),rgba(255,196,120,.07) 55%,transparent 78%)}
+  .scene .wallL{position:absolute;left:0;top:8%;width:26%;bottom:34%;
+    background:linear-gradient(90deg,#22252B,#171A1F 70%,#121418);
+    clip-path:polygon(0 0,100% 16%,100% 84%,0 100%)}
+  .scene .wallR{position:absolute;right:0;top:6%;width:22%;bottom:30%;
+    background:linear-gradient(270deg,#1E2127,#15171C 70%,#111317);
+    clip-path:polygon(100% 0,0 14%,0 86%,100% 100%)}
+  .scene .door{position:absolute;left:36%;top:20%;width:28%;bottom:32%;border-radius:3px 3px 0 0;
+    background:linear-gradient(180deg,#2B2621,#1D1A16);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+  .scene .door::after{content:"";position:absolute;right:14%;top:52%;width:5%;height:5%;
+    border-radius:50%;background:rgba(255,222,170,.5)}
+  .scene .step{position:absolute;left:26%;right:26%;bottom:20%;height:7%;
+    background:linear-gradient(180deg,#3A3226,#2A2419)}
+  .scene .vig{position:absolute;inset:0;
+    background:radial-gradient(78% 68% at 50% 46%,transparent 42%,rgba(0,0,0,.62) 100%)}
+  .scene.night .ground{filter:brightness(.42) saturate(.35)}
+  .scene.night .pool{opacity:.35}
+  .grain{position:absolute;inset:0;opacity:.11;mix-blend-mode:overlay;
+         background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/></filter><rect width='120' height='120' filter='url(%23n)'/></svg>")}
+  .chrome-t{position:absolute;left:0;right:0;top:0;display:flex;align-items:flex-start;
+            gap:6px;padding:8px}
+  .chrome-b{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:flex-end;
+            gap:6px;padding:8px}
+  .chip{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:6px;
+        background:rgba(0,0,0,.62);border:1px solid var(--s-vid);
+        font-size:11px;font-weight:600;color:#fff}
+  .chip .tagdot{width:6px;height:6px;border-radius:50%}
+  .stats{margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 7px;
+         border-radius:6px;background:rgba(0,0,0,.62);border:1px solid var(--s-vid);
+         font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.9)}
+  .stats .bolt{color:var(--warn)}
+  .rec{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:10px;
+       background:rgba(222,19,39,.9);font-size:10px;font-weight:700;letter-spacing:.5px;color:#fff}
+  .rec i{width:6px;height:6px;border-radius:50%;background:#fff}
+  .elapsed{font-family:var(--mono);font-size:11px;font-weight:600;color:#fff;
+           background:rgba(0,0,0,.62);border:1px solid var(--s-vid);border-radius:6px;
+           padding:2px 7px;line-height:16px}
+  .acts{margin-left:auto;display:flex;gap:4px}
+  .acts button{width:24px;height:24px;border:0;border-radius:6px;background:rgba(0,0,0,.62);
+               border:1px solid var(--s-vid);color:#fff;display:grid;place-items:center}
+  .acts button.on{background:rgba(222,19,39,.92);border-color:transparent}
+  .tname{position:absolute;left:8px;top:8px}
+
+  /* tile states */
+  .skel{position:absolute;inset:0;background:#0E0F13;overflow:hidden}
+  .skel::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.055) 48%,transparent 66%)}
+  .centre{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:7px;
+          text-align:center}
+  .ring{width:26px;height:26px;border-radius:50%;border:2px solid rgba(255,255,255,.14);
+        border-top-color:var(--accent)}
+  .centre .t{font-size:12px;font-weight:600;color:var(--text-2)}
+  .centre .s{font-family:var(--mono);font-size:10px;color:var(--text-3)}
+  .warnbar{position:absolute;left:8px;top:34px;display:inline-flex;align-items:center;gap:6px;
+           height:22px;padding:0 8px;border-radius:6px;background:rgba(255,212,38,.16);
+           border:1px solid rgba(255,212,38,.38);color:var(--warn);font-size:11px;font-weight:600}
+  .empty{background:var(--canvas);border:1px dashed var(--s-def);display:grid;place-content:center;
+         justify-items:center;gap:6px;color:var(--text-dis)}
+  .empty .t{font-size:12px;font-weight:500;color:var(--text-3)}
+
+  /* stage toast */
+  .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+         display:flex;align-items:center;gap:9px;height:36px;padding:0 14px;white-space:nowrap;
+         border-radius:14px;background:rgba(37,41,50,.82);backdrop-filter:blur(26px) saturate(1.6);
+         border:1px solid var(--s-str);
+         box-shadow:0 18px 48px rgba(0,0,0,.62),inset 0 1px 0 rgba(255,255,255,.10);
+         font-size:12px;color:var(--text-1)}
+  .toast .k{color:var(--warn);display:flex}
+  .toast .act{margin-left:auto;font-size:11px;font-weight:600;color:var(--focus)}
+
+  /* ───────────── inspector ───────────── */
+  .insp{background:var(--surface);border-left:1px solid var(--s-def);
+        display:flex;flex-direction:column;overflow:hidden}
+  .insp-hd{padding:14px 16px 12px;border-bottom:1px solid var(--s-sub)}
+  .insp-hd h2{font-size:17px;font-weight:600;letter-spacing:-.2px}
+  .insp-hd .st{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;
+               font-weight:500;color:var(--text-3)}
+  .tabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--s-sub)}
+  .tabs button{border:0;background:transparent;color:var(--text-3);font-size:12px;font-weight:500;
+               padding:5px 8px 8px;position:relative}
+  .tabs button.on{color:var(--text-1)}
+  .tabs button.on::after{content:"";position:absolute;left:6px;right:6px;bottom:0;height:2px;
+                         border-radius:1px;background:var(--accent)}
+  .insp-body{flex:1;padding:12px 16px;overflow:hidden}
+  .kv{display:flex;align-items:center;height:24px;font-size:12px}
+  .kv .k{color:var(--text-3);font-weight:500}
+  .kv .v{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:500;color:var(--text-1)}
+  .kv .v.warnv{color:var(--warn)}
+  .kv .v.okv{color:var(--ok)}
+  .isec{font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;
+        color:var(--text-dis);margin:14px 0 4px}
+  .chart{height:46px;margin:4px 0 2px;border-radius:6px;background:var(--raised);
+         border:1px solid var(--s-sub);position:relative;overflow:hidden}
+  .hw{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:10px;
+      background:rgba(255,212,38,.14);color:var(--warn);font-size:10px;font-weight:700;
+      letter-spacing:.4px}
+  .storage{height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:6px}
+  .storage i{display:block;height:100%;width:74%;background:linear-gradient(90deg,var(--accent),#4E3BC7)}
+</style>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M6.5 3v10"/></symbol>
+    <symbol id="i-inspector" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M10.5 3v10"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13.5 13.5"/></symbol>
+    <symbol id="i-g1" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.6"/></symbol>
+    <symbol id="i-g4" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="5" height="5" rx="1.2"/><rect x="8.5" y="2.5" width="5" height="5" rx="1.2"/><rect x="2.5" y="8.5" width="5" height="5" rx="1.2"/><rect x="8.5" y="8.5" width="5" height="5" rx="1.2"/></symbol>
+    <symbol id="i-g15" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="7" height="7" rx="1.2"/><rect x="10.5" y="2.5" width="3" height="3" rx="1"/><rect x="10.5" y="6.5" width="3" height="3" rx="1"/><rect x="2.5" y="10.5" width="3" height="3" rx="1"/><rect x="6.5" y="10.5" width="3" height="3" rx="1"/><rect x="10.5" y="10.5" width="3" height="3" rx="1"/></symbol>
+    <symbol id="i-g9" viewBox="0 0 16 16"><rect x="2" y="2" width="3.4" height="3.4" rx=".9"/><rect x="6.3" y="2" width="3.4" height="3.4" rx=".9"/><rect x="10.6" y="2" width="3.4" height="3.4" rx=".9"/><rect x="2" y="6.3" width="3.4" height="3.4" rx=".9"/><rect x="6.3" y="6.3" width="3.4" height="3.4" rx=".9"/><rect x="10.6" y="6.3" width="3.4" height="3.4" rx=".9"/><rect x="2" y="10.6" width="3.4" height="3.4" rx=".9"/><rect x="6.3" y="10.6" width="3.4" height="3.4" rx=".9"/><rect x="10.6" y="10.6" width="3.4" height="3.4" rx=".9"/></symbol>
+    <symbol id="i-cycle" viewBox="0 0 16 16"><path d="M2.5 6.5A5.5 5.5 0 0 1 13 5"/><path d="M13.5 9.5A5.5 5.5 0 0 1 3 11"/><path d="M11 2.5 13.3 4.8 11 7"/><path d="M5 13.5 2.7 11.2 5 9"/></symbol>
+    <symbol id="i-cmd" viewBox="0 0 16 16"><path d="M5.5 4.5h5v7h-5z"/><circle cx="4" cy="4" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/></symbol>
+    <symbol id="i-more" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="5.2" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="10.8" cy="8" r=".7" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.3"/><path d="M8 1.6v1.7M8 12.7v1.7M1.6 8h1.7M12.7 8h1.7M3.5 3.5l1.2 1.2M11.3 11.3l1.2 1.2M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 16 16"><path d="M3 6h2l3-2.5v9L5 10H3z"/><path d="M10.5 6.2l3 3.6M13.5 6.2l-3 3.6"/></symbol>
+    <symbol id="i-cam" viewBox="0 0 16 16"><rect x="2" y="4.5" width="12" height="8.5" rx="2"/><circle cx="8" cy="8.7" r="2.3"/><path d="M6 4.5 6.8 3h2.4l.8 1.5"/></symbol>
+    <symbol id="i-rec" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="2.6" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-dpad" viewBox="0 0 16 16"><path d="M6.2 2.4h3.6v3.8h3.8v3.6H9.8v3.8H6.2V9.8H2.4V6.2h3.8z"/></symbol>
+    <symbol id="i-qual" viewBox="0 0 16 16"><path d="M6.5 3H3v3.5M9.5 13H13V9.5"/><path d="M3 3l4 4M13 13l-4-4"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 16 16"><path d="M3 6V3h3M13 10v3h-3M10 3h3v3M6 13H3v-3"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.6 14.2 13H1.8z"/><path d="M8 6.4v3.1M8 11.3v.1"/></symbol>
+  </defs>
+</svg>
+
+<div class="win">
+  <!-- ══════════════ toolbar ══════════════ -->
+  <div class="tb">
+    <div class="lights">
+      <i style="background:#FF5F57"></i><i style="background:#FEBC2E"></i><i style="background:#28C840"></i>
+    </div>
+    <button class="tbtn" style="padding:0 7px"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+    <div class="search">
+      <svg class="ic sm"><use href="#i-search"/></svg><span>Search cameras</span><kbd>/</kbd>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg">
+      <button><svg class="ic"><use href="#i-g1"/></svg></button>
+      <button><svg class="ic"><use href="#i-g4"/></svg></button>
+      <button class="on"><svg class="ic"><use href="#i-g15"/></svg></button>
+      <button><svg class="ic"><use href="#i-g9"/></svg></button>
+    </div>
+    <div class="spacer"></div>
+    <button class="tbtn"><svg class="ic"><use href="#i-cycle"/></svg>Cycle</button>
+    <button class="tbtn bordered"><svg class="ic"><use href="#i-cmd"/></svg><kbd>⌘K</kbd></button>
+    <button class="tbtn" style="padding:0 7px"><svg class="ic"><use href="#i-more"/></svg></button>
+    <button class="tbtn" style="padding:0 7px;color:var(--accent)"><svg class="ic"><use href="#i-inspector"/></svg></button>
+  </div>
+
+  <!-- ══════════════ sidebar ══════════════ -->
+  <div class="sb">
+    <div class="sb-scroll">
+      <div class="sec">Live</div>
+      <div class="row sel"><svg class="ic sm" style="color:var(--accent)"><use href="#i-g15"/></svg>Current Layout</div>
+
+      <div class="sec">Groups <svg class="ic sm add"><use href="#i-plus"/></svg></div>
+      <div class="row"><span class="gtag" style="background:var(--id1)">A</span>Perimeter<span class="cnt">4</span></div>
+      <div class="row"><span class="gtag" style="background:var(--id2)">B</span>Indoors<span class="cnt">3</span></div>
+      <div class="row"><span class="gtag" style="background:var(--id6)">C</span>Gate<span class="cnt">2</span></div>
+
+      <div class="sec">Cameras <svg class="ic sm add"><use href="#i-plus"/></svg></div>
+
+      <div class="cam sel">
+        <span class="rail" style="background:var(--id1)"></span>
+        <span class="thumb"><span class="scene" style="filter:brightness(1.55)"><span class="sky"></span>
+          <span class="ground"></span><span class="door" style="left:32%;width:36%"></span>
+          <span class="pool"></span></span></span>
+        <span class="meta">
+          <span class="nm">Front Door</span>
+          <span class="sub"><i class="dot" style="background:var(--ok)"></i><span class="badge">H.265</span><span class="badge">1080p</span></span>
+        </span>
+        <svg class="spark" viewBox="0 0 34 14"><polyline points="0,11 4,9 8,10 12,6 16,7 20,4 24,6 28,3 34,4"
+          fill="none" stroke="#37D6A0" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      </div>
+
+      <div class="cam">
+        <span class="rail" style="background:var(--id2)"></span>
+        <span class="thumb"><span class="scene" style="filter:brightness(1.55) hue-rotate(96deg) saturate(.6)">
+          <span class="sky"></span><span class="ground"></span><span class="pool"></span></span></span>
+        <span class="meta">
+          <span class="nm">Garage</span>
+          <span class="sub"><i class="dot" style="background:var(--ok)"></i><span class="badge">H.264</span><span class="badge">720p</span></span>
+        </span>
+        <svg class="spark" viewBox="0 0 34 14"><polyline points="0,12 5,11 10,12 15,10 20,11 25,9 30,10 34,9"
+          fill="none" stroke="#37D6A0" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      </div>
+
+      <div class="cam">
+        <span class="rail" style="background:var(--id3)"></span>
+        <span class="thumb"><span class="skel"></span></span>
+        <span class="meta">
+          <span class="nm">Lobby</span>
+          <span class="sub"><i class="dot" style="background:var(--accent)"></i><span style="font-family:var(--mono);font-size:9px">connecting 62%</span></span>
+        </span>
+        <svg class="spark" viewBox="0 0 34 14"><polyline points="0,13 34,13" fill="none" stroke="#4E5563" stroke-width="1.3"/></svg>
+      </div>
+
+      <div class="cam">
+        <span class="rail" style="background:var(--id4)"></span>
+        <span class="thumb"><span class="scene" style="filter:grayscale(1) brightness(1.65)">
+          <span class="sky"></span><span class="ground"></span><span class="pool"></span></span></span>
+        <span class="meta">
+          <span class="nm">Back Yard</span>
+          <span class="sub"><i class="dot" style="background:var(--ok)"></i><span class="badge">H.265</span><span class="badge">1080p</span></span>
+        </span>
+        <svg class="spark" viewBox="0 0 34 14"><polyline points="0,9 4,7 8,8 12,5 16,3 20,5 24,2 28,4 34,2"
+          fill="none" stroke="#37D6A0" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      </div>
+
+      <div class="cam">
+        <span class="rail" style="background:var(--id6)"></span>
+        <span class="thumb"><span class="scene night" style="filter:brightness(1.7)">
+          <span class="sky"></span><span class="ground"></span><span class="pool"></span></span></span>
+        <span class="meta">
+          <span class="nm">Side Gate</span>
+          <span class="sub"><i class="dot" style="background:var(--warn)"></i><span style="color:var(--warn);font-family:var(--mono);font-size:9px">3.1% loss</span></span>
+        </span>
+        <svg class="spark" viewBox="0 0 34 14"><polyline points="0,6 4,8 8,5 12,10 16,6 20,12 24,7 28,11 34,8"
+          fill="none" stroke="#FFD426" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      </div>
+
+      <div class="cam">
+        <span class="rail" style="background:var(--id5)"></span>
+        <span class="thumb"><span class="vid" style="background:#0A0A0C"></span></span>
+        <span class="meta">
+          <span class="nm" style="color:var(--text-3)">Hallway</span>
+          <span class="sub"><i class="dot" style="background:var(--text-dis)"></i><span style="font-size:10px">offline · retry 8 s</span></span>
+        </span>
+        <svg class="spark" viewBox="0 0 34 14"><polyline points="0,13 34,13" fill="none" stroke="#4E5563" stroke-width="1.3"/></svg>
+      </div>
+
+      <div class="sec" style="margin-top:14px">Library</div>
+      <div class="row">Recordings</div>
+      <div class="row">Events<span class="cnt" style="color:var(--motion)">12</span></div>
+      <div class="row">Bookmarks</div>
+    </div>
+    <div class="sb-foot">
+      <svg class="ic sm"><use href="#i-gear"/></svg><b>6</b> live · <b>1.8 Gb/s</b>
+    </div>
+  </div>
+
+  <!-- ══════════════ stage ══════════════ -->
+  <div class="stage">
+    <div class="grid">
+      <!-- hero tile -->
+      <div class="tile big focus">
+        <div class="scene">
+          <div class="sky"></div><div class="ground"></div>
+          <div class="wallL"></div><div class="wallR"></div>
+          <div class="door"></div><div class="step"></div>
+          <div class="pool"></div><div class="vig"></div>
+        </div>
+        <div class="grain"></div>
+        <div class="chrome-t">
+          <span class="chip"><span class="tagdot" style="background:var(--id1)"></span>Front Door</span>
+          <span class="stats">H.265 · 1920×1080 · 25 fps <span class="bolt">⚡</span></span>
+          <span class="rec"><i></i>REC</span>
+        </div>
+        <div class="chrome-b">
+          <span class="elapsed">00:04:12</span>
+          <span class="acts">
+            <button><svg class="ic sm"><use href="#i-mute"/></svg></button>
+            <button><svg class="ic sm"><use href="#i-cam"/></svg></button>
+            <button class="on"><svg class="ic sm"><use href="#i-rec"/></svg></button>
+            <button><svg class="ic sm"><use href="#i-dpad"/></svg></button>
+            <button><svg class="ic sm"><use href="#i-qual"/></svg></button>
+            <button><svg class="ic sm"><use href="#i-fit"/></svg></button>
+            <button><svg class="ic sm"><use href="#i-x"/></svg></button>
+          </span>
+        </div>
+      </div>
+
+      <!-- Garage -->
+      <div class="tile">
+        <div class="scene night" style="filter:hue-rotate(96deg) saturate(.55)">
+          <div class="sky"></div><div class="ground"></div><div class="wallL"></div>
+          <div class="door" style="left:22%;width:52%;top:26%"></div>
+          <div class="pool"></div><div class="vig"></div>
+        </div>
+        <div class="grain"></div>
+        <div class="chrome-t">
+          <span class="chip"><span class="tagdot" style="background:var(--id2)"></span>Garage</span>
+          <span class="stats">25 fps</span>
+        </div>
+      </div>
+
+      <!-- Lobby: connecting -->
+      <div class="tile">
+        <div class="skel"></div>
+        <div class="centre">
+          <div class="ring"></div>
+          <div class="t">Connecting…</div>
+          <div class="s">negotiating stream · 0.6 s</div>
+        </div>
+        <div class="chrome-t">
+          <span class="chip"><span class="tagdot" style="background:var(--id3)"></span>Lobby</span>
+        </div>
+      </div>
+
+      <!-- Back Yard -->
+      <div class="tile">
+        <div class="scene" style="filter:grayscale(1) brightness(1.12)">
+          <div class="sky"></div><div class="ground"></div><div class="wallR"></div>
+          <div class="step" style="bottom:12%"></div><div class="pool" style="opacity:.22"></div>
+          <div class="vig"></div>
+        </div>
+        <div class="grain" style="opacity:.16"></div>
+        <div class="chrome-t">
+          <span class="chip"><span class="tagdot" style="background:var(--id4)"></span>Back Yard</span>
+          <span class="stats">20 fps</span>
+        </div>
+      </div>
+
+      <!-- Side Gate: degraded -->
+      <div class="tile">
+        <div class="scene night">
+          <div class="sky"></div><div class="ground"></div><div class="wallL" style="width:16%"></div>
+          <div class="wallR" style="width:30%"></div><div class="pool"></div><div class="vig"></div>
+        </div>
+        <div class="grain" style="opacity:.2"></div>
+        <div class="chrome-t">
+          <span class="chip"><span class="tagdot" style="background:var(--id6)"></span>Side Gate</span>
+        </div>
+        <div class="warnbar">
+          <svg class="ic sm"><use href="#i-warn"/></svg>3.1% packet loss
+        </div>
+      </div>
+
+      <!-- Hallway: offline -->
+      <div class="tile">
+        <div class="vid" style="background:linear-gradient(180deg,#141519,#0A0A0C)"></div>
+        <div class="vid" style="background:radial-gradient(70% 70% at 50% 45%,#20222A 0%,transparent 70%);opacity:.5"></div>
+        <div class="vid" style="background:rgba(0,0,0,.82)"></div>
+        <div class="centre">
+          <div class="t" style="color:var(--text-3)">Camera offline</div>
+          <div class="s">retrying in 8 s · last frame 14:19:02</div>
+        </div>
+        <div class="chrome-t">
+          <span class="chip" style="opacity:.6"><span class="tagdot" style="background:var(--id5)"></span>Hallway</span>
+        </div>
+      </div>
+
+      <div class="tile empty">
+        <svg class="ic" style="width:22px;height:22px;opacity:.55"><use href="#i-plus"/></svg>
+        <span class="t">Add camera</span>
+      </div>
+      <div class="tile empty">
+        <svg class="ic" style="width:22px;height:22px;opacity:.55"><use href="#i-plus"/></svg>
+        <span class="t">Add camera</span>
+      </div>
+      <div class="tile empty">
+        <svg class="ic" style="width:22px;height:22px;opacity:.55"><use href="#i-plus"/></svg>
+        <span class="t">Add camera</span>
+      </div>
+    </div>
+
+    <div class="toast">
+      <span class="k"><svg class="ic sm"><use href="#i-warn"/></svg></span>
+      Side Gate: 3.1% packet loss — switched to TCP
+      <span class="act" style="margin-left:14px">Run Stream Doctor</span>
+    </div>
+  </div>
+
+  <!-- ══════════════ inspector ══════════════ -->
+  <div class="insp">
+    <div class="insp-hd">
+      <h2>Front Door</h2>
+      <div class="st">
+        <i class="dot" style="background:var(--ok)"></i>Live · H.265 · TCP interleaved
+      </div>
+    </div>
+    <div class="tabs">
+      <button>Info</button><button class="on">Stream</button><button>PTZ</button>
+      <button>Image</button><button>Events</button><button>Rec</button>
+    </div>
+    <div class="insp-body">
+      <div class="isec">Bitrate — last 60 s</div>
+      <div class="chart">
+        <svg viewBox="0 0 288 46" preserveAspectRatio="none" style="width:100%;height:100%">
+          <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#7B61FF" stop-opacity=".42"/>
+            <stop offset="1" stop-color="#7B61FF" stop-opacity="0"/></linearGradient></defs>
+          <path d="M0,32 L18,29 L36,31 L54,24 L72,27 L90,21 L108,25 L126,18 L144,22 L162,16 L180,20 L198,14 L216,19 L234,13 L252,17 L270,12 L288,15 L288,46 L0,46 Z" fill="url(#bg)"/>
+          <polyline points="0,32 18,29 36,31 54,24 72,27 90,21 108,25 126,18 144,22 162,16 180,20 198,14 216,19 234,13 252,17 270,12 288,15"
+            fill="none" stroke="#7B61FF" stroke-width="1.6" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="kv"><span class="k">Bitrate</span><span class="v">4.1 Mb/s</span></div>
+      <div class="kv"><span class="k">Resolution</span><span class="v">1920×1080</span></div>
+      <div class="kv"><span class="k">Framerate</span><span class="v">25.0 fps</span></div>
+      <div class="kv"><span class="k">Keyframe int.</span><span class="v">2.0 s</span></div>
+
+      <div class="isec">Transport health</div>
+      <div class="kv"><span class="k">Packet loss</span><span class="v okv">0.02 %</span></div>
+      <div class="kv"><span class="k">Jitter</span><span class="v">6 ms</span></div>
+      <div class="kv"><span class="k">Reordered</span><span class="v">3</span></div>
+      <div class="kv"><span class="k">Decode queue</span><span class="v">2 frames</span></div>
+      <div class="kv"><span class="k">Latency</span><span class="v">186 ms</span></div>
+      <div class="kv"><span class="k">Decode</span><span class="v"><span class="hw">⚡ HARDWARE</span></span></div>
+
+      <div class="isec">Device</div>
+      <div class="kv"><span class="k">Model</span><span class="v">DS-2CD2385G1</span></div>
+      <div class="kv"><span class="k">Address</span><span class="v">192.168.1.64</span></div>
+      <div class="kv"><span class="k">Uptime</span><span class="v">6 d 04 h</span></div>
+      <div class="kv"><span class="k">Storage</span><span class="v">74 % of 4 TB</span></div>
+      <div class="storage"><i></i></div>
+    </div>
+  </div>
+</div>

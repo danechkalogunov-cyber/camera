@@ -1120,6 +1120,22 @@ bits are `transform_8x8_mode_flag = 1`, `pic_scaling_matrix_present_flag = 0`,
 
 ## 10. Parsed-model Swift types
 
+A tuple cannot conform to `Hashable`/`Codable`, so the four-offset groups use a named struct. Do not
+"simplify" these back to tuples — the conformances are load-bearing (`VideoFormatInfo` is persisted
+in the camera database and diffed for format-change detection).
+
+```swift
+/// H.264 `frame_crop_*_offset`, H.265 `conf_win_*_offset` and `def_disp_win_*_offset`.
+/// Units are as in the respective standard: macroblock-derived crop units for H.264,
+/// chroma sample units for H.265.
+public struct CropOffsets: Sendable, Hashable, Codable {
+    public var left: Int, right: Int, top: Int, bottom: Int
+    public init(left: Int = 0, right: Int = 0, top: Int = 0, bottom: Int = 0)
+    public static let zero = CropOffsets()
+    public var isZero: Bool { left == 0 && right == 0 && top == 0 && bottom == 0 }
+}
+```
+
 ```swift
 public struct H264SPS: Sendable, Hashable, Codable {
     // raw
@@ -1146,7 +1162,7 @@ public struct H264SPS: Sendable, Hashable, Codable {
     public var frameMbsOnlyFlag = true
     public var mbAdaptiveFrameFieldFlag = false
     public var direct8x8InferenceFlag = false
-    public var frameCropping: (left: Int, right: Int, top: Int, bottom: Int) = (0, 0, 0, 0)
+    public var frameCropping: CropOffsets = .zero
     // VUI
     public var vuiPresent = false
     public var vuiParseFailed = false
@@ -1658,7 +1674,7 @@ public struct H265SPS: Sendable, Hashable, Codable {
     public var separateColourPlaneFlag: Bool
     public var picWidthInLumaSamples: Int
     public var picHeightInLumaSamples: Int
-    public var conformanceWindow: (left: Int, right: Int, top: Int, bottom: Int)
+    public var conformanceWindow: CropOffsets
     public var bitDepthLuma: Int
     public var bitDepthChroma: Int
     public var log2MaxPicOrderCntLsb: Int
@@ -1683,7 +1699,7 @@ public struct H265SPS: Sendable, Hashable, Codable {
     public var sarHeight: Int
     public var fieldSeqFlag: Bool
     public var frameFieldInfoPresent: Bool
-    public var defaultDisplayWindow: (left: Int, right: Int, top: Int, bottom: Int)?
+    public var defaultDisplayWindow: CropOffsets?      // parsed, deliberately NOT applied (§13.5)
     public var numUnitsInTick: UInt32?
     public var timeScale: UInt32?
     public var colourPrimaries: UInt8?
@@ -1749,4 +1765,1413 @@ Verified HEVC PPS vectors:
 
 ---
 
-<!-- PART2 -->
+## 15. Format records — policy
+
+We build and parse two ISO/IEC 14496-15 decoder configuration records:
+
+| Record | ISO ref | Used for |
+|---|---|---|
+| `avcC` (`AVCDecoderConfigurationRecord`) | 14496-15 §5.3.3.1 | MP4/MOV muxing during recording, `.mp4` fixture playback, Linux unit tests, the `kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms` fallback path |
+| `hvcC` (`HEVCDecoderConfigurationRecord`) | 14496-15 §8.3.3.1 | same, for HEVC |
+
+**Binding decision: at runtime on macOS we build `CMVideoFormatDescription` with
+`CMVideoFormatDescriptionCreateFromH264ParameterSets` /
+`CMVideoFormatDescriptionCreateFromHEVCParameterSets`, not from a hand-built record.** See §18 for
+the reasoning and the exact glue. The record builders below are still mandatory, for four reasons
+that are each load-bearing:
+
+1. **Recording.** `AVAssetWriter` in passthrough mode derives the sample description from the
+   `CMFormatDescription` we give it, so it builds its own `avcC`; but our fragmented-MP4 export path
+   and the `.mov` sidecar index writer need the record bytes directly.
+2. **Reading.** Playing back our own recordings, or an MP4 pulled from an NVR over ISAPI, means
+   *parsing* an `avcC`/`hvcC` to recover the parameter sets. Same code, other direction.
+3. **Linux CI.** The record round trip (`build → parse → compare`) is the only way to regression-test
+   parameter-set handling on a machine with no VideoToolbox. This is where the §22 vectors live.
+4. **Fallback.** If `CMVideoFormatDescriptionCreateFrom…ParameterSets` returns an error for an
+   exotic stream, we retry via `CMVideoFormatDescriptionCreate` with an extension-atoms dictionary
+   containing our record. Observed necessary exactly once (a 4:2:2 10-bit HEVC NVR transcode).
+
+---
+
+## 16. `avcC` — exact byte layout
+
+```
+aligned(8) class AVCDecoderConfigurationRecord {
+   unsigned int(8)  configurationVersion = 1;
+   unsigned int(8)  AVCProfileIndication;          // == SPS NAL byte[1] (profile_idc)
+   unsigned int(8)  profile_compatibility;         // == SPS NAL byte[2] (constraint flags)
+   unsigned int(8)  AVCLevelIndication;            // == SPS NAL byte[3] (level_idc)
+   bit(6)           reserved = '111111'b;
+   unsigned int(2)  lengthSizeMinusOne;            // ALWAYS 3 in Vigil
+   bit(3)           reserved = '111'b;
+   unsigned int(5)  numOfSequenceParameterSets;
+   for (i = 0; i < numOfSequenceParameterSets; i++) {
+       unsigned int(16) sequenceParameterSetLength;
+       bit(8 * len)     sequenceParameterSetNALUnit;   // incl. 1-byte NAL header, escaped
+   }
+   unsigned int(8)  numOfPictureParameterSets;
+   for (i = 0; i < numOfPictureParameterSets; i++) {
+       unsigned int(16) pictureParameterSetLength;
+       bit(8 * len)     pictureParameterSetNALUnit;
+   }
+   if (AVCProfileIndication == 100 || 110 || 122 || 144) {     // <-- NOT 244
+       bit(6)          reserved = '111111'b;
+       unsigned int(2) chroma_format;                          // = chroma_format_idc
+       bit(5)          reserved = '11111'b;
+       unsigned int(3) bit_depth_luma_minus8;
+       bit(5)          reserved = '11111'b;
+       unsigned int(3) bit_depth_chroma_minus8;
+       unsigned int(8) numOfSequenceParameterSetExt;
+       for (i = 0; i < numOfSequenceParameterSetExt; i++) {
+           unsigned int(16) sequenceParameterSetExtLength;
+           bit(8 * len)     sequenceParameterSetExtNALUnit;    // NAL type 13
+       }
+   }
+}
+```
+
+Fixed offsets of the header:
+
+| Offset | Size | Field | Vigil value |
+|---:|---:|---|---|
+| 0 | 1 | `configurationVersion` | `0x01` |
+| 1 | 1 | `AVCProfileIndication` | SPS byte 1 |
+| 2 | 1 | `profile_compatibility` | SPS byte 2 |
+| 3 | 1 | `AVCLevelIndication` | SPS byte 3 |
+| 4 | 1 | `0b111111` \| `lengthSizeMinusOne` | `0xFC \| 3` = **`0xFF`** |
+| 5 | 1 | `0b111` \| `numOfSequenceParameterSets` | `0xE0 \| count` |
+| 6 | … | SPS array | |
+
+### 16.1 The three bytes at offsets 1–3
+
+They are **literally copied from the SPS NAL unit**, bytes 1, 2 and 3 (byte 0 is the NAL header
+`0x67`). They must not be recomputed from a parsed model — `profile_compatibility` is the packed
+constraint-flag byte including `reserved_zero_2bits`, and re-deriving it from six `Bool`s is how the
+bit order gets flipped. This is why `H264SPS.constraintFlags` is stored as the raw byte (§8.7).
+
+```swift
+guard sps.count >= 4 else { throw BitstreamError.emptyNALUnit }
+out.append(0x01)          // configurationVersion
+out.append(sps[1])        // AVCProfileIndication
+out.append(sps[2])        // profile_compatibility
+out.append(sps[3])        // AVCLevelIndication
+out.append(0xFC | 3)      // 0xFF
+out.append(0xE0 | UInt8(spsList.count))
+```
+
+### 16.2 The trailing extension condition — the classic bug
+
+Two *different* profile sets exist and are routinely confused:
+
+| Condition | Profile set |
+|---|---|
+| SPS carries `chroma_format_idc` / bit depths / scaling lists (H.264 §7.3.2.1) | {100, 110, 122, **244**, 44, 83, 86, 118, 128, 138, 139, 134, 135} |
+| `avcC` carries the trailing extension (ISO 14496-15 §5.3.3.1) | {100, 110, 122, **144**} |
+
+144 is not a valid `profile_idc` in any published H.264 edition — it is a historical artefact of the
+ISO text (it predates the renumbering of High 4:4:4 to 244). We follow the ISO text exactly when
+**writing**, and when **reading** we treat any bytes remaining after the PPS array as a possible
+extension regardless of profile, requiring ≥ 4 remaining bytes before interpreting them.
+
+```swift
+public func serialized() -> [UInt8] {
+    // ... header, SPS array, PPS array as above ...
+    switch avcProfileIndication {
+    case 100, 110, 122, 144:
+        out.append(0xFC | (chromaFormat ?? 1))
+        out.append(0xF8 | (bitDepthLumaMinus8 ?? 0))
+        out.append(0xF8 | (bitDepthChromaMinus8 ?? 0))
+        out.append(UInt8(sequenceParameterSetExt.count))
+        for e in sequenceParameterSetExt {
+            out.append(UInt8(truncatingIfNeeded: e.count >> 8))
+            out.append(UInt8(truncatingIfNeeded: e.count))
+            out.append(contentsOf: e)
+        }
+    default: break
+    }
+    return out
+}
+```
+
+When reading: if fewer than 4 bytes remain, stop (some muxers omit the extension even for High).
+If `numOfSequenceParameterSetExt` is non-zero but the arrays are truncated, ignore the extension
+entirely rather than throwing — the SPS/PPS we already recovered are what matter.
+
+### 16.3 Worked example A — Main profile, no extension (37 bytes)
+
+Input: SPS = vector **V1** (H.264 Main 4.0, 1920×1080 @ 25 fps), PPS = vector **P1**.
+
+```
+offset  bytes                                             meaning
+------  ------------------------------------------------  --------------------------------------
+00      01                                                configurationVersion = 1
+01      4D                                                AVCProfileIndication = 77 (Main)
+02      00                                                profile_compatibility = 0x00
+03      28                                                AVCLevelIndication = 40 (Level 4.0)
+04      FF                                                111111b | lengthSizeMinusOne = 3
+05      E1                                                111b    | numOfSequenceParameterSets = 1
+06      00 16                                             sequenceParameterSetLength = 22
+08      67 4D 00 28 F4 03 C0 11 3F 2E 02 20 00 00 03 00   SPS NAL unit (22 bytes)
+        20 00 00 06 50 80                                   note 00 00 03 00 = escaped 00 00 00
+1E      01                                                numOfPictureParameterSets = 1
+1F      00 04                                             pictureParameterSetLength = 4
+21      68 EE 3C 80                                       PPS NAL unit
+        (profile 77 is not in {100,110,122,144} -> no trailing extension)
+```
+
+Full hex, 37 bytes:
+```
+01 4D 00 28 FF E1 00 16 67 4D 00 28 F4 03 C0 11
+3F 2E 02 20 00 00 03 00 20 00 00 06 50 80 01 00
+04 68 EE 3C 80
+```
+base64: `AU0AKP/hABZnTQAo9APAET8uAiAAAAMAIAAABlCAAQAEaO48gA==`
+
+### 16.4 Worked example B — High profile, with extension (48 bytes)
+
+Input: SPS = vector **V2** (H.264 High 4.1, 1920×1080 @ 30 fps, VUI with colour description and
+bitstream restriction), PPS = vector **P2**.
+
+```
+offset  bytes                                             meaning
+------  ------------------------------------------------  --------------------------------------
+00      01                                                configurationVersion = 1
+01      64                                                AVCProfileIndication = 100 (High)
+02      00                                                profile_compatibility = 0x00
+03      29                                                AVCLevelIndication = 41 (Level 4.1)
+04      FF                                                lengthSizeMinusOne = 3
+05      E1                                                numOfSequenceParameterSets = 1
+06      00 1D                                             sequenceParameterSetLength = 29
+08      67 64 00 29 AC 2C AC 07 80 22 7E 5C 05 A8 08 08   SPS NAL unit (29 bytes)
+        0A 00 00 03 00 02 00 00 03 00 79 1E DF
+25      01                                                numOfPictureParameterSets = 1
+26      00 04                                             pictureParameterSetLength = 4
+28      68 EE 3C B0                                       PPS NAL unit
+2C      FD                                                111111b | chroma_format = 1 (4:2:0)
+2D      F8                                                11111b  | bit_depth_luma_minus8 = 0
+2E      F8                                                11111b  | bit_depth_chroma_minus8 = 0
+2F      00                                                numOfSequenceParameterSetExt = 0
+```
+
+Full hex, 48 bytes:
+```
+01 64 00 29 FF E1 00 1D 67 64 00 29 AC 2C AC 07
+80 22 7E 5C 05 A8 08 08 0A 00 00 03 00 02 00 00
+03 00 79 1E DF 01 00 04 68 EE 3C B0 FD F8 F8 00
+```
+base64: `AWQAKf/hAB1nZAAprCysB4AiflwFqAgICgAAAwACAAADAHke3wEABGjuPLD9+PgA`
+
+---
+
+## 17. `hvcC` — exact byte layout
+
+```
+aligned(8) class HEVCDecoderConfigurationRecord {
+   unsigned int(8)  configurationVersion = 1;
+   unsigned int(2)  general_profile_space;
+   unsigned int(1)  general_tier_flag;
+   unsigned int(5)  general_profile_idc;
+   unsigned int(32) general_profile_compatibility_flags;
+   unsigned int(48) general_constraint_indicator_flags;
+   unsigned int(8)  general_level_idc;
+   bit(4)           reserved = '1111'b;
+   unsigned int(12) min_spatial_segmentation_idc;
+   bit(6)           reserved = '111111'b;
+   unsigned int(2)  parallelismType;
+   bit(6)           reserved = '111111'b;
+   unsigned int(2)  chromaFormat;
+   bit(5)           reserved = '11111'b;
+   unsigned int(3)  bitDepthLumaMinus8;
+   bit(5)           reserved = '11111'b;
+   unsigned int(3)  bitDepthChromaMinus8;
+   bit(16)          avgFrameRate;                  // frames / (256 s); 0 = unspecified
+   bit(2)           constantFrameRate;             // 0 unknown, 1 constant, 2 constant per layer
+   bit(3)           numTemporalLayers;             // 0 unknown; else sps_max_sub_layers_minus1 + 1
+   bit(1)           temporalIdNested;
+   unsigned int(2)  lengthSizeMinusOne;            // ALWAYS 3
+   unsigned int(8)  numOfArrays;
+   for (j = 0; j < numOfArrays; j++) {
+       bit(1)           array_completeness;
+       unsigned int(1)  reserved = 0;
+       unsigned int(6)  NAL_unit_type;             // 32 VPS, 33 SPS, 34 PPS, 39 prefix SEI
+       unsigned int(16) numNalus;
+       for (i = 0; i < numNalus; i++) {
+           unsigned int(16) nalUnitLength;
+           bit(8 * len)     nalUnit;               // incl. 2-byte NAL header, escaped
+       }
+   }
+}
+```
+
+Fixed offsets:
+
+| Offset | Size | Field | Source |
+|---:|---:|---|---|
+| 0 | 1 | `configurationVersion` | `0x01` |
+| 1 | 1 | `profile_space<<6 \| tier<<5 \| profile_idc` | SPS PTL |
+| 2 | 4 | `general_profile_compatibility_flags` | SPS PTL, big-endian, `flag[0]` in the MSB |
+| 6 | 6 | `general_constraint_indicator_flags` | SPS PTL, the verbatim 48-bit region (§11) |
+| 12 | 1 | `general_level_idc` | SPS PTL |
+| 13 | 2 | `0xF000 \| min_spatial_segmentation_idc` | SPS VUI bitstream restriction, else 0 |
+| 15 | 1 | `0xFC \| parallelismType` | HEVC PPS (§14), else 0 |
+| 16 | 1 | `0xFC \| chromaFormat` | SPS `chroma_format_idc` |
+| 17 | 1 | `0xF8 \| bitDepthLumaMinus8` | SPS |
+| 18 | 1 | `0xF8 \| bitDepthChromaMinus8` | SPS |
+| 19 | 2 | `avgFrameRate` | `round(fps × 256)`, 0 if fps unknown |
+| 21 | 1 | `cfr<<6 \| numTemporalLayers<<3 \| temporalIdNested<<2 \| 3` | SPS |
+| 22 | 1 | `numOfArrays` | 3 or 4 |
+| 23 | … | arrays | VPS, SPS, PPS, [prefix SEI] |
+
+Vigil's fixed choices:
+
+| Field | Value | Why |
+|---|---|---|
+| `array_completeness` | **1** for VPS/SPS/PPS | we guarantee no other parameter set of that type appears in the samples… |
+| | **0** for the optional SEI array | …but SEI absolutely does appear in-band |
+| `constantFrameRate` | **1** when `fixed_frame_rate_flag`-equivalent evidence exists (VUI timing present and `field_seq_flag == 0`), else **0** | never 2; we do not do temporal-layer-aware muxing |
+| `numTemporalLayers` | `sps_max_sub_layers_minus1 + 1` | 0 ("unknown") only if no SPS parsed |
+| `temporalIdNested` | `sps_temporal_id_nesting_flag` | cross-checked against VPS; SPS wins |
+| `lengthSizeMinusOne` | **3** | §2.2 |
+| Array order | VPS (32), SPS (33), PPS (34), then SEI (39) if present | ascending `NAL_unit_type`, as ISO recommends and as `AVFoundation` expects |
+
+`avgFrameRate` is in **frames per 256 seconds**, i.e. `fps × 256`. 25 fps ⇒ 6400 = `0x1900`.
+20 fps ⇒ 5120 = `0x1400`. Getting this wrong by a factor of 256 makes QuickTime report a 0.1 fps
+movie.
+
+### 17.1 Worked example (119 bytes)
+
+Input: VPS from §12, SPS = vector **W1** (HEVC Main level 4.1, 1920×1080 @ 25 fps,
+`conformance_window_flag == 0`), PPS = vector **Q1** (`parallelismType == 1`).
+
+```
+offset  bytes                        meaning
+------  ---------------------------  ----------------------------------------------------------
+00      01                           configurationVersion = 1
+01      01                           profile_space=0, tier_flag=0, profile_idc=1 (Main)
+02      60 00 00 00                  general_profile_compatibility_flags (flags[1],[2] set)
+06      B0 00 00 00 00 00            general_constraint_indicator_flags:
+                                       progressive=1, interlaced=0, non_packed=1, frame_only=1
+0C      7B                           general_level_idc = 123 -> Level 4.1
+0D      F0 00                        1111b | min_spatial_segmentation_idc = 0
+0F      FD                           111111b | parallelismType = 1 (slice-based)
+10      FD                           111111b | chromaFormat = 1 (4:2:0)
+11      F8                           11111b  | bitDepthLumaMinus8 = 0
+12      F8                           11111b  | bitDepthChromaMinus8 = 0
+13      19 00                        avgFrameRate = 0x1900 = 6400 = 25.0 fps x 256
+15      4F                           01b constantFrameRate=1, 001b numTemporalLayers=1,
+                                     1b temporalIdNested=1, 11b lengthSizeMinusOne=3
+16      03                           numOfArrays = 3
+17      A0                           array_completeness=1, reserved=0, NAL_unit_type=32 (VPS)
+18      00 01                        numNalus = 1
+1A      00 18                        nalUnitLength = 24
+1C      40 01 0C 01 FF FF 01 60 00   VPS NAL unit (24 bytes)
+        00 03 00 B0 00 00 03 00 00
+        03 00 7B 97 02 40
+34      A1                           array_completeness=1, NAL_unit_type=33 (SPS)
+35      00 01                        numNalus = 1
+37      00 32                        nalUnitLength = 50
+39      42 01 01 01 60 00 00 03 00   SPS NAL unit (50 bytes)
+        B0 00 00 03 00 00 03 00 7B
+        A0 03 C0 80 10 E5 96 5E 49
+        1B 64 BB C0 5A 80 80 80 82
+        00 00 03 00 02 00 00 03 00
+        32 57 08 04 10
+6B      A2                           array_completeness=1, NAL_unit_type=34 (PPS)
+6C      00 01                        numNalus = 1
+6E      00 07                        nalUnitLength = 7
+70      44 01 E1 F3 C0 CC 90         PPS NAL unit (7 bytes)
+```
+
+Full hex, 119 bytes:
+```
+01 01 60 00 00 00 B0 00 00 00 00 00 7B F0 00 FD
+FD F8 F8 19 00 4F 03 A0 00 01 00 18 40 01 0C 01
+FF FF 01 60 00 00 03 00 B0 00 00 03 00 00 03 00
+7B 97 02 40 A1 00 01 00 32 42 01 01 01 60 00 00
+03 00 B0 00 00 03 00 00 03 00 7B A0 03 C0 80 10
+E5 96 5E 49 1B 64 BB C0 5A 80 80 80 82 00 00 03
+00 02 00 00 03 00 32 57 08 04 10 A2 00 01 00 07
+44 01 E1 F3 C0 CC 90
+```
+base64:
+`AQFgAAAAsAAAAAAAe/AA/f34+BkATwOgAAEAGEABDAH//wFgAAADALAAAAMAAAMAe5cCQKEAAQAyQgEBAWAAAAMAsAAAAwAAAwB7oAPAgBDlll5JG2S7wFqAgICCAAADAAIAAAMAMlcIBBCiAAEAB0QB4fPAzJA=`
+
+Observe at offsets 06–0B that the constraint flags in the **record** are `B0 00 00 00 00 00`
+(unescaped) while inside the **SPS NAL unit** at offsets 41–48 the same field appears as
+`B0 00 00 03 00 00 03 00` (escaped). The record stores parsed field values; the NAL arrays store
+on-wire bytes. Mixing the two up is the second classic `hvcC` bug.
+
+### 17.2 Record parsing (both records)
+
+```swift
+public init(parsing data: [UInt8]) throws
+```
+
+Parsing rules, both records:
+
+* Reject `configurationVersion != 1` with `.unsupportedRecordVersion`.
+* Reject `lengthSizeMinusOne != 3` with `.unsupportedLengthSize` — we have no 1/2-byte-length code
+  path anywhere and silently accepting it would produce a stream the depacketizer cannot read.
+* A truncated array terminates parsing; whatever parameter sets were fully read are kept.
+* `numNalus == 0` for an array is legal and yields an empty array.
+* Unknown `NAL_unit_type` values in `hvcC` arrays are retained in an `other: [(UInt8, [[UInt8]])]`
+  bucket so a round trip is byte-exact.
+* Round-trip requirement (tested): `try Record(parsing: r.serialized()).serialized() == r.serialized()`.
+
+---
+
+## 18. The CoreMedia boundary (implemented in `VigilVideo`, specified here)
+
+`VigilBitstream` cannot import CoreMedia. It publishes `ParameterSets` + `VideoFormatInfo`; exactly
+one file, `VigilVideo/FormatDescriptionFactory.swift`, converts them. The signatures below are
+binding on `VigilVideo`.
+
+```swift
+// macOS 14+, framework CoreMedia
+func CMVideoFormatDescriptionCreateFromH264ParameterSets(
+    allocator: CFAllocator?,
+    parameterSetCount: Int,
+    parameterSetPointers: UnsafePointer<UnsafePointer<UInt8>>,
+    parameterSetSizes: UnsafePointer<Int>,
+    nalUnitHeaderLength: Int32,
+    formatDescriptionOut: UnsafeMutablePointer<CMFormatDescription?>
+) -> OSStatus
+
+func CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+    allocator: CFAllocator?,
+    parameterSetCount: Int,
+    parameterSetPointers: UnsafePointer<UnsafePointer<UInt8>>,
+    parameterSetSizes: UnsafePointer<Int>,
+    nalUnitHeaderLength: Int32,
+    extensions: CFDictionary?,                 // <-- HEVC has this extra parameter
+    formatDescriptionOut: UnsafeMutablePointer<CMFormatDescription?>
+) -> OSStatus
+```
+
+**Which we use and why.** The `…ParameterSets` constructors are the runtime path, always:
+
+* They accept exactly our canonical storage form (§2.1) — NAL header included, no start code, no
+  length prefix, still escaped — so there is nothing to transform.
+* VideoToolbox parses the SPS itself and populates `CleanAperture`, `PixelAspectRatio`,
+  `FieldCount`, `ColorPrimaries`, `TransferFunction`, `YCbCrMatrix` and `FullRangeVideo` extensions.
+  Hand-building the extension dictionary means re-deriving all of that from our parse, and any
+  disagreement between our parse and VideoToolbox's shows up as a subtly wrong aspect ratio or a
+  washed-out picture. Letting VT parse the SPS makes our parse advisory, which is exactly the
+  robustness posture we want (§21).
+* For HEVC they handle the `hvcC`-adjacent extension bits (`temporalIdNested`, tier) that a
+  hand-built atom gets wrong.
+* Parameter-set *order* is `[SPS, PPS]` for H.264 and `[VPS, SPS, PPS]` for H.265.
+  `nalUnitHeaderLength` is **4**, always — it describes the length-prefix size of the *samples*, not
+  the NAL header, which is the most misread argument name in CoreMedia.
+
+`extensions` is passed `nil` except when we must force a colour space that the SPS omits (some
+Hikvision HEVC substreams carry no `colour_description_present_flag`); then we pass a dictionary
+with `kCVImageBufferColorPrimariesKey` = `kCVImageBufferColorPrimaries_ITU_R_709_2`,
+`kCVImageBufferTransferFunctionKey` = `…_ITU_R_709_2`, `kCVImageBufferYCbCrMatrixKey` =
+`…_ITU_R_709_2`. Rec. 709 is the correct default for every Hikvision camera we support.
+
+The nested-pointer pattern (`VigilVideo` owns it; reproduced so the two specs cannot disagree):
+
+```swift
+func makeFormatDescription(_ sets: ParameterSets) throws -> CMFormatDescription {
+    let ordered: [[UInt8]] = sets.codec == .h265
+        ? sets.vps + sets.sps + sets.pps
+        : sets.sps + sets.pps
+    guard !sets.sps.isEmpty, !sets.pps.isEmpty else { throw VideoError.incompleteParameterSets }
+
+    let sizes = ordered.map(\.count)
+    // Pin every buffer, collect base pointers, then call. Nested withUnsafeBufferPointer over an
+    // array of pointers: the inner arrays must stay alive for the duration of the call, which they
+    // do because `ordered` outlives it.
+    var pointers = [UnsafePointer<UInt8>]()
+    pointers.reserveCapacity(ordered.count)
+    var boxes = [UnsafeMutableBufferPointer<UInt8>]()
+    defer { for b in boxes { b.deallocate() } }
+    for set in ordered {
+        let box = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: set.count)
+        _ = box.initialize(from: set)
+        boxes.append(box)
+        pointers.append(UnsafePointer(box.baseAddress!))
+    }
+
+    var out: CMFormatDescription?
+    let status: OSStatus = pointers.withUnsafeBufferPointer { pp in
+        sizes.withUnsafeBufferPointer { ss in
+            switch sets.codec {
+            case .h264:
+                return CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: ordered.count,
+                    parameterSetPointers: pp.baseAddress!,
+                    parameterSetSizes: ss.baseAddress!,
+                    nalUnitHeaderLength: 4,
+                    formatDescriptionOut: &out)
+            case .h265:
+                return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: ordered.count,
+                    parameterSetPointers: pp.baseAddress!,
+                    parameterSetSizes: ss.baseAddress!,
+                    nalUnitHeaderLength: 4,
+                    extensions: nil,
+                    formatDescriptionOut: &out)
+            }
+        }
+    }
+    guard status == noErr, let desc = out else {
+        // Fallback: extension-atoms dictionary built from our own avcC/hvcC (§15 reason 4).
+        return try makeFormatDescriptionFromRecord(sets)
+    }
+    return desc
+}
+```
+
+The copy into `boxes` exists because `[[UInt8]]` gives no guarantee that nested-array storage stays
+put across the outer `withUnsafeBufferPointer`; copying a few hundred bytes once per format change
+is free and the alternative (recursive nesting of `withUnsafeBufferPointer` over N arrays) cannot be
+written for a runtime-determined N without recursion.
+
+Reverse direction, used when playing an MP4: `CMVideoFormatDescriptionGetH264ParameterSetAtIndex` /
+`…GetHEVCParameterSetAtIndex` recover the sets; alternatively read
+`kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms` and pull the `"avcC"` / `"hvcC"`
+key, then hand the bytes to `AVCDecoderConfigurationRecord(parsing:)`.
+
+---
+
+## 19. SEI
+
+### 19.1 Enumeration (H.264 §7.3.2.3.1, H.265 §7.3.5 — identical structure)
+
+```
+sei_rbsp():
+  do {
+     payloadType = 0
+     while (peek u(8) == 0xFF) { payloadType += 255; read u(8) }
+     payloadType += u(8)
+     payloadSize = 0
+     while (peek u(8) == 0xFF) { payloadSize += 255; read u(8) }
+     payloadSize += u(8)
+     sei_payload(payloadType, payloadSize)     // exactly payloadSize BYTES, byte-aligned
+  } while (more_rbsp_data())
+  rbsp_trailing_bits()
+```
+
+Both the type and the size use the `0xFF`-continuation encoding. The payload is byte-aligned and
+occupies exactly `payloadSize` bytes, which makes the enumerator robust: even for a payload type we
+do not understand we advance exactly `payloadSize` bytes and continue.
+
+```swift
+public enum SEI {
+    /// Enumerates the SEI messages in one SEI NAL unit. `payload` is the unescaped payload,
+    /// exactly `payloadSize` bytes. Zero interpretation.
+    public static func enumerate(
+        nalUnit nal: UnsafeRawBufferPointer, codec: VideoCodec,
+        _ body: (_ payloadType: Int, _ payload: ArraySlice<UInt8>) throws -> Void
+    ) throws {
+        let rbsp = try RBSP.unescape(nal, skippingHeaderBytes: codec.nalHeaderLength)
+        var i = 0
+        while i < rbsp.count {
+            var payloadType = 0
+            while i < rbsp.count && rbsp[i] == 0xFF { payloadType += 255; i += 1 }
+            guard i < rbsp.count else { return }              // ran into rbsp_trailing_bits
+            payloadType += Int(rbsp[i]); i += 1
+            var payloadSize = 0
+            while i < rbsp.count && rbsp[i] == 0xFF { payloadSize += 255; i += 1 }
+            guard i < rbsp.count else { throw BitstreamError.truncatedSEI }
+            payloadSize += Int(rbsp[i]); i += 1
+            guard i + payloadSize <= rbsp.count else { throw BitstreamError.truncatedSEI }
+            try body(payloadType, rbsp[i ..< (i + payloadSize)])
+            i += payloadSize
+            // Stop at the rbsp_stop_one_bit: a trailing 0x80 is the trailing-bits byte, not a message.
+            if i < rbsp.count && rbsp[i] == 0x80 && i == rbsp.count - 1 { return }
+        }
+    }
+}
+```
+
+### 19.2 The messages we care about
+
+| Type | Name | H.264 | H.265 | Vigil use |
+|---:|---|:-:|:-:|---|
+| 0 | `buffering_period` | ✓ | ✓ | ignored |
+| 1 | **`pic_timing`** | ✓ | ✓ | `pic_struct` only (§19.4) |
+| 3 | `filler_payload` | ✓ | ✓ | ignored |
+| 4 | `user_data_registered_itu_t_t35` | ✓ | ✓ | ignored |
+| 5 | `user_data_unregistered` | ✓ | ✓ | **Hikvision private metadata** — skipped, logged at `.debug` with the 16-byte UUID |
+| 6 | **`recovery_point`** | ✓ | ✓ | opens the IRAP gate (§20.2) |
+| 45 | `frame_packing_arrangement` | ✓ | — | ignored |
+| 47 | `display_orientation` | ✓ | — | ignored |
+| 129 | `active_parameter_sets` | — | ✓ | ignored |
+| 132 | `decoded_picture_hash` | — | ✓ | ignored |
+| 137 | `mastering_display_colour_volume` | — | ✓ | forwarded to `VigilVideo` for HDR metadata (future NVR HDR streams) |
+| 144 | `content_light_level_info` | — | ✓ | as above |
+
+Everything else is skipped by `payloadSize`. **Hikvision's `user_data_unregistered` is the one to
+know about**: it appears on nearly every frame on many models and carries an encoder frame counter
+and sometimes a wall-clock. We deliberately ignore it — RTCP SR/NTP mapping in `VigilRTP` is the
+authoritative wall clock, and trusting a vendor SEI would create a second, conflicting time base.
+
+### 19.3 `recovery_point`
+
+H.264 (§D.2.8):
+```
+recovery_frame_cnt          ue(v)
+exact_match_flag            u(1)
+broken_link_flag            u(1)
+changing_slice_group_idc    u(2)
+```
+H.265 (§D.3.8):
+```
+recovery_poc_cnt            se(v)
+exact_match_flag            u(1)
+broken_link_flag            u(1)
+```
+
+```swift
+public struct RecoveryPoint: Sendable, Hashable {
+    public var recoveryCount: Int32        // recovery_frame_cnt (H.264) or recovery_poc_cnt (H.265)
+    public var exactMatch: Bool
+    public var brokenLink: Bool
+    public var changingSliceGroupIDC: UInt8   // H.264 only, else 0
+}
+
+public static func parseRecoveryPoint(_ payload: ArraySlice<UInt8>, codec: VideoCodec) throws -> RecoveryPoint {
+    var r = try RBSPBitReader(rbsp: Array(payload))     // payload is already unescaped
+    switch codec {
+    case .h264:
+        let cnt = Int32(try r.ue("recovery_frame_cnt", max: 65535))
+        return RecoveryPoint(recoveryCount: cnt, exactMatch: try r.flag(),
+                            brokenLink: try r.flag(), changingSliceGroupIDC: UInt8(try r.u(2)))
+    case .h265:
+        let cnt = try r.se()
+        return RecoveryPoint(recoveryCount: cnt, exactMatch: try r.flag(),
+                            brokenLink: try r.flag(), changingSliceGroupIDC: 0)
+    }
+}
+```
+
+Verified vectors:
+
+| Codec | NAL hex | Parse |
+|---|---|---|
+| H.264 | `06 06 01 C4 80` | payloadType 6, payloadSize 1, `recovery_frame_cnt = 0`, `exact_match_flag = 1`, `broken_link_flag = 0`, `changing_slice_group_idc = 0` |
+| H.265 | `4E 01 06 01 D0 80` | payloadType 6, payloadSize 1, `recovery_poc_cnt = 0`, `exact_match_flag = 1`, `broken_link_flag = 0` |
+
+Note how the payload byte differs (`C4` vs `D0`) purely because `ue(0)` is one bit and `se(0)` is
+one bit but the H.264 message has two extra bits: `C4` = `1 1 0 00` + `1` alignment + `00`;
+`D0` = `1 1 0` + `1` alignment + `0000`. The trailing `0x80` is `rbsp_trailing_bits()`.
+
+### 19.4 `pic_timing` — parsed only for `pic_struct`
+
+`pic_timing` is context-dependent: its first fields exist only if the *active SPS* had
+`CpbDpbDelaysPresentFlag`, and their widths come from the SPS HRD. This is why §8.3 retains
+`cpbRemovalDelayLength` and `dpbOutputDelayLength`.
+
+```swift
+public static func parsePictureTiming(_ payload: ArraySlice<UInt8>, sps: H264SPS) throws -> PictureTiming {
+    var r = try RBSPBitReader(rbsp: Array(payload))
+    if sps.cpbDpbDelaysPresentFlag {
+        try r.skip(sps.cpbRemovalDelayLength)      // cpb_removal_delay
+        try r.skip(sps.dpbOutputDelayLength)       // dpb_output_delay
+    }
+    guard sps.picStructPresentFlag else { return PictureTiming(picStruct: 0) }
+    return PictureTiming(picStruct: UInt8(try r.u(4)))
+}
+```
+
+We stop after `pic_struct` and never parse the `clock_timestamp` loop.
+
+| `pic_struct` | Meaning | `NumClockTS` | Vigil interpretation |
+|---:|---|---:|---|
+| 0 | frame | 1 | progressive frame |
+| 1 | top field | 1 | field — mark stream interlaced |
+| 2 | bottom field | 1 | field — mark stream interlaced |
+| 3 | top then bottom | 2 | interlaced frame |
+| 4 | bottom then top | 2 | interlaced frame |
+| 5 | top, bottom, top | 3 | interlaced + repeat |
+| 6 | bottom, top, bottom | 3 | interlaced + repeat |
+| 7 | frame doubling | 2 | duration × 2 |
+| 8 | frame tripling | 3 | duration × 3 |
+
+**Binding decision:** `pic_struct` is used for (a) setting `VideoFormatInfo.isProgressive` when
+`frame_mbs_only_flag` is 0, and (b) the diagnostics HUD. It is **not** used to compute presentation
+times — live timing is RTP, recorded timing is the container's. Frame doubling/tripling from a
+Hikvision camera has never been observed and would be handled by the RTP timestamp deltas anyway.
+
+---
+
+## 20. Access-unit classification, IRAP gating, and mid-GOP start
+
+### 20.1 First-slice-of-picture predicate (called per frame by `VigilRTP`)
+
+`VigilRTP` needs to know whether a VCL NAL starts a new picture; §25 of the RTP spec explains why
+the RTP marker bit alone is not trustworthy on Hikvision firmware. `VigilBitstream` owns the
+predicate so it exists once:
+
+```swift
+public enum SliceHeader {
+    /// True when this VCL NAL is the first slice (segment) of a picture.
+    /// H.264: first_mb_in_slice == 0, and first_mb_in_slice is the first ue(v) of the slice header,
+    ///        so ue(v) == 0 iff the first RBSP bit is 1.
+    /// H.265: first_slice_segment_in_pic_flag is literally the first RBSP bit.
+    /// Either way the answer is the MSB of the first byte after the NAL header.
+    @inlinable
+    public static func isFirstSliceOfPicture(
+        nalUnit nal: UnsafeRawBufferPointer, codec: VideoCodec
+    ) -> Bool {
+        let h = codec.nalHeaderLength
+        guard nal.count > h else { return false }
+        return nal[h] & 0x80 != 0
+    }
+}
+```
+
+**Why no unescaping is needed — and this must be preserved if anyone refactors it.** An
+emulation-prevention `0x03` can only be inserted after two consecutive `0x00` bytes. The byte at
+index `h` is preceded only by the NAL header bytes. For H.264 the header byte of a VCL NAL is
+non-zero (`nal_unit_type` ∈ 1…5 occupies the low 5 bits). For H.265 the second header byte is
+`((layerID & 0x1F) << 3) | (temporalID + 1)` and `temporalID + 1 ≥ 1`, so it is non-zero. Therefore
+the first payload byte can never be an escape byte, and reading it raw is exact. Cost: one bounds
+check and one load, no allocation, per NAL — which is what makes 16 simultaneous streams affordable.
+
+### 20.2 Access-unit summary and the gate
+
+```swift
+public struct AccessUnitSummary: Sendable {
+    public var codec: VideoCodec
+    public var containsIRAP: Bool           // H.264: type 5; H.265: 16...23
+    public var containsCRAOrBLA: Bool       // H.265: 16...18, 21
+    public var containsIDR: Bool            // H.264: 5; H.265: 19, 20
+    public var containsRASL: Bool           // H.265: 8, 9
+    public var containsVCL: Bool
+    public var recoveryPoint: RecoveryPoint?
+    public var parameterSetsAvailable: Bool // the store holds a complete, self-consistent set
+    public var firstSliceSeen: Bool
+}
+
+public struct IRAPGate: Sendable {
+    public enum Decision: Sendable, Equatable {
+        case pass
+        case drop(DropReason)
+    }
+    public enum DropReason: String, Sendable, Equatable {
+        case awaitingIRAP            // stream started mid-GOP
+        case missingParameterSets    // IRAP arrived before SPS/PPS
+        case raslAfterCRAStart       // H.265 RASL with NoRaslOutputFlag == 1
+        case brokenLink              // recovery_point with broken_link_flag == 1
+        case nonVCLOnly              // AU had no VCL NAL at all
+    }
+
+    public struct Policy: Sendable {
+        /// Accept a non-IRAP AU that carries a recovery_point SEI with exact_match_flag == 1.
+        public var acceptRecoveryPointSEI = true
+        /// Accept a recovery_point SEI even when exact_match_flag == 0 (picture may differ slightly).
+        public var acceptInexactRecoveryPoint = false
+        /// After this long with no IRAP, open the gate on any AU and accept the artefacts, so the
+        /// user sees *something* rather than a permanently black tile on broken firmware.
+        public var desperationTimeout: Duration? = .seconds(12)
+        public static let strict = Policy()
+        public static let recordedPlayback = Policy(acceptRecoveryPointSEI: false,
+                                                    acceptInexactRecoveryPoint: false,
+                                                    desperationTimeout: nil)
+    }
+
+    public init(codec: VideoCodec, policy: Policy = .strict)
+    public private(set) var isOpen: Bool
+    /// True while the gate is closed and no IRAP has been seen for > 1 GOP interval; `VigilCore`
+    /// polls this and issues an ISAPI/RTSP keyframe request. Cleared once an IRAP arrives.
+    public private(set) var shouldRequestKeyframe: Bool
+    public private(set) var droppedAccessUnits: Int
+
+    public mutating func evaluate(_ au: AccessUnitSummary, at now: ContinuousClock.Instant) -> Decision
+    /// Call after any decoder reset, seek, or `kVTInvalidSessionErr`.
+    public mutating func reset()
+}
+```
+
+Gate algorithm:
+
+```
+if !au.containsVCL                                 -> .drop(.nonVCLOnly)   (parameter sets and SEI
+                                                       are still ingested by the store first)
+if !isOpen:
+    if !au.parameterSetsAvailable                  -> .drop(.missingParameterSets)
+    if au.containsIRAP:
+        if let rp = au.recoveryPoint, rp.brokenLink -> .drop(.brokenLink)
+        isOpen = true
+        if codec == .h265 && au.containsCRAOrBLA { noRaslOutputFlag = true }
+        -> .pass
+    if policy.acceptRecoveryPointSEI,
+       let rp = au.recoveryPoint,
+       rp.exactMatch || policy.acceptInexactRecoveryPoint,
+       !rp.brokenLink:
+        isOpen = true                              -> .pass
+    if let t = policy.desperationTimeout, now - firstAUInstant > t:
+        isOpen = true; logger.warning("opening IRAP gate on timeout, expect artefacts")
+        -> .pass
+    -> .drop(.awaitingIRAP)
+// gate open
+if noRaslOutputFlag && au.containsRASL             -> .drop(.raslAfterCRAStart)
+if !au.containsRASL { noRaslOutputFlag = false }    // first non-RASL AU clears it
+-> .pass
+```
+
+### 20.3 Why the RASL rule exists
+
+When decoding begins at a CRA (or a BLA), H.265 sets `NoRaslOutputFlag = 1` for that picture, and
+the associated RASL pictures reference frames that precede the CRA and are therefore **not
+available**. The standard requires them to be discarded. If we forward them, VideoToolbox returns
+`kVTVideoDecoderBadDataErr` (best case) or emits pixel garbage that looks like a corrupted keyframe
+(worse case, and the one users report as "the camera flashes green when I seek"). This is reachable
+in Vigil on **NVR playback seeks**, which land on a CRA, not on live streams.
+
+The flag is cleared by the first access unit that contains no RASL NAL. It is also cleared by
+`reset()`.
+
+### 20.4 Detecting that a stream started mid-GOP
+
+We do not need to *detect* it — we assume it. A Hikvision camera begins sending at the next packet
+after `PLAY`, which is almost never an IRAP boundary; with the default I-frame interval of 50 at
+25 fps the expected wait is ~1 s and the worst case 2 s. Therefore:
+
+* The gate starts **closed** on every `PLAY`, every reconnect, and every decoder reset.
+* Two independent mitigations shorten the wait, both of which are other modules' work but depend on
+  this module's contract:
+  1. `VigilRTSP` extracts `sprop-parameter-sets` (H.264) / `sprop-vps`, `sprop-sps`, `sprop-pps`
+     (H.265) from the SDP `fmtp` line and hands the base64-decoded NAL units to
+     `ParameterSetStore.ingest` **before** the first RTP packet arrives, so
+     `parameterSetsAvailable` is already true when the first IDR shows up and no GOP is wasted
+     waiting for in-band parameter sets.
+  2. `VigilCore` issues a keyframe request when `shouldRequestKeyframe` becomes true (Hikvision
+     ISAPI `PUT /ISAPI/Streaming/channels/<id>/requestKeyFrame`, and as a fallback an RTSP
+     re-`PLAY`).
+* While the gate is closed the UI shows the connecting shimmer, not black — `VigilCore` observes
+  `droppedAccessUnits` and the gate state.
+
+### 20.5 Keyframe classification (what `EncodedFrame.isKeyframe` means)
+
+| Codec | `isKeyframe == true` iff the AU contains | Notes |
+|---|---|---|
+| H.264 | a NAL of type **5** (IDR) | An I-slice of type 1 is *not* a keyframe: without an IDR the DPB is not reset and a decoder cannot start there. Recognised only via `recovery_point`. |
+| H.265 | a NAL of type in **16…23** (IRAP) | Includes CRA and BLA. |
+
+`AVAssetWriter` uses this for the sync-sample flag, and `VigilVideo` uses it for the
+`kCMSampleAttachmentKey_NotSync` attachment (present ⇔ `!isKeyframe`), so a wrong answer here
+produces an unseekable recording.
+
+---
+
+## 21. `ParameterSetStore` and format-change detection
+
+```swift
+public struct ParameterSetStore: Sendable {
+    public init(codec: VideoCodec)
+
+    public private(set) var sets: ParameterSets
+    /// nil when no SPS has parsed successfully yet — but `sets` may still be complete and usable.
+    public private(set) var format: VideoFormatInfo?
+    public private(set) var h264SPS: H264SPS?
+    public private(set) var h264PPS: [UInt32: H264PPS]
+    public private(set) var h265VPS: H265VPS?
+    public private(set) var h265SPS: H265SPS?
+    public private(set) var h265PPS: [UInt32: H265PPS]
+
+    /// Increments whenever the decode-relevant bytes change. `VigilVideo` compares this against the
+    /// generation its current VTDecompressionSession / AVSampleBufferDisplayLayer was built from.
+    public private(set) var generation: UInt32
+
+    @discardableResult
+    public mutating func ingest(nalUnit: UnsafeRawBufferPointer) -> IngestResult
+
+    public enum IngestResult: Sendable, Equatable {
+        case notAParameterSet
+        case unchanged                       // byte-identical re-send; the common case
+        case stored(generation: UInt32)      // new or changed bytes, same picture format
+        case formatChanged(generation: UInt32, from: VideoFormatInfo?, to: VideoFormatInfo?)
+    }
+
+    /// True when everything needed to build a format description is present.
+    public var isComplete: Bool {
+        switch sets.codec {
+        case .h264: return !sets.sps.isEmpty && !sets.pps.isEmpty
+        case .h265: return !sets.vps.isEmpty && !sets.sps.isEmpty && !sets.pps.isEmpty
+        }
+    }
+    public mutating func reset()
+}
+```
+
+### 21.1 The parse-failure policy (binding, and it is the important one)
+
+```
+ingest(nalUnit:):
+  1. classify the NAL. Not 7/8/13 (H.264) or 32/33/34 (H.265) -> .notAParameterSet
+  2. if the stored bytes for that (type, id) are byte-identical -> .unchanged   [fast path,
+     hit on essentially every IDR, so it must be a memcmp and nothing more]
+  3. store the bytes (replacing same-id, appending otherwise). Bump `generation`.
+  4. TRY to parse. On success, recompute `format`.
+     On failure: log at .error, leave `format` unchanged (or nil), and STILL KEEP THE BYTES.
+  5. return .formatChanged if codedWidth/codedHeight/codec/chromaFormat/bitDepth changed,
+     else .stored
+```
+
+Step 4 is the policy: **a parameter set we cannot parse is still forwarded to the decoder.**
+VideoToolbox has its own, more permissive parser and frequently decodes streams our parser rejects.
+Our parse exists for metadata (window sizing, HUD, decode budget, `hvcC` fields) and for the IRAP
+gate — none of which are prerequisites for decoding. A camera that trips our parser must still show
+a picture. Conversely, `isComplete` is about *bytes*, never about parse success.
+
+### 21.2 What counts as a format change
+
+Only these five fields, compared between the old and new `VideoFormatInfo`:
+
+| Field | Why it forces a decode-session rebuild |
+|---|---|
+| `codec` | different decoder |
+| `codedWidth`, `codedHeight` | VideoToolbox session and pixel-buffer pool are size-bound |
+| `chromaFormatIDC` | different output pixel format |
+| `bitDepthLuma` | 8-bit vs 10-bit output format (`420YpCbCr8…` vs `420YpCbCr10…`) |
+
+Deliberately **not** a format change: a new SAR, a new frame rate, new colour description, new
+cropping offsets that leave the coded size intact, a re-sent identical SPS, or a new PPS. Those
+update `format` and bump `generation` but `VigilVideo` keeps its session — rebuilding on every SPS
+re-send (i.e. every 2 seconds) would make the picture stutter forever. `VigilVideo` reacts to
+`generation` by rebuilding the `CMFormatDescription` (cheap) and to `formatChanged` by draining and
+recreating the decode session (expensive; see the video-pipeline spec for the no-black-flash drain).
+
+### 21.3 Identity hash
+
+```swift
+extension ParameterSets {
+    /// FNV-1a 64 over codec + every set's length and bytes, in array order.
+    /// Used for O(1) "is this the same configuration" checks in caches and in the recorder,
+    /// never for security. Not stable across app versions and not persisted.
+    public var identity: UInt64 {
+        var h: UInt64 = 0xcbf29ce484222325
+        func mix(_ b: UInt8) { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+        mix(codec == .h264 ? 1 : 2)
+        for group in [vps, sps, pps] {
+            mix(UInt8(truncatingIfNeeded: group.count))
+            for set in group {
+                mix(UInt8(truncatingIfNeeded: set.count >> 8))
+                mix(UInt8(truncatingIfNeeded: set.count))
+                for b in set { mix(b) }
+            }
+        }
+        return h
+    }
+}
+```
+
+---
+
+## 22. Complete public API of `VigilBitstream`
+
+```swift
+// ── Errors ─────────────────────────────────────────────────────────────────────
+public enum BitstreamError: Error, Equatable, Sendable, CustomStringConvertible {
+    case emptyNALUnit
+    case tooLarge(bytes: Int)
+    case unexpectedEndOfData(atBit: Int)
+    case malformedExpGolomb(leadingZeros: Int)
+    case valueOutOfRange(field: String, value: UInt64)
+    case wrongNALType(expected: UInt8, found: UInt8)
+    case forbiddenBitSet
+    case invalidTemporalID
+    case negativeSkip
+    case invalidCropping
+    case unsupportedSyntax(String)
+    case truncatedSEI
+    case truncatedLengthPrefix(atOffset: Int)
+    case unsupportedRecordVersion(UInt8)
+    case unsupportedLengthSize(UInt8)
+    case invalidBase64
+    public var description: String { get }
+}
+
+// ── NAL types ──────────────────────────────────────────────────────────────────
+public enum H264NALType: UInt8, Sendable, Hashable, CaseIterable { /* §3.1 */ }
+public enum H265NALType: UInt8, Sendable, Hashable, CaseIterable { /* §3.2 */ }
+public struct NALUnitRef: Sendable, Hashable {
+    public let range: Range<Int>        // into the source buffer, NAL header included
+    public let typeCode: UInt8
+    public let layerID: UInt8           // H.265; 0 for H.264
+    public let temporalID: UInt8        // H.265; 0 for H.264
+}
+public enum NALHeader {
+    public static func decodeH264(_ b0: UInt8) throws -> (type: UInt8, refIdc: UInt8)
+    public static func decodeHEVC(_ b0: UInt8, _ b1: UInt8) throws -> (type: UInt8, layerID: UInt8, temporalID: UInt8)
+    public static func encodeHEVC(type: UInt8, layerID: UInt8, temporalID: UInt8) -> (UInt8, UInt8)
+    /// Reads the type code from a NAL unit of either codec.
+    @inlinable public static func typeCode(_ nal: UnsafeRawBufferPointer, codec: VideoCodec) throws -> UInt8
+}
+
+// ── Annex-B / length-prefixed ──────────────────────────────────────────────────
+public enum AnnexB {
+    public static func findStartCode(in: UnsafeRawBufferPointer, from: Int) -> (index: Int, length: Int)?
+    public static func enumerateNALUnits(in: UnsafeRawBufferPointer, _ body: (Range<Int>) throws -> Void) rethrows
+    public static func nalRanges(_ bytes: [UInt8]) -> [Range<Int>]
+    public static func toLengthPrefixed(_ annexB: [UInt8]) -> [UInt8]
+    public static func toLengthPrefixedInPlace(_ buffer: inout [UInt8]) -> Bool
+    public static func fromLengthPrefixed(_ prefixed: [UInt8], startCodeLength: Int = 4) throws -> [UInt8]
+    public static func fromLengthPrefixedInPlace(_ buffer: inout [UInt8]) throws
+}
+public enum LengthPrefixed {
+    public static func enumerate(_ bytes: UnsafeRawBufferPointer, codec: VideoCodec,
+                                _ body: (Range<Int>, UInt8) throws -> Void) throws
+    public static func validate(_ bytes: UnsafeRawBufferPointer) -> Bool
+    @inlinable public static func appendLength(_ n: Int, to out: inout [UInt8])
+    /// Writes `nal` prefixed by its 4-byte big-endian length. The one function `VigilRTP` uses.
+    @inlinable public static func append(nal: UnsafeRawBufferPointer, to out: inout [UInt8])
+}
+
+// ── RBSP / bit reading ─────────────────────────────────────────────────────────
+public enum RBSP {
+    public static func unescape(_ nal: UnsafeRawBufferPointer, skippingHeaderBytes: Int) throws -> [UInt8]
+    public static func escape(_ rbsp: [UInt8]) -> [UInt8]
+    /// Count of emulation-prevention bytes, without allocating. For diagnostics.
+    public static func escapeByteCount(_ nal: UnsafeRawBufferPointer, skippingHeaderBytes: Int) -> Int
+}
+public struct RBSPBitReader: Sendable { /* §7 */ }
+
+// ── Parsers ────────────────────────────────────────────────────────────────────
+public enum H264Parser {
+    public static func parseSPS(_ nal: UnsafeRawBufferPointer) throws -> H264SPS
+    public static func parsePPS(_ nal: UnsafeRawBufferPointer) throws -> H264PPS
+    public static func parseSPS(base64: String) throws -> H264SPS
+    /// Splits an SDP `sprop-parameter-sets` value ("<b64>,<b64>") into NAL units.
+    public static func parseSpropParameterSets(_ value: String) throws -> [[UInt8]]
+}
+public enum H265Parser {
+    public static func parseVPS(_ nal: UnsafeRawBufferPointer) throws -> H265VPS
+    public static func parseSPS(_ nal: UnsafeRawBufferPointer) throws -> H265SPS
+    public static func parsePPS(_ nal: UnsafeRawBufferPointer) throws -> H265PPS
+    public static func parseSPS(base64: String) throws -> H265SPS
+}
+public struct ProfileTierLevel: Sendable, Hashable, Codable { /* §11 */ }
+public struct H264SPS: Sendable, Hashable, Codable { /* §10 */ }
+public struct H264PPS: Sendable, Hashable, Codable { /* §10 */ }
+public struct H265VPS: Sendable, Hashable, Codable { /* §12 */ }
+public struct H265SPS: Sendable, Hashable, Codable { /* §13.7 */ }
+public struct H265PPS: Sendable, Hashable, Codable { /* §14 */ }
+
+// ── The neutral format description ─────────────────────────────────────────────
+public struct VideoFormatInfo: Sendable, Hashable, Codable {
+    public var codec: VideoCodec
+    public var codedWidth: Int
+    public var codedHeight: Int
+    public var displayWidth: Int
+    public var displayHeight: Int
+    public var sarWidth: Int
+    public var sarHeight: Int
+    public var frameRate: Double?
+    public var profileIDC: UInt8
+    public var constraintFlags: UInt8          // H.264 only
+    public var levelIDC: UInt8
+    public var tier: UInt8                     // H.265 only, 0 = Main tier
+    public var chromaFormatIDC: UInt8
+    public var bitDepthLuma: Int
+    public var bitDepthChroma: Int
+    public var isProgressive: Bool
+    public var colourPrimaries: UInt8?
+    public var transferCharacteristics: UInt8?
+    public var matrixCoefficients: UInt8?
+    public var fullRange: Bool
+    public var maxNumReorderFrames: Int
+    public var maxDecFrameBuffering: Int
+    public var minSpatialSegmentationIDC: Int
+    public var numTemporalLayers: Int
+    public var temporalIDNested: Bool
+    public var profileName: String
+    public var levelName: String
+
+    public var pixelAspectRatio: Double { Double(sarWidth) / Double(sarHeight) }
+    /// Display aspect ratio including SAR. This is what the window and the tile use.
+    public var displayAspectRatio: Double {
+        Double(displayWidth) * pixelAspectRatio / Double(displayHeight)
+    }
+    /// Pixel count for the decode-budget cost function in VigilVideo.
+    public var codedPixels: Int { codedWidth * codedHeight }
+
+    public init(_ sps: H264SPS)
+    public init(_ sps: H265SPS, vps: H265VPS?, pps: H265PPS?)
+}
+
+// ── Records ────────────────────────────────────────────────────────────────────
+public struct AVCDecoderConfigurationRecord: Sendable, Hashable {
+    public var avcProfileIndication: UInt8
+    public var profileCompatibility: UInt8
+    public var avcLevelIndication: UInt8
+    public var lengthSizeMinusOne: UInt8            // always 3
+    public var sequenceParameterSets: [[UInt8]]
+    public var pictureParameterSets: [[UInt8]]
+    public var chromaFormat: UInt8?
+    public var bitDepthLumaMinus8: UInt8?
+    public var bitDepthChromaMinus8: UInt8?
+    public var sequenceParameterSetExt: [[UInt8]]
+    public init(sps: [[UInt8]], pps: [[UInt8]], spsExt: [[UInt8]] = []) throws
+    public init(parsing data: [UInt8]) throws
+    public func serialized() -> [UInt8]
+    public var parameterSets: ParameterSets { get }
+}
+public struct HEVCDecoderConfigurationRecord: Sendable, Hashable {
+    public var ptl: ProfileTierLevel
+    public var minSpatialSegmentationIDC: UInt16
+    public var parallelismType: UInt8
+    public var chromaFormat: UInt8
+    public var bitDepthLumaMinus8: UInt8
+    public var bitDepthChromaMinus8: UInt8
+    public var avgFrameRate: UInt16                 // fps * 256
+    public var constantFrameRate: UInt8
+    public var numTemporalLayers: UInt8
+    public var temporalIDNested: Bool
+    public var lengthSizeMinusOne: UInt8            // always 3
+    /// One entry per hvcC array, in ascending nalType order: 32 VPS, 33 SPS, 34 PPS, [39 SEI].
+    /// A struct rather than a tuple so the record stays Hashable.
+    public struct NALArray: Sendable, Hashable {
+        public var arrayCompleteness: Bool
+        public var nalUnitType: UInt8
+        public var nalUnits: [[UInt8]]
+    }
+    public var arrays: [NALArray]
+    public init(vps: [[UInt8]], sps: [[UInt8]], pps: [[UInt8]], sei: [[UInt8]] = [],
+                parsedSPS: H265SPS, parsedPPS: H265PPS?) throws
+    public init(parsing data: [UInt8]) throws
+    public func serialized() -> [UInt8]
+    public var parameterSets: ParameterSets { get }
+}
+
+// ── SEI ────────────────────────────────────────────────────────────────────────
+public enum SEI {
+    public static func enumerate(nalUnit: UnsafeRawBufferPointer, codec: VideoCodec,
+                                _ body: (Int, ArraySlice<UInt8>) throws -> Void) throws
+    public static func parseRecoveryPoint(_ payload: ArraySlice<UInt8>, codec: VideoCodec) throws -> RecoveryPoint
+    public static func parsePictureTiming(_ payload: ArraySlice<UInt8>, sps: H264SPS) throws -> PictureTiming
+}
+public struct RecoveryPoint: Sendable, Hashable { /* §19.3 */ }
+public struct PictureTiming: Sendable, Hashable { public var picStruct: UInt8 }
+
+// ── Classification / gating ────────────────────────────────────────────────────
+public enum SliceHeader {
+    @inlinable public static func isFirstSliceOfPicture(nalUnit: UnsafeRawBufferPointer, codec: VideoCodec) -> Bool
+}
+public struct AccessUnitSummary: Sendable { /* §20.2 */ }
+public struct IRAPGate: Sendable { /* §20.2 */ }
+public struct ParameterSetStore: Sendable { /* §21 */ }
+public enum SampleAspectRatio { public static let table: [UInt8: (Int, Int)] }
+```
+
+Concurrency: every type above is a `Sendable` value type or a namespace `enum`. There is no class,
+no actor and no shared mutable state in `VigilBitstream`. `ParameterSetStore` and `IRAPGate` are
+structs owned by whichever actor drives the stream (the `StreamCoordinator` actor in `VigilCore`),
+which is what makes the module trivially safe under Swift 6 strict concurrency.
+
+---
+
+## 23. Unit-test vectors (mandatory)
+
+### 23.1 Provenance
+
+Vectors **V1–V7** (H.264) and **W1–W4** (H.265) are byte-exact fixtures generated by an independent
+reference encoder and validated by round-tripping through an independent reference parser while
+writing this specification. Their parameter values were chosen to match the configurations Hikvision
+cameras and NVRs actually emit (Main/High profile 1080p25 with 1088→1080 cropping, 2560×1440@20,
+704×576 substreams, HEVC Main 1080p25, HEVC 2688×1520@20, Main 10) **plus** the awkward paths that
+real firmware occasionally takes (scaling lists present, MBAFF, `pic_order_cnt_type == 1`,
+conformance window, inter-predicted RPS, two temporal sub-layers). They are the normative regression
+corpus and they are exact: every field in the tables below was produced by parsing the given bytes.
+
+They are *not* claimed to be captures from a specific camera. Implementers **must additionally**
+commit real captures, using this procedure:
+
+1. `DESCRIBE rtsp://<cam>/Streaming/Channels/101` and copy the `fmtp` line's
+   `sprop-parameter-sets` (H.264) or `sprop-vps` / `sprop-sps` / `sprop-pps` (H.265).
+2. Add one `XCTest` case per capture with the model string and firmware version in the test name,
+   e.g. `test_DS2CD2385FWD_I_V5_7_3_H265_MainStream()`.
+3. Assert `displayWidth`, `displayHeight`, `frameRate`, `sarWidth/sarHeight`, `profileIDC`,
+   `levelIDC` and — for HEVC — `ptl.generalConstraintIndicatorFlags`.
+4. Assert the `avcC`/`hvcC` round trip: `Record(parsing: built.serialized()).serialized() == built.serialized()`.
+
+Any capture that fails to parse is a bug in the parser, not in the camera, until proven otherwise:
+add it to the corpus with an `XCTExpectFailure` and fix the parser.
+
+### 23.2 H.264 SPS vectors
+
+| ID | Base64 | Bytes |
+|---|---|---:|
+| V1 | `Z00AKPQDwBE/LgIgAAADACAAAAZQgA==` | 22 |
+| V2 | `Z2QAKawsrAeAIn5cBagICAoAAAMAAgAAAwB5Ht8=` | 29 |
+| V3 | `Z2QAMqzoAoALWwEQAAADABAAAAMCiEA=` | 23 |
+| V4 | `Z0KAHtoCwEm/8ADAALEAAAMAAQAAAwAeBA==` | 25 |
+| V5 | `Z2QAKK3//////////////////////////////////////+UB4AiflwEQAAADABAAAAMDKEA=` | 53 |
+| V6 | `Z00AKPYDwCJ+8BEAAAMAAQAAAwAyhA==` | 22 |
+| V7 | `Z00AH9CyCBIQYCgC3YCIAAADAAgAAAMBlCA=` | 26 |
+
+Hex:
+```
+V1  67 4D 00 28 F4 03 C0 11 3F 2E 02 20 00 00 03 00 20 00 00 06 50 80
+V2  67 64 00 29 AC 2C AC 07 80 22 7E 5C 05 A8 08 08 0A 00 00 03 00 02 00 00 03 00 79 1E DF
+V3  67 64 00 32 AC E8 02 80 0B 5B 01 10 00 00 03 00 10 00 00 03 02 88 40
+V4  67 42 80 1E DA 02 C0 49 BF F0 00 C0 00 B1 00 00 03 00 01 00 00 03 00 1E 04
+V5  67 64 00 28 AD FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+    FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF E5 01 E0
+    08 9F 97 01 10 00 00 03 00 10 00 00 03 03 28 40
+V6  67 4D 00 28 F6 03 C0 22 7E F0 11 00 00 03 00 01 00 00 03 00 32 84
+V7  67 4D 00 1F D0 B2 08 12 10 60 28 02 DD 80 88 00 00 03 00 08 00 00 03 01 94 20
+```
+
+Expected parse — the assertions each test must make:
+
+| Field | V1 | V2 | V3 | V4 | V5 | V6 | V7 |
+|---|---|---|---|---|---|---|---|
+| `profileIDC` | 77 | 100 | 100 | 66 | 100 | 77 | 77 |
+| profile name | Main | High | High | Baseline | High | Main | Main |
+| `constraintFlags` (SPS byte 2) | `0x00` | `0x00` | `0x00` | `0x80` | `0x00` | `0x00` | `0x00` |
+| `levelIDC` / name | 40 / 4.0 | 41 / 4.1 | 50 / 5.0 | 30 / 3.0 | 40 / 4.0 | 40 / 4.0 | 31 / 3.1 |
+| `seqParameterSetID` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `chromaFormatIDC` | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
+| bit depths | 8 / 8 | 8 / 8 | 8 / 8 | 8 / 8 | 8 / 8 | 8 / 8 | 8 / 8 |
+| `seqScalingMatrixPresent` | false | false | false | n/a | **true** | false | false |
+| `log2MaxFrameNum` | 4 | 8 | 4 | 4 | 4 | 4 | 4 |
+| `picOrderCntType` | 0 | 0 | 0 | **2** | 0 | 0 | **1** |
+| `log2MaxPicOrderCntLsb` | 4 | 8 | 4 | — | 4 | 4 | — |
+| `offsetForRefFrame` | — | — | — | — | — | — | `[4, -4, 8]` |
+| `offsetForNonRefPic` | — | — | — | — | — | — | −2 |
+| `maxNumRefFrames` | 1 | 2 | 1 | 1 | 4 | 2 | 2 |
+| `picWidthInMbs` | 120 | 120 | 160 | 44 | 120 | 120 | 80 |
+| `picHeightInMapUnits` | 68 | 68 | 90 | 36 | 68 | **34** | 45 |
+| `frameMbsOnlyFlag` | 1 | 1 | 1 | 1 | 1 | **0** | 1 |
+| `mbAdaptiveFrameFieldFlag` | — | — | — | — | — | **true** | — |
+| crop (l,r,t,b) | 0,0,0,4 | 0,0,0,4 | 0,0,0,0 | 0,0,0,0 | 0,0,0,4 | 0,0,0,**2** | 0,0,0,0 |
+| CropUnitX / CropUnitY | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / **4** | 2 / 2 |
+| **coded** W×H | 1920×1088 | 1920×1088 | 2560×1440 | 704×576 | 1920×1088 | 1920×1088 | 1280×720 |
+| **display** W×H | **1920×1080** | **1920×1080** | **2560×1440** | **704×576** | **1920×1080** | **1920×1080** | **1280×720** |
+| `aspectRatioIDC` | 1 | 1 | 1 | **255** | 1 | 1 | 1 |
+| SAR | 1:1 | 1:1 | 1:1 | **12:11** | 1:1 | 1:1 | 1:1 |
+| `numUnitsInTick` / `timeScale` | 1 / 50 | 1 / 60 | 1 / 40 | 1 / 30 | 1 / 50 | 1 / 50 | 1 / 50 |
+| **fps** | **25.0** | **30.0** | **20.0** | **15.0** | **25.0** | **25.0** | **25.0** |
+| `maxNumReorderFrames` | — | 0 | — | — | — | — | — |
+| `maxDecFrameBuffering` | — | 0 | — | — | — | — | — |
+| colour primaries / transfer / matrix | — | 1/1/1 | — | — | — | — | — |
+| `isProgressive` | true | true | true | true | true | **false** | true |
+| RBSP bits consumed / available | 152 / 160 | 207 / 208 | 153 / 160 | 173 / 176 | 393 / 400 | 149 / 152 | 178 / 184 |
+
+The last row is the strongest single assertion in the suite: it proves the parse consumed exactly
+the right number of bits, so every skip loop (scaling lists in V5, the POC type 1 cycle in V7, the
+VUI/HRD in V2) landed on the correct bit. `bitsConsumed` must always be within 8 bits of the
+available total, the slack being `rbsp_trailing_bits()`. Expose it as
+`H264SPS.debugBitsConsumed: Int` under `#if DEBUG` or as an internal property visible via
+`@testable import`.
+
+Notes on individual vectors:
+
+* **V1** is the reference 1080p case: 1088 coded rows cropped to 1080 with `CropUnitY = 2`. Also the
+  emulation-prevention showcase — `num_units_in_tick = 1` and `time_scale = 50` are 32-bit fields
+  full of zero bytes, producing two `0x03` insertions (`00 00 03 00` at bytes 12–15 and again at
+  17–20).
+* **V2** exercises `bitstream_restriction_flag`, giving `maxNumReorderFrames = 0` and
+  `maxDecFrameBuffering = 0` — the "this stream has no reordering, decode with zero latency" signal
+  that `VigilVideo`'s low-latency path keys on.
+* **V4** is the only vector with a non-square SAR (12:11) and with `pic_order_cnt_type == 2`, and the
+  only one whose `constraintFlags` is non-zero: `0x80` is `constraint_set0_flag`, **not**
+  `constraint_set1_flag`, so `profileName` must report plain **"Baseline"**. Reporting
+  "Constrained Baseline" here is the exact bug the vector exists to catch — Constrained Baseline
+  requires `constraint_set1_flag` (mask `0x40`). `displayAspectRatio` = 704 × (12/11) / 576 = 4:3
+  exactly, which is the assertion that proves SAR is applied to the *display* size rather than
+  ignored.
+* **V5** has all eight scaling lists present with every `delta_scale == 0` (each coded as a single
+  `1` bit, hence the run of `0xFF`). It is the `skipScalingList` regression: 6 × 16 + 2 × 64 = 224
+  `se(v)` reads must be consumed. A parser that skips a fixed number of bits, or that stops on
+  `nextScale == 0`, lands in the wrong place and reports a nonsense resolution.
+* **V6** is interlaced/MBAFF: `frame_mbs_only_flag == 0` doubles both the height derivation
+  (34 map units × 2 × 16 = 1088) and `CropUnitY` (2 × 2 = 4), so `frame_crop_bottom_offset = 2`
+  removes 8 rows. Getting `CropUnitY` wrong here yields 1084 or 1080 by luck; the vector catches it.
+* **V7** carries a three-entry `offset_for_ref_frame` cycle. If the loop is skipped or mis-bounded,
+  `maxNumRefFrames` reads as garbage and the resolution is wrong.
+
+### 23.3 H.264 PPS vectors
+
+| ID | Base64 | Hex | Assertions |
+|---|---|---|---|
+| P1 | `aO48gA==` | `68 EE 3C 80` | pps_id 0, sps_id 0, CABAC true, `usesSliceGroups` false, `transform8x8ModeFlag` **false**, `moreRBSPData()` **false** at the decision point, 16 of 24 bits consumed |
+| P2 | `aO48sA==` | `68 EE 3C B0` | as P1 but `transform8x8ModeFlag` **true**, `moreRBSPData()` **true**, 17 of 24 bits consumed |
+
+### 23.4 H.265 vectors
+
+VPS (24 bytes) — `QAEMAf//AWAAAAMAsAAAAwAAAwB7lwJA`
+```
+40 01 0C 01 FF FF 01 60 00 00 03 00 B0 00 00 03 00 00 03 00 7B 97 02 40
+```
+Assertions: `vpsID = 0`, `maxLayersMinus1 = 0`, `maxSubLayersMinus1 = 0`,
+`temporalIDNestingFlag = true`, reserved field == `0xFFFF`, PTL `generalProfileIDC = 1`,
+`generalLevelIDC = 123`.
+
+| ID | Base64 | Bytes |
+|---|---|---:|
+| W1 | `QgEBAWAAAAMAsAAAAwAAAwB7oAPAgBDlll5JG2S7wFqAgICCAAADAAIAAAMAMlcIBBA=` | 50 |
+| W2 | `QgEBAWAAAAMAsAAAAwAAAwB7oAPIgBEHEy5ZeSRtm+t14CAgAAADACAAAAMDJRcIBBA=` | 50 |
+| W3 | `QgEDAWAAAAMAsAAAAwAAAwCWwAABYAAAAwCwAAADAAADAJagAVAgBfFlly8kjbJd4CAgAAADACAAAAMChXCAQQ==` | 64 |
+| W4 | `QgEBAiQAAAMAsAAAAwAAAwB7oAPAgBDk2WXkkbZLvAQEAAADAAQAAAMAZK4QCCA=` | 47 |
+
+| Field | W1 | W2 | W3 | W4 |
+|---|---|---|---|---|
+| `sps_video_parameter_set_id` | 0 | 0 | 0 | 0 |
+| `sps_max_sub_layers_minus1` | 0 | 0 | **1** | 0 |
+| `sps_temporal_id_nesting_flag` | true | true | true | true |
+| `generalProfileSpace` / `generalTierFlag` | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| `generalProfileIDC` / name | 1 / Main | 1 / Main | 1 / Main | **2 / Main 10** |
+| `generalProfileCompatibilityFlags` | `0x60000000` | `0x60000000` | `0x60000000` | **`0x24000000`** |
+| `generalConstraintIndicatorFlags` | `0xB00000000000` | `0xB00000000000` | `0xB00000000000` | `0xB00000000000` |
+| progressive / interlaced / non_packed / frame_only | 1/0/1/1 | 1/0/1/1 | 1/0/1/1 | 1/0/1/1 |
+| `generalLevelIDC` / name | 123 / 4.1 | 123 / 4.1 | **150 / 5.0** | 123 / 4.1 |
+| `subLayerLevelIDC` | `[]` | `[]` | **`[150]`** | `[]` |
+| `chromaFormatIDC` | 1 | 1 | 1 | 1 |
+| bit depths | 8 / 8 | 8 / 8 | 8 / 8 | **10 / 10** |
+| `log2MaxPicOrderCntLsb` | 8 | 8 | 8 | 8 |
+| **coded** W×H | 1920×1080 | **1936×1088** | 2688×1520 | 1920×1080 |
+| conformance window (l,r,t,b) | 0,0,0,0 | **0,8,0,4** | 0,0,0,0 | 0,0,0,0 |
+| SubWidthC / SubHeightC | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
+| **display** W×H | **1920×1080** | **1920×1080** | **2688×1520** | **1920×1080** |
+| `minCbLog2SizeY` / `ctbLog2SizeY` / `ctbSizeY` | 3 / 6 / 64 | 3 / 6 / 64 | 3 / 6 / 64 | 3 / 6 / 64 |
+| `numShortTermRefPicSets` | 1 | **2** | 1 | 1 |
+| `numDeltaPocs` | `[1]` | **`[2, 3]`** | `[1]` | `[1]` |
+| `numUnitsInTick` / `timeScale` | 1 / 25 | 1 / 25 | 1 / 20 | 1 / 25 |
+| **fps** | **25.0** | **25.0** | **20.0** | **25.0** |
+| SAR | 1:1 | 1:1 | 1:1 | 1:1 |
+| `minSpatialSegmentationIDC` | 0 | **4** | 0 | 0 |
+| colour primaries / transfer / matrix | 1/1/1 | — | — | — |
+| `numTemporalLayers` | 1 | 1 | **2** | 1 |
+| `sps_extension_present_flag` | false | false | false | false |
+| RBSP bits consumed / available | 339 / 344 | 339 / 344 | 431 / 432 | 314 / 320 |
+
+Notes:
+
+* **W2** is the important one. It has (a) a conformance window that must be multiplied by
+  `SubWidthC`/`SubHeightC` — `1936 − 2·8 = 1920`, `1088 − 2·4 = 1080` — and (b) two short-term RPSs
+  where the second is **inter-predicted** from the first. `NumDeltaPocs[0] = 2`, so
+  `st_ref_pic_set(1)` reads `NumDeltaPocs[0] + 1 = 3` flag groups and derives
+  `NumDeltaPocs[1] = 3`. It also sets `min_spatial_segmentation_idc = 4`, which must reach
+  `hvcC` offset 13–14 as `0xF0 0x04`. A parser that treats the inclusive `0...N` bound as `0..<N`,
+  or that returns `NumDeltaPocs[RefRpsIdx]` unchanged, mis-parses the VUI and reports the wrong fps.
+* **W3** exercises the sub-layer loops of `profile_tier_level`: `sps_max_sub_layers_minus1 == 1`
+  means one `sub_layer_profile_present_flag`/`sub_layer_level_present_flag` pair, then
+  `2 × (8 − 1) = 14` bits of `reserved_zero_2bits`, then an 88-bit sub-layer profile block and an
+  8-bit `sub_layer_level_idc`. Omitting the reserved-bits loop (the common error) shifts everything
+  and yields a nonsensical `pic_width_in_luma_samples`.
+* **W4** is Main 10: `generalProfileIDC == 2`, compatibility flags `0x24000000`, bit depths 10/10.
+  `VigilVideo` must select `kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange` on the strength of
+  `bitDepthLuma == 10` from this parse.
+
+### 23.5 HEVC PPS vectors
+
+| ID | Base64 | Hex | tiles | WPP | `parallelismType` |
+|---|---|---|---:|---:|---:|
+| Q1 | `RAHh88DMkA==` | `44 01 E1 F3 C0 CC 90` | 0 | 0 | 1 |
+| Q2 | `RAHh88JLzJA=` | `44 01 E1 F3 C2 4B CC 90` | 1 (2×2) | 0 | 2 |
+| Q3 | `RAHh88HMkA==` | `44 01 E1 F3 C1 CC 90` | 0 | 1 | 3 |
+
+### 23.6 Record vectors
+
+| ID | Record | Input | Expected bytes |
+|---|---|---|---|
+| R1 | `avcC` | V1 + P1 | §16.3, 37 bytes, base64 `AU0AKP/hABZnTQAo9APAET8uAiAAAAMAIAAABlCAAQAEaO48gA==` |
+| R2 | `avcC` | V2 + P2 | §16.4, 48 bytes, base64 `AWQAKf/hAB1nZAAprCysB4AiflwFqAgICgAAAwACAAADAHke3wEABGjuPLD9+PgA` |
+| R3 | `hvcC` | VPS + W1 + Q1 | §17.1, 119 bytes |
+
+Each record vector requires three assertions: `build == expected`, `parse(expected)` recovers the
+exact parameter-set byte arrays, and `parse(expected).serialized() == expected`.
+
+### 23.7 Remaining mandatory test cases
+
+| ID | What it tests |
+|---|---|
+| T-EG-1 | The Exp-Golomb table in §7.1, both directions, plus the 33-leading-zero rejection |
+| T-EP-1 | Every `escape`/`unescape` row in §6, both directions |
+| T-EP-2 | `unescape` of a NAL ending in `00 00 03` (trailing-escape case) |
+| T-EP-3 | `unescape` refuses to drop `0x03` in `00 00 03 04` (strict form) |
+| T-AB-1 | `findStartCode` on 3-byte and 4-byte prefixes, and on a buffer with no start code |
+| T-AB-2 | Trailing-zero trimming: `00 00 01 65 AA 00 00 00 00 01 41 BB` yields NALs `65 AA` and `41 BB` |
+| T-AB-3 | §5.4 round trip: Annex-B → length-prefixed → Annex-B, with the embedded `00 00 03` payloads |
+| T-AB-4 | `toLengthPrefixedInPlace` returns `false` for the §5.4 input (mixed 3/4-byte prefixes) and `true` for an all-4-byte one, leaving the buffer untouched on failure |
+| T-LP-1 | `fromLengthPrefixedInPlace` rejects a truncated final NAL and a zero length |
+| T-NAL-1 | H.265 header encode/decode round trip over all 64 types × layer 0…63 × TID 0…6 |
+| T-NAL-2 | `forbidden_zero_bit == 1` throws; `nuh_temporal_id_plus1 == 0` throws |
+| T-SL-1 | `isFirstSliceOfPicture` for H.264 `first_mb_in_slice` ∈ {0, 1, 99} and H.265 flag ∈ {0, 1} |
+| T-GATE-1 | Gate stays closed through 40 non-IRAP AUs, opens on the 41st carrying an IDR, and reports `droppedAccessUnits == 40` |
+| T-GATE-2 | Gate opens on a `recovery_point` SEI with `exact_match_flag == 1`, stays closed when `broken_link_flag == 1` |
+| T-GATE-3 | H.265: starting at CRA sets `NoRaslOutputFlag`; the following RASL AUs are dropped; the first non-RASL AU clears it |
+| T-GATE-4 | `desperationTimeout` opens the gate and logs a warning |
+| T-STORE-1 | Re-ingesting a byte-identical SPS returns `.unchanged` and does **not** bump `generation` |
+| T-STORE-2 | A new SPS with the same coded size but a different fps returns `.stored`, not `.formatChanged` |
+| T-STORE-3 | V1 → V3 (1920×1088 → 2560×1440) returns `.formatChanged` |
+| T-STORE-4 | An SPS whose parse throws is still stored, `isComplete` becomes true, `format` stays nil |
+| T-BOUND-1 | Every row of the §4 bounds table throws the documented error rather than allocating |
+| T-FUZZ-1 | 10⁶ random mutations of V1/V2/W1/W2 (single-bit flips, truncations, byte injections): the parser must either return a value or throw — never crash, never allocate > 64 KiB, never exceed 1 ms |
+
+T-FUZZ-1 runs in CI on Linux with a fixed RNG seed and a 30-second budget. It is the only test
+allowed to be slow, and it is not optional: a parameter-set parser is directly reachable from the
+network by any device on the LAN.
+
+---
+
+## 24. Performance budget
+
+| Operation | Budget | Notes |
+|---|---|---|
+| `findStartCode` throughput | ≥ 2.0 GB/s single core on M-series | scalar 3-step loop; only relevant for file fixtures |
+| `LengthPrefixed.enumerate` over a 1080p keyframe (≈ 120 KB) | ≤ 4 µs | no allocation |
+| `H264Parser.parseSPS` | ≤ 3 µs | one allocation (the unescape buffer, ≤ 64 B typical) |
+| `H265Parser.parseSPS` | ≤ 6 µs | PTL + RPS + VUI/HRD |
+| `AVCDecoderConfigurationRecord.serialized()` | ≤ 2 µs | |
+| `ParameterSetStore.ingest` — unchanged fast path | ≤ 200 ns | `memcmp` only; this is the path taken twice per GOP per stream |
+| `SliceHeader.isFirstSliceOfPicture` | ≤ 2 ns | one bounds check + one load; called once per NAL |
+| `IRAPGate.evaluate` | ≤ 50 ns | |
+| Steady-state allocations per decoded frame | **0** | enforced by a `malloc` counter assertion in the perf test |
+
+Total per-stream steady-state cost of `VigilBitstream`: one `SliceHeader` call and one NAL-type read
+per NAL, plus a `memcmp`-only `ingest` twice per GOP. At 16 streams × 25 fps × ~4 NALs per frame
+that is 1600 calls/s of a 2 ns function — under 0.001 % of one core. Parameter-set parsing happens
+on format change only. **There is no per-frame parsing in Vigil**, and any change that introduces
+some is a performance regression that the allocation assertion will catch.
+
+---
+
+## 25. Cross-module contract summary
+
+Binding on other modules:
+
+1. **Dependency order** is `VigilProtocols → VigilBitstream → VigilRTP`. `VigilRTP` must use this
+   module's NAL tables, H.265 header codec, `LengthPrefixed.append`, and
+   `SliceHeader.isFirstSliceOfPicture`. No duplicates.
+2. **`EncodedFrame.data` is always 4-byte big-endian length-prefixed**, and
+   `lengthSizeMinusOne == 3` / `nalUnitHeaderLength == 4` everywhere. Annex-B never appears on the
+   live path.
+3. **Parameter sets are stored with the NAL header, without a start code or length prefix, still
+   escaped, byte-identical to the wire.** `VigilRTSP` hands base64-decoded `sprop-*` values in
+   exactly this form; `VigilVideo` passes them straight to CoreMedia.
+4. **`VigilBitstream` publishes `VideoFormatInfo`, never `CMVideoFormatDescription`.** The single
+   conversion site is `VigilVideo/FormatDescriptionFactory.swift`, and it uses the
+   `…CreateFrom{H264,HEVC}ParameterSets` APIs with `nalUnitHeaderLength: 4` and parameter-set order
+   `[SPS, PPS]` / `[VPS, SPS, PPS]`. Record builders are for muxing, reading MP4s, and tests.
+5. **Report cropped display size, allocate from coded size.** 1080p H.264 is coded 1920×1088;
+   `VigilRender`, `VigilUI` and the recorder must read `displayWidth`/`displayHeight` from
+   `VideoFormatInfo` and never from the pixel buffer.
+6. **Parsed fps is metadata only.** RTP timestamps drive the live clock; the container drives
+   recorded playback. The fps fallback chain is VUI → RTP-measured → ISAPI → 25.0. H.264 divides by
+   `2 × num_units_in_tick`; H.265 does not divide by 2.
+7. **A parameter set we cannot parse is still stored and still forwarded to the decoder.**
+   `isComplete` is about bytes; `format == nil` must never block decoding.
+8. **Format change means only:** codec, coded width, coded height, chroma format, or luma bit depth.
+   Everything else bumps `generation` (rebuild the format description) without recreating the decode
+   session.
+9. **The IRAP gate starts closed on every PLAY, reconnect and decoder reset.** `VigilCore` must act
+   on `shouldRequestKeyframe`, and `VigilUI` must render "connecting", never black, while it is
+   closed. For H.265, RASL pictures after a CRA start are dropped.
+10. **`isKeyframe` means IDR (H.264 type 5) or IRAP (H.265 types 16–23)** — not "an I-slice". This
+    drives sync samples in recordings and the `NotSync` sample attachment.
+11. **This module is 100 % value types, zero shared state, Linux-clean.** `ParameterSetStore` and
+    `IRAPGate` are structs owned by `VigilCore`'s per-stream actor.
+12. **`VigilProtocols.BitReader` has the API in §7** (`u`, `u64`, `flag`, `skip`, `alignToByte`,
+    `peek`, `bitsRemaining`, `isByteAligned`); Exp-Golomb and emulation-prevention live in
+    `VigilBitstream.RBSPBitReader`, not in `VigilProtocols`.
+

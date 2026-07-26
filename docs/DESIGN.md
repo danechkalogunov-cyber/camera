@@ -1261,7 +1261,7 @@ buttons are square. Label is `Body` for `secondary`/`ghost`, `Headline` (semibol
 | **rest** | fill `accentFill`, text/icon white, stroke none, E1 shadow (`black α 0.35 r4 y2`) | fill `surfaceRaised`, stroke `stroke.default`, text `text.primary` | fill clear, stroke none, text `text.secondary` | fill `dangerFill`, text white, E1 | fill clear, icon `text.secondary` | fill `scrim.base` (black α 0.62), icon `text.primary`, stroke `white α 0.14` |
 | **hover** | fill `accentHover`, shadow ×1.35 | fill `surfaceRaised` + white α 0.04, stroke `stroke.strong` | fill `white α 0.06`, text `text.primary` | fill `#D93A2B`, shadow ×1.35 | fill `white α 0.06`, icon `text.primary` | fill black α 0.74, icon white, stroke `white α 0.22` |
 | **pressed** | fill `accentPressed`, `scale 0.97`, shadow → none | fill `white α 0.10`, `scale 0.97` | fill `white α 0.10`, `scale 0.97` | fill `#B8281A`, `scale 0.97` | fill `white α 0.12`, `scale 0.94` | fill black α 0.86, `scale 0.94` |
-| **focused** | rest + focus ring (§9.30) | rest + ring | rest + ring | rest + ring | rest + ring | rest + ring inset 2 pt |
+| **focused** | rest + focus ring (§9.28) | rest + ring | rest + ring | rest + ring | rest + ring | rest + ring inset 2 pt |
 | **disabled** | fill `accentFill α 0.30`, text `white α 0.45` | fill `surface`, stroke `stroke.subtle`, text `text.disabled` | text `text.disabled` | fill `dangerFill α 0.30`, text `white α 0.45` | icon `text.disabled` | n/a — chrome hides instead |
 | **loading** | fill unchanged, label `opacity 1 → 0` + a 13 pt trimmed ring (`motion.spin`, 1.5 pt, white) cross-faded in over 120 ms; **width is frozen** at the label width so the button never resizes | same, ring `accent` | same | same, ring white | icon → ring | icon → ring |
 
@@ -1785,4 +1785,553 @@ dark loading, light rest, `reduceMotion`, `increaseContrast`, `reduceTransparenc
 that is ~1.4× the English length.
 
 ---
-<!-- PART2 -->
+
+## 10. Accessibility
+
+Vigil targets **WCAG 2.1 AA for all functional UI** and AAA for primary text, plus full macOS
+assistive-technology support. This is not a compliance appendix — the tokens in §3 were *chosen* to
+make these numbers fall out automatically.
+
+### 10.1 Contrast — the measured numbers
+
+All values computed from the sRGB hex tokens using the WCAG relative-luminance formula.
+
+| Requirement | Threshold | Vigil's worst case | Where |
+|---|---|---|---|
+| Body text | 4.5:1 | **13.23:1** | `text.primary` on E5 overlay glass (the darkest text context) |
+| Secondary text | 4.5:1 | **6.54:1** | `text.secondary` on overlay |
+| Tertiary text | 4.5:1 | **4.52:1** | `text.tertiary` on overlay — the tightest text pair in the app, deliberately still ≥ AA |
+| Text over video | 4.5:1 | **5.20:1** | `text.primary` on `scrim.base` over an all-white frame |
+| Button label on fill | 4.5:1 | **4.97:1** | white on `liveFill` |
+| Graphic / UI component | 3:1 | **3.46:1** | `accent` glyph on overlay glass |
+| Focus indicator | 3:1 | **4.76:1** | `focusRing` on overlay glass |
+| Status colour on video | 3:1 | **5.63:1** | `live` dot on `#000000` |
+| Light appearance, all text | 4.5:1 | **4.90:1** | `text.tertiary` `#626B79` on `#F3F4F7` |
+| Light appearance, semantics | 4.5:1 | **4.96:1** | `ok` `#157A2B` on canvas |
+
+The only deliberate exception is `text.disabled` (2.61:1). WCAG exempts disabled controls; Vigil
+nonetheless never relies on it alone — a disabled control always also loses its stroke, and any
+disabled *action* carries a `Caption1` reason string (e.g. "Camera offline", "No PTZ support").
+
+### 10.2 Full keyboard operability
+
+The app is fully operable with no pointer. Requirements on every component:
+
+1. `.focusable()` with an explicit `@FocusState`-backed focus value; `.focusEffectDisabled()` plus our
+   own ring (§9.28).
+2. `Tab`/`⇧Tab` walk containers in visual order; `⌃Tab` moves between the three main regions (sidebar
+   → stage → inspector); arrows move *within* a container (sidebar rows, grid tiles, palette results,
+   preset grid, timeline).
+3. `Space` activates the focused control; `↵` performs the primary action of the focused object (open a
+   camera fullscreen, run a palette row); `Esc` unwinds exactly one level (clear search → blur field →
+   close popover → exit fullscreen → exit cinema).
+4. Every action is in the menu bar with its shortcut, and every action is in `⌘K`. There is no action
+   reachable only by hover, drag or right-click. Drag-to-reorder has "Move Up"/"Move Down"
+   (`⌥⌘↑/↓`); drag-to-assign has "Assign to Cell ▸".
+5. Grid navigation: `⌥`+arrows move tile focus spatially (not by index) using the tile centres, so a
+   1+5 mosaic behaves as it looks.
+6. `⌘K` traps focus; sheets and popovers trap focus and restore it on dismiss.
+7. Focus is never lost: when a focused camera goes offline or a focused row is deleted, focus moves to
+   the nearest sibling, and VoiceOver announces the move.
+8. Full Keyboard Access (`⌃F1`) "increase contrast on focus" is honoured automatically because our
+   ring is 2 pt at ≥ 4.76:1; when `NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast` is
+   on, the ring goes to 3 pt.
+
+### 10.3 VoiceOver
+
+**Video tiles.** A tile is one accessibility element (the video content is not describable, so we
+describe its *state*), with custom actions replacing the hover toolbar:
+
+```swift
+tile
+  .accessibilityElement(children: .ignore)
+  .accessibilityLabel(Text(camera.name))
+  .accessibilityValue(Text(stateSentence))
+  .accessibilityHint(Text("Press Return to view fullscreen."))
+  .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+  .accessibilityCustomContent("Codec",      "\(codec) \(width) by \(height)")
+  .accessibilityCustomContent("Frame rate", "\(fps) frames per second")
+  .accessibilityCustomContent("Bit rate",   "\(mbps) megabits per second", importance: .default)
+  .accessibilityCustomContent("Latency",    "\(latencyMS) milliseconds")
+  .accessibilityCustomContent("Packet loss","\(lossPercent) percent")
+  .accessibilityCustomContent("Decoder",    hardwareDecode ? "Hardware" : "Software")
+  .accessibilityAction(named: "Take Snapshot")      { … }
+  .accessibilityAction(named: "Start Recording")    { … }   // label flips to "Stop Recording"
+  .accessibilityAction(named: "Mute Audio")         { … }
+  .accessibilityAction(named: "Open Fullscreen")    { … }
+  .accessibilityAction(named: "Show Pan Tilt Zoom") { … }
+  .accessibilityAction(named: "Remove From Layout") { … }
+```
+
+`stateSentence` is composed, never concatenated ad-hoc, by `VAccessibilityCopy`:
+
+| State | Spoken value |
+|---|---|
+| connecting | "Connecting, authenticating" (the live narration stage, in words) |
+| live | "Live, 1080p, 25 frames per second, hardware decode" |
+| live + recording | "Live and recording, 4 minutes 12 seconds" |
+| degraded | "Live but degraded, 2.4 percent packet loss" |
+| offline | "No signal, retrying in 4 seconds" |
+| auth failure | "Sign-in failed, credentials need updating" |
+| empty cell | "Empty cell, position 3 of 16. Drop a camera here or press Return to choose one." |
+
+Telemetry is in `accessibilityCustomContent` (rotor-accessible with `⌃⌥⇧↓`) rather than in the label,
+so a screen-reader user hears "Front Door, live, 1080p…" and can drill into the numbers on demand
+instead of hearing a paragraph. Values that change faster than 1 Hz are **not** announced live; the
+stats HUD is `accessibilityHidden(true)` and its content is exposed through custom content instead.
+State *transitions* are announced once, debounced 1 s, at `.medium` priority ("Front Door is live",
+"Front Door lost signal").
+
+**PTZ pad.** The pad is an adjustable element plus named actions:
+
+```swift
+ptzPad
+  .accessibilityElement(children: .ignore)
+  .accessibilityLabel("Pan and tilt control")
+  .accessibilityValue("Centred")   // or "Panning right at speed 4 of 10"
+  .accessibilityAdjustableAction { direction in     // VO up/down arrows change speed
+      speed += (direction == .increment ? 1 : -1)
+  }
+  .accessibilityAction(named: "Pan Left")  { move(.left) }     // + Right, Up, Down
+  .accessibilityAction(named: "Pan Up Left") { move(.upLeft) } // + 3 more diagonals
+  .accessibilityAction(named: "Stop") { stop() }
+  .accessibilityAction(named: "Go to Home Position") { home() }
+  .accessibilityHint("Use the actions to pan and tilt. Adjust the value to change speed.")
+```
+
+Zoom/focus/iris rockers are separate adjustable elements with values in words
+("Zoom, 3.2 times"). Presets are buttons labelled "Preset 1, Front Gate" with the hint "Press to
+recall. Use Set Preset to overwrite."
+
+**Timeline.** One adjustable element per lane: label "Recording timeline for Front Door", value
+"2 14 PM, 7 seconds", `accessibilityAdjustableAction` = ±1 s (±10 s with the VO fast rotor), plus
+named actions "Next Event", "Previous Event", "Set In Point", "Set Out Point", "Play From Here". The
+heatmap is summarised as custom content: "Recordings: continuous from 8 AM to 2 PM, 14 motion events".
+
+**Sidebar, palette, toasts.** Sidebar rows expose name + state + codec as label/value, group rows use
+`.isHeader`. Palette rows are buttons with the shortcut in `accessibilityHint`. Toasts announce via
+`announcementRequested` (`.high` for errors). The command palette posts
+`NSAccessibility.post(element: field, notification: .focusedUIElementChanged)` on open.
+
+### 10.4 `increaseContrast`
+
+Read `@Environment(\.colorSchemeContrast) == .increased` (backed by
+`accessibilityDisplayShouldIncreaseContrast`). Changes, applied centrally in `VTheme`:
+
+| Aspect | Normal | Increased |
+|---|---|---|
+| `stroke.subtle` / `default` / `strong` | α 0.06 / 0.10 / 0.18 | α 0.14 / **0.28** / 0.40 |
+| Every fill that had no border | — | gains a 1 pt `stroke.default` border |
+| `text.tertiary` | `#88909D` (6.08:1) | → `text.secondary` `#A7AEBC` (8.78:1) |
+| `text.disabled` | `#4E5563` (2.61:1) | `#6E7583` (4.05:1) + always paired with the reason string |
+| Focus ring | 2 pt + 3 pt glow | **3 pt**, glow removed (glow reduces edge definition), outset 3 pt |
+| Materials | `.hudWindow` etc. | Solid fallbacks (§2.4) — vibrancy is a contrast hazard |
+| Shadows | E1–E3 as specified | Removed; replaced by the 1 pt borders above |
+| Scrim over video | α 0.62 | α 0.78 |
+| Selected sidebar row | `accent α 0.16` + α 0.30 stroke | `accent α 0.28` + 1.5 pt `accent` stroke |
+| Video tile gutter | 2 pt canvas | 2 pt canvas **plus** a 1 pt `stroke.strong` tile border, so tile edges are unambiguous |
+| Skeleton shimmer | α 0.075 peak | shimmer off, block at `white α 0.10` |
+
+### 10.5 `differentiateWithoutColor`
+
+Read `@Environment(\.accessibilityDifferentiateWithoutColor)`. Every place colour carries meaning gains
+a shape or text partner. This is designed so the *non*-differentiated mode already has the partner in
+most cases (the badges are all lettered), which keeps the two modes visually close.
+
+| Signal | Colour-only form | Differentiated form |
+|---|---|---|
+| Status dot: connecting | `warn`-ish spinning ring | Spinning ring (unchanged — motion is the cue) |
+| Status dot: live | `ok` filled circle | Filled **circle** + `LIVE` `VBadge` becomes visible in the sidebar row |
+| Status dot: degraded | `warn` circle | Filled **triangle** (6 pt, apex up) |
+| Status dot: offline | hollow circle, `text.tertiary` | Hollow **square** (5.5 pt) with a 1 pt stroke |
+| Status dot: auth failure | `danger` circle | Filled circle with a **1.5 pt white slash** (⌀ glyph) |
+| Recording tile border | `live` 3 pt breathing | 3 pt border **plus** the `REC` badge is forced visible even on small tiles |
+| Timeline heatmap: continuous | `continuous` blue | Solid blue **plus** no hatch (the baseline) |
+| Timeline heatmap: motion | `motion` amber | Amber **plus** 45° hatch, 1 pt lines at 4 pt pitch |
+| Timeline heatmap: alarm | `live` red | Red **plus** cross-hatch, 1 pt at 3 pt pitch |
+| Camera identity chips | `ident.N` colour | Colour **plus** the camera's initial (already always shown, §3.4) |
+| Health thresholds on `VStatPill` | `ok`/`warn`/`danger` stroke | Stroke **plus** a leading 9 pt glyph: none / `exclamationmark.triangle.fill` / `xmark.octagon.fill` |
+| Sparkline threshold bands | tinted bands | Bands **plus** a 1 pt dashed threshold line and a `MonoSmall` label |
+| Multi-camera playback legend | colour swatches | Swatch **plus** initial **plus** a distinct dash pattern on each lane's playhead |
+| Drop target | `accent` dashed fill | Dashed fill **plus** a centred 15 pt `arrow.down.to.line` glyph |
+| Selected vs focused tile | `accent` vs `focusRing` | Selected = 2 pt solid; focused = 2 pt **dashed** (dash 6/3) — different geometry, not just tint |
+
+### 10.6 Hit targets and pointer
+
+| Rule | Value |
+|---|---|
+| Minimum interactive hit area | **24 × 24 pt**, achieved with `.contentShape(.rect)` and negative padding, even when the glyph is 11 pt |
+| Tile chrome buttons | 28 × 28 visual, **32 × 32** `contentShape` |
+| Slider knob | 14 pt visual, 28 pt grab area; track grab area 20 pt tall |
+| Timeline handles | 4 pt visual, **12 pt** grab area; playhead 2 pt visual, 16 pt grab |
+| Mosaic dividers | 1 pt visual, **8 pt** grab area, with `.pointerStyle(.frameResize(position:))` |
+| Sidebar/inspector resize | 1 pt visual, 6 pt grab, `.pointerStyle(.columnResize)` |
+| Row targets | Full row width is clickable (`.contentShape(Rectangle())`) |
+| Spacing between distinct targets | ≥ 2 pt; ≥ 4 pt when both are destructive-adjacent |
+| Cursor | `.pointerStyle(.link)` never used; `.grabIdle`/`.grabActive` on the PTZ pad and timeline; `.zoomIn` on a zoomable tile with `⌥` held |
+
+### 10.7 Other accessibility settings honoured
+
+| Setting | Handling |
+|---|---|
+| `accessibilityReduceMotion` | §7.10 — a complete per-animation fallback table |
+| `accessibilityReduceTransparency` | §2.4 — solid fallbacks for all four materials |
+| `accessibilityInvertColors` | Video wells and thumbnails are marked `.accessibilityIgnoresInvertColors(true)` so inverted footage is never shown; chrome inverts normally |
+| `accessibilityPrefersCrossFadeTransitions` | Treated as `reduceMotion` for all geometry transitions |
+| Full Keyboard Access | §10.2 item 8 |
+| Voice Control | Every control has a distinct, speakable `accessibilityLabel`; no two visible controls in a window share a label (icon buttons get "Snapshot", "Record", not "button") |
+| Zoom / Hover Text | No text is rendered into an image; everything is real `Text` so Hover Text can magnify it |
+| `NSAccessibility` window role | Video wall window is `.window` with a descriptive title, not an unlabelled panel |
+
+---
+
+## 11. App icon and window chrome
+
+### 11.1 App icon concept
+
+**Concept: a machined aperture over a night-time bokeh field.** It says "optics" and "instrument" in
+one shape, and it reuses the brand mark (`vigil.aperture`, §8.5) so the icon, the menu-bar extra and
+the empty-state hero are visibly the same object.
+
+Layers, back to front, on the 1024 × 1024 canvas (Apple macOS template: the artwork occupies an
+824 × 824 continuous-rounded square, corner radius 185.4 pt at 1024, centred, with 100 pt margins;
+the system adds no shadow, so ours is baked):
+
+| # | Layer | Spec |
+|---|---|---|
+| 1 | Body | 824 × 824 continuous rounded square, radius 185.4. Fill: 165° linear gradient `#1B1E27` → `#0A0B0E`. |
+| 2 | Bokeh field | Nine soft circles, ⌀ 40–120, at `white α 0.03–0.06`, Gaussian blur 24–48, clustered lower-left to upper-right; two of them tinted `ident.1` Cyan α 0.05 and `accent` α 0.06. Reads as out-of-focus city light at night. |
+| 3 | Inner bevel | 2 pt inset stroke, top-to-35 % gradient `white α 0.14` → clear; plus a 1 pt bottom stroke `black α 0.50`. Gives the body a milled-aluminium edge. |
+| 4 | Aperture blades | Six blades, 60° apart, forming a hexagonal opening. Outer blade radius 300, hexagon inscribed radius 102 (34 % of 300). Blade stroke width 26, tip gap 20. Fill: 120° linear gradient `#B8A8FF` → `#6247E8` per blade, each blade rotated so the gradient sweeps radially (a 6 % lightness step between adjacent blades sells the metal). Blade edges get a 1.5 pt `white α 0.35` top-left highlight and a 2 pt `black α 0.45` bottom-right shadow. |
+| 5 | Aperture well | The hexagonal opening is filled `#000000` with a 3 pt inner shadow `black α 0.8` — a true-black hole, echoing §3.6. |
+| 6 | Catchlight | One 22 pt circle at `live` `#FF2E43`, at the lower-right blade join (polar 315°, r 148), with a 40 pt `#FF2E43 α 0.35` bloom. This is the single warm accent: the "we are recording" tell, and the one element that makes the icon scan as *surveillance* rather than *photography*. |
+| 7 | Specular sweep | A 30°-rotated soft band across the upper third, `white α 0.06`, blur 60, clipped to the body. |
+| 8 | Contact shadow | Baked below the body: `black α 0.28`, blur 40, y +18, clipped to the 1024 canvas. |
+
+**Small-size variants** are drawn, not scaled — the 16 pt and 32 pt renditions drop layers 2, 7 and 8,
+thicken the blade stroke to 34 (16 pt) / 30 (32 pt), grow the hexagon to 40 % of the outer radius, and
+grow the catchlight to 30 pt so it survives. At 16 × 16 the icon must read as *a violet hexagonal ring
+with a red dot* — that is the legibility test, and any change that fails it is rejected.
+
+Deliverables in `Vigil/Resources/Assets.xcassets/AppIcon.appiconset`: 16, 32, 64, 128, 256, 512, 1024
+at 1× and 2× (the full macOS set). Also `MenuBarIcon` (18 × 18 @1×/2×/3×, **template**, blades only,
+no colour) and `DocumentIcon` for exported `.vigil-layout` files (the aperture over a small grid).
+
+### 11.2 Window chrome — the main window
+
+```swift
+WindowGroup(id: "main") { VMainWindowView() }
+    .windowStyle(.hiddenTitleBar)
+    .windowToolbarStyle(.unified(showsTitle: false))
+    .windowResizability(.contentSize)
+    .defaultSize(width: 1280, height: 800)
+    .commands { VigilCommands() }
+```
+
+| Property | Value |
+|---|---|
+| Style | `.hiddenTitleBar` + `.unified(showsTitle: false)` — the toolbar merges into the title bar; no title string is drawn (the selected camera/layout name is the toolbar's leading item instead) |
+| Toolbar height | 52 pt |
+| Min window size | 900 × 600 (below this the inspector auto-hides; below 700 wide the sidebar collapses to the rail) |
+| Default size | 1280 × 800; restored via `.windowResizability` + `NSWindow` autosave name `"VigilMain"` |
+| Background | `layer.canvas`, set on the window (`backgroundColor`) so live-resize never flashes white |
+| `titlebarAppearsTransparent` | `true` |
+| Toolbar separator | `NSWindow.toolbarStyle = .unified`; we set `window.titlebarSeparatorStyle = .none` and draw our own hairline `stroke.subtle` only when the stage is scrolled — over video there is no separator at all |
+| Traffic lights | Inset to a **26 pt** centre-y and a **20 pt** leading centre-x (default is ~13, 20), so they sit optically centred in the 52 pt unified bar and align with the sidebar's 20 pt content inset |
+| Tabbing | `window.tabbingMode = .disallowed` — Vigil's multi-window model is Playback/Wall/Settings, and tabs would hide live video |
+| Full-size content | `styleMask.insert(.fullSizeContentView)` so the sidebar material runs to the window's top edge and under the traffic lights |
+
+Traffic-light inset (must be re-applied after fullscreen transitions and on
+`windowDidBecomeKey`, because AppKit resets it):
+
+```swift
+func applyChrome(to window: NSWindow) {
+    window.titlebarAppearsTransparent = true
+    window.titleVisibility = .hidden
+    window.styleMask.insert(.fullSizeContentView)
+    window.titlebarSeparatorStyle = .none
+    window.backgroundColor = NSColor(VTheme.Color.Layer.canvas)
+    window.tabbingMode = .disallowed
+    guard let close = window.standardWindowButton(.closeButton),
+          let container = close.superview else { return }
+    // AppKit lays the three buttons out in `container`; shift the container, not the buttons,
+    // so their 20pt spacing is preserved.
+    let target = CGPoint(x: 20 - 7, y: container.frame.origin.y - 10)  // +13pt x, -10pt y
+    container.setFrameOrigin(target)
+    container.superview?.needsLayout = true
+}
+```
+
+Sidebar content therefore starts at `y = 52 + space.sm 8 = 60` from the window top, and the first
+section header's cap-height centre lines up with the traffic lights' centre at 26 pt only in the
+collapsed rail; in the expanded sidebar the traffic lights sit above the search field, which begins at
+y 60.
+
+Auxiliary windows use `.unifiedCompact(showsTitle: true)` at 38 pt with the standard traffic-light
+position — the inset treatment is reserved for the main window, where it reads as intentional.
+
+### 11.3 Toolbar contents (main window)
+
+`[traffic lights] [sidebar toggle] | [layout picker (VSegmentedControl + VLayoutGlyphs)] [cycle]
+… flex … [progress chip "4 of 16 live"] [snapshot all] [record all] | [search] [⌘K] [inspector toggle]`
+
+Items are `VButton(.icon, .md)` in a `ToolbarItemGroup`; the layout picker is a
+`ToolbarItem(placement: .principal)`. On narrow windows the group collapses into an
+`ellipsis.circle` overflow (AppKit does this automatically for `ToolbarItemGroup`).
+
+### 11.4 Cinema mode
+
+Entered with `⌘⌃F` (distinct from `⌘F` single-tile fullscreen). Effects:
+
+| Aspect | Cinema mode |
+|---|---|
+| Window | `toggleFullScreen(nil)`; `NSApp.presentationOptions = [.autoHideMenuBar, .autoHideDock]` |
+| Canvas | `layer.canvas` → `#000000` over 240 ms `crossfade` |
+| Stage inset | 8 → 0 pt (`expressive`) |
+| Sidebar / inspector / toolbar | `opacity → 0` over 120 ms then removed from the hierarchy (so they cost nothing) |
+| Tile chrome | Name chips fade to α 0.0; nothing is drawn over video at rest |
+| Cursor | `NSCursor.setHiddenUntilMouseMoves(true)`; re-hidden after each idle period |
+| Idle | After `idleChromeHide` 2500 ms of no mouse movement and no key press, the control bar hides |
+| Reveal | Any mouse movement > 3 pt, or any key press, reveals the bar with `standard`; the timer restarts |
+| Control bar | 56 pt tall, max 720 pt wide, centred, 32 pt from the bottom, radius `radius.xxl` 20, E3 elevation, **Metal-blurred video backdrop** at 24 pt (the one exception in §2.3), containing: layout picker, cycle toggle, snapshot all, record all, audio, a live clock in `MonoLarge`, and an exit button |
+| Top-right affordance | On reveal, a 32 pt `rectangle.grid.2x2` button appears 20 pt from the top-trailing corner for switching layouts without the bar |
+| Exit | `Esc` or `⌘⌃F` or the exit button; reverses with `expressive` |
+| Second display | If a video wall is active on another display, cinema mode applies to the main display only and the wall is untouched |
+
+⛔ In cinema mode there is no window chrome of any kind at rest. The screen is video and black.
+
+---
+
+## 12. The token file — `VTheme`
+
+One file per namespace under `VigilUI/Theme/`, all nested in a single `public enum VTheme` so every
+call site reads `VTheme.Color.Text.primary`, `VTheme.Motion.standard`, `VTheme.Space.md`.
+
+### 12.1 Structure
+
+```swift
+// VigilUI/Theme/VTheme.swift
+import SwiftUI
+import AppKit
+
+public enum VTheme {
+
+    // MARK: Colour
+    public enum Color {
+        public enum Layer   { public static let canvas, sidebar, sidebarFallback,
+                                                 surface, surfaceRaised, overlay,
+                                                 videoWell, scrim: SwiftUI.Color }
+        public enum Text    { public static let primary, secondary, tertiary,
+                                                 disabled, inverse: SwiftUI.Color }
+        public enum Stroke  { public static let subtle, `default`, strong, contrast: SwiftUI.Color
+                              public static let onVideo: SwiftUI.Color }          // white α 0.14
+        public enum Semantic {
+            public static let accent, accentHover, accentPressed, accentFill, focusRing,
+                              live, liveFill, ok, okFill, warn, motion,
+                              danger, dangerFill, continuous: SwiftUI.Color
+            public static func accentTint(_ a: Double) -> SwiftUI.Color
+        }
+        public enum Ident   { public static let all: [SwiftUI.Color]               // 6, in order
+                              public static func colour(for id: UUID) -> SwiftUI.Color
+                              public static func fill(_ c: SwiftUI.Color) -> SwiftUI.Color   // α 0.18
+                              public static func stroke(_ c: SwiftUI.Color) -> SwiftUI.Color } // α 0.40
+        public enum Scrim   { public static let light, base, strong: SwiftUI.Color } // α .45/.62/.82
+    }
+
+    // MARK: Typography  (§4)
+    public enum Typography {
+        public struct Step { let font: Font; let lineSpacing: CGFloat
+                             let tracking: CGFloat; let textCase: Text.Case? }
+        public static let display, title1, title2, title3, headline, body,
+                          callout, caption1, caption2, mono, monoSmall, monoLarge: Step
+        public static var textScale: CGFloat { get }        // 0.92 / 1.0 / 1.15
+        public static func numeric(_ s: Step) -> Step       // .monospacedDigit()
+        public enum Reserved { public static let fps, bitrate, latency, loss,
+                                                 jitter, timecode, resolution: CGFloat }
+    }
+
+    // MARK: Geometry  (§5)
+    public enum Space  { public static let hair: CGFloat = 2, xxs = 4, xs = 6, sm = 8,
+                                          md = 12, lg = 16, xl = 20, xxl = 24,
+                                          huge = 32, jumbo = 48 }
+    public enum Radius { public static let xs: CGFloat = 4, sm = 6, md = 8, lg = 10,
+                                          xl = 14, xxl = 20
+                         public static func nested(outer: CGFloat, inset: CGFloat,
+                                                   own: CGFloat) -> CGFloat }
+    public enum Border { public static let thin: CGFloat = 1, focus = 2,
+                                          selected = 2, recording = 3
+                         public static func hairline(_ scale: CGFloat) -> CGFloat { 1 / scale } }
+    public enum Size   { public static let xs: CGFloat = 20, sm = 24, md = 28, lg = 32, xl = 40
+                         public static let sidebarWidth: CGFloat = 248, sidebarRail = 52,
+                                           inspectorWidth = 300, toolbarHeight = 52,
+                                           tileGutter = 2, stageInset = 8,
+                                           rowHeight = 44, minHitTarget = 24 }
+    public enum Icon   { public static let xs: CGFloat = 11, sm = 12, md = 13,
+                                          lg = 15, xl = 17, hero = 32, brand = 18 }
+
+    // MARK: Elevation  (§6)
+    public enum Elevation {
+        public struct Level { let fill: ShapeStyle?; let stroke: SwiftUI.Color
+                              let strokeWidth: CGFloat; let highlight: Double
+                              let highlightFade: Double; let shadows: [Shadow] }
+        public struct Shadow { let colour: SwiftUI.Color; let radius, x, y: CGFloat }
+        public static let e0, e1, e2, e3: Level
+    }
+
+    // MARK: Motion  (§7)
+    public enum Motion {
+        public static let micro      = Animation.spring(response: 0.22, dampingFraction: 0.86, blendDuration: 0)
+        public static let standard   = Animation.spring(response: 0.34, dampingFraction: 0.82, blendDuration: 0)
+        public static let expressive = Animation.spring(response: 0.50, dampingFraction: 0.70, blendDuration: 0)
+        public static let snap       = Animation.spring(response: 0.16, dampingFraction: 1.00, blendDuration: 0)
+        public static let glide      = Animation.spring(response: 0.42, dampingFraction: 0.95, blendDuration: 0.10)
+        public static let rubber     = Animation.spring(response: 0.30, dampingFraction: 0.62, blendDuration: 0)
+        public static let fadeIn     = Animation.timingCurve(0.00, 0.00, 0.20, 1.00, duration: 0.18)
+        public static let fadeOut    = Animation.timingCurve(0.40, 0.00, 1.00, 1.00, duration: 0.12)
+        public static let crossfade  = Animation.easeInOut(duration: 0.24)
+        public static let emphasized = Animation.timingCurve(0.32, 0.72, 0.00, 1.00, duration: 0.28)
+        public static let breathe    = Animation.easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+        public static let shimmer    = Animation.linear(duration: 1.15).repeatForever(autoreverses: false)
+        public static let spin       = Animation.linear(duration: 0.90).repeatForever(autoreverses: false)
+
+        public enum Delay { public static let hoverOut = 0.26, stagger = 0.018,
+                                             tooltip = 0.50, pressMin = 0.08,
+                                             optimisticTimeout = 1.20,
+                                             idleChromeHide = 2.50, skeletonMin = 0.22
+                            public static let staggerCap = 12 }
+
+        public static func resolved(_ a: Animation, reduced: Bool,
+                                    fallback: Animation? = .easeInOut(duration: 0.12)) -> Animation?
+        public static func stagger(_ index: Int) -> Double        // min(index, 12) * 0.018
+    }
+
+    // MARK: Health thresholds (§9.20) — shared with VigilCore's health model
+    public enum Health { public static func level(loss: Double) -> VLevel
+                         public static func level(jitterMS: Double) -> VLevel
+                         public static func level(latencyMS: Double) -> VLevel }
+}
+```
+
+### 12.2 Dynamic colours — the only correct way on macOS
+
+`SwiftUI.Color` has no light/dark initialiser. Bridging through `NSColor`'s dynamic provider is what
+makes appearance switching (and `increaseContrast`) work everywhere, including inside AppKit views:
+
+```swift
+public extension SwiftUI.Color {
+    /// Appearance- and contrast-aware token.
+    /// - Parameters are 0xRRGGBB. `lightHC`/`darkHC` default to the normal values.
+    init(light: UInt32, dark: UInt32,
+         lightHC: UInt32? = nil, darkHC: UInt32? = nil, alpha: CGFloat = 1) {
+        self.init(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua,
+                                                     .accessibilityHighContrastAqua,
+                                                     .accessibilityHighContrastDarkAqua])
+                          .map { $0 == .darkAqua || $0 == .accessibilityHighContrastDarkAqua }
+                          ?? true
+            let isHC = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            let hex: UInt32 = isDark ? (isHC ? (darkHC ?? dark) : dark)
+                                     : (isHC ? (lightHC ?? light) : light)
+            return NSColor(srgbHex: hex, alpha: alpha)
+        })
+    }
+}
+
+extension NSColor {
+    convenience init(srgbHex hex: UInt32, alpha: CGFloat = 1) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                  green:   CGFloat((hex >>  8) & 0xFF) / 255,
+                  blue:    CGFloat( hex        & 0xFF) / 255,
+                  alpha:   alpha)
+    }
+}
+
+// Token definitions read exactly like the tables in §3:
+extension VTheme.Color.Layer {
+    public static let canvas        = SwiftUI.Color(light: 0xF3F4F7, dark: 0x0B0C0F)
+    public static let surface       = SwiftUI.Color(light: 0xFFFFFF, dark: 0x16181D)
+    public static let surfaceRaised = SwiftUI.Color(light: 0xFFFFFF, dark: 0x1D2026)
+    public static let overlay       = SwiftUI.Color(light: 0xFFFFFF, dark: 0x252932)
+    public static let videoWell     = SwiftUI.Color(light: 0x000000, dark: 0x000000)
+}
+extension VTheme.Color.Semantic {
+    public static let accent     = SwiftUI.Color(light: 0x5B44E0, dark: 0x7B61FF)
+    public static let accentFill = SwiftUI.Color(light: 0x5B44E0, dark: 0x6247E8)
+    public static let focusRing  = SwiftUI.Color(light: 0x5B44E0, dark: 0x9581FF)
+    public static let live       = SwiftUI.Color(light: 0xC40E20, dark: 0xFF2E43)
+    // …one line per row of §3.2
+}
+```
+
+⛔ `Color(.sRGB, red:green:blue:)` literals appear only in this file and only inside the `init(light:dark:)`
+bridge; no view ever constructs a colour.
+
+### 12.3 Environment keys `VigilUI` publishes
+
+| Key | Type | Set by | Read by |
+|---|---|---|---|
+| `\.vPulsePhase` | `Bool` | Window root `TimelineView(.periodic(by: 1.0))` | Every `VLiveDot`, recording border, menu-bar badge |
+| `\.vShimmerOffset` | `CGFloat` | Window root (single driver) | Every `VSkeleton` |
+| `\.vMotionEnabled` | `Bool` | `reduceMotion` ∨ governor tier ≥ T3 | Every animated component |
+| `\.vMotionTier` | `VMotionTier` | `VMotionGovernor` | Components with tier-specific degradations |
+| `\.vTextScale` | `CGFloat` | Settings | `VTheme.Typography` |
+| `\.vNamespaces` | `VNamespaces` | `VMainWindowView` | `matchedGeometryEffect` call sites |
+| `\.vOnVideo` | `Bool` | `VTile` | Chrome components, to switch to scrim + `stroke.onVideo` |
+
+`\.vOnVideo` is what lets one `VButton(.icon)` implementation serve both the toolbar and the tile
+without a separate variant: the button reads the flag and swaps its rest fill from `clear` to
+`scrim.base`.
+
+### 12.4 Lint rules (enforced in review, and by a `swift-syntax`-free grep script in CI)
+
+| Forbidden pattern | Replacement |
+|---|---|
+| `Color(red:` / `Color(hex:` outside `VTheme` | A token |
+| `.font(.system(size:` outside `VTheme.Typography` | A type step |
+| `.padding(7)` — any non-grid literal | A `VTheme.Space` step |
+| `cornerRadius:` without `style: .continuous` | Add the style |
+| `.animation(` with an inline `Animation` literal | A `VTheme.Motion` token |
+| `Divider()` | `VDivider` |
+| `.shadow(` outside `VTheme.Elevation` appliers | An elevation level |
+| `ProgressView()` | `VProgressRing` |
+| `.multicolor` symbol rendering outside Settings/About | `.monochrome`/`.hierarchical`/`.palette` |
+| `NSVisualEffectView` inside a view that also hosts a video layer | Scrim (§2.3) |
+| `withAnimation` in a file that imports `AVFoundation` | Route through `VTileTransitionProxy` |
+
+---
+
+## 13. Build order and definition of done
+
+**Implementation order for `VigilUI`** (each step is independently reviewable):
+
+1. `VTheme` (§12) with the dynamic-colour bridge, plus a "Token Gallery" debug window that renders
+   every token, every type step, every elevation and every motion token side by side in dark, light,
+   `increaseContrast` and `reduceTransparency`. Build this **first**; it is how the rest is reviewed.
+2. Primitives: `VVisualEffect`, `VGlass`, `VInnerHighlight`, `VDivider`, `vFocusRing`, `VSkeleton`,
+   `VProgressRing`, `VKeyCap`.
+3. Controls: `VButton`, `VToggle`, `VSegmentedControl`, `VSlider`, `VTextField`, `VSearchField`,
+   `VSelect`, `VBadge`, `VChip`, `VStatPill`.
+4. Containers: `VCard`, `VInspectorSection`, `VPopover`, `VSheet`, `VToast`, `VEmptyState`, `VToolbar`.
+5. Domain components: `VSidebarRow`, `VTile` (+ `VTileTransitionProxy`), `VSparkline`, `VTimeline`,
+   `VPTZPad`, `VCommandPalette`, `VLayoutGlyph`.
+6. `VMotionGovernor` and the environment drivers (§12.3).
+
+**Definition of done for any UI change:**
+
+- [ ] No literal colours, fonts, radii, spacings, shadows or animations (§12.4).
+- [ ] All six states previewed, in dark and light (§9.29).
+- [ ] `reduceMotion`, `reduceTransparency`, `increaseContrast`, `differentiateWithoutColor` previewed.
+- [ ] Every interactive element reachable and operable by keyboard, with a visible focus ring.
+- [ ] VoiceOver: label + value + hint on every element; custom actions for every hover-only affordance.
+- [ ] Every changing number is `monospacedDigit` with a reserved width.
+- [ ] Hit targets ≥ 24 × 24 pt.
+- [ ] With 16 streams live: UI frame time p99 ≤ 8 ms at 120 Hz, no stream below 60 fps, verified in
+      Instruments (Animation Hitches + Time Profiler) before and after the change.
+- [ ] No `AVSampleBufferDisplayLayer` bounds mutation outside a `VTileTransitionProxy` transition.
+- [ ] Russian strings at ~1.4× English length do not clip or reflow the layout.
+
+---
+
+*End of DESIGN.md. Numbers in this document are load-bearing: the colour tokens were selected against
+computed WCAG contrast ratios and CIELAB colour-blind simulations, and the motion values against a
+120 Hz frame budget. Change them here, with the new measurement, or not at all.*

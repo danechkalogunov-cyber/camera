@@ -17,7 +17,7 @@ decode.
 ### 1.1 Feature identifiers
 
 Every feature has a stable ID: `F-<AREA>-<nn>`. **IDs are permanent.** Commits, tests, issues and
-the traceability matrix in §12 reference them. Never renumber; retire an ID by marking it
+the traceability matrix in §21 reference them. Never renumber; retire an ID by marking it
 `WITHDRAWN` and never reuse it.
 
 | Area code | Domain |
@@ -57,7 +57,7 @@ conscious homeowner call the app broken without it?* If yes → P0. If it is mer
 ### 1.3 Acceptance-criteria conventions
 
 - Criteria are **testable**. Each is either an automated test (unit / integration against the
-  synthetic RTSP fixture / UI test) or a scripted manual check in the release checklist (§13).
+  synthetic RTSP fixture / UI test) or a scripted manual check in the release checklist (§22).
 - Numbers are hard. "Fast" is not a criterion; "≤ 180 ms p95" is.
 - `[A]` = automated, `[M]` = manual scripted check, `[F]` = requires the synthetic RTSP/RTP fixture,
   `[H]` = requires real Hikvision hardware.
@@ -97,7 +97,7 @@ no cloud, no relay, no account. Three commitments shape every scope decision:
    connection is unencrypted, when a device is unactivated — we say so, visibly, in plain language.
    Silent degradation is a defect.
 3. **The user's data stays theirs.** No telemetry, no egress off the LAN, credentials in the
-   Keychain only. See §11.
+   Keychain only. See §20.
 
 ---
 
@@ -106,8 +106,8 @@ no cloud, no relay, no account. Three commitments shape every scope decision:
 | Gate | Name | Content | Exit criterion |
 |---|---|---|---|
 | **G1** | Pipeline alpha | `F-STR-01..05`, `F-DEC-01..04`, `F-REN-01`, `F-CRD-01`, `F-INV-01` | One camera, one tile, TCP, H.264, 60-minute soak with zero crashes and zero unbounded memory growth |
-| **G2** | Usable beta | All P0 in areas INV, DSC, CRD, LIV, STR, DEC, REN, AUD, PTZ, CAP, HLT | 16 cameras live for 8 hours inside the §10 budget; Stream Doctor correctly diagnoses all 6 seeded fault modes |
-| **G3** | **1.0** | **All P0** | §13 checklist green on both reference machines; all six reference devices pass; localization complete; accessibility audit clean |
+| **G2** | Usable beta | All P0 in areas INV, DSC, CRD, LIV, STR, DEC, REN, AUD, PTZ, CAP, HLT | 16 cameras live for 8 hours inside the §19.2 budget; Stream Doctor correctly diagnoses all 6 seeded fault modes |
+| **G3** | **1.0** | **All P0** | §22 checklist green on both reference machines; all six reference devices pass; localization complete; accessibility audit clean |
 | **G4** | 1.1 | All P1 | — |
 
 ---
@@ -322,6 +322,8 @@ else. Fallback if a vendor still fails: the user can add the camera manually wit
    port, `kSecAttrAccount` = username, `kSecAttrPath` = `/vigil/<credentialRef-uuid>`,
    `kSecAttrProtocol` = `kSecAttrProtocolHTTP`/`HTTPS`, `kSecAttrAccessible` =
    `kSecAttrAccessibleWhenUnlocked`, `kSecAttrLabel` = `Vigil — <camera name>`.
+2. `[A]` `SecItemAdd` on create, `SecItemCopyMatching` with `kSecReturnData` on read, `SecItemUpdate`
+   on change, `SecItemDelete` on removal. No `kSecUseKeychain`, no legacy `SecKeychainItem` API.
 3. `[A]` `errSecDuplicateItem` triggers `SecItemUpdate`; `errSecItemNotFound` surfaces as a typed
    `CredentialError.notFound`; `errSecUserCanceled` and `errSecInteractionNotAllowed` produce
    distinct user-facing messages. Every `OSStatus` path is mapped, none is `fatalError`.
@@ -385,7 +387,7 @@ the user out of their own NVR. It is a release blocker.
 **What:** The stage shows 1–16 live tiles in the selected layout, each tile an independent video
 surface with its own state.
 **Acceptance:**
-1. `[A]` 16 tiles can be live simultaneously within the §10 budget.
+1. `[A]` 16 tiles can be live simultaneously within the §19.2 budget.
 2. `[A]` Each tile independently renders one of: connecting skeleton with progress narration, live
    video, degraded video with a loss banner, offline with the last frame dimmed 60 % plus a retry
    countdown, auth-failed, or empty "assign a camera".
@@ -394,7 +396,7 @@ surface with its own state.
    backing scale factor.
 4. `[A]` Adding, removing or reassigning a tile does not interrupt any other tile: a test asserts
    zero dropped frames on tiles 1–15 while tile 16 is reassigned 20 times.
-5. `[A]` Frame time p99 ≤ 7.0 ms at 120 Hz with 16 tiles live (§10).
+5. `[A]` Frame time p99 ≤ 7.0 ms at 120 Hz with 16 tiles live (§19).
 **Risk:** *Medium* — 16 concurrent `AVSampleBufferDisplayLayer` instances in a SwiftUI hierarchy can
 cause layer-tree thrash. *Mitigation:* tiles are `NSViewRepresentable` with a stable identity keyed
 by camera UUID, views are recycled rather than rebuilt on layout change, and the layout container is
@@ -577,7 +579,7 @@ the RTSP TCP connection.
    traverses switches and VLANs reliably and never loses packets silently.
 4. `[A]` `TCP_NODELAY` is set; the receive path uses `NWConnection.receive(minimumIncompleteLength:
    1, maximumLength: 65535)` and never copies the payload more than once before depacketization.
-5. `[A]` Glass-to-glass p95 ≤ 250 ms over TCP (§10).
+5. `[A]` Glass-to-glass p95 ≤ 250 ms over TCP (§19).
 **Risk:** *Low.*
 
 ### F-STR-04 · RTSP over UDP (unicast) `P0`
@@ -872,7 +874,7 @@ adjustment, cropping and overlay compositing in one pass.
    `vImage` conversion on the display path.
 2. `[A]` One pass performs: matrix conversion (BT.601/709/2020 selected by uniform), source-rect
    zoom/pan, brightness/contrast/saturation/gamma, and overlay blend. GPU cost ≤ 1.1 % per 1080p
-   stream on M1 (§10).
+   stream on M1 (§19).
 3. `[M]` Overlays: camera name, timestamp (device time and/or Mac time), recording dot, motion
    boxes, digital-zoom locator, and a "no signal" state — all toggleable, all crisp at any backing
    scale factor (rendered from a signed-distance-field glyph atlas, not a scaled bitmap).
@@ -1053,7 +1055,7 @@ wrong way. *Mitigation:* the pure conversion function with a test table of 12 kn
 4. `[A]` Changes are never applied to the wrong channel: the channel is taken from the camera record
    and asserted against the response's echoed channel id.
 5. `[M]` A before/after peek (hold `\`) shows the pre-edit values so the user can judge the change.
-**Risk:** `Medium` — image endpoints differ per model and a bad `PUT` can return 400 with an opaque
+**Risk:** *Medium* — image endpoints differ per model and a bad `PUT` can return 400 with an opaque
 body. *Mitigation:* read-modify-write of the full XML document rather than sending partial documents
 (the single most common cause of ISAPI 400s), preserving unknown elements verbatim.
 
@@ -1118,7 +1120,7 @@ moment.
    the files.
 3. `[A]` Output goes to a timestamped subfolder `Snapshot Set 2026-07-26 14-31-07/` containing one
    file per camera plus `manifest.json` (camera name, UUID, frame time, resolution, codec, source).
-4. `[A]" Failures are partial-tolerant: a set with 14 successes and 2 failures writes 14 files and a
+4. `[A]` Failures are partial-tolerant: a set with 14 successes and 2 failures writes 14 files and a
    manifest listing the 2 failures with reasons; the toast reads "14 of 16 cameras captured".
 5. `[A]` Progress is shown for sets larger than 4 cameras and the operation is cancellable.
 **Risk:** *Low.*
@@ -1192,7 +1194,7 @@ security app, since interesting things are noticed after they start.
 **Acceptance:**
 1. `[A]` Trigger source is the **device-side** event stream (`F-EVT-01`) — the camera's own detector,
    which is tuned, free, and does not require decoding. Client-side pixel analysis is explicitly
-   *not* used (see §16).
+   *not* used (see §18).
 2. `[A]` Per-camera arming with a selectable trigger set (motion, line crossing, intrusion, tamper,
    video loss) plus an optional schedule (weekday/time ranges, 15-minute granularity).
 3. `[A]` Clip shape: `preRoll` (default 10 s, from `F-REC-02`) + event duration + `postRoll`
@@ -1310,7 +1312,7 @@ SwiftUI shapes; an accessible alternative (a segment list with times, `F-PLT-06`
    background so the user can keep watching live cameras. Export rate ≥ 8× realtime on a wired LAN.
 5. `[A]` Exporting a range spanning multiple device segments produces one continuous file with real
    gap durations preserved.
-6. `[A]` A sidecar `<name>.json` records camera, device serial (masked per §11), requested and actual
+6. `[A]` A sidecar `<name>.json` records camera, device serial (masked per §20), requested and actual
    time range, codec, resolution, and Vigil version — useful when a clip is handed to someone else.
 **Risk:** *Medium* — edit-list trimming is subtle. *Mitigation:* if the edit list proves unreliable
 across players, fall back to starting the file at the preceding keyframe and documenting the actual
@@ -1444,7 +1446,7 @@ when they are.
 2. `[A]` Latency estimate = `(now − frameCaptureWallClock) ` where `frameCaptureWallClock` maps the
    RTP timestamp through the RTCP Sender Report NTP/RTP pair; when no SR has been received, the
    estimate is `jitterBufferDepth + decodeQueueDelay + presentationDelay` and is labelled
-   "estimated (no RTCP)". The reported value tracks the physical rig measurement (§10) within ±25 ms.
+   "estimated (no RTCP)". The reported value tracks the physical rig measurement (§19) within ±25 ms.
 3. `[A]` All metric math is pure and Linux-tested, including loss calculation across sequence
    wraparound and jitter against the RFC's worked example.
 4. `[M]` The inspector's Stream tab shows live sparklines for fps, bitrate, loss and latency; the
@@ -1465,7 +1467,7 @@ when they are.
 3. `[M]` Graphs render fps, bitrate, loss and latency over 10 min / 1 h / 24 h with the y-axis fixed
    per metric (not auto-scaled to noise), event and reconnect markers overlaid, and a hover readout.
 4. `[A]` A "Copy health summary" action puts a plain-text report on the clipboard for support
-   threads, redacted per §11.
+   threads, redacted per §20.
 **Risk:** *Low.*
 
 ### F-HLT-03 · Stream-loss detection and alerting `P0`
@@ -1784,7 +1786,7 @@ wouldn't want to send.
    |---|---|
    | `summary.txt` | App version + build, macOS version, hardware model, CPU/GPU, memory, display config, locale, appearance |
    | `library-redacted.json` | Full config with credentials absent, hostnames pseudonymized (opt-in to include real ones), serials masked |
-   | `logs/vigil-<date>.log` | Last 24 h from OSLog via `OSLogStore(scope:.currentProcessIdentifier)`, redacted per §11 |
+   | `logs/vigil-<date>.log` | Last 24 h from OSLog via `OSLogStore(scope:.currentProcessIdentifier)`, redacted per §20 |
    | `streams/<camera>/sdp.txt` | Last SDP per camera |
    | `streams/<camera>/rtsp-transcript.txt` | Last full RTSP exchange with `Authorization` elided |
    | `streams/<camera>/stats.csv` | 24 h of 1-minute health rollups |
@@ -1944,7 +1946,7 @@ gate, and the pure-layer/Linux design exists partly to make it cheap to run.
 ### F-SEC-02 · LAN-only egress enforcement `P0`
 **Modules:** VigilProtocols (policy, pure) · VigilTransport · VigilISAPI
 **What:** Vigil connects to the user's cameras and to nothing else. Enforced in code, not just by
-intent. Full rationale in §11.
+intent. Full rationale in §20.
 **Acceptance:**
 1. `[A]` A pure `HostPolicy.classify(_ host: String) -> HostClass` returns `.privateLAN`,
    `.linkLocal`, `.loopback`, `.mDNSLocal` or `.public`, correct for: `10/8`, `172.16/12`,
@@ -1989,7 +1991,7 @@ intent. Full rationale in §11.
 | `F-PLT-06` | Additional localizations (German, Spanish, French, Polish, Ukrainian). | The scaffolding and the ru proof ship in P0. | VigilUI | Low |
 | `F-PLT-07` | Manual, user-initiated update check (a single HTTPS GET, no background pings, off by default). | Conflicts with the LAN-only default; must be explicitly opt-in and is not needed to ship. | Vigil | Low |
 | `F-PLT-08` | Onboarding tour and an interactive Help book. | Good first-run copy (P0) carries 1.0. | VigilUI | Low |
-| `F-SEC-03` | Per-camera TLS certificate management UI: view, re-pin, export the pinned certificate. | P0 handles pinning and mismatch correctly (§11); the management UI is convenience. | VigilCore, VigilUI | Low |
+| `F-SEC-03` | Per-camera TLS certificate management UI: view, re-pin, export the pinned certificate. | P0 handles pinning and mismatch correctly (§20); the management UI is convenience. | VigilCore, VigilUI | Low |
 
 ---
 
@@ -2029,7 +2031,7 @@ that only via the explicit `F-SEC-02` opt-in.
 We will not implement Hik-Connect, EZVIZ, or any vendor P2P tunnel. *Why:* the protocol is
 proprietary, undocumented, and reverse-engineered implementations break with every firmware release —
 we would be shipping a feature we cannot maintain or test. It routes video through a third-party
-cloud, which directly contradicts §18.1 and §11. It typically requires a vendor account and a device
+cloud, which directly contradicts §18.1 and §20. It typically requires a vendor account and a device
 verification code, moving the trust boundary off the LAN. And it cannot be built without either a
 dependency or a large undocumented crypto stack, violating the zero-dependency rule. *What we do
 instead:* be excellent on the LAN and honest that remote viewing needs a VPN.

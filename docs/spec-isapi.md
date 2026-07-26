@@ -2689,4 +2689,1286 @@ Vigil's motion UI: an enable toggle, a sensitivity slider, and a paint-on-video 
 top-left — note the grid, unlike detection-region polygons, is **top-left origin, row-major**,
 so no Y flip). Whole-frame is the default for new users.
 
-<!--SPLIT-MARKER-DO-NOT-SHIP-->
+---
+
+## 15. Recorded video: search, tracks, storage, timeline
+
+### 15.1 `GET /ISAPI/ContentMgmt/record/tracks`
+
+A *track* is a recording stream. `trackID = channel * 100 + streamIndex`, same arithmetic as
+streaming channels but a distinct concept (a channel can have a main-stream track with no
+sub-stream track, and NVR channels can have tracks that no longer stream).
+
+```xml
+<TrackList version="1.0" xmlns="http://www.hikvision.com/ver10/XMLSchema">
+  <Track>
+    <id>101</id>
+    <Channel>1</Channel>
+    <Enable>true</Enable>
+    <Description>Track</Description>
+    <TrackGUID>{B4D0F1C2-0000-0000-0000-000000000000}</TrackGUID>
+    <DefaultRecordingMode>CMR</DefaultRecordingMode>
+    <Duration>P30DT0H0M0S</Duration>
+    <Loop>true</Loop>
+    <SrcDescriptor>
+      <SrcGUID>{A1B2C3D4-0000-0000-0000-000000000000}</SrcGUID>
+      <SrcType>camera</SrcType>
+      <SrcName>Driveway</SrcName>
+      <SrcIndex>1</SrcIndex>
+      <SrcLocation>local</SrcLocation>
+      <StreamHint>video, audio</StreamHint>
+    </SrcDescriptor>
+  </Track>
+  <Track>
+    <id>102</id>
+    <Channel>1</Channel>
+    …
+  </Track>
+</TrackList>
+```
+
+Note the `ver10` namespace and the **capitalized** `<Channel>`, `<Enable>` — the
+`ContentMgmt` family is older and uses different casing conventions from `/Streaming`. Our
+path matching is case-insensitive so this costs nothing, but hand-written body XML must copy
+the device's casing.
+
+| Field | Notes |
+| --- | --- |
+| `id` | trackID |
+| `Channel` | video input channel |
+| `Enable` | recording enabled for this track |
+| `DefaultRecordingMode` | `CMR` (continuous), `EMR` (event), `MMR` (manual), `OMR` (command) |
+| `Duration` | ISO 8601 duration = retention period. `P30DT0H0M0S` = 30 days. |
+| `Loop` | overwrite oldest when full |
+| `SrcDescriptor/StreamHint` | `video` or `video, audio` — tells us whether playback will have audio |
+
+```swift
+public struct RecordTrack: Sendable, Hashable, Codable, Identifiable {
+    public let id: TrackID
+    public let channel: ChannelID
+    public let enabled: Bool
+    public let sourceName: String?
+    public let recordingMode: String?
+    public let retention: TimeInterval?     // parsed from Duration
+    public let hasAudio: Bool
+    public let loopRecording: Bool
+}
+```
+
+Only tracks with `Enable == true` are offered in the playback UI. Cache TTL 5 min.
+`GET /ISAPI/ContentMgmt/record/tracks/{id}` returns a single `<Track>`.
+
+An ISO 8601 duration parser is needed for `Duration`; it handles
+`P<n>Y<n>M<n>DT<n>H<n>M<n>S` with any subset present, treating a year as 365 d and a month as
+30 d (retention display only, so the approximation is fine and is documented in the UI as
+"about 30 days").
+
+### 15.2 `POST /ISAPI/ContentMgmt/search`
+
+The universal recording search. `Content-Type: application/xml`. Timeout 15 s (a month-wide
+search on a busy 32-channel NVR genuinely takes 8 s).
+
+```
+POST /ISAPI/ContentMgmt/search HTTP/1.1
+Content-Type: application/xml
+Content-Length: 512
+
+<?xml version="1.0" encoding="UTF-8"?>
+<CMSearchDescription>
+  <searchID>{6F9619FF-8B86-D011-B42D-00CF4FC964FF}</searchID>
+  <trackIDList>
+    <trackID>101</trackID>
+  </trackIDList>
+  <timeSpanList>
+    <timeSpan>
+      <startTime>2024-05-01T00:00:00Z</startTime>
+      <endTime>2024-05-01T23:59:59Z</endTime>
+    </timeSpan>
+  </timeSpanList>
+  <contentTypeList>
+    <contentType>video</contentType>
+  </contentTypeList>
+  <maxResults>40</maxResults>
+  <searchResultPostion>0</searchResultPostion>
+  <metadataList>
+    <metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor>
+  </metadataList>
+</CMSearchDescription>
+```
+
+**Element order is mandatory** in exactly the sequence above; 5.4.x DVRs reject reordered
+documents with `invalidXMLContent`. Do not add a namespace to this body.
+
+| Element | Required | Notes |
+| --- | --- | --- |
+| `searchID` | yes | A GUID in braces, uppercase hex, format `{8-4-4-4-12}`. **Generate a new one per logical search and reuse it across pages** — the device keys its result cursor by `searchID`. Reusing a completed search's ID returns stale results; using a fresh ID per page breaks paging. |
+| `trackIDList/trackID` | yes | one or more. Multi-track search works but interleaves results; Vigil searches **one track per request** so paging and timeline math stay simple. |
+| `timeSpanList/timeSpan/startTime`,`endTime` | yes | ISO 8601. **Send UTC with a `Z`.** Naive local times are interpreted in device time and are a bug source. Max span accepted is device-dependent; Vigil never asks for more than 24 h in one search. |
+| `contentTypeList/contentType` | no | `video`, `audio`, `metadata`. Omitted ⇒ all. Vigil sends `video`. |
+| `maxResults` | yes | Device max is nominally 50; **use 40**. Values >50 yield `badParameters` on several firmwares. |
+| `searchResultPostion` | yes | **Note the real misspelling** (`Postion`, not `Position`). Zero-based offset of the first result to return. This is the paging cursor. |
+| `metadataList/metadataDescriptor` | yes on DVR/NVR, optional on cameras | See the descriptor table below. Omitting it returns nothing on some DVRs, so always send it. |
+
+`metadataDescriptor` values:
+
+| Descriptor | Meaning |
+| --- | --- |
+| `//recordType.meta.std-cgi.com` | all record types (Vigil's default) |
+| `//recordType.meta.std-cgi.com/timing` | scheduled/continuous recordings only |
+| `//recordType.meta.std-cgi.com/motion` | motion-triggered only |
+| `//recordType.meta.std-cgi.com/alarm` | alarm-input-triggered only |
+| `//recordType.meta.std-cgi.com/manual` | manual recordings only |
+| `//recordType.meta.std-cgi.com/command` | command-triggered only |
+
+If a filtered descriptor returns `badParameters`, retry once with the generic
+`//recordType.meta.std-cgi.com` and filter client-side on
+`metadataMatches/metadataDescriptor` from the results. Record
+`recordTypeFilterUnsupported` in the quirk record.
+
+Response:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CMSearchResult version="1.0" xmlns="http://www.hikvision.com/ver10/XMLSchema">
+  <searchID>{6F9619FF-8B86-D011-B42D-00CF4FC964FF}</searchID>
+  <responseStatus>true</responseStatus>
+  <responseStatusStrip>MORE</responseStatusStrip>
+  <numOfMatches>40</numOfMatches>
+  <matchList>
+    <searchMatchItem>
+      <sourceID>{A1B2C3D4-0000-0000-0000-000000000000}</sourceID>
+      <trackID>101</trackID>
+      <timeSpan>
+        <startTime>2024-05-01T08:00:00Z</startTime>
+        <endTime>2024-05-01T08:14:59Z</endTime>
+      </timeSpan>
+      <mediaSegmentDescriptor>
+        <contentType>video</contentType>
+        <codecType>H.264-BP</codecType>
+        <playbackURI>rtsp://192.168.1.64/Streaming/tracks/101?starttime=20240501T080000Z&amp;endtime=20240501T081459Z&amp;name=ch01_00000000019000000&amp;size=536870912</playbackURI>
+      </mediaSegmentDescriptor>
+      <metadataMatches>
+        <metadataDescriptor>recordType.meta.std-cgi.com/timing</metadataDescriptor>
+      </metadataMatches>
+    </searchMatchItem>
+    <searchMatchItem>
+      …
+    </searchMatchItem>
+  </matchList>
+</CMSearchResult>
+```
+
+| Field | Notes |
+| --- | --- |
+| `responseStatus` | `true` even when there are zero matches |
+| `responseStatusStrip` | **the paging signal**: `OK` = this is the last page; `MORE` = call again with `searchResultPostion += numOfMatches`; `NO MATCHES` = empty result set |
+| `numOfMatches` | number of `searchMatchItem`s in *this* page |
+| `codecType` | `H.264-BP`, `H.264-MP`, `H.264-HP`, `H.265`, `MJPEG`, `MPEG4`, `SVAC`. Parsed with the same prefix logic as `videoCodecType`. |
+| `playbackURI` | the RTSP URL to play this segment — see §15.3 |
+| `metadataMatches/metadataDescriptor` | why this segment exists: `…/timing`, `…/motion`, `…/alarm`, `…/manual`, `…/command`. Note the response omits the leading `//`. |
+
+Paging loop (normative):
+
+```swift
+public struct RecordSearchQuery: Sendable {
+    public var track: TrackID
+    public var start: Date
+    public var end: Date
+    public var recordTypes: Set<RecordType> = []      // empty = all
+    public var pageSize: Int = 40
+    public var hardSegmentCap: Int = 2000             // safety valve per query
+}
+
+public struct RecordSegment: Sendable, Hashable, Identifiable {
+    public var id: String { "\(track.value)-\(start.timeIntervalSince1970)" }
+    public let track: TrackID
+    public let start: Date
+    public let end: Date
+    public let codec: VideoCodec
+    public let contentType: String
+    public let recordType: RecordType
+    public let locator: PlaybackLocator
+    public var duration: TimeInterval { end.timeIntervalSince(start) }
+}
+
+public enum RecordType: String, Sendable, Codable, CaseIterable {
+    case timing, motion, alarm, manual, command, other
+}
+
+extension ISAPIDeviceSession {
+    /// Pages until responseStatusStrip != "MORE", the cap is hit, or the task is cancelled.
+    /// Uses one searchID for the whole query.
+    public func searchRecordings(_ q: RecordSearchQuery) async throws -> [RecordSegment]
+}
+```
+
+Errors: `403 notSupport` on cameras without storage ⇒ `.notSupported`, playback UI hidden.
+`400 badParameters` ⇒ almost always a bad time format or `maxResults > 50`; log the body.
+An empty `matchList` with `NO MATCHES` is a success with zero segments, never an error.
+
+### 15.3 `playbackURI` and `PlaybackLocator`
+
+Form:
+
+```
+rtsp://192.168.1.64/Streaming/tracks/101
+  ?starttime=20240501T080000Z
+  &endtime=20240501T081459Z
+  &name=ch01_00000000019000000
+  &size=536870912
+```
+
+| Query item | Meaning |
+| --- | --- |
+| `starttime` | compact UTC, `yyyyMMdd'T'HHmmss'Z'` |
+| `endtime` | compact UTC |
+| `name` | device-internal file name; **pass through verbatim**, do not synthesize |
+| `size` | file size in bytes; informational |
+
+Handling rules — all normative, because getting them wrong is the classic "playback works on
+some cameras" bug:
+
+1. **Rewrite scheme/host/port, keep path and query verbatim.** The device fills in the
+   address it thinks it has, which on a multi-homed NVR or behind NAT is not the address we
+   reached it on. Vigil replaces host/port with the known-good RTSP endpoint from the camera
+   record and keeps everything after the path intact.
+2. **Do not re-encode the query.** `&amp;` in the XML becomes `&` after XML unescaping;
+   nothing else is escaped and nothing else needs escaping. Running the query through
+   `URLComponents` re-encodes `name`'s underscores-and-digits harmlessly but has been observed
+   to reorder items on some Foundation versions — so we store the raw query string and
+   concatenate.
+3. **Never embed credentials.**
+4. Some firmwares omit `name`/`size`. That is fine; `starttime`/`endtime` are sufficient.
+5. Some firmwares emit `/Streaming/tracks/101/` (trailing slash) — normalize by trimming.
+
+```swift
+/// A fully resolved, ready-to-play recorded segment address. Consumed by VigilRTSP.
+public struct PlaybackLocator: Sendable, Hashable, Codable {
+    public let path: String        // "/Streaming/tracks/101"
+    public let rawQuery: String    // "starttime=…&endtime=…&name=…&size=…"
+    public let start: Date
+    public let end: Date
+    public let fileName: String?
+    public let sizeBytes: Int64?
+
+    /// Builds the request URI VigilRTSP puts on the RTSP request line.
+    public func requestURI(host: String, port: Int, useTLS: Bool) -> String
+    /// Range header value for the PLAY request: "clock=20240501T080000Z-20240501T081459Z".
+    public var clockRange: String
+
+    /// Constructs a locator without a search, for direct seeking (see below).
+    public init(track: TrackID, start: Date, end: Date)
+    public init?(playbackURI: String)
+}
+```
+
+**Direct seeking without a search.** Hikvision accepts a synthesized URI:
+`rtsp://host/Streaming/tracks/101?starttime=20240501T081000Z` (no `endtime` = play to the end
+of available footage). Vigil uses this for timeline scrubbing *within* a segment it already
+knows about, avoiding a search round trip per scrub. It does **not** use it to discover
+footage — an arbitrary time with no recording yields an RTSP 404 or an immediately-ending
+stream.
+
+**Time zone trap.** `starttime` is UTC with a `Z`, but a number of firmwares interpret it as
+**device-local** time despite the `Z`. Detection and correction: after `PLAY`, `VigilRTSP`
+reports the first frame's `RTP-Info rtptime`/`Range` echo; if the device's echoed range differs
+from what we asked by exactly the device's UTC offset, the quirk
+`playbackTimesAreDeviceLocal` is set and all subsequent locators are built with device-local
+compact times. The check is cheap (one comparison) and the flag is persisted per device.
+
+### 15.4 `GET /ISAPI/ContentMgmt/Storage`
+
+```xml
+<storage version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <hddList size="2">
+    <hdd>
+      <id>1</id>
+      <hddName>hdd1</hddName>
+      <hddPath>/</hddPath>
+      <hddType>SATA</hddType>
+      <status>ok</status>
+      <capacity>3815447</capacity>
+      <freeSpace>1258291</freeSpace>
+      <property>RW</property>
+      <group>1</group>
+    </hdd>
+    <hdd>
+      <id>2</id>
+      <hddName>sd1</hddName>
+      <hddType>SD</hddType>
+      <status>unformatted</status>
+      <capacity>61035</capacity>
+      <freeSpace>0</freeSpace>
+      <property>RW</property>
+    </hdd>
+  </hddList>
+  <nasList size="0"/>
+  <workMode>group</workMode>
+</storage>
+```
+
+| Field | Units | Values |
+| --- | --- | --- |
+| `capacity`, `freeSpace` | **MB** (1 MB = 1 000 000 B in Hikvision's accounting; we display with `ByteCountFormatter` using `.decimal` so the numbers match the camera's own web UI) | |
+| `hddType` | — | `SATA`, `SD`, `eSATA`, `NAS`, `local`, `iSCSI` |
+| `status` | — | `ok`, `unformatted`, `unformated` (sic), `error`, `sleeping`, `idle`, `mismatch`, `notExist`, `formatting` |
+| `property` | — | `RW`, `RO`, `redundancy` |
+| `workMode` | — | `group`, `quota` |
+
+`<nasList>` entries carry `<id>`, `<addressingFormatType>`, `<ipAddress>`, `<mountType>`
+(`NFS`/`SMB`), `<path>`, plus the same `status`/`capacity`/`freeSpace`.
+
+Quota is only meaningful when `workMode == quota`:
+`GET /ISAPI/ContentMgmt/Storage/quota` →
+`<QuotaList><Quota><id>1</id><type>picture|record</type><totalSpace>…</totalSpace><usedSpace>…</usedSpace></Quota></QuotaList>`
+(MB). This endpoint 404s on many devices; on failure the quota section of the UI is hidden.
+Never surface an error for it.
+
+```swift
+public struct StorageVolume: Sendable, Hashable, Identifiable {
+    public let id: Int
+    public let name: String?
+    public let kind: Kind                    // .sata, .sd, .nas(mount: String), .other(String)
+    public let status: Status                 // .ok, .unformatted, .error, .sleeping, .formatting, .absent, .other
+    public let capacityMB: Int
+    public let freeSpaceMB: Int
+    public let isReadOnly: Bool
+    public var usedFraction: Double { capacityMB > 0 ? 1 - Double(freeSpaceMB)/Double(capacityMB) : 0 }
+}
+
+public struct StorageInfo: Sendable, Hashable {
+    public let volumes: [StorageVolume]
+    public let workMode: String
+    public let quotas: [StorageQuota]        // empty when unsupported
+    public var totalCapacityMB: Int
+    public var totalFreeMB: Int
+    /// True when any volume is in .error/.unformatted — surfaced as a camera-row warning.
+    public var needsAttention: Bool
+}
+```
+
+Poll cadence: on device connect, then every **5 min** while a playback or health view is open.
+
+### 15.5 The timeline: exactly what we call
+
+**Decision.** The playback timeline for a selected day is painted **exclusively** from
+`POST /ISAPI/ContentMgmt/search` results for that day. There is no other endpoint we depend
+on. Rationale: `search` is supported by every device that can play back at all, its response
+gives exact segment boundaries *and* record types (which is what the heatmap colours encode),
+and its paging behaviour is well defined. Any "distribution" endpoint is an optional
+accelerator only.
+
+Algorithm (normative):
+
+```
+buildDayIndex(track, dayStart /* device-local midnight, converted to UTC */):
+    segments = searchRecordings(track: track,
+                               start: dayStart,
+                               end: dayStart + 86400,
+                               recordTypes: [],           // all
+                               pageSize: 40,
+                               hardSegmentCap: 2000)
+    merge adjacent segments of the SAME recordType whose gap < 2.0 s
+    bins = [RecordType?](repeating: nil, count: 1440)     // one per minute
+    for each merged segment:
+        for minute in floor(start)…ceil(end):
+            bins[minute] = max(bins[minute], segment.recordType, by: severity)
+    return RecordDayIndex(day: dayStart, segments: merged, minuteBins: bins,
+                          truncated: segments.count >= hardSegmentCap)
+```
+
+Severity order for bin colouring (higher wins when two record types share a minute):
+`alarm > motion > manual > command > timing`. The UI paints
+`timing` in a muted accent, `motion` in the warning accent, `alarm` in the critical accent.
+
+```swift
+public struct RecordDayIndex: Sendable, Hashable, Codable {
+    public let track: TrackID
+    public let dayStartUTC: Date
+    public let segments: [RecordSegment]
+    /// 1440 entries, one per minute of the device-local day. nil = no footage.
+    public let minuteBins: [RecordType?]
+    public let truncated: Bool
+    public var totalRecordedSeconds: TimeInterval
+    public var coverageFraction: Double        // 0…1, for the "12 h 04 m recorded" label
+}
+```
+
+Caching: `RecordDayIndex` is cached per `(deviceID, trackID, dayStartUTC)`.
+Past days are immutable and persisted in
+`~/Library/Application Support/Vigil/Cache/recordIndex/` as JSON (owned by `VigilCore`, which
+also caps the directory at 20 MB LRU); today's index has a 60 s TTL and is refreshed on
+timeline focus.
+
+Prefetch: opening the timeline builds the selected day, then, at `.utility` priority with
+concurrency 1, the previous and next day.
+
+**Month calendar dots (optional accelerator).** For the month picker we want one request, not
+30 searches. Probe order, once per device, result persisted in the quirk record:
+
+1. `POST /ISAPI/ContentMgmt/record/tracks/dailyDistribution`
+2. `POST /ISAPI/ContentMgmt/search/dailyDistribution`
+
+Body:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<trackDailyParam>
+  <year>2024</year>
+  <monthOfYear>5</monthOfYear>
+  <trackID>101</trackID>
+</trackDailyParam>
+```
+
+Response:
+
+```xml
+<trackDailyDistribution version="1.0" xmlns="http://www.hikvision.com/ver10/XMLSchema">
+  <dayList>
+    <day>
+      <id>1</id>
+      <dayOfMonth>1</dayOfMonth>
+      <record>true</record>
+      <recordType>timing,motion</recordType>
+    </day>
+    <day>
+      <id>2</id>
+      <dayOfMonth>2</dayOfMonth>
+      <record>false</record>
+    </day>
+    …
+  </dayList>
+</trackDailyDistribution>
+```
+
+If **both** paths fail (403/404/`badParameters`), the fallback is deterministic and specified:
+resolve dots lazily with a `maxResults=1` search per visible day, at `.utility` priority,
+concurrency **2**, cancelled when the month picker closes. 31 cheap searches complete in about
+2–4 s on a typical NVR and the dots fill in progressively. Days not yet resolved render as
+"unknown" (a hairline outline), never as "empty".
+
+```swift
+public struct MonthRecordCalendar: Sendable, Hashable, Codable {
+    public let year: Int, month: Int
+    public let track: TrackID
+    /// index 0 = day 1. nil = not yet known.
+    public let days: [DayState?]
+    public enum DayState: Sendable, Hashable, Codable { case none; case some(Set<RecordType>) }
+}
+
+extension ISAPIDeviceSession {
+    public func monthCalendar(track: TrackID, year: Int, month: Int) async throws -> MonthRecordCalendar
+}
+```
+
+### 15.6 Clip export
+
+Vigil exports clips by **re-playing the RTSP segment and passthrough-muxing** it
+(`VigilCore.ClipRecorder`), not by using Hikvision's HTTP download. Reasons: the ISAPI
+download endpoint (`GET /ISAPI/ContentMgmt/download` with a `<downloadRequest>` body) yields a
+proprietary Hikvision container that no Mac player opens without conversion, and it is absent
+on cameras. Passthrough re-play produces a standard MP4 at 1× wall-clock or faster with the
+`Scale` header. This keeps the code path identical to live recording.
+
+---
+
+## 16. Two-way audio
+
+### 16.1 `GET /ISAPI/System/TwoWayAudio/channels`
+
+```xml
+<TwoWayAudioChannelList version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <TwoWayAudioChannel version="2.0">
+    <id>1</id>
+    <enabled>true</enabled>
+    <audioCompressionType>G.711ulaw</audioCompressionType>
+    <audioInputType>MicIn</audioInputType>
+    <noisereduce>true</noisereduce>
+    <audioBitRate>64</audioBitRate>
+    <audioSamplingRate>8</audioSamplingRate>
+    <associateVideoInputs>
+      <enabled>true</enabled>
+      <videoInputChannelList><videoInputChannelID>1</videoInputChannelID></videoInputChannelList>
+    </associateVideoInputs>
+  </TwoWayAudioChannel>
+</TwoWayAudioChannelList>
+```
+
+| Field | Units / values |
+| --- | --- |
+| `id` | two-way audio channel; **1 on cameras.** On NVRs the NVR's own audio is `1` and IP-channel talk-back uses the channel number. |
+| `audioCompressionType` | `G.711ulaw`, `G.711alaw`, `G.722.1`, `G.726`, `AAC`, `MP2L2`, `PCM` |
+| `audioBitRate` | kbit/s (64 for G.711) |
+| `audioSamplingRate` | **kHz as an integer** (`8` = 8000 Hz, `16` = 16000 Hz) |
+| `audioInputType` | `MicIn`, `LineIn` |
+
+`GET /ISAPI/System/TwoWayAudio/channels/{id}` returns the single channel.
+`GET /ISAPI/System/TwoWayAudio/channels/{id}/capabilities` lists the supported
+`audioCompressionType` values as an `<opt>` attribute:
+`<audioCompressionType opt="G.711ulaw,G.711alaw,G.722.1,AAC">G.711ulaw</audioCompressionType>`.
+That `opt` attribute is how we enumerate choices — read it with `@opt` and split on `,`.
+
+### 16.2 Codec negotiation
+
+Vigil's decision procedure, in order:
+
+1. Read `/capabilities` for the channel and parse `audioCompressionType@opt`.
+   If absent, read the channel's current `audioCompressionType` and treat it as the only
+   option.
+2. Choose the first supported codec from Vigil's preference list:
+   **`G.711ulaw` → `G.711alaw` → `G.722.1` → `AAC` → `PCM`.**
+   G.711 is first because it is universally supported, is trivially encodable from
+   AVAudioEngine's 8 kHz mono float buffers with no framework dependency, and has no
+   container framing. `G.722.1` and `AAC` are accepted for *reading* device audio but Vigil
+   never *sends* them (we would need an encoder; AudioToolbox has AAC but the added
+   negotiation risk is not worth it for talk-back).
+3. If the device's current `audioCompressionType` differs from the chosen one, `PUT` the
+   channel (read-modify-write on `<TwoWayAudioChannel>`) to set it **before** opening. Some
+   firmwares ignore the codec of the uploaded data entirely and decode according to this
+   setting — sending µ-law to a device configured for A-law produces loud static, so this
+   step is mandatory, not an optimization.
+4. Sample rate is not negotiable per-request; use whatever `audioSamplingRate` reports
+   (8 kHz in practice) and resample locally.
+
+```swift
+public struct TwoWayAudioChannel: Sendable, Hashable {
+    public let id: Int
+    public var enabled: Bool
+    public var codec: AudioCodec
+    public var supportedCodecs: [AudioCodec]
+    public var bitrateKbps: Int
+    public var sampleRateHz: Int
+    public var inputType: String?
+    public var associatedVideoChannels: [ChannelID]
+    public var originalNode: XMLNode
+}
+
+public enum AudioCodec: String, Sendable, Hashable, Codable {
+    case g711ulaw = "G.711ulaw"
+    case g711alaw = "G.711alaw"
+    case g7221    = "G.722.1"
+    case g726     = "G.726"
+    case aac      = "AAC"
+    case mp2l2    = "MP2L2"
+    case pcm      = "PCM"
+    /// Bytes per 20 ms frame at the channel's sample rate; 160 for 8 kHz G.711.
+    public func frameBytes(sampleRateHz: Int) -> Int
+}
+```
+
+### 16.3 `PUT /ISAPI/System/TwoWayAudio/channels/{id}/open`
+
+Empty body, `Content-Length: 0`.
+
+```xml
+<TwoWayAudioSession version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <sessionId>112</sessionId>
+</TwoWayAudioSession>
+```
+
+Some firmwares return `<ResponseStatus>` with `statusCode 1` and no session id; that is
+success, and `sessionId` is simply unused. Failure modes:
+
+| Response | Meaning | User message |
+| --- | --- | --- |
+| `403` + `notSupport` | no speaker / talk-back not supported | `err.audio.notSupported` — "This camera has no speaker." |
+| `403` + `invalidOperation` / `deviceBusy` | another client already holds the audio channel | `err.audio.busy` — "Someone else is talking to this camera." |
+| `401` | credential lacks the two-way-audio permission | `err.auth.permission` |
+
+The device allows exactly **one** open talk session at a time. Vigil enforces app-side
+exclusivity too: at most one `TwoWayAudioSession` across all cameras, because the Mac has one
+microphone and simultaneous talk to two cameras is not a feature anyone wants.
+
+### 16.4 `POST /ISAPI/System/TwoWayAudio/channels/{id}/audioData` (chunked upload)
+
+```
+POST /ISAPI/System/TwoWayAudio/channels/1/audioData HTTP/1.1
+Host: 192.168.1.64
+Authorization: Digest username="admin", …, nc=00000007, …
+Content-Type: application/octet-stream
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+<G.711 µ-law payload, streamed, 160 bytes per 20 ms, no framing headers>
+```
+
+The body is raw codec bytes with **no RTP header, no length prefix, no container**. For
+8 kHz µ-law that is 160 bytes per 20 ms = 8000 B/s. Vigil sends one write per 20 ms frame and
+lets `URLSession` coalesce; frames are **not** batched beyond 4 (80 ms) because latency is the
+point.
+
+**Implementation (concrete, and the reason §5 exists).**
+
+```swift
+public actor TwoWayAudioSession {
+    public enum State: Sendable, Equatable { case opening, talking, closing, closed, failed(String) }
+
+    public init(session: ISAPIDeviceSession, channel: Int, codec: AudioCodec, sampleRateHz: Int)
+
+    /// Opens the device session, negotiates the codec, and starts the chunked upload.
+    public func open() async throws
+    /// Enqueues one frame of already-encoded codec bytes. Non-blocking; drops the oldest
+    /// frame when the outbound queue exceeds 25 frames (500 ms) so we never build latency.
+    public func send(frame: Data)
+    /// Optional: device → client audio (see §16.6).
+    public var incoming: AsyncStream<Data> { get }
+    public func close() async
+    public var state: State { get }
+}
+```
+
+Transport mechanics:
+
+* `URLSession.uploadTask(withStreamedRequest:)` plus
+  `urlSession(_:task:needNewBodyStream:)` returning the read end of a bound stream pair
+  created with `Stream.getBoundStreams(withBufferSize: 32 * 1024)`.
+  (`InputStream`/`OutputStream` bound pairs exist on Linux corelibs as well, so the code
+  compiles in CI even though we only exercise it on macOS.)
+* The output stream is driven from a dedicated `Thread`-less loop: we schedule the
+  `OutputStream` on a `RunLoop` owned by a single `OperationQueue`, and write on
+  `stream(_:handle:)` `.hasSpaceAvailable`. If no frame is queued, write **silence**
+  (µ-law `0xFF` for 160 bytes) rather than starving the stream — several firmwares close the
+  session after ~1 s of no data.
+* Because the body is unreplayable, `Authorization` **must** be correct on the first attempt.
+  The `open()` call immediately precedes the upload and guarantees a fresh, valid challenge in
+  `DigestStore`; the upload uses the next `nc`. If the upload nevertheless gets a 401, the
+  session fails with `.failed("authentication lost")` and the UI re-arms the button — we do
+  not attempt to resume a half-sent audio stream.
+* `Transfer-Encoding: chunked` is set implicitly by URLSession when the body length is
+  unknown; do not set `Content-Length`. Do not set `Transfer-Encoding` manually (URLSession
+  rejects reserved headers on some OS versions) — verify by asserting in debug that
+  `httpBodyStream != nil && value(forHTTPHeaderField: "Content-Length") == nil`.
+* Timeout: the `.audio` lane has `timeoutIntervalForResource = 0` (unbounded) and
+  `timeoutIntervalForRequest = 30` (idle). Since we always write silence, idle never trips
+  during a live talk session.
+
+Microphone capture (in `VigilCore`/`VigilVideo`, listed here so the contract is unambiguous):
+`AVAudioEngine` input tap → `AVAudioConverter` to 8 kHz mono `Int16` → µ-law encode
+(a 256-entry table plus the standard 8-bit compression; ~25 lines, unit-tested against the
+G.711 reference vectors, implemented in `VigilProtocols` so it is Linux-testable) → 160-byte
+frames → `TwoWayAudioSession.send(frame:)`.
+
+### 16.5 `PUT /ISAPI/System/TwoWayAudio/channels/{id}/close`
+
+Empty body. Returns `<ResponseStatus>`. Always sent, including on error paths, cancellation,
+window close, and app termination (detached task, 1 s budget). A session left open blocks
+every other client until the device times it out (60–120 s), so this is as important as the
+PTZ stop.
+
+### 16.6 Device → client audio
+
+`GET /ISAPI/System/TwoWayAudio/channels/{id}/audioData` returns an endless chunked body of raw
+codec bytes in the same format. Vigil uses it only when the RTSP stream carries no audio track
+(some doorbell models), and treats it as a fallback listen path on the `.stream` lane. It is
+decoded by `VigilVideo`'s audio path exactly like RTP-delivered G.711.
+
+---
+
+## 17. Image settings, reboot, users
+
+### 17.1 The read-modify-write rule
+
+**Every** ISAPI configuration `PUT` in this section follows the same mandatory pattern:
+
+```swift
+extension ISAPIDeviceSession {
+    /// GET → mutate the parsed tree → PUT the whole element → validate → re-GET → return.
+    /// `mutate` receives the node exactly as the device sent it, including elements Vigil
+    /// does not model, and must return a node with the same root name.
+    func readModifyWrite(_ resource: String,
+                         mutate: (XMLNode) throws -> XMLNode) async throws -> ISAPIDocument
+}
+```
+
+Why: Hikvision's validators require every mandatory sibling to be present, several firmwares
+reset omitted elements to factory defaults, and new firmware adds elements we do not know
+about which must survive round-tripping. Constructing a "minimal" body is a bug, always.
+
+The re-GET is skipped only for `/PTZCtrl/**` (which has no persistent state to confirm) and
+for `/System/reboot`.
+
+### 17.2 Image endpoints
+
+Base: `/ISAPI/Image/channels/{ch}` where `{ch}` is the **video input channel**.
+`GET` on the base returns the whole `<ImageChannel>`; we use the sub-resources for writes
+because a whole-`ImageChannel` PUT is rejected by most firmware.
+
+| Setting | Method + path | Element | Range / values |
+| --- | --- | --- | --- |
+| Brightness / contrast / saturation | `GET`,`PUT /ISAPI/Image/channels/{ch}/color` | `<Color><brightnessLevel>`, `<contrastLevel>`, `<saturationLevel>` | 0…100, default 50 |
+| Sharpness | `GET`,`PUT /ISAPI/Image/channels/{ch}/sharpness` | `<Sharpness><SharpnessLevel>` (also seen `<sharpnessLevel>`) | 0…100 |
+| WDR | `GET`,`PUT /ISAPI/Image/channels/{ch}/WDR` | `<WDR><mode>`,`<WDRLevel>` | mode `open`\|`close`\|`auto`; level 0…100 |
+| BLC | `GET`,`PUT /ISAPI/Image/channels/{ch}/BLC` | `<BLC><enabled>`,`<BLCRegion>` | region `up`\|`down`\|`left`\|`right`\|`center`\|`auto` |
+| HLC | `GET`,`PUT /ISAPI/Image/channels/{ch}/HLC` | `<HLC><enabled>`,`<HLCLevel>` | 0…100 |
+| IR-cut / day-night | `GET`,`PUT /ISAPI/Image/channels/{ch}/ircutFilter` | `<IrcutFilter><IrcutFilterType>`, `<nightToDayFilterLevel>`, `<nightToDayFilterTime>` | type `auto`\|`day`\|`night`\|`schedule`\|`triggeredByAlarmIn`; level 0…7; time 3…10 (seconds) |
+| Noise reduction | `GET`,`PUT /ISAPI/Image/channels/{ch}/noiseReduce` | `<NoiseReduce><mode>`, `<GeneralMode><generalLevel>` | mode `close`\|`general`\|`advanced`\|`expert`; level 0…100 |
+| White balance | `GET`,`PUT /ISAPI/Image/channels/{ch}/whiteBalance` | `<WhiteBalance><whiteBalanceStyle>`,`<whiteBalanceRed>`,`<whiteBalanceBlue>` | style `auto`\|`manual`\|`indoor`\|`outdoor`\|`fluorescentLamp`\|`sodiumLamp`\|`autoTrack`\|`onceWB`; red/blue 0…100 |
+| Exposure | `GET`,`PUT /ISAPI/Image/channels/{ch}/exposure` | `<Exposure><ExposureType>`,`<OverexposeSuppress>` | type `auto`\|`manual`\|`irisFirst`\|`shutterFirst`\|`gainFirst` |
+| Shutter | `GET`,`PUT /ISAPI/Image/channels/{ch}/shutter` | `<Shutter><ShutterLevel>` | e.g. `1/25`, `1/50`, `1/100`, `1/250`, `1/500`, `1/1000` |
+| Gamma | `GET`,`PUT /ISAPI/Image/channels/{ch}/gamma` | `<Gamma><enabled>`,`<gammaLevel>` | 0…100 |
+| Image flip / corridor | `GET`,`PUT /ISAPI/Image/channels/{ch}/imageFlip` | `<ImageFlip><enabled>`,`<ImageFlipStyle>` | `CENTER`\|`LEFTRIGHT`\|`UPDOWN` |
+| Power line frequency | `GET`,`PUT /ISAPI/Image/channels/{ch}/powerLineFrequency` | `<PowerLineFrequency><powerLineFrequencyMode>` | `50hz`\|`60hz` |
+| Defaults | `PUT /ISAPI/Image/channels/{ch}/defaultConfiguration` | empty | resets image settings |
+
+Sample:
+
+```
+GET /ISAPI/Image/channels/1/color
+→
+<Color version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <brightnessLevel>50</brightnessLevel>
+  <contrastLevel>50</contrastLevel>
+  <saturationLevel>50</saturationLevel>
+</Color>
+
+PUT /ISAPI/Image/channels/1/color
+Content-Type: application/xml
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Color version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <brightnessLevel>62</brightnessLevel>
+  <contrastLevel>50</contrastLevel>
+  <saturationLevel>55</saturationLevel>
+</Color>
+→
+<ResponseStatus version="2.0" xmlns="…">
+  <requestURL>/ISAPI/Image/channels/1/color</requestURL>
+  <statusCode>1</statusCode><statusString>OK</statusString><subStatusCode>ok</subStatusCode>
+</ResponseStatus>
+```
+
+Note the echoed `version` and `xmlns` on the PUT — that is the read-modify-write rule in
+action, and some 5.4.x builds reject a `<Color>` body without them.
+
+```swift
+public struct ImageSettings: Sendable, Hashable {
+    public var brightness: Int?        // 0…100
+    public var contrast: Int?
+    public var saturation: Int?
+    public var sharpness: Int?
+    public var wdr: WDRSetting?
+    public var irCut: IRCutSetting?
+    public var noiseReduction: Int?
+    public var whiteBalanceStyle: String?
+    public var flip: String?
+    public var powerLineFrequency: String?
+    /// Which of the above the device actually exposed — drives which controls the UI shows.
+    public var available: Set<ImageControl>
+}
+
+public enum ImageControl: String, Sendable, Hashable, CaseIterable {
+    case color, sharpness, wdr, blc, hlc, ircut, noiseReduce, whiteBalance,
+         exposure, shutter, gamma, flip, powerLine
+}
+
+extension ISAPIDeviceSession {
+    /// Fetches every sub-resource concurrently (max 3 at a time), tolerating 403/404 per
+    /// control, and reports which controls exist.
+    public func imageSettings(channel: ChannelID) async throws -> ImageSettings
+    public func setImageColor(channel: ChannelID, brightness: Int?, contrast: Int?,
+                              saturation: Int?) async throws
+    public func setSharpness(channel: ChannelID, _ level: Int) async throws
+    public func setWDR(channel: ChannelID, _ setting: WDRSetting) async throws
+    public func setIRCut(channel: ChannelID, _ setting: IRCutSetting) async throws
+    public func resetImageDefaults(channel: ChannelID) async throws
+}
+```
+
+UI behaviour: sliders are **debounced at 250 ms** and coalesced — a drag produces at most
+4 PUTs per second, and only the final value is guaranteed to be sent. A PUT that returns
+`badParameters` reverts the slider to the last confirmed value with a brief shake animation.
+
+### 17.3 `PUT /ISAPI/System/reboot`
+
+Empty body, `Content-Length: 0`.
+
+```xml
+<ResponseStatus version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <requestURL>/ISAPI/System/reboot</requestURL>
+  <statusCode>1</statusCode>
+  <statusString>OK</statusString>
+  <subStatusCode>ok</subStatusCode>
+</ResponseStatus>
+```
+
+Post-conditions Vigil enforces:
+* Two-step confirmation in the UI (destructive action).
+* On success: stop every stream for that device, flush all caches, mark the device
+  `rebooting`, and poll `GET /ISAPI/System/status` every 5 s for up to 180 s. First success
+  ⇒ resume streams. Timeout ⇒ `err.device.rebootTimeout`.
+* The response frequently never arrives (the device reboots mid-response). A
+  `URLError.networkConnectionLost` or timeout **after** a reboot PUT is treated as success.
+
+`PUT /ISAPI/System/factoryReset?mode=basic|full` exists and is deliberately **not** exposed.
+
+### 17.4 `GET /ISAPI/Security/users`
+
+```xml
+<UserList version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <User version="2.0">
+    <id>1</id>
+    <userName>admin</userName>
+    <userLevel>Administrator</userLevel>
+  </User>
+  <User version="2.0">
+    <id>2</id>
+    <userName>viewer</userName>
+    <userLevel>Operator</userLevel>
+    <bondIpAddressList/>
+    <bondMacAddressList/>
+  </User>
+</UserList>
+```
+
+`userLevel`: `Administrator` | `Operator` | `Viewer`. Vigil reads this for exactly one
+purpose: when a PTZ or configuration call returns `insufficientPermission`, the diagnostics
+panel can say *"the account 'viewer' is an Operator; PTZ requires Administrator on this
+camera"*. **Vigil never creates, deletes, or modifies device users**, and never writes
+passwords to a device — that is the camera vendor's web UI's job and doing it here is a
+support liability. `PUT /ISAPI/Security/users/{id}` is documented here only so implementers
+know we chose not to call it.
+
+`GET /ISAPI/Security/UserPermission/{id}` (or `/ISAPI/Security/userPermission`) returns
+per-user permission bitmaps; read-only, best-effort, used only for the same diagnostic text.
+
+```swift
+public struct DeviceUser: Sendable, Hashable, Identifiable {
+    public let id: Int
+    public let userName: String
+    public let level: Level      // .administrator, .operator, .viewer, .other(String)
+}
+```
+
+---
+
+## 18. The device session actor
+
+```swift
+public actor ISAPIDeviceSession {
+    public init(endpoint: ISAPIEndpoint,
+                credential: ISAPICredential,
+                configuration: ISAPIClient.Configuration = .init(),
+                transport: any ISAPIHTTPTransporting,
+                trustEvaluator: any ServerTrustEvaluating,
+                clock: any VigilClock,
+                logger: any VigilLogger)
+
+    // Identity & inventory
+    public func deviceInfo(force: Bool = false) async throws -> DeviceInfo
+    public func status() async throws -> DeviceStatus
+    public func time(force: Bool = false) async throws -> DeviceTime
+    public func capabilities(force: Bool = false) async throws -> DeviceCapabilities
+    public func networkInterfaces() async throws -> [NetworkInterfaceInfo]
+    public func checkCredentials() async throws -> UserCheckResult
+    public func channels(force: Bool = false) async throws -> [DeviceChannel]
+    public func users() async throws -> [DeviceUser]
+
+    // Streaming
+    public func streamingChannels(force: Bool = false) async throws -> [StreamingChannelConfig]
+    public func streamingChannel(_ id: StreamingChannelID) async throws -> StreamingChannelConfig
+    public func updateStream(_ id: StreamingChannelID,
+                             _ patch: StreamingChannelPatch) async throws -> StreamingChannelConfig
+    public func snapshot(_ request: SnapshotRequest) async throws -> Data
+
+    // PTZ
+    public func ptzCapabilities(channel: ChannelID) async throws -> PTZCapabilities
+    public func ptzController(channel: ChannelID) async throws -> PTZController
+
+    // Events
+    public func alertStream() -> AlertStreamMonitor          // memoized, one per device
+    public func eventTriggers(force: Bool = false) async throws -> [EventTrigger]
+    public func eventSchedule(triggerID: String) async throws -> EventSchedule?
+    public func motionDetection(channel: ChannelID) async throws -> MotionDetectionConfig
+    public func setMotionDetection(channel: ChannelID, enabled: Bool?,
+                                  sensitivity: Int?, grid: MotionGrid?) async throws
+
+    // Playback
+    public func recordTracks(force: Bool = false) async throws -> [RecordTrack]
+    public func searchRecordings(_ q: RecordSearchQuery) async throws -> [RecordSegment]
+    public func dayIndex(track: TrackID, dayStartUTC: Date,
+                         force: Bool = false) async throws -> RecordDayIndex
+    public func monthCalendar(track: TrackID, year: Int, month: Int) async throws -> MonthRecordCalendar
+    public func storage(force: Bool = false) async throws -> StorageInfo
+
+    // Audio
+    public func twoWayAudioChannels() async throws -> [TwoWayAudioChannel]
+    public func openTwoWayAudio(channel: Int) async throws -> TwoWayAudioSession
+
+    // Image
+    public func imageSettings(channel: ChannelID) async throws -> ImageSettings
+    // …setters per §17.2
+
+    // Lifecycle
+    public func reboot() async throws
+    public func invalidateCaches()
+    public func shutdown() async         // stops alertStream, closes audio, cancels tasks
+    public var quirks: DeviceQuirks { get }
+}
+```
+
+### 18.1 Cache TTLs (authoritative)
+
+| Data | TTL | Invalidated by |
+| --- | --- | --- |
+| `DeviceInfo` | 24 h | reboot, credential change |
+| `DeviceCapabilities` | 24 h (keyed by firmware version) | firmware change, reboot |
+| `DeviceTime` | 5 min | reboot |
+| `DeviceStatus` | 5 s | — |
+| channel inventory (`[DeviceChannel]`) | 60 s | any stream PUT, reboot |
+| `[StreamingChannelConfig]` | 30 s | any stream PUT |
+| InputProxy status | 30 s | stream failure on that channel |
+| `[RecordTrack]` | 5 min | reboot |
+| `StorageInfo` | 5 min | reboot |
+| `RecordDayIndex` (today) | 60 s | — |
+| `RecordDayIndex` (past day) | ∞ (persisted) | reboot does not invalidate |
+| `MonthRecordCalendar` (current month) | 10 min | — |
+| `[EventTrigger]` | 5 min | — |
+| `PTZCapabilities` | 24 h | reboot |
+| `PTZStatus` | never cached | — |
+| `ImageSettings` | 30 s | any image PUT |
+| JPEG snapshots | never cached in VigilISAPI (VigilCore owns thumbnail retention) | — |
+
+All caches are flushed by `invalidateCaches()`, which is called on: credential change,
+detected reboot (uptime regression), `AlertStreamState.authFailed`, and endpoint change.
+
+### 18.2 Connect sequence
+
+The first thing Vigil does with a new device. Ordered, with a hard 12 s overall budget; a
+failure at step 2 aborts, everything later is best-effort.
+
+| # | Call | Concurrency | On failure |
+| --- | --- | --- | --- |
+| 1 | `GET /ISAPI/System/deviceInfo` | serial | 401 ⇒ prompt for credentials; 404/timeout ⇒ "not an ISAPI device", offer ONVIF fallback |
+| 2 | `GET /ISAPI/Security/userCheck` | serial | maps lock-out state; abort on lock |
+| 3 | `GET /ISAPI/System/capabilities`, `GET /ISAPI/System/time` | parallel (2) | ignore; fall through to probes/defaults |
+| 4 | `GET /ISAPI/Streaming/channels` | serial | fatal for streaming: fall back to synthesizing channel 1 main/sub |
+| 5 | `GET /ISAPI/ContentMgmt/InputProxy/channels` + `/status` (NVR only) | parallel (2) | ignore |
+| 6 | `GET /ISAPI/System/Video/inputs/channels` | serial | ignore |
+| 7 | capability functional probes (only the unresolved ones) | parallel (2), `.utility` | ignore |
+| 8 | `GET /ISAPI/PTZCtrl/channels` then per-channel `capabilities` for PTZ channels | parallel (2), `.utility` | PTZ hidden |
+| 9 | `GET /ISAPI/ContentMgmt/record/tracks`, `GET /ISAPI/ContentMgmt/Storage` | parallel (2), `.utility` | playback hidden |
+| 10 | start `AlertStreamMonitor` | background | `.unsupported` shown in health panel |
+
+Steps 1–4 must complete before the first tile can open a stream; measured budget on a
+DS-7608 over gigabit LAN: 180–350 ms total.
+
+### 18.3 Negative capability cache
+
+Any `403 notSupport`, `404 notFound`, or `405 methodNotAllowed` on a *capability-bearing*
+resource is recorded as a negative capability keyed by the resource template (with channel
+numbers normalized to `{ch}` / `{id}`), for **24 h** or until reboot. Subsequent calls to that
+template throw `ISAPIError.notSupported` **without a network round trip**. This is what stops
+Vigil from re-asking a fixed camera for PTZ capabilities 40 times a session.
+
+Negative entries are visible in the diagnostics bundle, and there is a "re-probe device"
+action in the camera settings that clears them.
+
+---
+
+## 19. Firmware quirks matrix
+
+`DeviceQuirks` is a `Codable` value type persisted on the camera record by `VigilCore`.
+Every flag is either resolved by observation (marked **obs**) or seeded from a model/firmware
+match (marked **seed**) and then corrected by observation.
+
+```swift
+public struct DeviceQuirks: Sendable, Hashable, Codable {
+    public var schemaVersion: Int = 1
+    public var streamingChannelIDIsSingleDigit: Bool = false
+    public var snapshotIgnoresResolutionQuery: Bool = false
+    public var momentaryUnsupported: Bool = false
+    public var ptz3DOriginIsTopLeft: Bool? = nil
+    public var recordTypeFilterUnsupported: Bool = false
+    public var playbackTimesAreDeviceLocal: Bool = false
+    public var dailyDistributionPath: String? = nil       // resolved endpoint or nil
+    public var eventSchedulePath: String? = nil
+    public var alertStreamBoundaryFromSniff: Bool = false
+    public var requiresXMLDeclarationInBody: Bool = true
+    public var digestNoQOP: Bool = false
+    public var maxConcurrentRequestsOverride: Int? = nil
+    public var inputProxyStatusListUnsupported: Bool = false
+    public var sharpnessElementIsCapitalized: Bool = true
+}
+```
+
+| Firmware / family | Observed behaviour | Flag |
+| --- | --- | --- |
+| 5.1.x cameras | `/Streaming/channels/1` only; 3-digit IDs 404 | `streamingChannelIDIsSingleDigit` (**obs**) |
+| 5.1.x–5.2.x | Digest without `qop`; RFC 2069 response form | `digestNoQOP` (**obs**) |
+| 5.2.x | bare `LF` after the multipart boundary | handled unconditionally by the parser |
+| 5.2.x | rejects request bodies lacking `<?xml …?>` | `requiresXMLDeclarationInBody` (**seed** true, always sent) |
+| 5.2.x | snapshot returns `Content-Type: text/html` with JPEG body | handled unconditionally (SOI sniff) |
+| 5.4.x DVR | `CMSearchDescription` element order enforced | handled unconditionally (fixed order) |
+| 5.4.x | `text/xml` on PTZ PUT ⇒ `invalidXMLFormat` | handled unconditionally (`application/xml`) |
+| 5.4.x–5.5.x | `<sharpnessLevel>` lowercase | `sharpnessElementIsCapitalized` (**obs**) — reads use alternation regardless |
+| 5.5.x+ | `qop="auth"` present | automatic |
+| 5.5.x+ smart cameras | detection-region coordinates 0…10000 | handled unconditionally (magnitude sniff) |
+| some DS-2DE4xxx | `position3D` Y origin upper-left | `ptz3DOriginIsTopLeft` (**obs**, via §13.5 calibration) |
+| some 6.x NVRs | `dailyDistribution` under `/search/` not `/record/tracks/` | `dailyDistributionPath` (**obs**) |
+| some 6.x | `Authentication-Info: nextnonce` | automatic |
+| DS-76xx/77xx | `/InputProxy/channels/status` list form 404s | `inputProxyStatusListUnsupported` (**obs**) |
+| several DVRs | playback `starttime` interpreted as device-local despite `Z` | `playbackTimesAreDeviceLocal` (**obs**, via §15.3 range echo) |
+| low-end cameras (≤ DS-2CD1xxx) | >2 concurrent ISAPI requests ⇒ 503 storm | `maxConcurrentRequestsOverride = 2` (**obs**, after 3 `deviceBusy` in 10 s) |
+
+The matrix is data, not code paths sprinkled through call sites: quirks are consulted in
+exactly four places (path builder, body builder, parser configuration, and the request gate).
+
+---
+
+## 20. Testing
+
+All of `VigilISAPI` is unit-testable on Linux. `swift test --filter VigilISAPITests` must pass
+on Linux Swift 6.1 with zero macOS-only code paths exercised.
+
+### 20.1 Fixtures
+
+Recorded real responses live in `Tests/VigilISAPITests/Fixtures/` as plain files, one per
+response, named `{family}-{firmware}-{endpoint}.xml`, e.g.
+`ipc-5.6.3-streaming-channels.xml`, `nvr-4.30.005-cmsearch-page1.xml`. Binary fixtures
+(`alertstream-with-jpeg.bin`) are byte-exact captures including CRLFs.
+
+Minimum fixture set (33 files): `deviceInfo` × 4 families, `capabilities` × 3,
+`status` × 2, `time` × 2, `userCheck` × 3 (ok / wrong / locked), `Streaming/channels` × 3
+(IPC 3-stream, NVR 16-channel, 5.1.x single-digit), `InputProxy` × 2, `videoInputs` × 1,
+PTZ `capabilities` × 2 (`PTZChanelCap` and `PTZChannelCap`), `presets` × 1, `patrols` × 1,
+`status` (PTZ) × 1, `alertStream` × 4 (motion, line-crossing with polygon, heartbeat-only,
+motion + JPEG), `CMSearchResult` × 3 (OK / MORE / NO MATCHES), `record/tracks` × 1,
+`Storage` × 2 (HDD, SD unformatted), `TwoWayAudio/channels` × 1 + `capabilities` × 1,
+`Image/color` × 1, `motionDetection` × 1, `ResponseStatus` error bodies × 6.
+
+```swift
+public struct FixtureTransport: ISAPIHTTPTransporting, Sendable {
+    public init(routes: [Route])
+    public struct Route: Sendable {
+        public var method: String
+        public var pathPattern: String          // "/ISAPI/Streaming/channels/*"
+        public var status: Int
+        public var headers: [String: String]
+        public var body: Data
+        /// Artificial delay, for timeout and cancellation tests.
+        public var delay: Duration = .zero
+        /// Splits `body` into chunks for streaming routes, to exercise partial reads.
+        public var chunking: [Int]? = nil
+    }
+    /// Every request is recorded, so tests can assert on the exact bytes we sent.
+    public var recordedRequests: [ISAPIRawRequest] { get }
+}
+```
+
+### 20.2 Test list (each item is at least one `XCTest`/`swift-testing` case)
+
+**XML reader (24 cases)**
+namespace-prefixed elements; `ver10` vs `ver20`; casing variance both directions; path
+alternation `|` and `||`; `*` and `**`; `[n]`; `@attr`; missing-value error names siblings;
+bool table (all 14 accepted spellings + 2 rejected); every date form in §7.5 including a leap
+day and a `+05:30` offset; `gb2312` fallback; 8 MiB cap; 64-level depth cap; XXE payload is
+ignored; HTML login page ⇒ `.notXML`; trailing-NUL tolerance; empty element vs absent element;
+CDATA merge; `<hddList size="2">` attribute read.
+
+**XML builder (6)** declaration present; escaping of `& < > " '`; element order preserved;
+no xmlns on constructed bodies; xmlns echoed on RMW bodies; `Int`/`Bool` rendering.
+
+**Digest (14)** RFC 2617 §3.5 reference vector; no-qop (RFC 2069) vector; MD5-sess;
+`nc` increments and is 8 hex digits; `cnonce` differs per request; digestURI includes the
+query string; realm with parentheses and spaces (`IP Camera(51253)`); `stale=TRUE` triggers
+re-auth without counting a failure; identical nonce twice ⇒ `authenticationFailed`;
+two failures ⇒ `authBlockedLocally`; `Authentication-Info: nextnonce` adopted;
+multiple `WWW-Authenticate` headers prefer Digest; unsupported algorithm over http ⇒ throws;
+unsupported algorithm over https ⇒ Basic.
+
+**Client (12)** gate limits concurrency to 3 (assert via `FixtureTransport` overlap
+counting); PTZ over-subscription of exactly one slot; cancellation propagates and the
+recorded request count stops growing; timeout maps to `.timedOut`; 503 retried twice then
+throws; GET coalescing produces one recorded request for five concurrent callers; POST is not
+coalesced; 8 MiB response cap; `.notXML` on an HTML body; snapshot 403 ⇒ retried without
+query then remembered; negative capability cache prevents the second request; reboot's lost
+connection counts as success.
+
+**Endpoint decoding (30)** one per model type, asserting every field of at least one fixture,
+including: `maxFrameRate 1250 ⇒ 12.5 fps`; `keyFrameInterval 2000 ⇒ 2 s`; `GovLength` kept
+separately; `capacity` in MB; `userCheck` lock fields; `Duration P30DT0H0M0S ⇒ 2 592 000 s`;
+`timeZone "CST-8:00:00" ⇒ +28800`; `chanDetectResult` passthrough.
+
+**ID mapping (8)** `StreamingChannelID(channel: 12, stream: .sub).value == 1202`;
+round-trip; rejects `100`, `104`, `99`; `livePath` string; `legacyLivePaths` order;
+`TrackID` is not interchangeable with `StreamingChannelID` (compile-time, verified by a
+`// swift-format-ignore` negative-compile fixture documented in the test file).
+
+**Multipart parser (18)** the four boundary spellings in §14.1; boundary split across two
+`ingest` calls at every offset (parameterized over 1…len); `CRLF` and bare `LF`;
+`Content-Length` present and absent; JPEG containing the boundary token *not* preceded by a
+newline is not split; preamble discarded; closing `--boundary--`; header over 8 KiB ⇒
+`.partTruncated` then resync; text part over 256 KiB ⇒ truncated, stream survives; binary
+part over 4 MiB ⇒ truncated, event still emitted; **memory assertion: retained buffer never
+exceeds `boundary.count + 4` in body states** (white-box check on an `internal` property);
+`finish()` closes an open part; garbage between parts resynchronizes.
+
+**Alert stream monitor (12)** heartbeat suppressed; motion event emitted; XML+JPEG pairing;
+pending event flushed after 1.5 s without an image; backoff sequence exactly
+`1,2,4,8,15,30,60,60` under a fake clock, with jitter within ±20%; reset after 120 s healthy;
+60 s idle triggers `userCheck` probe; 90 s idle forces reconnect; 401 twice ⇒ `.authFailed`
+and no further connections; 403 ⇒ `.unsupported` and no further connections;
+`AsyncStream` back-pressure drops oldest beyond 256 without unbounded growth;
+`stop()` cancels promptly.
+
+**Search & timeline (10)** paging follows `MORE` and stops on `OK`; one `searchID` across
+pages (assert the recorded bodies); `NO MATCHES` ⇒ empty, not an error; `searchResultPostion`
+spelling in the emitted body; `hardSegmentCap` respected; segment merge with a 1.5 s gap
+merges and a 3 s gap does not; minute-bin severity ordering; `playbackURI` host rewrite keeps
+the query verbatim; synthesized locator for mid-segment seek; `clockRange` format.
+
+**Motion grid (6)** 22×18 hex round-trip; padding bits forced to zero; `isFullFrame`;
+polygon rasterization; odd column counts (e.g. 25 columns ⇒ 7 hex digits/row); malformed hex
+⇒ `nil`.
+
+**PTZ (10)** body bytes for continuous/momentary/absolute/relative/position3D asserted
+byte-for-byte; clamping to −100…100; keep-alive resends every 400 ms under a fake clock;
+`stop()` sends three zero bodies; reserved preset 94 rejected by `setPreset`; `PTZChanelCap`
+and `PTZChannelCap` both parse; absent capabilities ⇒ `isAbsent`;
+`PTZ3D.box` conversion for both origin conventions.
+
+**Error mapping (14)** one case per row of §9.3, asserting the `ISAPIError` case and the
+message key; HTTP 200 with `statusCode 4` still throws; unknown `subStatusCode` preserved.
+
+**Two-way audio (6)** codec preference selection from an `opt` list; codec PUT precedes
+`open`; silence frames written when the queue is empty; queue drops oldest beyond 25 frames;
+`close` sent on the error path; µ-law encoder vectors.
+
+### 20.3 What needs a Mac
+
+Only three things, all thin and all covered by an XCTest target that is skipped on Linux:
+
+1. `URLSessionTransport` against a local `NWListener`-based stub HTTP server (verifies real
+   chunked upload, keep-alive reuse, and delegate wiring).
+2. TLS pinning through `ServerTrustEvaluating` with a generated self-signed certificate.
+3. `AVAudioEngine` → µ-law capture path (lives in `VigilCore`, listed here for completeness).
+
+Everything else — every parser, every builder, every state machine, every policy — runs on
+Linux.
+
+---
+
+## Appendix A — endpoint index
+
+| # | Method | Path | Auth | Body | Response root | Swift model | §|
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | GET | `/ISAPI/System/deviceInfo` | Digest | — | `DeviceInfo` | `DeviceInfo` | 10.1 |
+| 2 | GET | `/ISAPI/Security/userCheck` | Digest | — | `userCheck` | `UserCheckResult` | 10.2 |
+| 3 | GET | `/ISAPI/System/status` | Digest | — | `DeviceStatus` | `DeviceStatus` | 10.3 |
+| 4 | GET | `/ISAPI/System/time` | Digest | — | `Time` | `DeviceTime` | 10.4 |
+| 5 | GET | `/ISAPI/System/capabilities` | Digest | — | `DeviceCap` | `DeviceCapabilities` | 10.5 |
+| 6 | GET | `/ISAPI/System/Network/interfaces` | Digest | — | `NetworkInterfaceList` | `[NetworkInterfaceInfo]` | 10.6 |
+| 7 | GET | `/ISAPI/ContentMgmt/InputProxy/channels` | Digest | — | `InputProxyChannelList` | `[UpstreamSource]` | 11.1 |
+| 8 | GET | `/ISAPI/ContentMgmt/InputProxy/channels/status` | Digest | — | `InputProxyChannelStatusList` | channel online flags | 11.2 |
+| 9 | GET | `/ISAPI/ContentMgmt/InputProxy/channels/{id}/status` | Digest | — | `InputProxyChannelStatus` | same | 11.2 |
+| 10 | GET | `/ISAPI/System/Video/inputs/channels` | Digest | — | `VideoInputChannelList` | channel names | 11.3 |
+| 11 | GET | `/ISAPI/Streaming/channels` | Digest | — | `StreamingChannelList` | `[StreamingChannelConfig]` | 12.1 |
+| 12 | GET | `/ISAPI/Streaming/channels/{id}` | Digest | — | `StreamingChannel` | `StreamingChannelConfig` | 12.2 |
+| 13 | PUT | `/ISAPI/Streaming/channels/{id}` | Digest | `StreamingChannel` (RMW) | `ResponseStatus` | — | 12.3 |
+| 14 | GET | `/ISAPI/Streaming/channels/{id}/picture` | Digest | — | `image/jpeg` | `Data` | 12.5 |
+| 15 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/continuous` | Digest | `PTZData` | `ResponseStatus` | — | 13.1 |
+| 16 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/momentary` | Digest | `PTZData`+`Momentary` | `ResponseStatus` | — | 13.2 |
+| 17 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/absolute` | Digest | `PTZData`/`AbsoluteHigh` | `ResponseStatus` | — | 13.3 |
+| 18 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/relative` | Digest | `PTZData`/`Relative` | `ResponseStatus` | — | 13.4 |
+| 19 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/position3D` | Digest | `PTZData`/`Position3D` | `ResponseStatus` | — | 13.5 |
+| 20 | GET | `/ISAPI/PTZCtrl/channels/{ch}/presets` | Digest | — | `PTZPresetList` | `[PTZPreset]` | 13.6 |
+| 21 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/presets/{n}` | Digest | `PTZPreset` | `ResponseStatus` | — | 13.6 |
+| 22 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/presets/{n}/goto` | Digest | empty | `ResponseStatus` | — | 13.6 |
+| 23 | DELETE | `/ISAPI/PTZCtrl/channels/{ch}/presets/{n}` | Digest | — | `ResponseStatus` | — | 13.6 |
+| 24 | GET | `/ISAPI/PTZCtrl/channels/{ch}/patrols` | Digest | — | `PTZPatrolList` | `[PTZPatrol]` | 13.7 |
+| 25 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/patrols/{n}/start` | Digest | empty | `ResponseStatus` | — | 13.7 |
+| 26 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/patrols/{n}/stop` | Digest | empty | `ResponseStatus` | — | 13.7 |
+| 27 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/homeposition/goto` | Digest | empty | `ResponseStatus` | — | 13.8 |
+| 28 | GET | `/ISAPI/PTZCtrl/channels/{ch}/status` | Digest | — | `PTZStatus` | `PTZStatus` | 13.8 |
+| 29 | GET | `/ISAPI/PTZCtrl/channels/{ch}/capabilities` | Digest | — | `PTZChanelCap` | `PTZCapabilities` | 13.9 |
+| 30 | PUT | `/ISAPI/System/Video/inputs/channels/{ch}/focus` | Digest | `FocusData` | `ResponseStatus` | — | 13.8 |
+| 31 | PUT | `/ISAPI/System/Video/inputs/channels/{ch}/iris` | Digest | `IrisData` | `ResponseStatus` | — | 13.8 |
+| 32 | PUT | `/ISAPI/PTZCtrl/channels/{ch}/auxcommand` | Digest | `PTZAux` | `ResponseStatus` | — | 13.8 |
+| 33 | GET | `/ISAPI/Event/notification/alertStream` | Digest | — | `multipart/mixed` | `EventNotification` stream | 14.1 |
+| 34 | GET | `/ISAPI/Event/triggers` | Digest | — | `EventTriggerList` | `[EventTrigger]` | 14.7 |
+| 35 | GET | `/ISAPI/Event/schedules/{triggerID}` | Digest | — | `EventSchedule` | `EventSchedule` | 14.8 |
+| 36 | GET/PUT | `/ISAPI/System/Video/inputs/channels/{ch}/motionDetection` | Digest | `MotionDetection` (RMW) | `MotionDetection` / `ResponseStatus` | `MotionDetectionConfig` | 14.9 |
+| 37 | GET | `/ISAPI/ContentMgmt/record/tracks` | Digest | — | `TrackList` | `[RecordTrack]` | 15.1 |
+| 38 | POST | `/ISAPI/ContentMgmt/search` | Digest | `CMSearchDescription` | `CMSearchResult` | `[RecordSegment]` | 15.2 |
+| 39 | POST | `/ISAPI/ContentMgmt/record/tracks/dailyDistribution` | Digest | `trackDailyParam` | `trackDailyDistribution` | `MonthRecordCalendar` | 15.5 |
+| 40 | GET | `/ISAPI/ContentMgmt/Storage` | Digest | — | `storage` | `StorageInfo` | 15.4 |
+| 41 | GET | `/ISAPI/ContentMgmt/Storage/quota` | Digest | — | `QuotaList` | `[StorageQuota]` | 15.4 |
+| 42 | GET | `/ISAPI/System/TwoWayAudio/channels` | Digest | — | `TwoWayAudioChannelList` | `[TwoWayAudioChannel]` | 16.1 |
+| 43 | GET | `/ISAPI/System/TwoWayAudio/channels/{id}/capabilities` | Digest | — | `TwoWayAudioChannel` | codec list | 16.1 |
+| 44 | PUT | `/ISAPI/System/TwoWayAudio/channels/{id}` | Digest | `TwoWayAudioChannel` (RMW) | `ResponseStatus` | — | 16.2 |
+| 45 | PUT | `/ISAPI/System/TwoWayAudio/channels/{id}/open` | Digest | empty | `TwoWayAudioSession` | session id | 16.3 |
+| 46 | POST | `/ISAPI/System/TwoWayAudio/channels/{id}/audioData` | Digest | chunked raw codec | `ResponseStatus` | — | 16.4 |
+| 47 | GET | `/ISAPI/System/TwoWayAudio/channels/{id}/audioData` | Digest | — | chunked raw codec | `AsyncStream<Data>` | 16.6 |
+| 48 | PUT | `/ISAPI/System/TwoWayAudio/channels/{id}/close` | Digest | empty | `ResponseStatus` | — | 16.5 |
+| 49 | GET/PUT | `/ISAPI/Image/channels/{ch}/color` | Digest | `Color` (RMW) | `Color` / `ResponseStatus` | `ImageSettings` | 17.2 |
+| 50 | GET/PUT | `/ISAPI/Image/channels/{ch}/sharpness` | Digest | `Sharpness` (RMW) | as above | — | 17.2 |
+| 51 | GET/PUT | `/ISAPI/Image/channels/{ch}/WDR` | Digest | `WDR` (RMW) | as above | `WDRSetting` | 17.2 |
+| 52 | GET/PUT | `/ISAPI/Image/channels/{ch}/ircutFilter` | Digest | `IrcutFilter` (RMW) | as above | `IRCutSetting` | 17.2 |
+| 53 | GET/PUT | `/ISAPI/Image/channels/{ch}/{noiseReduce,BLC,HLC,whiteBalance,exposure,shutter,gamma,imageFlip,powerLineFrequency}` | Digest | element (RMW) | as above | `ImageSettings` | 17.2 |
+| 54 | PUT | `/ISAPI/Image/channels/{ch}/defaultConfiguration` | Digest | empty | `ResponseStatus` | — | 17.2 |
+| 55 | PUT | `/ISAPI/System/reboot` | Digest | empty | `ResponseStatus` | — | 17.3 |
+| 56 | GET | `/ISAPI/Security/users` | Digest | — | `UserList` | `[DeviceUser]` | 17.4 |
+
+Deliberately **not** implemented: `/ISAPI/System/factoryReset`, `/ISAPI/System/updateFirmware`,
+`/ISAPI/Security/users` writes, `/ISAPI/Event/notification/httpHosts`,
+`/ISAPI/System/time` writes, `/ISAPI/ContentMgmt/download`, `/ISAPI/System/Network/*` writes,
+`/ISAPI/Streaming/channels/{id}/picture` with `compression`. Each is a support liability or
+superseded by a better path, per the sections above.
+
+---
+
+## Appendix B — public API summary
+
+```
+// Addressing & auth
+ISAPIEndpoint, ISAPICredential, DigestChallenge, ServerTrustEvaluating, ServerTrustDecision
+
+// Transport
+ISAPIClient (actor), ISAPIClient.Configuration, ISAPIClient.Lane
+ISAPIHTTPTransporting, ISAPIRawRequest, ISAPIResponse, HTTPHeaders
+URLSessionTransport, ISAPIChunkedUpload
+
+// XML
+XMLNode, ISAPIDocument, XMLValue, XMLReadError, XMLBuilder, ISAPITime
+
+// Errors
+ISAPIError, ResponseStatus
+
+// Identity & inventory
+DeviceInfo, DeviceFamily, FirmwareVersion, DeviceStatus, DeviceTime,
+DeviceCapabilities, NetworkInterfaceInfo, UserCheckResult, DeviceUser,
+DeviceChannel, UpstreamSource, DeviceQuirks
+
+// Identifiers
+ChannelID, StreamIndex, StreamingChannelID, TrackID, HikvisionURL
+
+// Streaming
+StreamingChannelConfig, StreamingChannelPatch, VideoCodec, AudioCodec,
+BitrateControl, ScanType, RTPTransport, MulticastConfig, SnapshotRequest
+
+// PTZ
+PTZController (actor), PTZVelocity, PTZAbsolutePosition, PTZRelativeMove,
+PTZBox, PTZ3D, PTZPreset, PTZPatrol, PTZStatus, PTZCapabilities, PTZAuxiliary
+
+// Events
+AlertStreamMonitor (actor), AlertStreamState, EventNotification, EventState,
+VigilEventType, DetectionRegion, EventTrigger, EventSchedule,
+MultipartStreamParser, MotionDetectionConfig, MotionGrid
+
+// Playback
+RecordTrack, RecordSearchQuery, RecordSegment, RecordType, PlaybackLocator,
+RecordDayIndex, MonthRecordCalendar, StorageInfo, StorageVolume, StorageQuota
+
+// Audio
+TwoWayAudioChannel, TwoWayAudioSession (actor)
+
+// Image
+ImageSettings, ImageControl, WDRSetting, IRCutSetting
+
+// Session
+ISAPIDeviceSession (actor)
+
+// Test support (in VigilISAPITests)
+FixtureTransport, FixtureTransport.Route
+```
+
