@@ -9,7 +9,7 @@
 //
 //  NONE OF THE APPKIT / AVFOUNDATION CODE IN THIS FILE HAS BEEN COMPILED. The container is Linux;
 //  `#if os(macOS)` compiles it to nothing. Framework signatures are quoted above each call so a
-//  reviewer without a compiler can check them (docs/.vigil/STEP3.md, rule 1).
+//  reviewer without a compiler can check them (.vigil/STEP3.md, rule 1).
 //
 
 #if os(macOS)
@@ -161,7 +161,7 @@ public final class VideoTileView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
         configureBeforeLayer()
 
-        // TRAP (docs/.vigil/STEP3.md §3.3): `wantsLayer` must be set before `layer` is touched.
+        // TRAP (.vigil/STEP3.md §3.3): `wantsLayer` must be set before `layer` is touched.
         // Reading `layer` first gives AppKit an ordinary CALayer and `makeBackingLayer()` is then
         // never consulted, so the view silently loses its video layer.
         wantsLayer = true
@@ -188,7 +188,10 @@ public final class VideoTileView: NSView {
 
     /// The well is fully covered by opaque black plus video, so AppKit can skip everything behind
     /// it. This is half of the no-white-flash rule; the other half is the layer's own `isOpaque`.
-    override public var isOpaque: Bool { true }
+    ///
+    /// A non-zero corner radius means the view no longer covers its own rectangle, so it stops
+    /// claiming to — the two answers must agree or AppKit leaves the corners undrawn.
+    override public var isOpaque: Bool { options.cornerRadiusPt <= 0 }
 
     /// `updateLayer()` instead of `draw(_:)`. `draw(_:)` would allocate a CPU backing store for a
     /// view that never draws a pixel itself.
@@ -232,7 +235,10 @@ public final class VideoTileView: NSView {
     ///
     /// - Parameters:
     ///   - sampleBuffer: a ready sample carrying its own format description, built by `VigilVideo`.
-    ///   - format: the neutral description of that format. Used for diagnostics only here.
+    ///   - format: the neutral description of that format. Accepted for signature compatibility
+    ///     with `VideoSink` and **not consulted** on this path: the sample buffer already carries
+    ///     its `CMVideoFormatDescription`, and the display layer applies crop and aspect itself.
+    ///     The Metal backend, which has to build geometry, is the member that will need it.
     ///   - generation: bumps on every format change. A change flushes the pending queue —
     ///     `flush()` alone, which discards queued samples and **keeps the displayed picture**.
     public nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer,
@@ -249,8 +255,20 @@ public final class VideoTileView: NSView {
     /// sibling overlay in `VigilUI`, not a black rectangle (docs/API_CONTRACT.md §4.9, the
     /// no-black-flash rule; docs/spec-render.md §13.2).
     public nonisolated func streamDidReset() {
+        // `logger` and `cameraID` are immutable and `Sendable`, so a nonisolated method may read
+        // them without hopping to the main actor.
+        logger.debug(.render, "stream reset: pending samples dropped, displayed picture kept",
+                     ["camera": cameraID.short])
         sampleBuffers.flushKeepingLastImage(reason: .streamReset)
         publishIdle()
+    }
+
+    /// Whether the display layer can take another sample right now.
+    ///
+    /// Backpressure policy belongs to `VigilVideo`; `VigilRender` only reports the flag
+    /// (docs/spec-render.md §13.2). Safe to read from the decode thread.
+    public nonisolated var isReadyForMoreMediaData: Bool {
+        sampleBuffers.isReadyForMoreMediaData
     }
 
     // MARK: - Private helpers

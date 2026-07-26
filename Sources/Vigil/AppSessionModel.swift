@@ -123,8 +123,8 @@ final class AppSessionModel {
     init(dependencies: CoreDependencies, defaults: UserDefaults = .standard) {
         self.dependencies = dependencies
         self.defaults = defaults
-        // ASSUMED SIGNATURE (VigilCore/Security/CredentialStore.swift, docs/spec-core.md §6.4):
-        //     public init(keychain: any KeychainProtocol, logger: any LoggerProtocol,
+        // Verified against the landed source (Sources/VigilCore/Security/CredentialStore.swift):
+        //     public init(keychain: any KeychainProtocol, logger: any LoggerProtocol = NullLogger(),
         //                 accessGroup: String? = nil)
         self.credentials = CredentialStore(keychain: dependencies.keychain,
                                            logger: dependencies.logger)
@@ -215,15 +215,11 @@ final class AppSessionModel {
         do {
             let camera = try makeCamera(host: host, ref: ref)
             let credential = Credential(ref: ref, account: account, secret: secret)
-            // ASSUMED SIGNATURE (VigilCore, docs/spec-core.md §6.2): a public memberwise-shaped
-            // initialiser on `CredentialDescriptor` with exactly these labels, in this order.
-            let descriptor = CredentialDescriptor(ref: ref,
-                                                  host: camera.host,
-                                                  port: camera.httpPort,
-                                                  useTLS: camera.useTLS,
-                                                  account: account,
-                                                  label: "Vigil — \(camera.name) (\(camera.host))",
-                                                  comment: Self.keychainComment)
+            // Verified against the landed source: `CredentialDescriptor(camera:account:)` derives
+            // server, port, protocol and the Keychain Access label from the record, and `save`
+            // preconditions that the credential's ref matches the descriptor's — which it does,
+            // because both come from `ref`.
+            let descriptor = CredentialDescriptor(camera: camera, account: account)
             try await credentials.save(credential, descriptor: descriptor)
             await stream(camera: camera, ref: ref)
         } catch {
@@ -236,7 +232,9 @@ final class AppSessionModel {
         do {
             // A missing item is a normal outcome, not an error (`errSecItemNotFound`,
             // docs/spec-core.md §6.4) — it means the user removed it in Keychain Access, so we ask.
-            guard try await credentials.credential(for: remembered.credentialRef) != nil else {
+            // `hasCredential` answers from `kSecReturnAttributes` alone, so this launch-time check
+            // does not decrypt the secret; the controller's provider does that when it connects.
+            guard try await credentials.hasCredential(for: remembered.credentialRef) else {
                 LastConnection.clear(in: defaults)
                 return
             }
@@ -367,9 +365,6 @@ final class AppSessionModel {
         default: return "Connecting…"
         }
     }
-
-    private static let keychainComment =
-        "Managed by Vigil. Deleting this item breaks the camera."
 }
 
 #endif  // os(macOS)

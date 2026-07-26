@@ -117,7 +117,7 @@ extension VTheme {
 
         // Cameras
         case camera, cameraOffline, addCamera, discover, device, channel, group, newGroup
-        case rename, delete, reorderHandle, credentials, locked, insecure
+        case rename, delete, reorderHandle, credentials, locked, insecure, revealSecret
 
         // Layout and stage
         case layoutSingle, layout2x2, layout3x3, layout4x4, layoutPicker
@@ -196,6 +196,9 @@ extension VTheme.Symbol {
         case .credentials: return "key.horizontal"
         case .locked: return "lock"
         case .insecure: return "lock.open.trianglebadge.exclamationmark"
+        // The reveal control on a secure field (UX.md §8.3, "secure field with a reveal eye").
+        // Its ``alternateName`` is the struck-through eye shown while the value is visible.
+        case .revealSecret: return "eye"
 
         // Layout and stage
         case .layoutSingle: return "square"
@@ -349,6 +352,7 @@ extension VTheme.Symbol {
         case .preset: return "star.fill"
         case .bookmark: return "bookmark.fill"
         case .pushToTalk: return "mic.fill"
+        case .revealSecret: return "eye.slash"
         default: return nil
         }
     }

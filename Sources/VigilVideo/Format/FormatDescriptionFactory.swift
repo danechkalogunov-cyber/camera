@@ -179,39 +179,46 @@ public enum FormatDescriptionFactory {
         _ body: (UnsafePointer<UnsafePointer<UInt8>>, UnsafePointer<Int>, Int) -> R
     ) -> R? {
         guard !sets.isEmpty else { return nil }
+        return pinning(sets, from: 0, pointers: [], sizes: [], body)
+    }
 
-        var pointers: [UnsafePointer<UInt8>] = []
-        pointers.reserveCapacity(sets.count)
-        var sizes: [Int] = []
-        sizes.reserveCapacity(sets.count)
-
-        // One `withUnsafeBytes` frame per set. `descend(i)` opens set i's frame, records its
-        // pointer and size, then opens set i+1's inside it; only at the bottom, with every frame
-        // still on the stack, are the two arrays handed to `body`.
-        func descend(_ index: Int) -> R? {
-            guard index < sets.count else {
-                return pointers.withUnsafeBufferPointer { pointerBuffer -> R? in
-                    sizes.withUnsafeBufferPointer { sizeBuffer -> R? in
-                        guard let pointerBase = pointerBuffer.baseAddress else { return nil }
-                        guard let sizeBase = sizeBuffer.baseAddress else { return nil }
-                        return body(pointerBase, sizeBase, sets.count)
-                    }
+    /// One level of the descent: opens `sets[index]`'s buffer, appends its pointer and size to the
+    /// accumulators, and opens the next level **inside** that closure, so every buffer is still
+    /// pinned when the bottom of the recursion calls `body`.
+    ///
+    /// The accumulators travel **by value** rather than as `inout` with a `defer` that pops them.
+    /// The spec sketches the `inout` form; passing them down instead costs one small array copy per
+    /// level — at most eight, once per format change, never per frame — and in exchange nothing in
+    /// this function mutates anything, which is the property a reviewer without a compiler can
+    /// actually check.
+    private static func pinning<R>(
+        _ sets: [Data],
+        from index: Int,
+        pointers: [UnsafePointer<UInt8>],
+        sizes: [Int],
+        _ body: (UnsafePointer<UnsafePointer<UInt8>>, UnsafePointer<Int>, Int) -> R
+    ) -> R? {
+        guard index < sets.count else {
+            // Bottom of the recursion: every `withUnsafeBytes` frame above is still open, so every
+            // pointer in `pointers` is still valid. One `withUnsafeBufferPointer` per C array.
+            return pointers.withUnsafeBufferPointer { pointerBuffer -> R? in
+                sizes.withUnsafeBufferPointer { sizeBuffer -> R? in
+                    guard let pointerBase = pointerBuffer.baseAddress else { return nil }
+                    guard let sizeBase = sizeBuffer.baseAddress else { return nil }
+                    return body(pointerBase, sizeBase, sets.count)
                 }
-            }
-            return sets[index].withUnsafeBytes { raw -> R? in
-                guard let rawBase = raw.baseAddress else { return nil }
-                let base = rawBase.assumingMemoryBound(to: UInt8.self)
-                pointers.append(base)
-                sizes.append(raw.count)
-                defer {
-                    pointers.removeLast()
-                    sizes.removeLast()
-                }
-                return descend(index + 1)
             }
         }
 
-        return descend(0)
+        return sets[index].withUnsafeBytes { raw -> R? in
+            guard let rawBase = raw.baseAddress else { return nil }
+            let base = rawBase.assumingMemoryBound(to: UInt8.self)
+            return pinning(sets,
+                           from: index + 1,
+                           pointers: pointers + [base],
+                           sizes: sizes + [raw.count],
+                           body)
+        }
     }
 
     // MARK: - The two constructors

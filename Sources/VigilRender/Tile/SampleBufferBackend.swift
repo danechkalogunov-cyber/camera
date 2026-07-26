@@ -184,15 +184,6 @@ final class SampleBufferBackend {
         renderer.flush()
         needsFlushBeforeNextSample = false
     }
-
-    /// Requests a flush before the next sample without touching the renderer now.
-    ///
-    /// Used when the decision is taken on a thread that should not call into AVFoundation.
-    func markNeedsFlush() {
-        lock.lock()
-        needsFlushBeforeNextSample = true
-        lock.unlock()
-    }
 }
 
 #endif

@@ -452,10 +452,10 @@ public actor RTSPConnection {
             } else {
                 // `.failed` can arrive after `.ready`, and when it does the session is over. The
                 // reconnect decision belongs to `VigilCore` (.vigil/STEP3.md §3.1), so it is
-                // surfaced and never retried here. The machine is told first, so its own
-                // `.stateChanged` / `.fail` ordering is preserved.
-                feedConnectionClosed(reason: Self.describe(error))
+                // surfaced and never retried here. Reported before the machine is told, for the
+                // reason given in `runReadLoop`'s `.failed` case.
                 deliverFailure(mapped)
+                feedConnectionClosed(reason: Self.describe(error))
             }
 
         case .cancelled:
@@ -591,13 +591,22 @@ public actor RTSPConnection {
                 execute(actions)
 
             case .endOfStream:
+                // The machine is told first here, deliberately, and it is the one case where that
+                // is right: a FIN that arrives while `TEARDOWN` is outstanding is a **normal**
+                // close, and only the machine knows that. It answers a FIN in any other state with
+                // a failure of its own.
                 logger.info(.transport, "peer closed the connection")
                 feedConnectionClosed(reason: nil)
                 return
 
             case .failed(let error):
-                feedConnectionClosed(reason: Self.describe(error))
+                // The socket's own error is reported first, and `deliverFailure` latches, so the
+                // machine's consequent `.fail` does not overwrite it. `RTSPError` has no
+                // `transportClosed` member, so the machine answers a dead socket with the closest
+                // retryable timeout — accurate about the policy, useless about the cause. The
+                // cause is `ECONNRESET`, and that is what the user's bug report needs.
                 deliverFailure(error)
+                feedConnectionClosed(reason: Self.describe(error))
                 return
 
             case .torndown:
