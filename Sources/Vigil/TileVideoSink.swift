@@ -82,8 +82,21 @@ final class TileVideoSink: VideoSink {
             slot.withLock { $0 = view }
             onRenderState(view?.state)
         }
-        slot.withLock { $0 = handle.sink }
-        onRenderState(handle.sink?.state)
+        // ⛔ `handle.sink` is read HERE and not inside the `withLock` closure below.
+        //
+        // `OSAllocatedUnfairLock.withLock` takes a `@Sendable` closure, so its body is checked as
+        // nonisolated — and `sink` is a `@MainActor` property, which nonisolated code may not read:
+        //   error: main actor-isolated property 'sink' can not be referenced from a Sendable closure
+        // This method is `@MainActor`, so the read is legal one line earlier. Hoisting it is the whole
+        // fix; the value that crosses into the closure is a `VideoTileView?`, and a `@MainActor` class
+        // is implicitly `Sendable`, so nothing unsafe is captured.
+        //
+        // Read once into a local rather than twice, so the reference stored under the lock and the
+        // render state published to the caller cannot describe two different views if the handle
+        // changes between the two statements.
+        let current = handle.sink
+        slot.withLock { $0 = current }
+        onRenderState(current?.state)
     }
 
     /// Stops delivering. The tile keeps its last picture, which is the correct thing to leave on
