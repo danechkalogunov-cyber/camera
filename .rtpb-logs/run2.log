@@ -61,3 +61,11 @@ Building for debugging...
 [71/98] Compiling VigilProtocolsTests PercentEncodingTests.swift
 [72/98] Compiling VigilProtocolsTests Placeholder.swift
 [73/98] Compiling VigilProtocolsTests RTPTimestampWraparoundTests.swift
+[74/105] Emitting module VigilProtocolsTests
+[75/105] Compiling VigilProtocolsTests DecodePolicyTests.swift
+[76/105] Compiling VigilProtocolsTests DeviceIdentifierTests.swift
+[77/105] Compiling VigilProtocolsTests EncodedFrameTests.swift
+[78/105] Compiling VigilProtocolsTests FrameGeometryTests.swift
+[79/105] Compiling VigilProtocolsTests IPv4AddressTests.swift
+[80/105] Compiling VigilProtocolsTests IPv4SubnetTests.swift
+[81/105] Compiling VigilProtocolsTests LoggingTests.swift

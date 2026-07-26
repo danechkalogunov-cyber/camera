@@ -302,9 +302,10 @@ private enum Server {
         harness.send(.start)
         harness.feed(Server.options(cseq: 1))
         harness.feed(Server.describe(cseq: 2))
+        // No session-expiry re-arm on the first SETUP: there is no session id until it answers.
         #expect(kinds(harness.feed(Server.setup(cseq: 3)))
-            == ["cancelTimer(request:3)", "emitTrack", "setTimer(sessionExpiry)",
-                "stateChanged(settingUp(1/2))", "send", "setTimer(request:4)"])
+            == ["cancelTimer(request:3)", "emitTrack", "stateChanged(settingUp(1/2))", "send",
+                "setTimer(request:4)"])
         #expect(kinds(harness.feed(Server.setup(cseq: 4, channels: "2-3")))
             == ["cancelTimer(request:4)", "setTimer(sessionExpiry)", "emitTrack",
                 "stateChanged(awaitingPlay)", "send", "setTimer(request:5)"])
@@ -503,7 +504,7 @@ private enum Server {
                                                      ("Content-Type", "application/sdp")],
                                            body: body)
         let actions = kinds(harness.feed(bytes))
-        #expect(actions.last == "fail(sdpParse(\"no m= media section\"))")
+        #expect(actions.last == "fail(sdpParse(no m= media section))")
     }
 
     // MARK: - Keepalive, teardown and server-initiated messages
@@ -536,8 +537,9 @@ private enum Server {
 
         harness.advance(.seconds(20))
         harness.fire(.keepalive)
+        // The camera's `Public` lists SET_PARAMETER, which is the next rung of §12.2's table.
         #expect(harness.requestLines.last
-            == "OPTIONS rtsp://192.168.1.64:554/Streaming/Channels/101 RTSP/1.0")
+            == "SET_PARAMETER rtsp://192.168.1.64:554/Streaming/Channels/101 RTSP/1.0")
     }
 
     @Test func sessionMachineTearsDownAndCloses() throws {
@@ -574,10 +576,12 @@ private enum Server {
         harness.feed(Server.options(cseq: 1))
         harness.feed(Server.describe(cseq: 2))
         harness.feed(Server.setup(cseq: 3))
-        harness.feed(Server.play(cseq: 4))
-        // The queued PAUSE runs as soon as the connection goes idle again.
-        #expect(kinds(harness.machine.step(now: harness.now))
+        // The queued PAUSE runs as soon as the connection goes idle, which is the moment the PLAY
+        // response is consumed — so it appears at the tail of that same action array.
+        let afterPlay = kinds(harness.feed(Server.play(cseq: 4)))
+        #expect(afterPlay.suffix(3)
             == ["stateChanged(awaitingPause)", "send", "setTimer(request:5)"])
+        #expect(harness.machine.step(now: harness.now).isEmpty)
     }
 
     @Test func sessionMachineFailsWhenTheCommandQueueOverflows() throws {
@@ -595,7 +599,7 @@ private enum Server {
         harness.send(.start)
         harness.advance(.seconds(5))
         #expect(kinds(harness.fire(.requestTimeout(cseq: 1)))
-            == ["stateChanged(failed)", "fail(timeout(requestTimeout(cseq: 1)))"])
+            == ["stateChanged(failed)", "fail(timeout(request:1))"])
     }
 
     @Test func sessionMachineTimesOutWaitingForDescribe() throws {
@@ -604,7 +608,7 @@ private enum Server {
         harness.feed(Server.options(cseq: 1))
         harness.advance(.seconds(5))
         #expect(kinds(harness.fire(.requestTimeout(cseq: 2)))
-            == ["stateChanged(failed)", "fail(timeout(requestTimeout(cseq: 2)))"])
+            == ["stateChanged(failed)", "fail(timeout(request:2))"])
     }
 
     @Test func sessionMachineTimesOutWaitingForSetup() throws {
@@ -614,7 +618,7 @@ private enum Server {
         harness.feed(Server.describe(cseq: 2))
         harness.advance(.seconds(5))
         #expect(kinds(harness.fire(.requestTimeout(cseq: 3)))
-            == ["stateChanged(failed)", "fail(timeout(requestTimeout(cseq: 3)))"])
+            == ["stateChanged(failed)", "fail(timeout(request:3))"])
     }
 
     @Test func sessionMachineTimesOutWaitingForPlay() throws {
@@ -625,14 +629,14 @@ private enum Server {
         harness.feed(Server.setup(cseq: 3))
         harness.advance(.seconds(5))
         #expect(kinds(harness.fire(.requestTimeout(cseq: 4)))
-            == ["stateChanged(failed)", "fail(timeout(requestTimeout(cseq: 4)))"])
+            == ["stateChanged(failed)", "fail(timeout(request:4))"])
     }
 
     @Test func sessionMachineTimesOutWhenPlaySucceedsButNoMediaArrives() throws {
         var harness = playing()
         harness.advance(.seconds(5))
         #expect(kinds(harness.fire(.firstMediaTimeout))
-            == ["stateChanged(failed)", "fail(timeout(firstMediaTimeout))"])
+            == ["stateChanged(failed)", "fail(timeout(firstMedia))"])
     }
 
     @Test func sessionMachineTimesOutWhenAPlayingStreamGoesIdle() throws {
