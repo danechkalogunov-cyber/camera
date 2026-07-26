@@ -55,11 +55,13 @@ import VigilProtocols
     @Test func audioSpecificConfigHandlesReservedAndEscapeFrequencyIndices() throws {
         // AOT 2, sfi 13 -> 00010 1101 0001 000...
         #expect(throws: RTPError.self) { try AudioSpecificConfig.parse(Data([0x16, 0x88])) }
-        // AOT 2, sfi 15 (escape), 24-bit rate 44 100, then channels 1.
-        // 00010 1111 000000000000000010101100 0001 000
-        let escape = Data([0x17, 0x80, 0x00, 0x15, 0x82, 0x00])
+        // AOT 2 (00010), sfi 15 (1111) escape, explicit 24-bit rate 44 100
+        // (000000001010110001000100), channelConfiguration 1 (0001), frameLengthFlag 0, padding.
+        let escape = Data([0x17, 0x80, 0x56, 0x22, 0x08])
         let format = try AudioSpecificConfig.parse(escape)
         #expect(format.sampleRate == 44_100)
+        #expect(format.channels == 1)
+        #expect(format.framesPerPacket == 1024)
     }
 
     /// A `channelConfiguration` of zero means a program config element follows, which Vigil does

@@ -167,8 +167,8 @@ struct AccessUnitAssembler: Sendable {
                 closeAccessUnit(early: false, into: &out)
                 startAccessUnit(packet: packet, into: &out)
             } else {
-                noteContribution(&open, packet: packet)
                 pending = open
+                noteContribution(packet)
             }
         } else {
             startAccessUnit(packet: packet, into: &out)
@@ -222,10 +222,15 @@ struct AccessUnitAssembler: Sendable {
         out.events.append(.malformed(reason))
     }
 
-    /// Applies the close rules that depend on the packet rather than the NAL: the trusted marker
-    /// bit (C2) and the learned single-slice shortcut (C3). Call once per packet, after every NAL
-    /// it carried has been committed.
+    /// Records this packet against the open access unit and applies the close rules that depend on
+    /// the packet rather than the NAL: the trusted marker bit (C2) and the learned single-slice
+    /// shortcut (C3). Call once per packet, after every NAL it carried has been committed.
+    ///
+    /// The bookkeeping has to happen here rather than in `beginNAL`, because the continuation
+    /// fragments of a NAL never begin one: without this a well-behaved camera that marks the last
+    /// fragment of each picture would look like a camera that never marks anything.
     mutating func endOfPacket(_ packet: PacketContext, into out: inout DepacketizerOutput) {
+        noteContribution(packet)
         guard pendingDescriptor == nil, let open = pending else { return }
         let markerClose = packet.marker && boundary.allowsMarkerFastPath
         let sliceClose = open.lastCommittedWasVCL && boundary.allowsSingleSliceFastPath
@@ -309,15 +314,24 @@ struct AccessUnitAssembler: Sendable {
                                     lastPacketHadMarker: packet.marker)
     }
 
-    /// Records that `packet` contributed a NAL to the open access unit, tracking whether the marker
-    /// bit landed anywhere other than the final packet.
-    private func noteContribution(_ open: inout PendingAccessUnit, packet: PacketContext) {
-        guard open.contributingSequence != packet.extendedSequence else { return }
+    /// Records that `packet` belongs to the open access unit.
+    ///
+    /// Idempotent per packet: a packet that carried several NAL units, and a packet that both began
+    /// and ended one, are counted once. A packet whose timestamp does not match the open access
+    /// unit is ignored, so a malformed stray cannot corrupt the marker accounting.
+    ///
+    /// The marker rule this maintains is the whole point: `markerOnNonFinalPacket` becomes true as
+    /// soon as a packet that had the marker set turns out not to have been the last one.
+    private mutating func noteContribution(_ packet: PacketContext) {
+        guard var open = pending,
+              open.rtpTimestamp == packet.timestamp,
+              open.contributingSequence != packet.extendedSequence else { return }
         if open.lastPacketHadMarker { open.markerOnNonFinalPacket = true }
         open.contributingSequence = packet.extendedSequence
         open.lastPacketHadMarker = packet.marker
         open.lastSequence = max(open.lastSequence, packet.extendedSequence)
         open.lastArrival = packet.arrival
+        pending = open
     }
 
     /// Closes the open access unit: folds it into the learned policy, merges its parameter sets,

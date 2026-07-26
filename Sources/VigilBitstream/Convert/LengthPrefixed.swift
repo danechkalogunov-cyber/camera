@@ -42,6 +42,9 @@ public enum LengthPrefixed {
         _ bytes: UnsafeRawBufferPointer, codec: VideoCodec,
         _ body: (Range<Int>, UInt8) throws -> Void
     ) throws {
+        guard codec.isNALBased else {
+            throw BitstreamError.unsupportedSyntax("MJPEG has no NAL units")
+        }
         var i = 0
         let count = bytes.count
         let headerLength = codec.nalHeaderLength
@@ -52,16 +55,13 @@ public enum LengthPrefixed {
             guard n > 0, i + 4 + n <= count else {
                 throw BitstreamError.truncatedLengthPrefix(atOffset: i)
             }
-            guard n >= headerLength, headerLength > 0 else { throw BitstreamError.emptyNALUnit }
+            guard n >= headerLength else { throw BitstreamError.emptyNALUnit }
             let start = i + 4
             let typeCode: UInt8
-            switch codec {
-            case .h264:
+            if codec == .h264 {
                 typeCode = try NALHeader.decodeH264(bytes[start]).type
-            case .h265:
+            } else {
                 typeCode = try NALHeader.decodeHEVC(bytes[start], bytes[start + 1]).type
-            case .mjpeg:
-                throw BitstreamError.unsupportedSyntax("MJPEG has no NAL units")
             }
             try body(start ..< (start + n), typeCode)
             i = start + n

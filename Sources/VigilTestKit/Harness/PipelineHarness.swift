@@ -156,6 +156,7 @@ public struct PipelineHarness {
     /// instead of a hung test run.
     private mutating func pump() {
         var iterations = 0
+        var steppedWithoutWork = false
         while iterations < 512 {
             iterations += 1
             var didWork = false
@@ -178,7 +179,18 @@ public struct PipelineHarness {
                 didWork = true
             }
 
-            if !didWork { break }
+            // With both directions idle, give the machine a chance to start whatever it queued
+            // while a request was outstanding. Doing this only once per quiet period keeps the
+            // loop from spinning on a machine that has nothing to do.
+            if !didWork {
+                if steppedWithoutWork { break }
+                steppedWithoutWork = true
+                let actions = machine.step(now: instant)
+                if actions.isEmpty { break }
+                apply(actions)
+            } else {
+                steppedWithoutWork = false
+            }
         }
     }
 

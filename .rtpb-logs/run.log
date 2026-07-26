@@ -14,3 +14,4 @@ Another instance of SwiftPM is already running using '/home/user/camera/.build-r
 [20/39] Wrapping AST for VigilDiscoveryTests for debugging
 [21/39] Wrapping AST for VigilISAPITests for debugging
 [22/71] Linking Vigil
+[24/81] Emitting module VigilPipelineTests
