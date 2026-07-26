@@ -4792,5 +4792,581 @@ public enum Fixture {
 public enum GoldenVectors { … }            // RFC 1321 / 3174 / 6234 / 2617 tables
 ```
 
+## 5. The complete file manifest
+
+**233 rows.** Paths are exact. `LoC` is a budget, not a target — a row that lands at half its budget
+is fine; a row that doubles it must be split at a `// MARK:` boundary into `Type+Feature.swift`.
+**No file exceeds 600 lines** (§7.2).
+
+**Waves.** W1 unblocks everything (RTSP, ISAPI and ONVIF all block on the crypto). W2 is the pure
+protocol layer and is where the Linux test suite lives. W3–W6 are macOS and cannot be compiled in
+the development container at all, so their rows are written against §3/§4 and type-checked on a Mac.
+
+| Wave | Contents | Gate to leave the wave |
+|---|---|---|
+| **W1** | `VigilProtocols` + crypto | `swift build --product VigilPure` green; `VigilProtocolsTests` ≥ 120 tests green on Linux |
+| **W2** | `VigilBitstream`, `VigilRTSP`, `VigilRTP`, `VigilISAPI`, `VigilDiscovery`, `VigilTestKit` + their tests | `swift test` green on Linux; `VigilPipelineTests` end-to-end green |
+| **W3** | `VigilTransport`, `VigilVideo`, `VigilRender` | `swift build` green on macOS; `swift build` still green on Linux (empty modules) |
+| **W4** | `VigilCore` | `VigilCoreTests` green on macOS |
+| **W5** | `VigilUI` | `VigilUITests` green; token gallery renders |
+| **W6** | `Vigil`, `Scripts/`, CI, entitlements, `Info.plist` | `Scripts/build-app.sh` produces a launching `Vigil.app`; R1 acceptance run |
+
+Rows are ordered so an agent can take a contiguous block. `Deps` lists the *other rows in this
+manifest* a row needs, not the module dependency (which §1 fixes).
+
+### 5.1 Repository root — W1 (scaffolding) and W6 (build)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Package.swift` | **Exists and is green. §6 reproduces it. Do not modify** without amending §6 in the same commit | 265 | — | W1 ✅ |
+| `.gitattributes` | **Exists.** `*.rtsp`/`*.sdp`/`*.rtsp.txt` marked `-text` so CRLF survives checkout | 4 | — | W1 ✅ |
+| `.gitignore` | **Exists.** `.build*`, `dist/`, `*.xcodeproj` | 12 | — | W1 ✅ |
+| `.swift-format` | Formatter config: 110 columns, 4-space indent, no tabs | 40 | — | W1 |
+| `Package.resolved` | Committed, empty pin list — the machine-checkable proof of "zero dependencies" | 6 | — | W6 |
+| `README.md` | What Vigil is, how to build, the two build worlds | 120 | — | W6 |
+| `LICENSE` | — | 20 | — | W6 |
+| `Info.plist` | §2 R-39: bundle keys, `NSLocalNetworkUsageDescription`, `NSBonjourServices` `["_rtsp._tcp", "_http._tcp", "_axis-video._tcp"]`, `NSAppTransportSecurity/NSAllowsLocalNetworking`, `CFBundleURLTypes` (`vigil`), 3 `UTExportedTypeDeclarations` | 150 | — | W6 |
+| `Vigil.entitlements` | Sandboxed shipping: app-sandbox, network.client, **network.server**, developer.networking.multicast, files.user-selected.read-write, device.audio-input | 40 | — | W6 |
+| `Vigil-Dev.entitlements` | Unsandboxed dev build; adds `get-task-allow`. Never distributed | 20 | — | W6 |
+| `Vigil-nomulticast.entitlements` | Fallback when no multicast provisioning profile is available | 30 | — | W6 |
+| `project.yml` | XcodeGen input; **one** target that links the local package. No `.pbxproj` is ever committed | 45 | — | W6 |
+| `Scripts/build-app.sh` | The 15-step bundle contract. `set -euo pipefail`. Emits `build-manifest.json` | 320 | — | W6 |
+| `Scripts/lint.sh` | Import allow-list per target; banned patterns (`!`, `try!`, `as!`, `print`, `TODO`, `CryptoKit`, `DispatchSemaphore`, `nonisolated(unsafe)`, `@preconcurrency`); `@MainActor` check for `VigilUI`; `@unchecked Sendable` count ≤ 3 | 260 | — | W6 |
+| `Scripts/test-linux.sh` | Runs the pure suite; **fails if a pure target reports zero tests** | 70 | — | W2 |
+| `Scripts/test-macos.sh` | Full suite + coverage | 60 | — | W6 |
+| `Scripts/coverage.sh` | Floors: 90 % pure, 70 % macOS | 70 | — | W6 |
+| `Scripts/bench.sh` | Signpost-driven latency/CPU benchmark; asserts the §19 gates | 180 | — | W6 |
+| `Scripts/gen-shader-source.swift` | Regenerates `ShaderSource.swift` from the `.metal` files (R-38) | 90 | — | W3 |
+| `Scripts/gen-xcode.sh` | `xcodegen generate` | 25 | — | W6 |
+| `Scripts/make-icon.sh` | `iconutil` from `AppIcon.iconset` | 30 | — | W6 |
+| `.github/workflows/linux.yml` | `swift:6.1-noble`: `--product VigilPure`, `--product VigilTestKit`, full build, `swift test --parallel`, `test-linux.sh` | 45 | — | W6 |
+| `.github/workflows/macos.yml` | `macos-14`: build, test+coverage, lint, `build-app.sh`, `bench.sh --smoke` | 50 | — | W6 |
+| `.github/workflows/lint.yml` | `swift format lint --strict` + `Scripts/lint.sh` | 30 | — | W6 |
+| `docs/ACCEPTANCE.md` | The R1 checklist: launch → visible moving picture in ≤ 10 s, password only | 180 | — | W6 |
+
+### 5.2 `Sources/VigilProtocols` — W1 (40 files, ~4 400 LoC)
+
+Everything here is §3. This is the wave that unblocks the whole project; it should be done by **two
+agents in parallel** (crypto + everything else) and merged before W2 starts.
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Time/MediaInstant.swift` | `MediaInstant`, `Duration` helpers | 110 | — | W1 |
+| `Time/Clocks.swift` | `MonotonicClock`, `WallClock`, `SystemMonotonicClock`, `SystemWallClock` | 120 | MediaInstant | W1 |
+| `Time/MediaTimestamp.swift` | `MediaTimestamp` + 128-bit rescale and compare | 230 | — | W1 |
+| `Time/RandomSource.swift` | `RandomSource` + extension, `SystemRandomSource`, `SplitMix64RandomSource` | 130 | — | W1 |
+| `Media/Codecs.swift` | `VideoCodec`, `AudioCodec`, `MediaCodec` | 140 | — | W1 |
+| `Media/ParameterSets.swift` | `ParameterSets` + `fingerprint` | 110 | Codecs | W1 |
+| `Media/EncodedFrame.swift` | `EncodedFrame`, `FrameDropClass`, `AudioFormatInfo` | 190 | ParameterSets, MediaTimestamp | W1 |
+| `Media/FrameGeometry.swift` | `FrameGeometry`, `ColorInfo`, `FieldOrder`, `Resolution` | 260 | — | W1 |
+| `Media/VideoFormatInfo.swift` | `VideoFormatInfo` + passthroughs + `isDecoderCompatible` | 190 | FrameGeometry, Codecs | W1 |
+| `Streams/StreamQuality.swift` | `StreamQuality`, `StreamKey`, `RTSPTransportKind`, `LatencyPreset` | 170 | Identifiers | W1 |
+| `Streams/DecodePolicy.swift` | `DecodeMode`, `StreamPriority`, `DecodeCost`, `DecodeAdmitting`, `DecodeLease`, `AdmissionResult`, `BudgetChange`, `BudgetSnapshot`, `DenialReason`, `BudgetPressure` | 300 | StreamQuality, FrameGeometry | W1 |
+| `Streams/TilePolicy.swift` | `TileClass`, `TileContext`, `TilePolicy`, `StreamChoice` — the class A–E table, pure | 220 | StreamQuality, Resolution | W1 |
+| `Stats/StreamStatistics.swift` | `StreamStatistics` (31 fields) | 140 | — | W1 |
+| `Stats/RingBuffer.swift` | `RingBuffer<Element>` | 120 | — | W1 |
+| `Errors/VigilError.swift` | `VigilFailure`, `ErrorSeverity`, `RetryDisposition`, `VigilError`, `vigilRequire` | 200 | DomainErrors | W1 |
+| `Errors/DomainErrors.swift` | **All eleven domain enums** (R-10). The largest W1 file; split into `DomainErrors+Protocol.swift` / `+Media.swift` / `+App.swift` if it exceeds 600 | 560 | — | W1 |
+| `Errors/DiagnosticCodes.swift` | The `VG-<DOMAIN>-NNNN` tables and the `diagnosticCode`/`userMessage`/`userRemedy` mappings | 420 | DomainErrors | W1 |
+| `Logging/LoggerProtocol.swift` | `LogLevel`, `LogCategory`, `LogEvent`, `LoggerProtocol` + level extensions, `NullLogger` | 170 | — | W1 |
+| `Logging/RateLimitedLogger.swift` | Decorator: N per key per window + suppression summary | 130 | LoggerProtocol, Clocks | W1 |
+| `Logging/Redact.swift` | `Redact` — the one redaction implementation | 260 | — | W1 |
+| `Bytes/ByteReader.swift` | `ByteReader` | 230 | DomainErrors | W1 |
+| `Bytes/ByteWriter.swift` | `ByteWriter` incl. `lengthPrefixed32` | 170 | — | W1 |
+| `Bytes/BitReader.swift` | `BitReader` — verbatim from §3.11 | 130 | DomainErrors | W1 |
+| `Bytes/BitWriter.swift` | `BitWriter` incl. `ue`/`se`/`rbspTrailingBits` | 130 | — | W1 |
+| `Crypto/MD5.swift` | RFC 1321, streaming, hex helper | 170 | — | W1 |
+| `Crypto/SHA1.swift` | FIPS 180-4, streaming | 150 | — | W1 |
+| `Crypto/SHA256.swift` | FIPS 180-4, streaming | 180 | — | W1 |
+| `Crypto/Base64.swift` | Padding-, whitespace- and URL-safe-tolerant decode; `decodeList` for `sprop-*` | 180 | — | W1 |
+| `Crypto/CRC32.swift` | IEEE 802.3, table-driven | 70 | — | W1 |
+| `Net/IPv4Address.swift` | `IPv4Address` | 160 | — | W1 |
+| `Net/MACAddress.swift` | `MACAddress` with four separator forms | 150 | — | W1 |
+| `Net/IPv4Subnet.swift` | `IPv4Subnet`, `IPv4HostSequence` | 180 | IPv4Address | W1 |
+| `Net/HostPolicy.swift` | `HostPolicy`, `HostClass` — the LAN-only egress gate | 150 | IPv4Address, DomainErrors | W1 |
+| `Net/Endpoints.swift` | `ISAPIEndpoint`, `RTSPEndpoint` | 140 | DomainErrors | W1 |
+| `Net/HTTP.swift` | `HTTPHeaders`, `HTTPRequest`, `HTTPResponse`, `HTTPLane`, `HTTPTransporting`, `HTTPUploadHandle` | 220 | Endpoints | W1 |
+| `Net/Credential.swift` | `Credential`, `CredentialRef` | 90 | — | W1 |
+| `Identity/Identifiers.swift` | `CameraID`, `GroupID`, `LayoutID`, `EventID`, `ClipID`, `BookmarkID`, `WindowID` | 190 | — | W1 |
+| `Identity/DeviceIdentifiers.swift` | `ChannelID`, `StreamingChannelID`, `TrackID` | 160 | StreamQuality | W1 |
+| `Identity/DeviceQuirks.swift` | `DeviceQuirks` — 28 flags + `merge` | 190 | — | W1 |
+| `Identity/EventKind.swift` | `EventKind` + `init(isapiEventType:)`, `EventSeverity` | 200 | — | W1 |
+| `Concurrency/Broadcaster.swift` | `Broadcaster<Element>` | 130 | — | W1 |
+| `Concurrency/ConcurrencyLimiter.swift` | `ConcurrencyLimiter` FIFO permit gate | 150 | StreamPriority | W1 |
+
+### 5.3 `Sources/VigilBitstream` — W2 (22 files, ~4 100 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `NAL/H264NALType.swift` | Type table 0–31 + `isVCL`, `isIDR`, `isParameterSet` | 130 | — | W2 |
+| `NAL/H265NALType.swift` | Type table 0–63 + IRAP 16–23, RASL, RADL | 150 | — | W2 |
+| `NAL/NALHeader.swift` | `NALHeader`, `NALUnitRef` | 140 | — | W2 |
+| `NAL/Limits.swift` | Security bounds: max NAL 4 MiB, max sets 8, max scaling-list entries | 60 | — | W2 |
+| `Convert/AnnexB.swift` | Start-code scan, `enumerateNALUnits`, `toLengthPrefixed`, `fromLengthPrefixed` | 260 | Limits | W2 |
+| `Convert/LengthPrefixed.swift` | `enumerate`, `validate`, `append(nal:to:)` — the one function `VigilRTP` uses | 140 | ByteWriter | W2 |
+| `Convert/RBSP.swift` | `unescape`, `escape`, `escapeByteCount` | 160 | — | W2 |
+| `Convert/RBSPBitReader.swift` | Exp-Golomb `ue`/`se`, `moreRBSPData`, trailing-bit check | 230 | BitReader, RBSP | W2 |
+| `H264/H264SPS.swift` | The parsed model | 170 | — | W2 |
+| `H264/H264SPSParser.swift` | ITU-T H.264 §7.3.2.1, full, incl. scaling lists, VUI, cropping | 420 | RBSPBitReader, H264SPS | W2 |
+| `H264/H264PPS.swift` | Model + minimal parse (§7.3.2.2) | 150 | RBSPBitReader | W2 |
+| `H265/ProfileTierLevel.swift` | §7.3.3, incl. the 48-bit constraint flags | 190 | RBSPBitReader | W2 |
+| `H265/H265VPS.swift` | Model + parse (§7.3.2.1) | 160 | ProfileTierLevel | W2 |
+| `H265/H265SPS.swift` | Model | 190 | — | W2 |
+| `H265/H265SPSParser.swift` | §7.3.2.2.1, full, incl. short-term RPS, VUI, conformance window | 460 | ProfileTierLevel, H265SPS | W2 |
+| `H265/H265PPS.swift` | Model + minimal parse for `parallelismType` | 130 | RBSPBitReader | W2 |
+| `Format/VideoFormatInfo+Parse.swift` | `VideoFormatInfo.init(_ sps:)` for both codecs, incl. the fps rules and SAR table | 300 | H264SPS, H265SPS | W2 |
+| `Format/SampleAspectRatio.swift` | The `aspect_ratio_idc` → `(w, h)` table | 70 | — | W2 |
+| `Records/AVCDecoderConfigurationRecord.swift` | Build + parse + serialize | 250 | H264SPS | W2 |
+| `Records/HEVCDecoderConfigurationRecord.swift` | Build + parse + serialize, `NALArray` | 300 | H265SPS, ProfileTierLevel | W2 |
+| `SEI/SEI.swift` | `enumerate`, `parseRecoveryPoint`, `parsePictureTiming` | 220 | RBSPBitReader | W2 |
+| `Gate/SliceHeader.swift` | `isFirstSliceOfPicture`, `sliceType` — **the AU-boundary predicate** | 170 | NALHeader, RBSPBitReader | W2 |
+| `Gate/AccessUnitSummary.swift` | `AccessUnitSummary`, `IRAPGate`, RASL-after-CRA drop | 210 | SliceHeader | W2 |
+| `Gate/ParameterSetStore.swift` | Merge-not-replace, `ParameterSetChange`, format-change detection | 210 | VideoFormatInfo+Parse | W2 |
+
+### 5.4 `Sources/VigilRTSP` — W2 (21 files, ~4 300 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Model/RTSPMethod.swift` | `RTSPMethod`, `RTSPStatus` (30 named codes) | 190 | — | W2 |
+| `Model/RTSPHeaders.swift` | Ordered case-insensitive container, ASCII-only folding (`İ` ≠ `i`) | 210 | — | W2 |
+| `Model/RTSPMessage.swift` | `RTSPRequest`, `RTSPResponse`, `RTSPIncoming`, byte-exact serializer | 280 | RTSPHeaders | W2 |
+| `Model/RTSPURL.swift` | Hand-written URL value type; `requestLineForm`, credential-free `description` | 230 | Endpoints | W2 |
+| `Wire/RTSPHeaderScanner.swift` | Token / quoted-string / parameter-list primitives | 190 | — | W2 |
+| `Wire/RTSPWireDecoder.swift` | Incremental parse + `$` demux + resync; every limit enforced | 480 | RTSPHeaderScanner | W2 |
+| `Wire/RTSPRequestBuilder.swift` | Canonical request emission, header order, `Content-Length` rules | 210 | RTSPMessage | W2 |
+| `Auth/RTSPChallenge.swift` | `WWW-Authenticate` parsing; two challenges in one header; comma in `realm` | 200 | RTSPHeaderScanner | W2 |
+| `Auth/RTSPAuthenticator.swift` | Basic + Digest; `nc`/`cnonce`/`opaque`/`stale`; RFC 2069 no-qop first-class; **2-attempt cap** | 300 | MD5, RTSPChallenge | W2 |
+| `SDP/SDPDocument.swift` | Line model | 150 | — | W2 |
+| `SDP/SDPParser.swift` | Lenient parser: bare LF, trailing NUL, unknown attributes, non-UTF-8 `s=` | 340 | SDPDocument, Base64 | W2 |
+| `SDP/SDPMediaDescription.swift` | `rtpmap`/`fmtp`(lower-cased keys)/`control`, `sprop-*` decode | 260 | Base64 | W2 |
+| `SDP/ControlURLResolver.swift` | `Content-Base` → `Content-Location` → request URI, append-with-slash merge | 190 | RTSPURL | W2 |
+| `Headers/TransportHeader.swift` | Parse + build; interleaved, unicast, multicast, `mode`, `ssrc` | 230 | RTSPHeaderScanner | W2 |
+| `Headers/SessionHeader.swift` | Opaque id + `timeout` | 90 | — | W2 |
+| `Headers/RTPInfoHeader.swift` | `url`/`seq`/`rtptime`; absolute, relative and quoted forms | 170 | RTSPURL | W2 |
+| `Headers/RangeHeader.swift` | `npt`/`clock`/`smpte`, `Scale`, `Rate-Control` | 260 | — | W2 |
+| `Machine/RTSPSessionConfig.swift` | Config + `RTSPTimerID` + `RTSPCloseReason` | 150 | — | W2 |
+| `Machine/RTSPAction.swift` | `RTSPAction`, `RTSPLogEvent`, `RTSPTrack`, `RTSPTrackTiming`, `RTSPSessionDescription` | 280 | — | W2 |
+| `Machine/RTSPCommand.swift` | `RTSPCommand`, `RTSPSessionState` | 130 | — | W2 |
+| `Machine/RTSPSessionMachine.swift` | The state machine + transport ladder + probe support | 580 | everything above | W2 |
+| `Machine/RTSPSessionMachine+Playback.swift` | Seek, scale, frame-step, `ANNOUNCE`/`Notice`, backpressure | 320 | RTSPSessionMachine | W2 |
+
+### 5.5 `Sources/VigilRTP` — W2 (24 files, ~4 400 LoC)
+
+`SliceHeaderPeek.swift` is **deleted** by R-01; use `VigilBitstream.SliceHeader`.
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Packet/RTPPacket.swift` | RFC 3550 §5.1 header parse, padding, CSRC, extension | 230 | ByteReader | W2 |
+| `Packet/RTPHeaderExtension.swift` | One-byte and two-byte header extensions | 120 | RTPPacket | W2 |
+| `Packet/SequenceNumber.swift` | 16-bit modular compare, extended (unwrapped) sequence | 130 | — | W2 |
+| `Packet/TimestampUnwrapper.swift` | 32-bit RTP timestamp → monotonic `Int64` before any `MediaTimestamp` | 150 | — | W2 |
+| `Track/RTPTrackFormat.swift` | Format struct + payload-type binding + factory | 240 | Codecs | W2 |
+| `Track/RTPTrackReceiver.swift` | The surface `VigilTransport` drives | 420 | everything below | W2 |
+| `Track/Depacketizer.swift` | Protocol, `DepacketizerOutput`, `AnyDepacketizer` enum for the hot path | 180 | — | W2 |
+| `Track/AccessUnitBuilder.swift` | AU assembly, 4-byte length prefixing, corruption marking | 260 | LengthPrefixed | W2 |
+| `Track/BoundaryPolicy.swift` | **Never trust the marker bit**; learned marker reliability | 210 | SliceHeader | W2 |
+| `H264/H264Depacketizer.swift` | RFC 6184: single NAL, STAP-A, FU-A. No MTAP | 340 | AccessUnitBuilder | W2 |
+| `H265/H265Depacketizer.swift` | RFC 7798: single NAL, AP, FU. No PACI, no interleaved mode | 360 | AccessUnitBuilder | W2 |
+| `Audio/AACDepacketizer.swift` | RFC 3640 `mode=AAC-hbr`; AU-headers-length, sizeLength/indexLength | 280 | AudioSpecificConfig | W2 |
+| `Audio/AudioSpecificConfig.swift` | ASC parse from bytes and from SDP `config=` hex | 200 | BitReader | W2 |
+| `Audio/ADTS.swift` | ADTS header build, for debug dumps and fixtures only | 110 | — | W2 |
+| `Audio/G711.swift` | µ-law and A-law tables, decode and encode, decoded in the pure layer | 190 | — | W2 |
+| `Audio/G726.swift` | 32 kbit/s (4-bit) only | 210 | — | W2 |
+| `Jitter/ReorderBuffer.swift` | `.passthrough` for TCP; UDP 128/60 ms adaptive → 512/200 ms above 1 % loss | 280 | SequenceNumber, RingBuffer | W2 |
+| `Jitter/GapPolicy.swift` | Gap detection, keyframe-request throttling, drop-to-keyframe | 170 | — | W2 |
+| `RTCP/RTCPPacket.swift` | SR, RR, SDES, BYE, APP models | 190 | — | W2 |
+| `RTCP/RTCPParser.swift` | Compound-packet parse, strict length validation | 220 | RTCPPacket | W2 |
+| `RTCP/RTCPReportBuilder.swift` | RR generation on the RFC 3550 interval rules | 210 | RTPSourceState | W2 |
+| `RTCP/RTPSourceState.swift` | Per-SSRC loss, jitter (A.8), sequence-cycle state | 230 | SequenceNumber | W2 |
+| `Clock/PresentationClock.swift` | Min-filter + PLL. **Not** used for live pacing | 240 | TimestampUnwrapper | W2 |
+| `Stats/StatisticsAccumulator.swift` | The fixed EWMA constants; writes `StreamStatistics` | 230 | StreamStatistics | W2 |
+
+### 5.6 `Sources/VigilISAPI` — W2 (30 files, ~6 200 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `XML/XMLNode.swift` | `XMLNode`, path compilation and memoisation | 300 | — | W2 |
+| `XML/ISAPIDocument.swift` | Parser: 8 MiB / 64-level caps, **XXE off**, explicit stack, truncation-tolerant | 320 | XMLNode | W2 |
+| `XML/XMLValue.swift` | Lenient accessors, the bool vocabulary, clamped ints, required variants | 280 | — | W2 |
+| `XML/XMLBuilder.swift` | Escapes `& < > " '` only; no pretty-printing; element order preserved | 170 | — | W2 |
+| `XML/ISAPITime.swift` | Hand-rolled ASCII date scanner (no `DateFormatter`), POSIX-inverted zones | 240 | — | W2 |
+| `Client/ISAPIClient.swift` | The actor: verbs, XML convenience, lanes, coalescing, retry table | 470 | HTTPTransporting | W2 |
+| `Client/RequestGate.swift` | FIFO permit actor; PTZ may over-subscribe by exactly one | 140 | — | W2 |
+| `Client/DigestStore.swift` | Nonce cache, `nc` per (realm, nonce), pre-emptive auth | 230 | MD5 | W2 |
+| `Client/DigestChallenge.swift` | Parse; RFC 2069 no-qop first-class | 160 | — | W2 |
+| `Client/ServerTrust.swift` | `ServerTrustEvaluating`, `ServerTrustDecision`, the TOFU SPKI rule | 90 | — | W2 |
+| `Client/URLSessionHTTPTransport.swift` | Four ephemeral sessions, one per lane; delegate state in an actor | 420 | HTTP | W2 |
+| `Client/ResponseValidation.swift` | The four-step `validate`; `ResponseStatus` extraction; §9.3 mapping | 300 | ResponseStatus | W2 |
+| `Model/ResponseStatus.swift` | `ResponseStatus`, the 7 status codes, sub-status vocabulary | 150 | — | W2 |
+| `Endpoints/HikvisionURL.swift` | The **single** RTSP path builder + `RTSPPathCandidate` ladder | 200 | DeviceIdentifiers | W2 |
+| `Endpoints/DeviceIdentity.swift` | `deviceInfo`, `status`, `time`, `capabilities`, `userCheck`, `networkInterfaces` | 420 | XML | W2 |
+| `Endpoints/ChannelInventory.swift` | `InputProxy/channels` + `Video/inputs/channels`, paging at 64 | 320 | XML | W2 |
+| `Endpoints/StreamingChannels.swift` | Config read + **read-modify-write** PUT + re-GET; wire units | 400 | XMLBuilder | W2 |
+| `Endpoints/Snapshots.swift` | `/picture`, SOI sniffing, size query, per-device rate cap | 180 | — | W2 |
+| `Endpoints/PTZController.swift` | Continuous + 400 ms keep-alive + triple zero-stop; presets 33–105 blocked | 460 | XMLBuilder | W2 |
+| `Endpoints/ImageSettings.swift` | Colour, sharpness, WDR, IR-cut, defaults | 300 | XMLBuilder | W2 |
+| `Endpoints/RecordSearch.swift` | `POST /ContentMgmt/search`, one `searchID`, `searchResultPostion`, `MORE` paging | 380 | XMLBuilder | W2 |
+| `Endpoints/StorageInfo.swift` | Volumes, capacity in decimal MB, health | 160 | XML | W2 |
+| `Endpoints/PlaybackLocator.swift` | Rewrites scheme/host/port, keeps path+query **verbatim** | 130 | — | W2 |
+| `Endpoints/TwoWayAudio.swift` | Channel list, open/close, chunked upload session | 300 | HTTPUploadHandle | W2 |
+| `Events/MultipartStreamParser.swift` | Boundary sniffing, bare-LF tolerance, fixed memory budget | 330 | — | W2 |
+| `Events/AlertStreamMonitor.swift` | **One per device**; heartbeat suppression; 403 ⇒ `.unsupported`; terminal `.authFailed` | 340 | MultipartStreamParser | W2 |
+| `Events/EventNotificationAlert.swift` | The wire model + region magnitude sniffing | 280 | EventKind | W2 |
+| `Events/MotionDetection.swift` | Grid read/write, `gridMap` origin | 240 | XMLBuilder | W2 |
+| `Session/ISAPIDeviceSession.swift` | The device actor: cache TTLs, negative-capability cache, memoised alert stream | 500 | all endpoints | W2 |
+| `Session/QuirkResolver.swift` | The firmware matrix; the **four** consultation points | 260 | DeviceQuirks | W2 |
+
+### 5.7 `Sources/VigilDiscovery` — W2 (22 files, ~4 300 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Model/DiscoveredDevice.swift` | `DiscoveredDevice`, `DeviceIdentity`, `DeviceFieldKey`, `FieldStamp`, derived properties | 380 | IPv4Address, MACAddress | W2 |
+| `Model/DiscoveryEnums.swift` | `DiscoverySource` (+`trust`), `DeviceVendor`, `DeviceClass`, `ActivationState`, `Reachability` | 240 | — | W2 |
+| `Model/ONVIFScopes.swift` | Scope URI model + percent decoding | 130 | — | W2 |
+| `Model/DiscoveryConfiguration.swift` | Config, port tiers, timeouts, budgets | 230 | — | W2 |
+| `Model/DiscoveryEvents.swift` | `DiscoveryEvent`, `DiscoveryPhase`, `DiscoveryProgress`, `PhaseSummary`, `DiscoverySummary` | 300 | — | W2 |
+| `Model/DiscoveryDiagnostic.swift` | 15 cases + `userFacingMessage` + `Severity` | 240 | — | W2 |
+| `Transport/Protocols.swift` | The seven injected protocols + `DiscoveryEnvironment` + `MulticastGroupSpec` + `InboundDatagram` | 280 | — | W2 |
+| `Transport/NetworkInterfaceInfo.swift` | `NetworkInterfaceInfo`, `ARPEntry`, `TCPProbeOutcome`, `POSIXCode` | 160 | IPv4Subnet | W2 |
+| `SADP/SADPCodec.swift` | Probe encode, decode, `SADPDecodeResult`, opaque-payload entropy | 380 | XML-lite | W2 |
+| `SADP/SADPProbeMatch.swift` | The wire model + `splitSerial` | 260 | — | W2 |
+| `SADP/SADPXMLReader.swift` | Tiny lenient XML reader (SADP only; not the ISAPI one) | 220 | — | W2 |
+| `WSDiscovery/WSDiscoveryCodec.swift` | SOAP probe build, ProbeMatches/Hello/Bye decode, correlation | 420 | — | W2 |
+| `WSDiscovery/WSDProbeMatch.swift` | Model + scope parsing + XAddrs | 200 | ONVIFScopes | W2 |
+| `Sweep/IPv4HostOrder.swift` | Van der Corput ordering, gateway/`.64` priming | 150 | IPv4Subnet | W2 |
+| `Sweep/SweepPlanner.swift` | Interface filtering, the **/16 hard guard**, /16–/21 narrowing | 320 | IPv4HostOrder | W2 |
+| `Sweep/ARPTableDecoder.swift` | `rt_msghdr` walk with bounds checks; `arp -an` text fallback | 260 | ARPEntry | W2 |
+| `Fingerprint/StartLineHeaderScanner.swift` | ~70-line lenient scanner; **deliberately not `VigilRTSP`** | 180 | — | W2 |
+| `Fingerprint/FingerprintCodec.swift` | RTSP `OPTIONS`, ISAPI `deviceInfo`, `/` requests + classification | 340 | StartLineHeaderScanner | W2 |
+| `Fingerprint/VendorClassifier.swift` | The confidence-delta table, OUI seed lookup | 260 | — | W2 |
+| `Merge/IdentityNormalizer.swift` | Serial and ONVIF-UUID normalisation rules | 170 | — | W2 |
+| `Merge/MergeEngine.swift` | Union-find over the identity ladder; field precedence; confidence | 420 | IdentityNormalizer | W2 |
+| `Coordinator/DiscoveryCoordinator.swift` | Phase orchestration, budgets, deadline, cancellation | 480 | everything above | W2 |
+| `Resources/oui-seed.json` | `{"c42f90": "hikvision", …}` — declared as `.copy("Resources")` if used; **if added, the directory must exist from the same commit** | — | — | W2 |
+
+### 5.8 `Sources/VigilTestKit` — W2 (13 files, ~2 400 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Doubles/VirtualClock.swift` | `MonotonicClock` + `DiscoveryClock`, explicit `advance(by:)` | 160 | Clocks | W2 |
+| `Doubles/ManualClock.swift` | Lock-based class clock for concurrent tests; exempt from R-52 | 90 | Clocks | W2 |
+| `Doubles/RecordingLogger.swift` | Records every `LogEvent` for assertions | 110 | LoggerProtocol | W2 |
+| `Doubles/FixtureHTTPTransport.swift` | Route table + recorded requests; **fails on any credential** | 260 | HTTPTransporting | W2 |
+| `Doubles/MockDatagramChannel.swift` | Scripted `(delay, datagram)` replay + send log | 180 | DatagramChannel | W2 |
+| `Doubles/MockTCPProber.swift` | `[IPv4Address: [UInt16: TCPProbeOutcome]]` with artificial latency | 110 | TCPProbing | W2 |
+| `Doubles/MockExchanger.swift` | Table-driven; **fails on any credential** | 130 | ByteExchanging | W2 |
+| `Synthetic/ScriptedRTSPPeer.swift` | Fixture transcript, digest recomputation, configurable chunking | 340 | VigilRTSP | W2 |
+| `Synthetic/SyntheticCamera.swift` | Full RTSP + RTP script generator, per-firmware quirk profiles | 420 | ScriptedRTSPPeer | W2 |
+| `Synthetic/SyntheticRTPGenerator.swift` | Targets `RTPTrackReceiver` exactly: H.264/H.265/AAC/G.711 | 380 | VigilRTP | W2 |
+| `Synthetic/SyntheticSPSBuilder.swift` | `BitWriter`-built SPS/PPS/VPS with chosen geometry and VUI | 260 | BitWriter | W2 |
+| `Harness/Fixture.swift` | `data(_:)`, `hex(_:)`, comment-stripping hex parser | 90 | — | W2 |
+| `Harness/GoldenVectors.swift` | RFC 1321 / 3174 / 6234 / 2617 tables + the Exp-Golomb table | 220 | — | W2 |
+
+### 5.9 `Sources/VigilTransport` — W3 (18 files, ~3 400 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `RTSPConnection.swift` | The actor: connect, atomic write, `pauseReads`/`resumeReads`, timers | 460 | RTSPSessionMachine | W3 |
+| `RTSPConnection+Timers.swift` | `RTSPTimerID` → cancellable `Task`; one timer per id | 160 | RTSPConnection | W3 |
+| `UDPMediaSocketPair.swift` | Even/odd ports 51000–51998, RTP + RTCP | 300 | — | W3 |
+| `MulticastResponder.swift` | `NWListener` on 37020 / 3702 | 220 | — | W3 |
+| `RTPTrackFormatAdapter.swift` | `SDPMediaDescription` → `RTPTrackFormat`, `RTSPTrackTiming` → seed | 90 | VigilRTP | W3 |
+| `TLS/ServerTrustEvaluator.swift` | TOFU SPKI-256 leaf pinning shared by RTSP and ISAPI | 280 | SHA256 | W3 |
+| `TLS/CertificateSummary.swift` | Chain summary for the UI; `SecTrustEvaluateWithError` diagnostics only | 160 | — | W3 |
+| `FileDescriptorBudget.swift` | `setrlimit` to `min(4096, rlim_max)` at launch | 70 | — | W3 |
+| `EgressGuard.swift` | Wraps every socket creation in `HostPolicy.requirePermitted` | 110 | HostPolicy | W3 |
+| `Discovery/MulticastDatagramChannel.swift` | `NWConnectionGroup`, `disableUnicast: false`, hop limit 1, port reuse | 340 | Protocols | W3 |
+| `Discovery/UnicastDatagramChannel.swift` | Ephemeral-port unicast fallback | 200 | Protocols | W3 |
+| `Discovery/TCPConnectProber.swift` | `NWConnection` probe; `.waiting` is terminal; POSIX classification | 230 | Protocols | W3 |
+| `Discovery/NWByteExchanger.swift` | One request/response; TLS verify-block accepts anything (fingerprint only) | 250 | Protocols | W3 |
+| `Discovery/SystemInterfaceEnumerator.swift` | `getifaddrs` + `SCNetworkInterface` wireless detection | 200 | Protocols | W3 |
+| `Discovery/SystemARPTableReader.swift` | `sysctl` route dump → `ARPTableDecoder` | 140 | ARPTableDecoder | W3 |
+| `Discovery/BonjourBrowser.swift` | `NWBrowser` over the three service types | 190 | Protocols | W3 |
+| `Discovery/EntitlementInspector.swift` | `SecCode` entitlement read; local-network permission heuristic | 180 | — | W3 |
+| `Discovery/LiveDiscoveryEnvironment.swift` | Assembles the eleven injected values | 90 | all of `Discovery/` | W3 |
+
+### 5.10 `Sources/VigilVideo` — W3 (36 files, ~6 800 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Support/VideoFrame.swift` | `VideoFrame` (`@unchecked Sendable` #2) | 130 | VideoFormatInfo | W3 |
+| `Support/VideoSink.swift` | The protocol + no-op defaults, `StreamEndReason`, `FrameDropReason`, `PacingMode` | 170 | VideoFrame | W3 |
+| `Support/DecodeSinkBox.swift` | The VT-callback → `AsyncStream` bridge (`@unchecked Sendable` #1) | 140 | — | W3 |
+| `Format/FormatDescriptionFactory.swift` | **The single CoreMedia conversion site**; `withParameterSetPointers` | 320 | ParameterSets | W3 |
+| `Format/FormatOverrides.swift` | `avcC`/`hvcC` atom rebuild for colour and aperture overrides | 240 | Records | W3 |
+| `Format/FormatChangeCoordinator.swift` | Compatible vs incompatible; `generation`; the **no black flash** rule | 280 | ParameterSetStore | W3 |
+| `Sample/SampleBufferBuilder.swift` | `CMBlockBuffer` + `CMSampleBuffer` + attachments | 300 | FormatDescriptionFactory | W3 |
+| `Sample/SampleAttachments.swift` | `DisplayImmediately`, `NotSync`, `DoNotDisplay` | 130 | — | W3 |
+| `Sample/TimestampConversion.swift` | `MediaTimestamp` ↔ `CMTime`; duration estimation chain | 150 | MediaTimestamp | W3 |
+| `Decode/DecodePipeline.swift` | The actor: submit, modes, strategy, statistics | 520 | everything below | W3 |
+| `Decode/DecodePipeline+Audio.swift` | Audio submission, routing, decoder lifetime | 260 | AudioPlaybackEngine | W3 |
+| `Decode/LayerDecodeSession.swift` | Strategy A: `AVSampleBufferDisplayLayer` + `sampleBufferRenderer` | 380 | SampleBufferBuilder | W3 |
+| `Decode/SampleBufferRendering.swift` | The renderer protocol + `requestMediaDataWhenReady` pump | 190 | — | W3 |
+| `Decode/VTDecodeSession.swift` | Strategy B: session create/configure/decode/invalidate | 420 | FormatDescriptionFactory | W3 |
+| `Decode/VTConfig.swift` | Every property key we set, and why | 200 | — | W3 |
+| `Decode/StrategySelection.swift` | `DisplayStrategy`, `StrategyInputs`, `selectStrategy`, switch choreography | 260 | — | W3 |
+| `Decode/PixelBufferPool.swift` | IOSurface + Metal-compatible, depth ≥ 6, threshold handling | 230 | — | W3 |
+| `Decode/FrameQueue.swift` | Capacity 6/12/72, drop order by `dropClass`, `flushToKeyframe` | 240 | RingBuffer | W3 |
+| `Decode/LatencyController.swift` | The four-level ladder, EWMAs, dwell times | 300 | — | W3 |
+| `Decode/VTErrorRecovery.swift` | The `OSStatus` → action table, backoff, hardware-requirement drop | 260 | — | W3 |
+| `Budget/DecodeBudget.swift` | The `@globalActor`; conforms to `DecodeAdmitting` | 420 | DecodePolicy | W3 |
+| `Budget/MachineClass.swift` | `sysctl` detection + the R-59 seed table + persistence | 220 | — | W3 |
+| `Budget/ThermalGovernor.swift` | Thermal and low-power multipliers, announced via `budgetChanges()` | 190 | DecodeBudget | W3 |
+| `Budget/OcclusionMonitor.swift` | The 0 s / 1 s / 30 s / 5 min occlusion ladder | 210 | — | W3 |
+| `Budget/JPEGPoller.swift` | Class-D polling with jitter and per-device rate limiting | 230 | — | W3 |
+| `Budget/MJPEGDecoder.swift` | `CGImageSource` decode; separate CPU budget; 10 fps cap | 190 | — | W3 |
+| `Playback/PlaybackPipeline.swift` | Timebase, rate, seek, step | 460 | DecodePipeline | W3 |
+| `Playback/ReorderHeap.swift` | PTS min-heap for B-frame content | 140 | — | W3 |
+| `Playback/RateController.swift` | Server `Scale` vs client-side rate; auto-mute outside 0.5…2.0 | 240 | — | W3 |
+| `Playback/ReverseGOPDecoder.swift` | Whole-GOP burst decode, 320 MB ring, one tile at a time | 320 | — | W3 |
+| `Audio/AudioPlaybackEngine.swift` | `AVAudioEngine` graph, source node, lifecycle | 380 | AudioRingBuffer | W3 |
+| `Audio/AACDecoder.swift` | `AudioConverterRef`, magic cookie, ASBD constants | 280 | AudioFormatInfo | W3 |
+| `Audio/AudioRingBuffer.swift` | Lock-free SPSC, 400 ms, fade-out on underrun | 200 | — | W3 |
+| `Audio/Resampler.swift` | 8 k → 48 k, 31-tap linear-phase FIR via `vDSP` | 180 | — | W3 |
+| `Audio/AudioRouter.swift` | D8: focused-only by default, max 4 unmuted, equal-power fades | 280 | — | W3 |
+| `Audio/TalkbackController.swift` | Capture → 8 k mono → G.711 → 320-byte chunks at 25 Hz; AEC; PTT | 400 | G711 | W3 |
+| `Snapshot/SnapshotEncoder.swift` | PNG/JPEG/HEIC via ImageIO, EXIF/TIFF/IPTC, clean-aperture crop | 320 | — | W3 |
+| `Diagnostics/DecodeStatistics.swift` | Reservoirs, percentiles, `< 20 µs` accessor | 220 | — | W3 |
+| `Diagnostics/VideoSignposts.swift` | The permanent signpost names | 130 | — | W3 |
+| `Diagnostics/HardwareProbe.swift` | **Measured** hardware-decode flag, read 200 ms after the first decode | 110 | — | W3 |
+
+### 5.11 `Sources/VigilRender` — W3 (33 files, ~6 400 LoC)
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `RenderContext.swift` | Shared device, queue, library, caches, capabilities | 320 | — | W3 |
+| `RenderCapabilities.swift` | The capability struct + probes | 150 | — | W3 |
+| `Shaders/VigilTileShaders.metal` | The reviewable shader source of truth (resource, not compiled by SwiftPM) | 420 | — | W3 |
+| `Shaders/ShaderSource.swift` | Byte-identical embedded copy, generated by `Scripts/gen-shader-source.swift` | 430 | the `.metal` | W3 |
+| `Shaders/TileUniforms.swift` | Swift mirror + a layout self-check test hook | 190 | — | W3 |
+| `Shaders/PipelineCache.swift` | `PipelineKey`, `MTLBinaryArchive` persistence keyed by source SHA-256 | 250 | SHA256 | W3 |
+| `Geometry/TileGeometry.swift` | Crop + SAR + display size | 140 | FrameGeometry | W3 |
+| `Geometry/TileTransform.swift` | Zoom 1…8, NDC pan, anchored zoom, clamp | 200 | — | W3 |
+| `Geometry/FitRect.swift` | `fit`/`fill`/`stretch`, the normative table | 130 | — | W3 |
+| `Geometry/TileCoordinateMap.swift` | content ↔ view, `visibleContentRect`, `picturePixel` | 250 | TileTransform | W3 |
+| `Geometry/NormalizedRegions.swift` | 0…1000 and 0…255 conversions, both origins, rect and polygon flips | 190 | — | W3 |
+| `Color/ColorConversion.swift` | BT.601/709/2020 matrices, ranges, siting, sample scale | 260 | ColorInfo | W3 |
+| `Color/EDRPolicy.swift` | PQ/HLG only, and only where headroom > 1.0 | 150 | — | W3 |
+| `Frames/LatestFrameBox.swift` | The lock-protected slot (`@unchecked Sendable` #3) | 170 | VideoFrame | W3 |
+| `Frames/FramePacer.swift` | `NSView.displayLink`, frame-rate ranges, field doubling | 240 | — | W3 |
+| `Frames/FrameStreamHandle.swift` | Attach/detach without importing `VigilCore` | 110 | VideoSink | W3 |
+| `Tile/VideoTileView.swift` | The `NSView`, options, state, `VideoSink` conformance | 480 | RenderContext | W3 |
+| `Tile/VideoTileView+Layer.swift` | Backing layer, contents scale, resize, live-resize | 260 | VideoTileView | W3 |
+| `Tile/VideoTileView+Render.swift` | Encode and present for the Metal backend | 420 | Shaders | W3 |
+| `Tile/VideoTileView+Input.swift` | Events, gestures, cursors, PTZ keys, click-to-centre | 460 | TileCoordinateMap | W3 |
+| `Tile/VideoTileView+DragDrop.swift` | Drag sessions, drop routing, the two UTIs | 260 | TransferTypes | W3 |
+| `Tile/SampleBufferBackend.swift` | The ASBDL path, `flush()` never `flushAndRemoveImage()` | 300 | — | W3 |
+| `Tile/BackendSwitcher.swift` | Still-layer crossfade, 400 ms wait, 80 ms fade, oscillation guard | 240 | — | W3 |
+| `Tile/TileRenderState.swift` | `@Observable`, publishes `pixelSize` and `coordinateMap` | 200 | — | W3 |
+| `Effects/DownsampleChain.swift` | Box halvings then bilinear/bicubic by scale factor | 220 | — | W3 |
+| `Effects/PrivacyMaskPass.swift` | Solid / mosaic / blur, pixel-exact under zoom | 260 | — | W3 |
+| `Effects/OverlayRectPass.swift` | Instanced boxes for the > 32 case and for wall mode | 200 | — | W3 |
+| `Wall/WallCompositorView.swift` | Single-layer atlas, hit testing, per-cell renderers | 420 | AtlasTarget | W3 |
+| `Wall/AtlasTarget.swift` | Atlas allocation, `maxTextureDimension` gate | 240 | — | W3 |
+| `Wall/DirtySlotTracker.swift` | Per-drawable dirty union | 150 | — | W3 |
+| `Interop/VideoTile.swift` | `NSViewRepresentable` | 200 | VideoTileView | W3 |
+| `Interop/VideoWall.swift` | `NSViewRepresentable` for the wall | 160 | WallCompositorView | W3 |
+| `Interop/TileInteractionDelegate.swift` | The 14-member delegate + `PTZDirection` + `Position3DGesture` | 220 | — | W3 |
+| `Interop/TransferTypes.swift` | `UTType` exports, `TileAssignmentTransfer`, `CameraRefTransfer` | 160 | — | W3 |
+| `Snapshot/TileSnapshotter.swift` | Offscreen render, overlay composite, `CGImage` | 240 | — | W3 |
+| `Diagnostics/RenderStats.swift` | Stats, signposts, debug-HUD model | 240 | — | W3 |
+
+### 5.12 `Sources/VigilCore` — W4 (58 files, ~11 500 LoC)
+
+The largest target. Split across ~6 agents by directory.
+
+| Path | Responsibility | LoC | Deps | Wave |
+|---|---|---|---|---|
+| `Platform/CoreDependencies.swift` | The struct + `.live` + every injected protocol | 320 | — | W4 |
+| `Platform/FileSystem+Real.swift` | `writeDurably` with `F_FULLFSYNC`; `replaceItem` | 220 | — | W4 |
+| `Platform/Paths.swift` | **The only place a filesystem URL is constructed**; security-scoped bookmarks | 220 | — | W4 |
+| `Platform/Occlusion+AppKit.swift` | One of only three AppKit files in the module | 180 | — | W4 |
+| `Platform/Pasteboard+AppKit.swift` | ditto | 90 | — | W4 |
+| `Platform/QuickLook+AppKit.swift` | ditto | 90 | — | W4 |
+| `Platform/PowerObserver.swift` | Sleep/wake, screensaver, low-power, thermal | 220 | — | W4 |
+| `Platform/NetworkPathObserver.swift` | `NWPathMonitor` → `NetworkPathState` with interface fingerprint | 180 | — | W4 |
+| `Model/Camera.swift` | `Camera` + validation + `slug` + endpoint helpers | 380 | — | W4 |
+| `Model/StreamProfile.swift` | `StreamProfile`, `Origin`, `mergeProfiles` precedence | 300 | — | W4 |
+| `Model/DeviceCapabilities.swift` | Capabilities, `ChannelDescriptor`, `PTZCapabilities`, `StorageVolumeInfo`, `RTSPPathTemplate` | 420 | DeviceQuirks | W4 |
+| `Model/CameraGroup.swift` | Group + membership invariants | 140 | — | W4 |
+| `Model/Layout.swift` | `Layout`, `LayoutMode` (+ the flat-`type` Codable), `GridCell`, `CellAssignment` | 420 | — | W4 |
+| `Model/LayoutGeometry.swift` | `cells()` for all modes on the 12 × 12 grid | 260 | Layout | W4 |
+| `Model/Bookmark.swift` | — | 110 | — | W4 |
+| `Model/EventRecord.swift` | `EventRecord`, `NormalizedRect`, `CoalesceKey` | 240 | EventKind | W4 |
+| `Model/RecordingClip.swift` | Clip record, container, trigger | 220 | — | W4 |
+| `Model/AppSettings.swift` | Every persisted preference, all defaulted | 360 | — | W4 |
+| `Model/Library.swift` | The document + `normalize()` + lookups + `OrderIndex` | 340 | all models | W4 |
+| `Persistence/AtomicJSONFile.swift` | The durable-write engine: rotate, temp, `replaceItemAt`, debounce | 300 | FileSystem | W4 |
+| `Persistence/LibraryCoding.swift` | Encoder/decoder config, the three date forms | 180 | — | W4 |
+| `Persistence/ConfigStore.swift` | The actor: load ladder, `mutate`, `flush`, `changes()` | 480 | AtomicJSONFile | W4 |
+| `Persistence/RecoveryLadder.swift` | `.bak` → `.bak2` → quarantine → empty-with-banner | 220 | — | W4 |
+| `Persistence/SchemaMigrator.swift` | Chain runner, never a jump table | 200 | — | W4 |
+| `Persistence/Migration1to2.swift` | `port` split, UNIX dates → ISO-8601 | 160 | — | W4 |
+| `Persistence/Migration2to3.swift` | `credentialRef` rekey, `cells` → `assignments` | 200 | — | W4 |
+| `Persistence/EventLog.swift` | The separate `events.json` ring, capacity 5000, query | 340 | AtomicJSONFile | W4 |
+| `Persistence/ImportExport.swift` | CSV + JSON + the encrypted `.vigilbackup` (PBKDF2 600 000, AES-GCM-256) | 420 | SHA256 | W4 |
+| `Security/CredentialStore.swift` | **The only user of `Security.framework`** | 420 | Credential | W4 |
+| `Security/LockoutGovernor.swift` | ≤ 3 probes per (host, account) per 10 min; the shared 2-failure counter | 180 | — | W4 |
+| `Security/ServerTrustBridge.swift` | Implements `ServerTrustEvaluating` over `Camera.tlsPinSPKI256` | 200 | SHA256 | W4 |
+| `Streaming/StreamController.swift` | The actor + public API + the 9-task structured group | 520 | everything | W4 |
+| `Streaming/StreamController+Machine.swift` | **The 58-row transition table**, one function per group of rows | 580 | StreamController | W4 |
+| `Streaming/StreamController+Timers.swift` | The 20 named timeouts | 260 | — | W4 |
+| `Streaming/StreamController+Capture.swift` | Snapshot and recording entry points, pre-roll drain | 300 | ClipRecorder | W4 |
+| `Streaming/StreamState.swift` | States, `StateDetail`, narration strings | 190 | — | W4 |
+| `Streaming/StreamEvent.swift` | The event enum | 260 | — | W4 |
+| `Streaming/StreamError.swift` | `StreamError` + `Code` + the `DoctorCause` bridge | 320 | DomainErrors | W4 |
+| `Streaming/ReconnectPolicy.swift` | The ladder, jitter, reset, cold retry | 160 | RandomSource | W4 |
+| `Streaming/StreamProbe.swift` | **R1.2**: 3-in-flight candidate ladder, `401` does not advance | 300 | HikvisionURL | W4 |
+| `Streaming/ChannelEnumerator.swift` | **R1.3**: ISAPI channels, else `DESCRIBE` probe 1…16 | 240 | ISAPIDeviceSession | W4 |
+| `Streaming/StreamCoordinator.swift` | The actor: viewport, priority, admission, shutdown | 520 | DecodeAdmitting | W4 |
+| `Streaming/LivePlan.swift` | `makePlan` — a **pure function**, unit-tested exhaustively | 340 | TilePolicy | W4 |
+| `Streaming/QualityPolicy.swift` | The class A–E application + hysteresis state per tile | 260 | TilePolicy | W4 |
+| `Streaming/LiveViewState.swift` | `@MainActor @Observable`; the cadence rules; **no pixels ever** | 340 | — | W4 |
+| `Recording/ClipRecorder.swift` | `AVAssetWriter` passthrough; `.partial` → rename; fragmented every 2 s | 480 | — | W4 |
+| `Recording/PreRollBuffer.swift` | Whole GOPs only; 96 MiB / 240 GOPs; never a partial GOP | 220 | — | W4 |
+| `Recording/RecordingNaming.swift` | Template rendering, 200-byte path components, collision suffixes | 200 | — | W4 |
+| `Recording/RecordingRecovery.swift` | Crash scan for `.partial`, ≤ 5 000 files / 10 s | 190 | — | W4 |
+| `Recording/RetentionSweeper.swift` | Days + gigabytes, launch and 6-hourly | 200 | — | W4 |
+| `Snapshots/SnapshotService.swift` | Source selection, bounded concurrency, destinations | 340 | SnapshotEncoder | W4 |
+| `Snapshots/BurnInOverlay.swift` | CoreGraphics composite for the snapshot path only | 220 | — | W4 |
+| `Events/EventCenter.swift` | Subscription reconciliation, dedupe, notification, auto-record | 480 | AlertStreamMonitor | W4 |
+| `Events/Coalescer.swift` | Pure 3 s window logic | 180 | — | W4 |
+| `Events/AutoRecordArbiter.swift` | Pure policy: cooldown, caps, disk, quiet hours | 220 | — | W4 |
+| `Events/NotificationScheduler.swift` | `UNUserNotificationCenter` adapter, categories, throttles | 300 | — | W4 |
+| `Health/HealthMonitor.swift` | One 1 Hz timer for the whole app | 280 | HealthRing | W4 |
+| `Health/HealthSample.swift` | Exactly 24 bytes; `Flags` option set | 190 | — | W4 |
+| `Health/HealthRing.swift` | 600 slots, preallocated | 130 | RingBuffer | W4 |
+| `Diagnostics/StreamDoctor.swift` | The 13 steps, 25 s budget, the nine R1.5 diagnoses | 520 | — | W4 |
+| `Diagnostics/DoctorCause.swift` | Cause → message → fix → action table | 340 | — | W4 |
+| `Diagnostics/DiagnosticsBundleBuilder.swift` | The tree, the caps, the manifest | 380 | TarWriter | W4 |
+| `Diagnostics/DiagnosticsRedactor.swift` | Pure second-pass redaction over collected logs | 220 | Redact | W4 |
+| `Diagnostics/TarWriter.swift` | POSIX `ustar`, uncompressed | 200 | — | W4 |
+| `Diagnostics/LogExporter.swift` | `OSLogStore`, 50 000 entries / 20 MB / 24 h caps | 190 | — | W4 |
+| `Automation/DeepLink.swift` | The grammar, total `parse`, write-action gating, 10-per-10 s limit | 420 | — | W4 |
+| `Automation/Entities.swift` | `CameraEntity`, `CameraGroupEntity`, `LayoutEntity`, `PTZPresetEntity`, `RecordingClipEntity`, `EventEntity` + queries | 480 | — | W4 |
+| `Automation/Intents.swift` | The 16 intents + `VigilShortcuts` (split at 600 lines) | 580 | Entities | W4 |
+| `Logging/OSLogLogger.swift` | The 13-category adapter; applies `Redact` before emitting | 190 | Redact | W4 |
+| `Logging/Signposts.swift` | The permanent signpost names | 140 | — | W4 |
+| `Errors/LocalizedError+Vigil.swift` | `LocalizedError` for every §3.9 enum | 200 | DomainErrors | W4 |
+
+### 5.13 `Sources/VigilUI` — W5 (78 files, ~14 000 LoC)
+
+Every top-level type carries an explicit `@MainActor`. Split across ~6 agents by directory.
+
+| Path | Responsibility | LoC | Wave |
+|---|---|---|---|
+| `Theme/VTheme.swift` | The namespace + `Space`/`Radius`/`Border`/`Metrics`/`Icon` | 260 | W5 |
+| `Theme/Colors.swift` | Every token, via `NSColor(name:dynamicProvider:)`; the 26-row table + idents | 420 | W5 |
+| `Theme/Typography.swift` | Nine steps + Mono track + reserved telemetry widths + `vType` | 280 | W5 |
+| `Theme/Motion.swift` | Six springs, four curves, three repeaters, `Delay`, `resolved`, `stagger` | 220 | W5 |
+| `Theme/Elevation.swift` | `e0`…`e3`, `VGlass`, `VInnerHighlight`, `VVisualEffect` | 300 | W5 |
+| `Theme/Environment.swift` | `\.vPulsePhase`, `\.vShimmerOffset`, `\.vMotionEnabled`, `\.vMotionTier`, `\.vTextScale`, `\.vNamespaces`, `\.vOnVideo` | 200 | W5 |
+| `Theme/TokenGallery.swift` | The debug window that renders every token in 4 appearances. **Build first** | 380 | W5 |
+| `Components/VButton.swift` … `VProgressRing.swift` | **28 files**, one per component (`VButton`, `VSegmentedControl`, `VToggle`, `VSlider`, `VTextField`, `VSearchField`, `VSelect`, `VBadge`, `VChip`, `VCard`, `VToolbar`, `VSidebarRow`, `VTile`, `VTimeline`, `VPTZPad`, `VCommandPalette`, `VToast`, `VEmptyState`, `VSkeleton`, `VStatPill`, `VSparkline`, `VContextMenu`, `VPopover`, `VSheet`, `VInspectorSection`, `VKeyCap`, `VDivider`, `VProgressRing`), each with a `#Preview` covering **every state in its table** | 28 × ~200 = 5 600 | W5 |
+| `Components/VTileTransitionProxy.swift` | **All** tile geometry transitions go through this | 220 | W5 |
+| `Components/VLiveDot.swift` | Pulse driven by `\.vPulsePhase`, never its own timer | 110 | W5 |
+| `Components/VLayoutGlyph.swift` | The layout-picker icons, drawn from `LayoutMode.cells()` | 160 | W5 |
+| `Components/FocusRing.swift` | `vFocusRing(_:radius:outset:)` | 90 | W5 |
+| `Motion/VMotionGovernor.swift` | Four tiers, one-per-3-s recovery, publishes `\.vMotionTier` | 260 | W5 |
+| `State/AppModel.swift` | The injected `@Observable` façade | 300 | W5 |
+| `State/LayoutState.swift` | Mode + assignments + overflow, bridged to `ConfigStore` | 240 | W5 |
+| `State/SidebarSelection.swift` `InspectorTab.swift` | Selection enums | 120 | W5 |
+| `State/PaletteState.swift` | Open/closed, query, mode prefix | 160 | W5 |
+| `State/ToastQueue.swift` | Bounded queue, 320 pt cards | 150 | W5 |
+| `State/ShortcutStore.swift` | Defaults ⊕ overrides, conflict detection, `UserDefaults` persistence | 300 | W5 |
+| `State/FocusedValues.swift` | Focused-camera plumbing for menu commands | 120 | W5 |
+| `Window/MainWindowView.swift` | `NavigationSplitView` + `.inspector`; declares the three namespaces | 320 | W5 |
+| `Window/MainToolbar.swift` | Customisable 52 pt toolbar | 260 | W5 |
+| `Window/WindowAccessor.swift` | Traffic-light inset (20, 26), tabbing off, autosave | 160 | W5 |
+| `Window/CinemaChrome.swift` | Full-screen chrome auto-hide | 180 | W5 |
+| `Sidebar/SidebarView.swift` + 6 files | Rows, groups, filter bar, footer, context menu, inline rename | 900 | W5 |
+| `Stage/StageView.swift` + 9 files | Router, `LayoutEngine`, tile container, chrome, state overlay, empty cell, mosaic editor, patrol, drop delegate | 1 500 | W5 |
+| `Inspector/InspectorView.swift` + 10 files | Six tabs, PTZ pad, preset grid, schedule grid, system overview | 1 700 | W5 |
+| `Playback/PlaybackWindowView.swift` + 9 files | Model, timeline ruler/heatmap/lane, scrub preview, transport, export, date popover | 1 700 | W5 |
+| `Discovery/DiscoveryRootView.swift` + 8 files | Scan, results, credentials, channels, manual add, CSV import, activation | 1 400 | W5 |
+| `Events/EventsFeedView.swift` + 4 files | Feed, row, card, filter bar, watch-mode overlay | 700 | W5 |
+| `Palette/CommandPaletteOverlay.swift` + 4 files | In-window overlay, index, `FuzzyMatcher`, row, actions | 900 | W5 |
+| `Wall/VideoWallView.swift` `ScreenPicker.swift` | Second-display wall | 340 | W5 |
+| `Settings/SettingsView.swift` + 7 panes | General, Streams, Recording, Notifications, Shortcuts, Advanced, About | 1 400 | W5 |
+| `Shared/StreamDoctorSheet.swift` | The live 13-step sheet with per-step outcomes and one-tap fixes | 340 | W5 |
+| `Shared/CheatSheetOverlay.swift` | Renders live from `ShortcutStore`; printable | 220 | W5 |
+| `Shared/Formatters.swift` | Bitrate, duration, bytes, timecode — all `monospacedDigit` | 200 | W5 |
+| `Shared/Strings.swift` | Generated key accessors over `Localizable.xcstrings` | 260 | W5 |
+| `Resources/Assets.xcassets` | App icon, custom SF Symbols. **Directory exists** | — | W5 |
+| `Resources/AppIcon.iconset` | Source for `make-icon.sh` | — | W5 |
+| `Localizations/Localizable.xcstrings` | EN + RU, `surface.subject.variant.part` keys, plural variations for RU | — | W5 |
+
+### 5.14 `Sources/Vigil` — W6 (7 files, ~1 100 LoC)
+
+| Path | Responsibility | LoC | Wave |
+|---|---|---|---|
+| `main.swift` | Top-level code; `VigilApp.main()` on macOS, stderr + `EXIT_FAILURE` elsewhere. **No `@main`** | 20 | W6 |
+| `VigilApp.swift` | The seven scenes (`Window` ×4, `WindowGroup(for: PlaybackRequest.self)`, `Settings`, `MenuBarExtra`) | 280 | W6 |
+| `VigilCommands.swift` | The menu bar; every command routed through `AppModel` | 340 | W6 |
+| `AppEnvironment.swift` | Bootstraps `CoreDependencies.live` and the actors | 200 | W6 |
+| `MenuBarExtraContent.swift` | Status glance + six quick actions; JPEG thumbnails at 15 s | 220 | W6 |
+| `URLSchemeHandler.swift` | `vigil://` → `DeepLink.parse` → consent gate → action | 180 | W6 |
+| `AppDelegate.swift` | Sleep/wake, reopen, dock badge, `applicationWillTerminate` 2 s budget | 200 | W6 |
+
+### 5.15 Tests (45 files, ~11 000 LoC)
+
+All test targets exist with a `Placeholder.swift`. The nine with `.copy("Fixtures")` **already have
+the directory and its `.placeholder`** — never delete them (R-70).
+
+| Path | Responsibility | LoC | Wave |
+|---|---|---|---|
+| `Tests/VigilProtocolsTests/CryptoTests.swift` | RFC 1321 (7 vectors) + RFC 3174 + RFC 6234 + RFC 2617 Digest; streaming chunk sizes 1/3/7/13/25/26; 1 MiB input | 340 | W1 |
+| `Tests/VigilProtocolsTests/Base64Tests.swift` | Padded, unpadded, whitespace-laden, URL-safe, illegal char, `len % 4 == 1` | 180 | W1 |
+| `Tests/VigilProtocolsTests/MediaTimestampTests.swift` | Rescale exactness at 90 kHz and 1 MHz, saturation, cross-timescale compare, clamped init | 260 | W1 |
+| `Tests/VigilProtocolsTests/BitReaderTests.swift` | Every boundary, `u(0)`, `u(32)`, `u64(48)`, truncation, `peek` non-mutation | 220 | W1 |
+| `Tests/VigilProtocolsTests/ByteReaderWriterTests.swift` | Round-trip, `lengthPrefixed32`, `line(limit:)` overflow | 200 | W1 |
+| `Tests/VigilProtocolsTests/NetTypesTests.swift` | `IPv4Address` strictness, four MAC forms, subnet maths, `/31` and `/32` | 300 | W1 |
+| `Tests/VigilProtocolsTests/HostPolicyTests.swift` | Every class; the `.publicInternet` refusal | 160 | W1 |
+| `Tests/VigilProtocolsTests/RedactTests.swift` | Fuzz: seeded secrets in several encodings; idempotence; ≤ 2× growth | 280 | W1 |
+| `Tests/VigilProtocolsTests/TilePolicyTests.swift` | Every class boundary, both scale factors, dead band, dwell, class-B promotion | 300 | W1 |
+| `Tests/VigilProtocolsTests/DecodeCostTests.swift` | The worked examples; 0.25 rounding; bit-depth surcharge | 180 | W1 |
+| `Tests/VigilProtocolsTests/ErrorTaxonomyTests.swift` | Every code unique, stable, and mapped to a message and a remedy | 200 | W1 |
+| `Tests/VigilBitstreamTests/ExpGolombTests.swift` | Table T-EG-1 verbatim + the 32-zero overflow | 160 | W2 |
+| `Tests/VigilBitstreamTests/H264SPSTests.swift` | Real SPS vectors; 1088-vs-1080 cropping; VUI fps `÷ 2 × num_units_in_tick` | 320 | W2 |
+| `Tests/VigilBitstreamTests/H265SPSTests.swift` | Main and Main10; conformance window; fps **not** halved | 320 | W2 |
+| `Tests/VigilBitstreamTests/RecordTests.swift` | `avcC`/`hvcC` build → parse → serialize byte-identical | 260 | W2 |
+| `Tests/VigilBitstreamTests/AnnexBTests.swift` | Conversion both ways; 3- and 4-byte start codes; emulation bytes | 240 | W2 |
+| `Tests/VigilBitstreamTests/SliceHeaderTests.swift` | `isFirstSliceOfPicture` on both codecs, incl. hostile input | 200 | W2 |
+| `Tests/VigilBitstreamTests/FuzzTests.swift` | 1 M random inputs per parser; zero crashes, zero hangs | 200 | W2 |
+| `Tests/VigilRTSPTests/HeadersTests.swift` | Case-insensitive lookup, duplicates, order, ASCII-only folding | 200 | W2 |
+| `Tests/VigilRTSPTests/WireDecoderTests.swift` | Split invariance over 200 chunkings; every limit; bare LF; mid-header `$` | 420 | W2 |
+| `Tests/VigilRTSPTests/ResyncTests.swift` | 1/3/4095 B garbage; false `0x24`; scan-limit; rate policy | 220 | W2 |
+| `Tests/VigilRTSPTests/DigestTests.swift` | Every §6.5 row; `nc` across 6 requests; no-`qop` property test ×100 | 300 | W2 |
+| `Tests/VigilRTSPTests/SDPTests.swift` | All fixtures; missing/duplicate `a=control`; trailing NUL; static PT 8 | 320 | W2 |
+| `Tests/VigilRTSPTests/ControlURLTests.swift` | All six precedence rows plus the query-carrying cases | 200 | W2 |
+| `Tests/VigilRTSPTests/SessionMachineTests.swift` | Exact action arrays from fixtures; determinism ×100 chunkings; `.fail` terminal | 480 | W2 |
+| `Tests/VigilRTSPTests/HikvisionURLTests.swift` | Every path row; ladder order; credentials never in `description` | 180 | W2 |
+| `Tests/VigilRTPTests/PacketTests.swift` | Header parse, padding, CSRC, extension, hostile lengths | 240 | W2 |
+| `Tests/VigilRTPTests/H264DepacketizerTests.swift` | STAP-A, FU-A, loss, **marker-bit-unreliable** AU splitting | 340 | W2 |
+| `Tests/VigilRTPTests/H265DepacketizerTests.swift` | AP, FU, IRAP gating, RASL drop | 320 | W2 |
+| `Tests/VigilRTPTests/AudioTests.swift` | AAC-hbr, ASC parse, G.711 both laws over all 65 536 inputs, G.726 | 300 | W2 |
+| `Tests/VigilRTPTests/ReorderTests.swift` | Passthrough vs adaptive; escalation above 1 % loss; wraparound | 280 | W2 |
+| `Tests/VigilRTPTests/RTCPTests.swift` | Compound parse, RR generation intervals, SR NTP mapping | 240 | W2 |
+| `Tests/VigilRTPTests/StatisticsTests.swift` | The exact EWMA algebra against hand-computed series | 220 | W2 |
+| `Tests/VigilISAPITests/XMLTests.swift` | 24 reader cases + 6 builder cases; **XXE refusal**; depth and size caps | 400 | W2 |
+| `Tests/VigilISAPITests/DigestTests.swift` | 14 cases incl. RFC 2069 and `nextnonce` | 220 | W2 |
+| `Tests/VigilISAPITests/ClientTests.swift` | Lanes, gate, coalescing, retry table, **2-failure hard block** | 300 | W2 |
+| `Tests/VigilISAPITests/EndpointTests.swift` | 30 decode cases across 4 device families | 480 | W2 |
+| `Tests/VigilISAPITests/AlertStreamTests.swift` | 18 multipart cases + 12 monitor cases; heartbeat suppression | 380 | W2 |
+| `Tests/VigilISAPITests/SearchTests.swift` | Paging with the real misspelling; `MORE`; timeline assembly | 240 | W2 |
+| `Tests/VigilDiscoveryTests/SADPTests.swift` | 20 cases incl. the XOR-obfuscated and random payloads | 340 | W2 |
+| `Tests/VigilDiscoveryTests/WSDiscoveryTests.swift` | 15 cases incl. Hello, Bye, no-prefix | 300 | W2 |
+| `Tests/VigilDiscoveryTests/SweepPlannerTests.swift` | 15 cases; the **/16 refusal**; /16–/21 narrowing; host order | 300 | W2 |
+| `Tests/VigilDiscoveryTests/FingerprintTests.swift` | 14 cases across four vendors | 280 | W2 |
+| `Tests/VigilDiscoveryTests/MergeEngineTests.swift` | 13 cases; `.addressReused` never re-points a saved camera | 320 | W2 |
+| `Tests/VigilDiscoveryTests/CoordinatorTests.swift` | 13 orchestration + 10 degraded-mode cases; **the credential-refusal mock** | 380 | W2 |
+| `Tests/VigilPipelineTests/EndToEndTests.swift` | **The highest-value test in the repo**: synthetic camera → RTSP → RTP → `EncodedFrame`, no sockets, no Mac | 480 | W2 |
+| `Tests/VigilPipelineTests/DeterminismTests.swift` | Same seed ⇒ byte-identical action arrays and frame sequences | 240 | W2 |
+| `Tests/VigilTransportTests/` | Adapter tests + `NWListener` stub server (macOS only) | 400 | W3 |
+| `Tests/VigilVideoTests/` | Format description, sample buffer, budget, tile policy application, audio | 900 | W3 |
+| `Tests/VigilRenderTests/` | Geometry (fitRect table verbatim), colour, effects, atlas, backend, snapshot | 900 | W3 |
+| `Tests/VigilCoreTests/` | 173 numbered cases: model, `ConfigStore`, credentials, the **58 transition rows**, coordinator, recorder, snapshots, events, health, diagnostics, automation | 2 400 | W4 |
+| `Tests/VigilUITests/` | Palette ranking + throughput, layout geometry, shortcut conflicts, localisation parity | 600 | W5 |
+
 ---
 <!-- APPEND-HERE -->
