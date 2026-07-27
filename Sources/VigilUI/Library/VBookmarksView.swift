@@ -182,7 +182,7 @@ package struct VBookmarksRow: View {
                 .foregroundStyle(VTheme.Color.Text.primary)
                 .lineLimit(1)
             Text(verbatim: subtitle)
-                .vType(VTheme.Typography.caption)
+                .vType(VTheme.Typography.caption1)
                 .foregroundStyle(VTheme.Color.Text.tertiary)
                 .lineLimit(1)
         }

@@ -54,7 +54,7 @@ package struct VRecordingsView: View {
             VLibraryHeader(title: VLibrarySection.recordings.title, count: state.clips.count) {
                 if state.recordingsFolder != nil {
                     VButton("Open folder",
-                            symbol: VTheme.Symbol.folder,
+                            symbol: VTheme.Symbol.storage,
                             style: .ghost,
                             size: .sm,
                             action: actions.onOpenRecordingsFolder)
@@ -230,7 +230,7 @@ package struct VRecordingsRow: View {
                 .foregroundStyle(VTheme.Color.Text.primary)
                 .lineLimit(1)
             Text(verbatim: clip.fileName)
-                .vType(VTheme.Typography.caption)
+                .vType(VTheme.Typography.caption1)
                 .foregroundStyle(VTheme.Color.Text.tertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -262,7 +262,7 @@ package struct VRecordingsRow: View {
     private var controls: some View {
         if isHovering {
             HStack(spacing: VTheme.Space.xs) {
-                VButton(symbol: VTheme.Symbol.folder,
+                VButton(symbol: VTheme.Symbol.storage,
                         size: .sm,
                         accessibilityLabel: "Reveal in Finder",
                         action: { actions.onRevealClip(clip) })

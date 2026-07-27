@@ -666,15 +666,19 @@ package struct VLibraryDayHeader: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    @ViewBuilder
+    /// Today, Yesterday, or the formatted date.
+    ///
+    /// Not `@ViewBuilder`: that attribute builds a `_ConditionalContent`, which is not a `Text`, and
+    /// the declared return type here has to stay `Text` so the caller can apply `.vType`. Explicit
+    /// returns keep the concrete type.
     private var label: Text {
         if clock.isToday(day) {
-            Text("Today", bundle: .vigilUI)
-        } else if VLibraryFormat.isYesterday(day, clock: clock) {
-            Text("Yesterday", bundle: .vigilUI)
-        } else {
-            Text(verbatim: VLibraryFormat.dayLabel(day, clock: clock))
+            return Text("Today", bundle: .vigilUI)
         }
+        if VLibraryFormat.isYesterday(day, clock: clock) {
+            return Text("Yesterday", bundle: .vigilUI)
+        }
+        return Text(verbatim: VLibraryFormat.dayLabel(day, clock: clock))
     }
 }
 
