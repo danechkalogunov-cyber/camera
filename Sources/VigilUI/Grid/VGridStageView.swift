@@ -17,31 +17,6 @@ import SwiftUI
 
 import VigilProtocols
 
-// MARK: - VGridStageMetrics
-
-/// The stage's own numbers, in a non-generic namespace.
-///
-/// Two reasons this is not inside ``VGridStageView``. Swift rejects a static stored property in a
-/// generic type outright — `static stored properties not supported in generic types` — which is a
-/// hard error on macOS that a Linux build cannot see (`Scripts/lint.py` catches it instead). And a
-/// number that DESIGN.md states belongs somewhere a reviewer can find it, next to the citation.
-package enum VGridStageMetrics {
-
-    /// 0.96 — the entrance scale of DESIGN.md §7.8: a tile arrives at `scale 0.96 → 1` together
-    /// with `opacity 0 → 1`, staggered in reading order.
-    ///
-    /// A `scaleEffect` is one of the properties §7.9 rule 1 permits on a view that *contains* a
-    /// video layer, because it is a compositor transform and not a re-layout. The tile's frame is
-    /// untouched by it.
-    package static let entranceScale: CGFloat = 0.96
-
-    /// The promoted tile is drawn above the black backdrop that hides the grid behind it.
-    package static let promotedZIndex: Double = 2
-
-    /// The backdrop sits above the grid and below the promoted tile.
-    package static let backdropZIndex: Double = 1
-}
-
 // MARK: - VGridStageView
 
 /// The grid of tiles.
@@ -260,8 +235,8 @@ package struct VGridStageView<Video: View>: View {
 
     /// One cell: a tile, or the "Add camera" placeholder.
     ///
-    /// The two branches apply their geometry separately on purpose. The tile's rect is pinned
-    /// unanimated (§7.9); an empty cell holds no video, so it is free to move however the caller's
+    /// The two branches apply their geometry separately on purpose — the tile's rect is pinned
+    /// unanimated (§7.9), while an empty cell holds no video and may move however the caller's
     /// transaction says it should.
     @ViewBuilder
     private func cell(_ slot: VStageSlot, in geometry: VGridGeometry) -> some View {
@@ -270,11 +245,9 @@ package struct VGridStageView<Video: View>: View {
             tile(model, slot: slot)
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
-                // ⛔ §7.9 rule 2. A tile's rectangle is applied in one step and never interpolated:
-                // an animated frame mutates the display layer's bounds every display frame, and the
-                // still proxy that would make that legal lives in VigilRender. Passing `nil` here
-                // also defeats an ambient `withAnimation` from an ancestor, which is the
-                // transaction-stripping rule 3 asks for at the video boundary.
+                // ⛔ §7.9 rule 2, and rule 3's transaction stripping: a tile's rectangle is applied
+                // in one step, and an ambient `withAnimation` from an ancestor cannot interpolate
+                // it. See the type's discussion.
                 //     func animation<V: Equatable>(_ animation: Animation?, value: V) -> some View
                 .animation(nil, value: rect)
                 .modifier(VStageGeometryMatch(namespace: namespace,
@@ -396,7 +369,7 @@ package struct VGridStageView<Video: View>: View {
             onCloseCell(current)
             return .handled
         }
-        guard press.modifiers.contains(.option), let direction = direction(for: press.key) else {
+        guard press.modifiers.contains(.option), let direction = arrow(for: press.key) else {
             return .ignored
         }
         guard focusedIndex != nil else {
@@ -423,8 +396,9 @@ package struct VGridStageView<Video: View>: View {
         }
     }
 
-    /// The arrow a key press names, or `nil` for any other key.
-    private func direction(for key: KeyEquivalent) -> VGridDirection? {
+    /// The arrow a key press names, or `nil` for any other key. Named `arrow` rather than
+    /// `direction` so it cannot be shadowed by the binding at its one call site.
+    private func arrow(for key: KeyEquivalent) -> VGridDirection? {
         if key == .leftArrow { return .left }
         if key == .rightArrow { return .right }
         if key == .upArrow { return .up }
@@ -493,21 +467,31 @@ private struct GridStagePreviewPicture: View {
     let seed: Int
 
     var body: some View {
-        LinearGradient(colors: [SwiftUI.Color(white: 0.05 + 0.02 * Double(seed % 4)),
-                                SwiftUI.Color(white: 0.24 + 0.03 * Double(seed % 3))],
-                       startPoint: .top,
-                       endPoint: .bottom)
+        let shades = [
+            SwiftUI.Color(white: 0.05 + 0.02 * Double(seed % 4)),
+            SwiftUI.Color(white: 0.24 + 0.03 * Double(seed % 3)),
+        ]
+        LinearGradient(colors: shades, startPoint: .top, endPoint: .bottom)
     }
 }
 
-/// Six cameras in the mockup's states: live and recording, live, connecting, live, degraded,
-/// offline (`design/mockups/01-main-window.html`).
+/// Preview host: the cameras are built once, in `init`. Building them in `body` would mint new
+/// identifiers on every evaluation and the assignment would stop matching them.
+///
+/// The six states are the mockup's, in its order: live and recording, live, connecting, live,
+/// degraded, offline (`design/mockups/01-main-window.html`).
 @MainActor
-private enum GridStagePreviewData {
+private struct GridStagePreviewHost: View {
+    private let cameras: [VStageCamera]
+    private let assignment: VStageAssignment
+    private let mode: VStageMode
+    private let focusedIndex: Int?
 
-    static let names = ["Front Door", "Garage", "Lobby", "Back Yard", "Side Gate", "Hallway"]
+    private static let names = [
+        "Front Door", "Garage", "Lobby", "Back Yard", "Side Gate", "Hallway",
+    ]
 
-    static func state(_ index: Int) -> LiveConnectionState {
+    private static func state(_ index: Int) -> LiveConnectionState {
         switch index % 6 {
         case 2: return .connecting(.negotiating)
         case 4: return .degraded(.packetLoss(fraction: 0.031))
@@ -516,7 +500,7 @@ private enum GridStagePreviewData {
         }
     }
 
-    static func cameras(_ count: Int) -> [VStageCamera] {
+    private static func makeCameras(_ count: Int) -> [VStageCamera] {
         (0..<count).map { index in
             let name = names[index % names.count]
             let identity = LiveCameraIdentity(id: UUID(),
@@ -533,22 +517,12 @@ private enum GridStagePreviewData {
                                                   isHardwareDecode: true))
         }
     }
-}
-
-/// Preview host: the cameras have to be built once, in `init`, or every body evaluation would mint
-/// new identifiers and the assignment would stop matching them.
-@MainActor
-private struct GridStagePreviewHost: View {
-    private let cameras: [VStageCamera]
-    private let assignment: VStageAssignment
-    private let mode: VStageMode
-    private let focusedIndex: Int?
 
     init(layout: VGridLayout,
          cameraCount: Int,
          promotesFirst: Bool = false,
          focusedIndex: Int? = 0) {
-        let made = GridStagePreviewData.cameras(cameraCount)
+        let made = Self.makeCameras(cameraCount)
         self.cameras = made
         self.assignment = VStageAssignment(layout: layout, cameras: made.map { $0.id })
         self.mode = promotesFirst ? (made.first.map { VStageMode.focus($0.id) } ?? .grid) : .grid

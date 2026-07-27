@@ -18,8 +18,16 @@
 //  (`RecordSearchQuery.hardSegmentCap` is 2 000 per track). One SwiftUI view per run would put
 //  thousands of nodes through layout and diffing on every pan frame, against the 4 ms redraw budget
 //  of docs/FEATURES.md §13. A `Canvas` is one view whose renderer walks an array — no identity, no
-//  diffing, no layout. Markers stay real views, because there are at most ~150 of them after
-//  clustering and each one has to be clickable and reachable by VoiceOver.
+//  diffing, no layout. DESIGN.md §7.9 names the timeline heatmap as one of exactly two places
+//  `.drawingGroup()` is permitted, and it is applied here. Markers stay real views, because after
+//  clustering there are at most ~150 of them and each one has to be clickable and reachable by
+//  VoiceOver.
+//
+//  WHY THE RENDERER TAKES A PRE-RESOLVED PAINT. `Canvas`'s renderer is a plain escaping closure
+//  with no declared isolation, so reading a `@MainActor` token — which every `VTheme` value is —
+//  from inside it would be a concurrency error. Every colour and every rectangle is therefore
+//  resolved on the main actor into ``VTimelineBandPaint`` first, and the renderer is a pure
+//  function of that value.
 //
 
 #if os(macOS)
@@ -78,8 +86,8 @@ package enum VTimelineSegmentKind: Int, Sendable, Hashable, CaseIterable {
 
     /// The base token. Alpha is applied separately — see ``fillOpacity``.
     ///
-    /// `@MainActor` because `VTheme` is; the enum itself stays a plain `Sendable` value so the
-    /// mapping above can be asserted by a test without an actor hop.
+    /// `@MainActor` on the member rather than on the enum, so the mapping above stays a plain value
+    /// a test can assert without an actor hop, exactly as `VButton.Size.control` does.
     @MainActor
     package var colour: SwiftUI.Color {
         switch self {
@@ -137,7 +145,7 @@ package enum VTimelineHatch: Sendable, Hashable {
     case cross
 
     /// The distance between lines, in points. Zero for ``none``, which is what stops the renderer
-    /// from looping.
+    /// from looping at all.
     package var pitch: CGFloat {
         switch self {
         case .none: 0
@@ -154,16 +162,16 @@ package enum VTimelineHatch: Sendable, Hashable {
 /// `VTheme` publishes the two numbers DESIGN.md §5.1 gives the component as a whole
 /// (``VTheme/Metrics/timelineHeight`` and ``VTheme/Metrics/timelineLaneHeight``) but not the band
 /// heights inside a lane, which live in §9.14 and UX.md §7.3. This namespace is where those live,
-/// exactly once, each derived from a spacing token where one is an exact match and each carrying the
-/// clause it comes from where it is not — the same arrangement `VChip.height`, `VIdentityMark.dotSize`
-/// and `VSkeleton.travel` already use for their own component's dimensions.
+/// exactly once, each derived from a spacing token where one is an exact match and each carrying
+/// the clause it comes from where it is not — the same arrangement `VChip.height`,
+/// `VIdentityMark.dotSize` and `VSkeleton.travel` already use for their own component's dimensions.
 @MainActor
 package enum VTimelineMetrics {
 
     /// The ruler band: one `MonoSmall` line box for the labels above a 6 pt major tick.
     ///
     /// DESIGN.md §9.14 says 16 pt. 16 does not fit a 13 pt line box and a 6 pt tick without the
-    /// label sitting on top of the tick, so the band is the sum of the two it actually contains.
+    /// label sitting on the tick, so the band is the sum of the two things it actually contains.
     package static let ruler: CGFloat = VTheme.Typography.monoSmall.lineHeight + VTheme.Space.xs
 
     /// The lane's own label row (UX.md §7.3: 12 pt).
@@ -188,7 +196,7 @@ package enum VTimelineMetrics {
     package static let minorTick: CGFloat = VTheme.Space.hair + VTheme.Border.thin
 
     /// A marker diamond's side (UX.md §7.3: 6 pt), matching the identity dot so a lane's marks and
-    /// its header dot are the same size.
+    /// its header dot sit on the same optical row.
     package static let markerGlyph: CGFloat = VIdentityMark.dotSize
 
     /// The grab width of a marker: 12 pt, per DESIGN.md §10.6's "timeline handles 4 pt visual,
@@ -198,11 +206,8 @@ package enum VTimelineMetrics {
     /// The playhead's drawn width (UX.md §7.3: 2 pt).
     package static let playhead: CGFloat = VTheme.Border.selected
 
-    /// The playhead's grab width (DESIGN.md §10.6: 16 pt).
-    package static let playheadGrab: CGFloat = VTheme.Space.lg
-
-    /// The timecode bubble above the playhead (UX.md §7.3: a 22 pt rounded label; the 20 pt `xs`
-    /// control height is the token that carries a `MonoLarge` line box and is used instead).
+    /// The timecode bubble above the playhead (UX.md §7.3 asks for a 22 pt rounded label; the 20 pt
+    /// `xs` control height is the token that carries a `MonoSmall` line box and is used instead).
     package static let bubble: CGFloat = VTheme.Metrics.xs
 
     /// The scrub preview card (UX.md §7.3: 176 pt wide, a 160 × 90 thumbnail inside it).
@@ -297,6 +302,142 @@ package struct VTimelineTrack: Identifiable, Sendable {
     }
 }
 
+// MARK: - VTimelineBandPaint
+
+/// Every rectangle and every colour the band renderer needs, resolved before the `Canvas` runs.
+///
+/// This type is what keeps `VTheme` — all of which is `@MainActor` — out of a closure that has no
+/// declared isolation. Nothing in ``VTimelineBandRenderer`` reads anything but this value.
+struct VTimelineBandPaint {
+
+    /// One painted segment run.
+    struct Box {
+        let rect: CGRect
+        let fill: SwiftUI.Color
+        /// Non-`nil` when the run could not reach the minimum width and gets the 1 pt outer glow of
+        /// UX.md §7.3 instead of being moved.
+        let glow: SwiftUI.Color?
+        let hatch: VTimelineHatch
+    }
+
+    /// The band's recessed well.
+    let well: CGRect
+    let wellRadius: CGFloat
+    let wellFill: SwiftUI.Color
+
+    /// The segment runs, left to right.
+    let boxes: [Box]
+
+    /// The dotted "no recording" baselines, one per drawable gap, as `from ... to` x pairs at
+    /// ``baselineY``.
+    let gapSpans: [ClosedRange<CGFloat>]
+    let baselineY: CGFloat
+    let gapInk: SwiftUI.Color
+    let gapDash: [CGFloat]
+
+    /// The local-clip strip.
+    let clipWell: CGRect
+    let clipRadius: CGFloat
+    let clipWellFill: SwiftUI.Color
+    let clipBoxes: [CGRect]
+    let clipFill: SwiftUI.Color
+
+    /// 1 pt, the width of every line this renderer strokes.
+    let hairline: CGFloat
+
+    /// The ink the hatch is drawn in, or `nil` when `differentiateWithoutColor` is off.
+    let hatchInk: SwiftUI.Color?
+}
+
+// MARK: - VTimelineBandRenderer
+
+/// Paints a ``VTimelineBandPaint``.
+///
+/// A non-isolated namespace on purpose: it is called from inside `Canvas`'s renderer closure, which
+/// carries no isolation, and it touches nothing but its argument.
+enum VTimelineBandRenderer {
+
+    /// Draws the band, then the clip strip. Back to front: well, gap baselines, runs, hatch.
+    ///
+    ///     func fill(_ path: Path, with shading: GraphicsContext.Shading, style: FillStyle)
+    ///     func stroke(_ path: Path, with shading: GraphicsContext.Shading, style: StrokeStyle)
+    ///     static func color(_ color: Color) -> GraphicsContext.Shading
+    static func draw(_ paint: VTimelineBandPaint, in context: inout GraphicsContext) {
+        context.fill(Path(roundedRect: paint.well,
+                          cornerRadius: paint.wellRadius,
+                          style: .continuous),
+                     with: .color(paint.wellFill))
+
+        // Gaps first: their dotted baseline sits under any run that widened into them, which is the
+        // visual counterpart of TimelineBarLayout's promise that a drawn gap keeps uncovered width.
+        if !paint.gapSpans.isEmpty {
+            var baseline = Path()
+            for span in paint.gapSpans {
+                baseline.move(to: CGPoint(x: span.lowerBound, y: paint.baselineY))
+                baseline.addLine(to: CGPoint(x: span.upperBound, y: paint.baselineY))
+            }
+            context.stroke(baseline,
+                           with: .color(paint.gapInk),
+                           style: StrokeStyle(lineWidth: paint.hairline, dash: paint.gapDash))
+        }
+
+        for box in paint.boxes {
+            context.fill(Path(box.rect), with: .color(box.fill))
+            if let glow = box.glow {
+                let outline = Path(box.rect.insetBy(dx: -paint.hairline, dy: 0))
+                context.stroke(outline, with: .color(glow), lineWidth: paint.hairline)
+            }
+            if let ink = paint.hatchInk {
+                drawHatch(box.hatch, rect: box.rect, ink: ink,
+                          lineWidth: paint.hairline, in: &context)
+            }
+        }
+
+        context.fill(Path(roundedRect: paint.clipWell,
+                          cornerRadius: paint.clipRadius,
+                          style: .continuous),
+                     with: .color(paint.clipWellFill))
+        for clip in paint.clipBoxes {
+            context.fill(Path(roundedRect: clip, cornerRadius: paint.clipRadius,
+                              style: .continuous),
+                         with: .color(paint.clipFill))
+        }
+    }
+
+    /// The 45° hatch that carries recording type without colour (DESIGN.md §10.5).
+    ///
+    ///     func drawLayer(content: (inout GraphicsContext) throws -> Void) rethrows
+    ///     mutating func clip(to path: Path, style: FillStyle, options: GraphicsContext.ClipOptions)
+    static func drawHatch(_ hatch: VTimelineHatch,
+                          rect: CGRect,
+                          ink: SwiftUI.Color,
+                          lineWidth: CGFloat,
+                          in context: inout GraphicsContext) {
+        let pitch = hatch.pitch
+        guard pitch > 0, rect.width > 0, rect.height > 0 else { return }
+        context.drawLayer { layer in
+            layer.clip(to: Path(rect))
+            var lines = Path()
+            var offset = -rect.height
+            // Bounded independently of the arithmetic: a run as wide as the bar at a 3 pt pitch is
+            // ~400 lines, and the cap stops a degenerate pitch from stalling the renderer.
+            var drawn = 0
+            let limit = 512
+            while offset < rect.width, drawn < limit {
+                lines.move(to: CGPoint(x: rect.minX + offset, y: rect.maxY))
+                lines.addLine(to: CGPoint(x: rect.minX + offset + rect.height, y: rect.minY))
+                if hatch == .cross {
+                    lines.move(to: CGPoint(x: rect.minX + offset, y: rect.minY))
+                    lines.addLine(to: CGPoint(x: rect.minX + offset + rect.height, y: rect.maxY))
+                }
+                offset += pitch
+                drawn += 1
+            }
+            layer.stroke(lines, with: .color(ink), lineWidth: lineWidth)
+        }
+    }
+}
+
 // MARK: - VTimelineBarView
 
 /// One camera's lane: header, density band, local-clip strip and marker row.
@@ -359,6 +500,11 @@ package struct VTimelineBarView: View {
         isPrimary ? VTimelineMetrics.band : VTimelineMetrics.compactBand
     }
 
+    /// The height of the band and the clip strip together — the `Canvas`'s box.
+    package var stripHeight: CGFloat {
+        bandHeight + VTheme.Space.hair + VTimelineMetrics.clipLane
+    }
+
     // MARK: - View
 
     package var body: some View {
@@ -397,7 +543,6 @@ package struct VTimelineBarView: View {
     /// The density band with the local-clip strip beneath it, and the compact lane's overlaid name.
     @ViewBuilder
     private var bandStrip: some View {
-        let stripHeight = bandHeight + VTheme.Space.hair + VTimelineMetrics.clipLane
         Group {
             if isLoading {
                 VSkeleton(radius: VTheme.Radius.xs, base: VTheme.Color.Layer.inset)
@@ -444,123 +589,76 @@ package struct VTimelineBarView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The band and clip strip in one `Canvas`. See the file header for why this is not a `ForEach`.
+    /// The band and clip strip in one `Canvas`. See the file header for why this is not a `ForEach`
+    /// and why the renderer takes a pre-resolved paint.
     ///
     ///     init(opaque: Bool = false, colorMode: ColorRenderingMode = .nonLinear,
     ///          rendersAsynchronously: Bool = false,
     ///          renderer: @escaping (inout GraphicsContext, CGSize) -> Void)
     private var canvas: some View {
-        let layout = TimelineBarLayout.lay(out: track.index, in: geometry)
+        let paint = bandPaint
         return Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) {
-            context, size in
-            draw(layout: layout, in: &context, size: size)
+            context, _ in
+            VTimelineBandRenderer.draw(paint, in: &context)
         }
+        // DESIGN.md §7.9 permits `.drawingGroup()` on exactly two surfaces, and the timeline
+        // heatmap is one of them: the band is a few thousand fills that never change between pans.
         .drawingGroup()
         .accessibilityHidden(true)
     }
 
-    // MARK: - Drawing
+    // MARK: - Paint
 
-    /// Paints the band, then the clip strip. Ordered back to front: track well, gaps, runs, hatch.
-    private func draw(layout: TimelineBarLayout, in context: inout GraphicsContext, size: CGSize) {
-        let band = CGRect(x: 0, y: 0, width: size.width, height: min(bandHeight, size.height))
-        drawBand(layout: layout, in: &context, band: band)
+    /// Resolves the layout and every token into the value the renderer draws.
+    private var bandPaint: VTimelineBandPaint {
+        let layout = TimelineBarLayout.lay(out: track.index, in: geometry)
+        let width = CGFloat(geometry.width)
+        let band = CGRect(x: 0, y: 0, width: width, height: bandHeight)
         let clipTop = band.maxY + VTheme.Space.hair
-        guard size.height - clipTop > 0 else { return }
-        let strip = CGRect(x: 0, y: clipTop, width: size.width, height: size.height - clipTop)
-        drawClips(in: &context, strip: strip)
-    }
+        let clipWell = CGRect(x: 0, y: clipTop, width: width, height: VTimelineMetrics.clipLane)
 
-    /// The density band.
-    ///
-    ///     func fill(_ path: Path, with shading: GraphicsContext.Shading, style: FillStyle)
-    ///     static func color(_ color: Color) -> GraphicsContext.Shading
-    private func drawBand(layout: TimelineBarLayout,
-                          in context: inout GraphicsContext,
-                          band: CGRect) {
-        let well = Path(roundedRect: band, cornerRadius: VTheme.Radius.xs, style: .continuous)
-        context.fill(well, with: .color(VTheme.Color.Layer.inset))
-
-        // Gaps first: their dotted baseline sits under any run that widened into them, which is the
-        // visual counterpart of TimelineBarLayout's promise that a drawn gap keeps uncovered width.
-        for gap in layout.gapRuns {
-            var line = Path()
-            let y = band.maxY - VTheme.Border.thin
-            line.move(to: CGPoint(x: gap.x, y: y))
-            line.addLine(to: CGPoint(x: gap.maxX, y: y))
-            context.stroke(line,
-                           with: .color(VTheme.Color.Stroke.strong),
-                           style: StrokeStyle(lineWidth: VTheme.Border.thin,
-                                              dash: [VTheme.Space.hair, VTheme.Space.xxs]))
-        }
-
-        for run in layout.runs {
+        var boxes: [VTimelineBandPaint.Box] = []
+        boxes.reserveCapacity(layout.runs.count)
+        for run in layout.runs where run.width > 0 {
             let kind = VTimelineSegmentKind(run.recordType)
-            let rect = CGRect(x: run.x, y: band.minY, width: run.width, height: band.height)
-            let path = Path(rect)
-            context.fill(path, with: .color(kind.colour.opacity(kind.fillOpacity)))
-            if run.isCompressed {
-                // UX.md §7.3: a run that could not reach the minimum width bleeds a 1 pt outer glow
-                // rather than being moved, so it is visible without lying about where it starts.
-                let glow = Path(rect.insetBy(dx: -VTheme.Border.thin, dy: 0))
-                context.stroke(glow, with: .color(kind.colour), lineWidth: VTheme.Border.thin)
-            }
-            if differentiate {
-                drawHatch(kind.hatch, in: &context, rect: rect)
-            }
+            let base = kind.colour
+            boxes.append(VTimelineBandPaint.Box(
+                rect: CGRect(x: CGFloat(run.x), y: band.minY,
+                             width: CGFloat(run.width), height: band.height),
+                fill: base.opacity(kind.fillOpacity),
+                glow: run.isCompressed ? base : nil,
+                hatch: kind.hatch))
         }
-    }
 
-    /// The 45° hatch that carries recording type without colour (DESIGN.md §10.5).
-    ///
-    ///     func drawLayer(content: (inout GraphicsContext) throws -> Void) rethrows
-    ///     mutating func clip(to path: Path, style: FillStyle, options: GraphicsContext.ClipOptions)
-    private func drawHatch(_ hatch: VTimelineHatch,
-                           in context: inout GraphicsContext,
-                           rect: CGRect) {
-        let pitch = hatch.pitch
-        guard pitch > 0, rect.width > 0, rect.height > 0 else { return }
-        context.drawLayer { layer in
-            layer.clip(to: Path(rect))
-            var lines = Path()
-            var offset = -rect.height
-            // Bounded independently of the arithmetic: a run as wide as the bar at a 3 pt pitch is
-            // ~400 lines, and the cap stops a degenerate pitch from stalling the renderer.
-            var drawn = 0
-            let limit = 512
-            while offset < rect.width, drawn < limit {
-                lines.move(to: CGPoint(x: rect.minX + offset, y: rect.maxY))
-                lines.addLine(to: CGPoint(x: rect.minX + offset + rect.height, y: rect.minY))
-                if hatch == .cross {
-                    lines.move(to: CGPoint(x: rect.minX + offset, y: rect.minY))
-                    lines.addLine(to: CGPoint(x: rect.minX + offset + rect.height, y: rect.maxY))
-                }
-                offset += pitch
-                drawn += 1
-            }
-            layer.stroke(lines,
-                         with: .color(VTheme.Color.Text.inverse.opacity(0.45)),
-                         lineWidth: VTheme.Border.thin)
-        }
-    }
-
-    /// The local-clip strip: Vigil's own recordings, in `accent` (UX.md §7.3's `▁ local clips`).
-    private func drawClips(in context: inout GraphicsContext, strip: CGRect) {
-        let radius = VTheme.Radius.full(strip.height)
-        let well = Path(roundedRect: strip, cornerRadius: radius, style: .continuous)
-        context.fill(well, with: .color(VTheme.Color.Stroke.subtle))
-        let kind = VTimelineSegmentKind.localClip
+        let clipKind = VTimelineSegmentKind.localClip
+        var clipBoxes: [CGRect] = []
         for clip in track.localClips
         where geometry.window.intersects(from: clip.start, to: clip.end) {
-            let x = geometry.clampedX(at: clip.start)
-            let maxX = geometry.clampedX(at: clip.end)
+            let x = CGFloat(geometry.clampedX(at: clip.start))
+            let maxX = CGFloat(geometry.clampedX(at: clip.end))
             // The same visibility floor the segment layout applies, so a two-second clip is not a
             // sub-pixel sliver at the 24 h zoom.
-            let width = max(TimelineBarLayout.defaultMinimumWidth, maxX - x)
-            let box = CGRect(x: x, y: strip.minY, width: width, height: strip.height)
-            context.fill(Path(roundedRect: box, cornerRadius: radius, style: .continuous),
-                         with: .color(kind.colour.opacity(kind.fillOpacity)))
+            let boxWidth = max(CGFloat(TimelineBarLayout.defaultMinimumWidth), maxX - x)
+            clipBoxes.append(CGRect(x: x, y: clipWell.minY,
+                                    width: boxWidth, height: clipWell.height))
         }
+
+        return VTimelineBandPaint(
+            well: band,
+            wellRadius: VTheme.Radius.xs,
+            wellFill: VTheme.Color.Layer.inset,
+            boxes: boxes,
+            gapSpans: layout.gapRuns.map { CGFloat($0.x)...CGFloat($0.maxX) },
+            baselineY: band.maxY - VTheme.Border.thin,
+            gapInk: VTheme.Color.Stroke.strong,
+            gapDash: [VTheme.Space.hair, VTheme.Space.xxs],
+            clipWell: clipWell,
+            clipRadius: VTheme.Radius.full(VTimelineMetrics.clipLane),
+            clipWellFill: VTheme.Color.Stroke.subtle,
+            clipBoxes: clipBoxes,
+            clipFill: clipKind.colour.opacity(clipKind.fillOpacity),
+            hairline: VTheme.Border.thin,
+            hatchInk: differentiate ? VTheme.Color.Text.inverse.opacity(0.45) : nil)
     }
 
     // MARK: - Markers
@@ -570,11 +668,11 @@ package struct VTimelineBarView: View {
     private var markerRow: some View {
         let clusters = TimelineMarkerLayout.lay(out: track.markers, in: geometry)
         return ZStack(alignment: .topLeading) {
-            // A transparent spacer so the row keeps its height when there are no markers at all.
+            // A transparent filler so the row keeps its height with no markers on it at all.
             SwiftUI.Color.clear
             ForEach(clusters) { cluster in
-                VTimelineMarkerGlyph(cluster: cluster, action: { onActivateMarker(cluster) })
-                    .position(x: cluster.x, y: VTimelineMetrics.markerRow / 2)
+                VTimelineMarkerGlyph(cluster: cluster) { onActivateMarker(cluster) }
+                    .position(x: CGFloat(cluster.x), y: VTimelineMetrics.markerRow / 2)
             }
         }
         .frame(height: VTimelineMetrics.markerRow)
@@ -607,8 +705,7 @@ package struct VTimelineMarkerGlyph: View {
     package var body: some View {
         Button(action: action) {
             glyph
-                .frame(width: VTimelineMetrics.markerGrab,
-                       height: VTimelineMetrics.markerRow)
+                .frame(width: VTimelineMetrics.markerGrab, height: VTimelineMetrics.markerRow)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
@@ -633,12 +730,12 @@ package struct VTimelineMarkerGlyph: View {
         if cluster.isCluster {
             clusterBadge
         } else if cluster.dominantKind.isPennant {
-            VTimelinePennant()
+            VTimelinePennant(staffWidth: VTheme.Border.selected)
                 .fill(tint)
                 .frame(width: VTimelineMetrics.markerGlyph + VTheme.Space.hair,
                        height: VTimelineMetrics.markerRow - VTheme.Space.hair)
         } else {
-            // A rotated near-square rather than a `Path`: the diamond is 6 pt and a 1 pt corner
+            // A rotated near-square rather than a `Path`: the diamond is 6 pt, and a 1 pt corner
             // radius keeps it from reading as a spike at that size.
             VTheme.Radius.shape(VTheme.Border.thin)
                 .fill(tint)
@@ -658,13 +755,12 @@ package struct VTimelineMarkerGlyph: View {
             .overlay {
                 if differentiate {
                     Capsule(style: .continuous)
-                        .strokeBorder(VTheme.Color.Text.primary,
-                                      lineWidth: VTheme.Border.thin)
+                        .strokeBorder(VTheme.Color.Text.primary, lineWidth: VTheme.Border.thin)
                 }
             }
     }
 
-    /// Bookmarks name themselves; events speak their own label, which the caller supplies.
+    /// Bookmarks name themselves; events speak the label the caller supplied.
     private var accessibilityLabel: Text {
         if cluster.isCluster {
             return Text("Events", bundle: .vigilUI)
@@ -680,17 +776,31 @@ package struct VTimelineMarkerGlyph: View {
 
 /// The bookmark's pennant: a vertical staff with a triangular flag at the top.
 ///
-/// A shape rather than an SF Symbol because UX.md §7.3 asks for a silhouette that is distinguishable
-/// from a diamond *by outline* — that is what makes bookmarks legible under
-/// `differentiateWithoutColor` without a second layout.
+/// A shape rather than an SF Symbol because UX.md §7.3 asks for a silhouette distinguishable from a
+/// diamond *by outline* — which is what makes bookmarks legible under `differentiateWithoutColor`
+/// without a second layout.
+///
+/// `path(in:)` is `nonisolated` so the type can carry the module's mandatory `@MainActor` (R-40)
+/// and still witness `Shape`'s non-isolated requirement, exactly as ``VStatusTriangle`` does. That
+/// is also why the staff's width is stored rather than read from `VTheme` inside the path.
+@MainActor
 package struct VTimelinePennant: Shape {
 
-    /// Draws the pennant inside `rect`. Degenerate rects yield an empty path rather than a
+    /// The width of the vertical staff, in points. Supplied by the call site because `VTheme` is
+    /// `@MainActor` and ``path(in:)`` is not.
+    package let staffWidth: CGFloat
+
+    /// Creates a pennant.
+    package init(staffWidth: CGFloat) {
+        self.staffWidth = staffWidth
+    }
+
+    /// Draws the pennant inside `rect`. A degenerate rect yields an empty path rather than a
     /// negative-width flag.
-    package func path(in rect: CGRect) -> Path {
+    nonisolated package func path(in rect: CGRect) -> Path {
         var path = Path()
         guard rect.width > 0, rect.height > 0 else { return path }
-        let staff = max(VTheme.Border.thin, rect.width / 4)
+        let staff = min(max(staffWidth, 0), rect.width)
         path.addRect(CGRect(x: rect.minX, y: rect.minY, width: staff, height: rect.height))
         path.move(to: CGPoint(x: rect.minX + staff, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height / 4))

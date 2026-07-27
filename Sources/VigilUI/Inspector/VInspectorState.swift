@@ -369,4 +369,189 @@ package struct VInspectorActions {
     package init() {}
 }
 
+// MARK: - Preview fixtures
+
+#if DEBUG
+
+extension VInspectorState {
+
+    /// A healthy 1080p main stream on a working camera.
+    ///
+    /// ⚠️ Synthesised, not captured from hardware. The numbers are the ones
+    /// design/mockups/01-main-window.html renders, so a preview and the mockup can be compared
+    /// side by side.
+    package static var previewHealthy: VInspectorState {
+        var statistics = StreamStatistics()
+        statistics.framesPerSecond = 25
+        statistics.bitsPerSecond = 4_120_000
+        statistics.keyframeIntervalSeconds = 2
+        statistics.packetsReceived = 918_400
+        statistics.packetsOutOfOrder = 3
+        statistics.lossFraction = 0.0002
+        statistics.jitterMilliseconds = 6
+        statistics.decodeQueueDepth = 2
+        statistics.estimatedLatencyMilliseconds = 186
+        statistics.isHardwareAccelerated = true
+        statistics.uptimeSeconds = 5_412
+
+        return VInspectorState(
+            camera: previewCamera,
+            connection: .live,
+            now: previewNow,
+            identity: previewIdentity,
+            storage: previewStorage(freeMegabytes: 1_040_000),
+            stream: previewStream,
+            statistics: statistics,
+            recentStatistics: previewSeries(peak: 4_600_000, loss: 0.0002),
+            ptz: InspectorPTZCapability(isPresent: true, supportsPosition3D: true),
+            presets: previewPresets,
+            patrols: previewPatrols,
+            image: InspectorImageSettings(brightness: 62, contrast: 50, saturation: 55,
+                                          sharpness: 40, wdrMode: .auto, wdrLevel: 45,
+                                          dayNightMode: .auto, irMode: .auto, irLevel: 60),
+            events: previewEvents,
+            recording: VInspectorRecordingState(isRecording: true, elapsedSeconds: 252,
+                                                destination: "~/Movies/Vigil", clipsToday: 4))
+    }
+
+    /// The same camera with every threshold crossed: packet loss past 2 %, jitter and latency in
+    /// the danger band, a decode queue that is behind, **software** decode, and a disk at 98 %.
+    ///
+    /// Every degraded surface in the panel is on screen at once here on purpose — it is the state
+    /// that is hardest to get right and the one nobody can reproduce on demand.
+    package static var previewDegraded: VInspectorState {
+        var statistics = StreamStatistics()
+        statistics.framesPerSecond = 14
+        statistics.bitsPerSecond = 1_240_000
+        statistics.keyframeIntervalSeconds = 4
+        statistics.packetsReceived = 402_100
+        statistics.packetsLost = 12_880
+        statistics.packetsOutOfOrder = 417
+        statistics.lossFraction = 0.031
+        statistics.jitterMilliseconds = 74
+        statistics.decodeQueueDepth = 9
+        statistics.estimatedLatencyMilliseconds = 812
+        statistics.isHardwareAccelerated = false
+        statistics.uptimeSeconds = 612
+        statistics.reconnectCount = 4
+        statistics.lastErrorCode = "VG-RTP-0012"
+
+        return VInspectorState(
+            camera: previewCamera,
+            connection: .degraded(.packetLoss(fraction: 0.031)),
+            now: previewNow,
+            identity: previewIdentity,
+            storage: previewStorage(freeMegabytes: 60_000),
+            isDeviceUnavailable: true,
+            stream: previewStream,
+            statistics: statistics,
+            recentStatistics: previewSeries(peak: 2_100_000, loss: 0.031),
+            ptz: .absent,
+            image: InspectorImageSettings(brightness: 88, contrast: 30, saturation: 20,
+                                          sharpness: 95, wdrMode: .on, wdrLevel: 90,
+                                          dayNightMode: .night, irMode: .on, irLevel: 100,
+                                          flip: .horizontal, isLocalPreviewOnly: true),
+            events: previewEvents,
+            recording: VInspectorRecordingState(destination: "~/Movies/Vigil", clipsToday: 0))
+    }
+
+    /// The healthy camera with its ISAPI answers still in flight, so every device row is a
+    /// skeleton at the real content's width (§9.19).
+    package static var previewLoading: VInspectorState {
+        var state = VInspectorState.previewHealthy
+        state.isDeviceLoading = true
+        state.storage = nil
+        return state
+    }
+
+    /// A fixed instant, so a preview renders the same uptime and the same event ages every time.
+    static var previewNow: Date { Date(timeIntervalSince1970: 1_700_000_000) }
+
+    static var previewCamera: LiveCameraIdentity {
+        LiveCameraIdentity(
+            id: UUID(uuidString: "1B7E0C6A-1111-4A2B-9C3D-0E5F6A7B8C9D") ?? UUID(),
+            name: "Front Door",
+            host: "192.168.1.64")
+    }
+
+    static var previewIdentity: InspectorDeviceIdentity {
+        InspectorDeviceIdentity(model: "DS-2CD2385G1",
+                                deviceName: "Front Door",
+                                firmwareVersion: "V5.7.3 build 220315",
+                                firmwareReleased: "15 March 2022",
+                                serialNumber: "DS-2CD2385G120220315AAWR1234821",
+                                macAddress: "44:47:cc:1a:2b:3c",
+                                totalChannels: 1,
+                                host: "192.168.1.64",
+                                uptimeSeconds: 6 * 86_400 + 4 * 3_600 + 12 * 60)
+    }
+
+    static var previewStream: InspectorStreamDescription {
+        InspectorStreamDescription(codec: "H.265",
+                                   profile: "Main",
+                                   level: "4.1",
+                                   pixelWidth: 1920,
+                                   pixelHeight: 1080,
+                                   streamInUse: "Main",
+                                   transport: "TCP (interleaved)",
+                                   targetFramesPerSecond: 25,
+                                   sessionID: "\u{2026}a91c")
+    }
+
+    static func previewStorage(freeMegabytes: Int) -> StorageInfo {
+        StorageInfo(volumes: [StorageVolume(id: 1,
+                                            name: "HDD1",
+                                            kind: .sata,
+                                            status: .ok,
+                                            capacityMB: 4_000_000,
+                                            freeSpaceMB: freeMegabytes,
+                                            isReadOnly: false)],
+                    workMode: "group")
+    }
+
+    /// Sixty samples that rise gently to `peak`, so the sparkline has a shape rather than a slope.
+    static func previewSeries(peak: Double, loss: Double) -> [StreamStatistics] {
+        (0..<60).map { index in
+            var sample = StreamStatistics()
+            let phase = Double(index) / 59
+            let wobble = (index % 3 == 0) ? 0.92 : 1.0
+            sample.bitsPerSecond = peak * (0.62 + 0.38 * phase) * wobble
+            sample.lossFraction = loss * wobble
+            sample.framesPerSecond = 25 * wobble
+            return sample
+        }
+    }
+
+    static var previewPresets: [PTZPreset] {
+        [PTZPreset(id: 1, name: "Gate", enabled: true),
+         PTZPreset(id: 2, name: "Driveway", enabled: true),
+         PTZPreset(id: 3, name: "", enabled: true),
+         PTZPreset(id: 4, name: "Back fence", enabled: true)]
+    }
+
+    static var previewPatrols: [PTZPatrol] {
+        [PTZPatrol(id: 1, name: "Night Sweep", enabled: true,
+                   stops: (1...8).map { PTZPatrol.Stop(presetID: $0, dwellSeconds: 12, speed: 20) }),
+         PTZPatrol(id: 2, name: "Perimeter", enabled: true,
+                   stops: (1...4).map { PTZPatrol.Stop(presetID: $0, dwellSeconds: 20, speed: 12) })]
+    }
+
+    static var previewEvents: [InspectorEvent] {
+        let base = previewNow
+        return [
+            InspectorEvent(id: UUID(uuidString: "2C8F1D7B-2222-4A2B-9C3D-0E5F6A7B8C9D") ?? UUID(),
+                           instant: base.addingTimeInterval(-240), kind: .motion,
+                           label: "Motion", duration: 8, hasThumbnail: true),
+            InspectorEvent(id: UUID(uuidString: "3D9A2E8C-3333-4A2B-9C3D-0E5F6A7B8C9D") ?? UUID(),
+                           instant: base.addingTimeInterval(-1_820), kind: .lineCrossing,
+                           label: "Line crossing", duration: 3, hasThumbnail: true),
+            InspectorEvent(id: UUID(uuidString: "4EAB3F9D-4444-4A2B-9C3D-0E5F6A7B8C9D") ?? UUID(),
+                           instant: base.addingTimeInterval(-96_400), kind: .tamper,
+                           label: "Tamper", duration: nil, hasThumbnail: false),
+        ]
+    }
+}
+
+#endif
+
 #endif  // os(macOS)

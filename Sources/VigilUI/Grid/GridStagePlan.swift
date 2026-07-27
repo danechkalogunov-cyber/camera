@@ -15,6 +15,32 @@ import Foundation
 
 import VigilProtocols
 
+// MARK: - VGridStageMetrics
+
+/// The stage's own numbers.
+///
+/// A namespace of its own for two reasons. Swift rejects a static stored property inside a generic
+/// type outright — `static stored properties not supported in generic types` — so `VGridStageView`,
+/// which is generic over its video content, cannot hold these itself; that is a hard error on macOS
+/// which a Linux build cannot see, and `Scripts/lint.py` catches it instead. And a number DESIGN.md
+/// states belongs somewhere a reviewer can find it, next to the citation.
+package enum VGridStageMetrics {
+
+    /// 0.96 — the entrance scale of DESIGN.md §7.8: a tile arrives at `scale 0.96 → 1` together
+    /// with `opacity 0 → 1`, staggered in reading order.
+    ///
+    /// `scaleEffect` is one of the properties §7.9 rule 1 permits on a view that *contains* a video
+    /// layer, because it is a compositor transform rather than a re-layout: the tile's frame, and so
+    /// the display layer's bounds, are untouched by it.
+    package static let entranceScale: CGFloat = 0.96
+
+    /// The promoted tile is drawn above the black backdrop that hides the grid behind it.
+    package static let promotedZIndex: Double = 2
+
+    /// The backdrop sits above the grid and below the promoted tile.
+    package static let backdropZIndex: Double = 1
+}
+
 // MARK: - VStageSlot
 
 /// One cell of the stage, resolved: where it sits, what is in it, and what SwiftUI should key it by.

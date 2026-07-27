@@ -315,17 +315,22 @@ package struct VTimelineRulerView: View {
 
     package var body: some View {
         let ticks = TimelineRuler.ticks(in: geometry, day: day, zoom: zoom, clock: clock)
+        let marks = tickMarks(ticks)
         return ZStack(alignment: .topLeading) {
+            // The renderer carries no isolation, so it draws pre-resolved rectangles and never
+            // reads a `@MainActor` token — the same arrangement `VTimelineBandRenderer` uses.
             Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) {
-                context, size in
-                draw(ticks: ticks, in: &context, size: size)
+                context, _ in
+                for mark in marks {
+                    context.fill(Path(mark.rect), with: .color(mark.ink))
+                }
             }
             ForEach(ticks.filter(\.isMajor)) { tick in
                 Text(verbatim: tick.label ?? "")
                     .vType(VTheme.Typography.monoSmall.numeric)
                     .foregroundStyle(VTheme.Color.Text.tertiary)
                     .fixedSize()
-                    .position(x: tick.x,
+                    .position(x: CGFloat(tick.x),
                               y: VTheme.Typography.monoSmall.lineHeight / 2)
             }
         }
@@ -337,18 +342,27 @@ package struct VTimelineRulerView: View {
 
     /// Major ticks are 1 × 6 pt at `stroke.strong`, minors 1 × 3 pt at `stroke.default`, both
     /// hanging from the band's bottom edge (DESIGN.md §9.14).
-    private func draw(ticks: [TimelineTick], in context: inout GraphicsContext, size: CGSize) {
-        for tick in ticks {
+    ///
+    /// Drawn as filled 1 pt rectangles rather than as strokes so no half-point straddles a device
+    /// pixel and turns a hairline into a two-pixel smudge.
+    private func tickMarks(_ ticks: [TimelineTick]) -> [VTimelineTickMark] {
+        let height = VTimelineMetrics.ruler
+        return ticks.map { tick in
             let length = tick.isMajor ? VTimelineMetrics.majorTick : VTimelineMetrics.minorTick
-            var line = Path()
-            line.move(to: CGPoint(x: tick.x, y: size.height - length))
-            line.addLine(to: CGPoint(x: tick.x, y: size.height))
-            context.stroke(line,
-                           with: .color(tick.isMajor ? VTheme.Color.Stroke.strong
-                                                     : VTheme.Color.Stroke.default),
-                           lineWidth: VTheme.Border.thin)
+            return VTimelineTickMark(
+                rect: CGRect(x: CGFloat(tick.x), y: height - length,
+                             width: VTheme.Border.thin, height: length),
+                ink: tick.isMajor ? VTheme.Color.Stroke.strong : VTheme.Color.Stroke.default)
         }
     }
+}
+
+// MARK: - VTimelineTickMark
+
+/// One ruler tick, resolved to a rectangle and an ink before the `Canvas` runs.
+struct VTimelineTickMark {
+    let rect: CGRect
+    let ink: SwiftUI.Color
 }
 
 // MARK: - VTimelinePlayheadView
@@ -365,10 +379,11 @@ package struct VTimelinePlayheadView: View {
 
     /// Where the playhead is. Exactly what the user asked for, even in a gap — see the ruling at
     /// the top of TimelineSeek.swift.
+    ///
+    /// The view draws no `x` of its own: the owner positions it, because the same
+    /// ``TimelineGeometry`` has to place the playhead, the hover cursor and every lane, and two
+    /// call sites resolving it separately is how they drift apart.
     package let instant: Date
-
-    /// The pixel mapping.
-    package let geometry: TimelineGeometry
 
     /// The clock the bubble's timecode is formatted with.
     package let clock: TimelineClock
@@ -383,12 +398,10 @@ package struct VTimelinePlayheadView: View {
 
     /// Creates a playhead.
     package init(instant: Date,
-                 geometry: TimelineGeometry,
                  clock: TimelineClock,
                  height: CGFloat,
                  isScrubbing: Bool = false) {
         self.instant = instant
-        self.geometry = geometry
         self.clock = clock
         self.height = height
         self.isScrubbing = isScrubbing

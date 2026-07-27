@@ -227,7 +227,8 @@ private func gridStageFilledPlan(_ layout: VGridLayout, _ count: Int) -> VStageP
 /// rectangle instead of collapsing.
 @Test func gridStagePromotingAnAbsentCameraLeavesEveryCellAlone() {
     let plan = gridStageFilledPlan(.grid2x2, 4)
-    let stranger = try? #require(gridStageCameras(9).last)
+    // The ninth identifier is deterministic and is not among the four the plan was filled with.
+    let stranger = gridStageCameras(9).last
     let geometry = VGridGeometry(layout: .grid2x2, size: CGSize(width: 900, height: 600))
     for slot in plan.slots {
         #expect(plan.frame(for: slot, in: geometry, promoted: stranger)

@@ -336,7 +336,7 @@ package struct VToastPolicy: Sendable, Hashable {
     package func remaining(after elapsed: Duration) -> Duration? {
         guard let dwell else { return nil }
         let left = dwell - elapsed
-        return left > .zero ? left : .zero
+        return left > Duration.zero ? left : Duration.zero
     }
 
     /// Whether the dwell has run out. Always `false` for an indefinite toast.
@@ -361,8 +361,12 @@ package struct VToastPolicy: Sendable, Hashable {
     @MainActor
     private static func dwellSeconds(for kind: VToastKind, hasAction: Bool) -> Duration? {
         guard !kind.blocksAutomaticDismissal else { return nil }
-        return .seconds(hasAction ? VTheme.Motion.Delay.toastDwellWithAction
-                                  : VTheme.Motion.Delay.toastDwell)
+        let seconds = hasAction ? VTheme.Motion.Delay.toastDwellWithAction
+                                : VTheme.Motion.Delay.toastDwell
+        // Spelled `Duration.seconds` rather than `.seconds`: the return type is `Duration?`, and an
+        // implicit member expression against an Optional is exactly the kind of inference this
+        // container cannot check.
+        return Duration.seconds(seconds)
     }
 }
 

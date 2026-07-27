@@ -153,3 +153,74 @@
    signInPaused diagnosis, where Vigil itself is the one holding back. Wording quoted from
    the ruling. Inert until the case lands — if the literal differs the key simply misses. */
 "Waiting before trying again" = "Waiting before trying again";
+
+/* The stage — the grid of tiles (UX.md §5.1, §5.4). The stage is one accessibility
+   container; each tile inside it names its own camera, so this label only has to say
+   what the container is. */
+"Camera grid" = "Camera grid";
+
+/* The `+3` chip at the stage's bottom-trailing corner, which lists the cameras a smaller
+   layout could not fit. The visible text is the numeral alone, so no plural rule can
+   apply and neither key belongs in the stringsdict. */
+"Cameras that don't fit this layout" = "Cameras that don't fit this layout";
+"Show the cameras that don't fit" = "Show the cameras that don't fit";
+
+/* ── The sidebar (UX.md §4, DESIGN.md §9.12) ───────────────────────────────────────── */
+
+/* The four fixed section eyebrows. Caption2 uppercases them, so they are written in
+   sentence case here and translated the same way. `Live` already exists above, as the
+   status word beside a dot; one key serves both, which is correct — it is the same word
+   about the same thing. */
+"Groups" = "Groups";
+"Cameras" = "Cameras";
+"Library" = "Library";
+
+/* The LIVE section's single row, and the three LIBRARY links */
+"Current Layout" = "Current Layout";
+"Recordings" = "Recordings";
+"Events" = "Events";
+"Bookmarks" = "Bookmarks";
+
+/* The muted row a section shows instead of disappearing (UX.md §4.1, §12.2). CAMERAS has
+   two, and they are not interchangeable: an empty library invites a camera, a fruitless
+   search offers to undo itself. */
+"No groups — drag cameras together to make one" = "No groups — drag cameras together to make one";
+"No cameras yet" = "No cameras yet";
+"No cameras match your search" = "No cameras match your search";
+"Clear Filters" = "Clear Filters";
+
+/* VoiceOver labels for the icon-only controls: the two section `+` buttons and the
+   footer's gear. A glyph is not speakable, and no two visible controls in a window may
+   share a label (DESIGN.md §10.7). */
+"New Group" = "New Group";
+"Add Camera" = "Add Camera";
+"Settings" = "Settings";
+
+/* The status footer, `6 live · 1.8 Gb/s` (UX.md §3.3). The number is a separate Text run
+   from the word, so the pair never becomes a count-bearing phrase and never needs the
+   stringsdict; both Russian values are chosen to be invariable for that reason. */
+"live" = "live";
+"degraded" = "degraded";
+
+/* The camera row's status line (UX.md §4.2, §12.5, §12.6). Every number arrives already
+   formatted by FormatStyle, so the value carries a bare %@ and never a separator or a
+   percent sign of its own. `Connecting…`, `Offline` and `Live` are reused from above. */
+"Disabled" = "Disabled";
+"Sign-in failed" = "Sign-in failed";
+"Offline · retry %@ s" = "Offline · retry %@ s";
+"Connecting %@" = "Connecting %@";
+"%@ loss" = "%@ loss";
+"%@ jitter" = "%@ jitter";
+"%@ queued" = "%@ queued";
+"%@ fps" = "%@ fps";
+"On TCP" = "On TCP";
+
+/* The unit is inside the key, exactly as it is for `%@ s` above: Measurement's
+   abbreviated width spells a second `sec`, and a bit rate has no Measurement at all. */
+"%@ b/s" = "%@ b/s";
+"%@ kb/s" = "%@ kb/s";
+"%@ Mb/s" = "%@ Mb/s";
+"%@ Gb/s" = "%@ Gb/s";
+
+/* The tooltip on the sub-stream marker in a camera row's status line (UX.md §4.2) */
+"Sub-stream" = "Sub-stream";
