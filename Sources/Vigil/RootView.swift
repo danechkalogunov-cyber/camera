@@ -36,6 +36,13 @@ struct RootView: View {
     /// The app-level model. `@Bindable` because `ConnectFormView` writes back into `form`.
     @Bindable var session: AppSessionModel
 
+    /// The window's own state: which panels are shown, the layout, the search box.
+    ///
+    /// Created here rather than injected because it is per-window and has no dependencies. It
+    /// outlives a reconnect, which is the point — losing the sidebar every time a camera blinks
+    /// would be worse than not having one.
+    @State private var window = MainWindowState()
+
     // MARK: - Body
 
     var body: some View {
@@ -65,7 +72,11 @@ struct RootView: View {
                             onConnect: { session.connect($0) },
                             onRemedy: { session.perform($0) })
         case .live:
-            liveVideo
+            // The full window — toolbar, camera list, stage, inspector, status bar — around the
+            // same tile `liveVideo` mounts. To fall back to the bare picture, substitute
+            // `liveVideo` here; that property is kept for exactly that reason, and because it is
+            // still the honest minimum if the chrome turns out to cost frames.
+            MainWindowView(session: session, window: window)
         }
     }
 
@@ -113,7 +124,10 @@ struct RootView: View {
 
     /// One placeholder id for the life of the process, so the tile does not change identity — and
     /// therefore does not get rebuilt — between the connect press and the camera record.
-    private static let pendingCameraID = CameraID()
+    ///
+    /// Not `private`: `MainWindowView` derives the same identity for the stage tile, and two
+    /// placeholders would make the tile change identity when the window chrome appeared.
+    static let pendingCameraID = CameraID()
 }
 
 #endif  // os(macOS)

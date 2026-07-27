@@ -1,0 +1,131 @@
+//
+//  MainWindowState.swift
+//  Vigil
+//
+//  The main window's own state — what is shown, not what is streaming. Chrome visibility, the
+//  chosen layout, the search box and the inspector's tab live here; nothing about a connection does.
+//  macOS-only. See docs/UX.md and docs/DESIGN.md §9.
+//
+
+#if os(macOS)
+
+import Foundation
+import Observation
+import SwiftUI
+
+import VigilProtocols
+import VigilUI
+
+// MARK: - MainWindowState
+
+/// View state for the main window.
+///
+/// **Why this is separate from `AppSessionModel`.** That object owns the `StreamController` and
+/// everything that can fail; this one owns nothing that can fail. Collapsing the sidebar must not be
+/// able to disturb a stream, and a reconnect must not be able to move the inspector's tab, so the two
+/// are not allowed to share a type. It also means every property here is safe to write from a view
+/// body's callback without thinking about the actor the controller lives on.
+///
+/// Persistence is deliberately absent for now: the slice restores a *connection*
+/// (`AppSessionModel.resumeOrPrompt()`), not a workspace. Layout and chrome restoration belongs with
+/// the layout store in `VigilCore`, which the single-camera slice does not yet drive.
+@Observable
+final class MainWindowState {
+
+    // MARK: - Chrome
+
+    /// Whether the camera list is shown. The toolbar's leading toggle writes this.
+    var isSidebarVisible = true
+
+    /// Whether the inspector is shown. The toolbar's trailing toggle writes this.
+    var isInspectorVisible = true
+
+    // MARK: - Stage
+
+    /// The tile arrangement.
+    ///
+    /// `.single` while the slice drives one camera: every other case would draw empty cells for
+    /// cameras that cannot exist yet, which reads as breakage rather than as capacity. The switcher
+    /// still offers them, because the assignment and geometry types behind it are complete and this
+    /// is the cheapest way to exercise them against a real window.
+    var layout: VGridLayout = .single
+
+    /// Free-text filter over the camera list, bound to the toolbar's search field.
+    var searchText = ""
+
+    /// Sidebar focus and selection.
+    var sidebarSelection = VSidebarSelectionState()
+
+    /// Rows the user has collapsed, by row id.
+    var collapsedRows: Set<String> = []
+
+    // MARK: - Inspector
+
+    /// The visible inspector tab.
+    ///
+    /// `.stream` rather than `.info`, because the question a single-camera build is actually asked is
+    /// "is the picture healthy", and that is the Stream tab. `docs/UX.md` picks `.info` for a
+    /// populated library, which is the right default once there is more than one camera to identify.
+    var inspectorTab: VInspectorTab = .stream
+
+    // MARK: - Transient
+
+    /// The most recent advisory to show over the stage, or `nil` when there is nothing to say.
+    ///
+    /// Held here rather than in the session model because a toast is a piece of window furniture: it
+    /// outlives the event that raised it, it is dismissed by the user, and dismissing it must not
+    /// change anything about the stream it describes.
+    var toast: MainWindowToast?
+
+    // MARK: - Initialisation
+
+    /// Builds the default window state: both panels shown, one tile, nothing searched.
+    init() {}
+}
+
+// MARK: - MainWindowToast
+
+/// An advisory shown over the stage, with the one action it offers.
+///
+/// `kind` chooses the semantic colour and the dwell policy through `VToastPolicy.resolved(for:…)`;
+/// the view layer owns both, so this type carries only what the window decides.
+struct MainWindowToast: Identifiable, Sendable {
+
+    /// Distinguishes one advisory from the next so SwiftUI animates a replacement rather than
+    /// mutating the visible one in place.
+    let id = UUID()
+
+    /// Severity, which selects the colour and the auto-dismiss policy.
+    let kind: VToastKind
+
+    /// The sentence shown to the user. Already localised by the caller.
+    let message: String
+
+    /// Title for the inline action button, or `nil` for an advisory with nothing to do.
+    ///
+    /// `LocalizedStringKey` rather than a `String`, because that is what `VToastView` takes and a
+    /// conversion here would strip the localisation the view is about to perform.
+    let actionTitle: LocalizedStringKey?
+
+    /// What the action button performs.
+    let action: (@Sendable () -> Void)?
+
+    /// Builds an advisory.
+    ///
+    /// - Parameters:
+    ///   - kind: severity; drives colour and dwell.
+    ///   - message: the localised sentence to show.
+    ///   - actionTitle: label for the inline action, or `nil` for no action.
+    ///   - action: what the inline action does. Ignored when `actionTitle` is `nil`.
+    init(kind: VToastKind,
+         message: String,
+         actionTitle: LocalizedStringKey? = nil,
+         action: (@Sendable () -> Void)? = nil) {
+        self.kind = kind
+        self.message = message
+        self.actionTitle = actionTitle
+        self.action = action
+    }
+}
+
+#endif  // os(macOS)
