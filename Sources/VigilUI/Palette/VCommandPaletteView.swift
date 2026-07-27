@@ -193,7 +193,7 @@ package struct VCommandPaletteView: View {
             // `.tint` is what colours the insertion point and the selection on macOS (§9.5).
             .tint(VTheme.Color.Semantic.accent)
             .autocorrectionDisabled()
-            .onSubmit(run)
+            .onSubmit { run() }
             if !query.isEmpty {
                 clearButton
             }
@@ -271,9 +271,10 @@ package struct VCommandPaletteView: View {
     /// would ship untranslated.
     private func sectionHeader(_ category: VCommandCategory) -> some View {
         categoryLabel(category)
+            // `caption2` is the section-eyebrow step and already carries `.textCase(.uppercase)`;
+            // restating it here would be a second place for the two to disagree.
             .vType(VTheme.Typography.caption2)
             .foregroundStyle(VTheme.Color.Text.tertiary)
-            .textCase(.uppercase)
             .padding(.horizontal, VTheme.Space.lg)
             .frame(height: VPaletteMetrics.headerHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
