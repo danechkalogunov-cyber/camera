@@ -41,6 +41,28 @@ struct MainWindowView: View {
     /// Window furniture: what is shown, what is selected, what is being searched.
     @Bindable var window: MainWindowState
 
+    /// Fetches the Info tab's device identity over ISAPI.
+    ///
+    /// Owned here rather than by `AppSessionModel`, because nothing it does can affect the stream:
+    /// a camera that refuses `/ISAPI/System/deviceInfo` still shows a picture, and a device-info
+    /// timeout must not be able to disturb a session. Built in `init` because it needs the app's
+    /// logger and clock, which arrive with the session.
+    @State private var deviceInfo: DeviceInfoService
+
+    // MARK: - Initialisation
+
+    /// Builds the window over a session.
+    ///
+    /// - Parameters:
+    ///   - session: the streaming session.
+    ///   - window: per-window view state.
+    init(session: AppSessionModel, window: MainWindowState) {
+        self.session = session
+        self.window = window
+        _deviceInfo = State(initialValue: DeviceInfoService(logger: session.dependencies.logger,
+                                                            clock: session.dependencies.clock))
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -96,6 +118,9 @@ struct MainWindowView: View {
                 .hidden()
         }
         .task(id: cycleTick) { await runCycle() }
+        // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
+        // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
+        .task(id: session.camera?.id) { loadDeviceInfo() }
     }
 
     // MARK: - Overlays
@@ -128,6 +153,16 @@ struct MainWindowView: View {
     }
 
     // MARK: - Palette, menu and cycle
+
+    /// Asks the camera who it is, once there is a camera to ask.
+    ///
+    /// Silent when the record does not exist yet — that is the window between pressing Return and
+    /// the session storing the camera, and guessing an address there would send a request to the
+    /// wrong host.
+    private func loadDeviceInfo() {
+        guard let camera = session.camera else { return }
+        deviceInfo.load(camera: camera, credentials: session.credentials)
+    }
 
     /// Opens the palette with an empty query.
     ///
@@ -399,7 +434,10 @@ struct MainWindowView: View {
         VInspectorState(camera: identity,
                         connection: session.liveState,
                         now: Date(),
-                        identity: deviceIdentity)
+                        identity: deviceIdentity,
+                        storage: deviceInfo.storage,
+                        isDeviceLoading: deviceInfo.isLoading,
+                        isDeviceUnavailable: deviceInfo.isUnavailable)
     }
 
     /// The address half of the Info tab.
@@ -410,12 +448,10 @@ struct MainWindowView: View {
     /// and the single-camera slice never calls it. An empty identity was why the Info tab showed a
     /// bare `:554` — the port with no host in front of it.
     private var deviceIdentity: InspectorDeviceIdentity {
-        let camera = session.camera
-        return InspectorDeviceIdentity(channel: camera?.channel ?? .first,
-                                       host: camera?.host ?? session.form.request.host,
-                                       rtspPort: camera?.rtspPort ?? 554,
-                                       httpPort: camera?.httpPort ?? 80,
-                                       usesTLS: camera?.useTLS ?? false)
+        // Whatever the device answered. `DeviceInfoService.load` publishes the address half
+        // immediately and fills in model, firmware, serial, MAC and uptime when the reply lands, so
+        // this is correct before the request completes and richer after it.
+        deviceInfo.identity
     }
 
     /// The inspector buttons the slice can actually honour.
@@ -430,6 +466,7 @@ struct MainWindowView: View {
         actions.onOpenWebPage = { openDeviceWebPage() }
         actions.onRequestKeyframe = { session.recoverStalledPicture() }
         actions.onReconnect = { session.perform(.retry) }
+        actions.onRetryDevice = { deviceInfo.retry() }
         return actions
     }
 
