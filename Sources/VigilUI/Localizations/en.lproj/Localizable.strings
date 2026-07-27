@@ -224,3 +224,80 @@
 
 /* The tooltip on the sub-stream marker in a camera row's status line (UX.md §4.2) */
 "Sub-stream" = "Sub-stream";
+
+/* ── Window chrome: the toolbar (DESIGN.md §11.3, UX.md §3.2) ──────────────────────────
+   Titles and VoiceOver labels for the 52 pt unified bar. Every icon-only control carries a
+   label because a glyph is not speakable and no two visible controls in one window may
+   share one (DESIGN.md §10.7); each label doubles as the control's tooltip. */
+"Toggle Sidebar" = "Toggle Sidebar";
+"Toggle Inspector" = "Toggle Inspector";
+"Cycle" = "Cycle";
+"Cycle cameras" = "Cycle cameras";
+"More" = "More";
+"Command palette" = "Command palette";
+
+/* The toolbar search field (DESIGN.md §9.6). One key serves the placeholder and the hidden
+   label, which is what keeps them from drifting apart. */
+"Search cameras" = "Search cameras";
+"Clear search" = "Clear search";
+
+/* The toolbar's layout switcher (UX.md §5.1). Each segment draws a miniature of the real
+   arrangement, so these strings exist only to be spoken and to be said back: VoiceOver reads
+   `3 × 3` as "three multiplication sign three", and a Voice Control user has to be able to
+   name the segment out loud (DESIGN.md §10.7). Spelled out for both reasons. */
+"Choose a layout" = "Choose a layout";
+"Single view" = "Single view";
+"Two by two" = "Two by two";
+"Hero and five" = "Hero and five";
+"Three by three" = "Three by three";
+"Four by four" = "Four by four";
+"Hero and seven" = "Hero and seven";
+"Two heroes and eight" = "Two heroes and eight";
+"Mosaic" = "Mosaic";
+
+/* The status footer's degraded affordance (UX.md §3.3). `live`, `degraded` and `Settings`
+   are the footer's other strings and are already above. */
+"Show degraded cameras" = "Show degraded cameras";
+
+/* Toasts (DESIGN.md §9.17). `Dismiss` is the close button's VoiceOver label; the rest is copy
+   the #if DEBUG previews render, taken from UX.md §3.3 and §14.3 rather than invented, so the
+   translations are already right when the toast queue starts posting them. */
+"Dismiss" = "Dismiss";
+"Run Stream Doctor" = "Run Stream Doctor";
+"Recording stopped — disk is full." = "Recording stopped — disk is full.";
+"Manage Recordings" = "Manage Recordings";
+
+/* The archive timeline — the multi-track scrubber on the playback screen (UX.md §7.3,
+   DESIGN.md §9.14). */
+
+/* a11y.timeline.label, UX.md §14.5. The camera's name, so a stack of four lanes gives
+   VoiceOver four distinguishable elements. */
+"Recording timeline for %@" = "Recording timeline for %@";
+
+/* DESIGN.md §9.14's disabled state, verbatim. It says nothing was recorded, which is
+   different from "not loaded yet" — that state shimmers and has no text at all. */
+"No recordings on this day" = "No recordings on this day";
+
+/* The marker row. A bookmark is the one marker the user placed by hand; every other
+   marker speaks the event label the caller supplied, so it needs no key. The counted
+   cluster reuses the existing "Events" key with the count as its accessibility value,
+   which is what keeps a number out of a sentence that would have to agree with it. */
+"Bookmark" = "Bookmark";
+
+/* The five legend keys, in the mockup's order and in its sentence case. Lowercase on
+   purpose: they name a kind of recording inside a phrase, not a section eyebrow. */
+"continuous" = "continuous";
+"motion" = "motion";
+"alarm" = "alarm";
+"no recording" = "no recording";
+"local clip" = "local clip";
+
+/* The zoom stepper. The span readout beside it is a formatted Duration, never a key. */
+"Timeline zoom" = "Timeline zoom";
+"Zoom in" = "Zoom in";
+"Zoom out" = "Zoom out";
+
+/* The timeline's VoiceOver rotor actions (UX.md §14.5). Singular in both languages: the
+   action moves to one event, however many there are. */
+"Next event" = "Next event";
+"Previous event" = "Previous event";

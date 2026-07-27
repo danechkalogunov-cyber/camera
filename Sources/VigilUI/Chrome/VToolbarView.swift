@@ -22,6 +22,10 @@ import SwiftUI
 /// not design tokens shared across the app, and putting them in `VTheme` would imply that some other
 /// view may reach for a 200 pt search field. Everything that *is* a token — heights, radii, spacing,
 /// colours, icon sizes — comes from `VTheme` and is not restated here.
+///
+/// `@MainActor` for the same reason `VTheme.Metrics` is: several of these values are **derived from**
+/// main-actor tokens, and a nonisolated static cannot be initialised from one.
+@MainActor
 package enum VToolbarMetrics {
 
     // MARK: Traffic lights (§11.2)
@@ -523,9 +527,11 @@ private struct VToolbarLayoutGlyph: View {
 
     var body: some View {
         GeometryReader { proxy in
+            // `cells` is computed, so it is read once here rather than once per iteration.
+            let cells = layout.cells
             let unit = proxy.size.width / CGFloat(VGridLayout.units)
-            ForEach(Array(layout.cells.enumerated()), id: \.offset) { item in
-                cell(item.element, unit: unit)
+            ForEach(cells.indices, id: \.self) { index in
+                cell(cells[index], unit: unit)
             }
         }
         .frame(width: VTheme.Icon.lg, height: VTheme.Icon.lg)

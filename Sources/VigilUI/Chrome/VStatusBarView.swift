@@ -23,9 +23,10 @@ import SwiftUI
 /// translation. `6 live · 1.8 Gb/s` is not a sentence: it is the `[value][label]` telemetry pattern
 /// DESIGN.md §9.20 already specifies for `VStatPill`, and the mockup renders it the same way — the
 /// digits in the mono face, the word beside them. Splitting it here means the numbers get
-/// `monospacedDigit()` (§4.4 makes that mandatory for anything that changes on screen) while the
-/// words stay translatable, and it keeps the units out of the localisation tables, which is the
-/// decision `InspectorStat` already took and documented for exactly the same reason.
+/// `monospacedDigit()` (§4.4 makes that mandatory for anything that changes on screen) while every
+/// word around them — including the unit — stays translatable, and it keeps the pair out of the
+/// `.stringsdict`: neither "live" nor "degraded" nor `Гбит/с` inflects with the number in front of
+/// it, so there is no plural rule to get wrong.
 ///
 /// ## Degraded
 ///

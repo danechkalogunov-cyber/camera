@@ -152,11 +152,11 @@ package struct VSidebarView<Thumbnail: View>: View {
         // `onGroup(index:)` inside the row builder would make it quadratic.
         let ordinals = groupOrdinals
         VStack(spacing: 0) {
-            scroller(groupOrdinals: ordinals)
+            scroller(ordinals: ordinals)
             hairline(VTheme.Color.Stroke.subtle)
             footer
         }
-        .background { background }
+        .background { panelBackground }
         .overlay(alignment: .trailing) { trailingEdge }
         .frame(minWidth: VTheme.Metrics.sidebarMin,
                idealWidth: VTheme.Metrics.sidebarWidth,
@@ -167,11 +167,11 @@ package struct VSidebarView<Thumbnail: View>: View {
 
     // MARK: - Rows
 
-    private func scroller(groupOrdinals: [GroupID: Int]) -> some View {
+    private func scroller(ordinals: [GroupID: Int]) -> some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(tree.rows) { row in
-                    rowView(row, groupOrdinals: groupOrdinals)
+                    rowView(row, ordinals: ordinals)
                 }
             }
             .padding(.horizontal, VTheme.Space.sm)
@@ -182,14 +182,14 @@ package struct VSidebarView<Thumbnail: View>: View {
     }
 
     @ViewBuilder
-    private func rowView(_ row: VSidebarRow, groupOrdinals: [GroupID: Int]) -> some View {
+    private func rowView(_ row: VSidebarRow, ordinals: [GroupID: Int]) -> some View {
         switch row.kind {
         case .sectionHeader(let section):
             sectionHeader(section, rowID: row.id)
         case .layout:
             layoutRow()
         case .group(let group, let memberCount):
-            groupRow(group, memberCount: memberCount, ordinal: groupOrdinals[group.id])
+            groupRow(group, memberCount: memberCount, ordinal: ordinals[group.id])
         case .device(let key, let name, let channelCount):
             deviceRow(key: key, name: name, channelCount: channelCount, indent: row.indent)
         case .camera(let camera, let match):
@@ -499,7 +499,7 @@ package struct VSidebarView<Thumbnail: View>: View {
     /// `.sidebar`, behind the window, following its active state — the placement DESIGN.md §2.4
     /// sanctions, with the solid fallback under `reduceTransparency`.
     @ViewBuilder
-    private var background: some View {
+    private var panelBackground: some View {
         if reduceTransparency {
             VTheme.Color.Layer.sidebarFallback
         } else {
@@ -537,8 +537,17 @@ private func vSidebarPreviewPicture(_ camera: VSidebarCamera) -> some View {
                    endPoint: .bottom)
 }
 
-/// The six cameras of the approved mockup, including every unhappy state it shows.
-@MainActor
+/// A repeatable motion trace: derived from the identifier's characters rather than from
+/// `hashValue`, which is seeded per process and would redraw differently on every launch.
+private func vSidebarPreviewMotion(_ id: CameraID, buckets: Int) -> [Double] {
+    let seed = id.short.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+    return (0..<Swift.max(0, buckets)).map { index in
+        Double((index &* 7 &+ seed) % 11) / 10.0
+    }
+}
+
+/// The cameras of the approved mockup, plus the two states it has no room for — a camera the
+/// user switched off, and one whose password was rejected.
 private func vSidebarPreviewCameras() -> [VSidebarCamera] {
     [
         VSidebarCamera(id: CameraID(), name: "Front Door", host: "192.168.1.64",
@@ -564,7 +573,6 @@ private func vSidebarPreviewCameras() -> [VSidebarCamera] {
     ]
 }
 
-@MainActor
 private func vSidebarPreviewGroups() -> [VSidebarGroup] {
     [
         VSidebarGroup(id: GroupID(), name: "Perimeter", identityIndex: 0),
@@ -573,79 +581,85 @@ private func vSidebarPreviewGroups() -> [VSidebarGroup] {
     ]
 }
 
-/// A repeatable motion trace, so the sparks do not change between preview runs.
-private func vSidebarPreviewMotion(_ seed: Int) -> [Double] {
-    (0..<VSidebarMetrics.sparkBuckets).map { index in
-        let raw = Double((index * 7 + seed * 13) % 11) / 10.0
-        return raw
+/// A host for the previews.
+///
+/// It exists so each `#Preview` body stays a **single expression**: the macro's closure is a
+/// `@ViewBuilder`, which accepts local `let`s but not an explicit `return`, and keeping the body
+/// to one expression is correct either way. It also holds the cameras in stored properties, so the
+/// identifiers — and therefore the identity colours and the motion traces — are stable across the
+/// body evaluations a preview performs.
+@MainActor
+private struct VSidebarPreviewHost: View {
+
+    var cameras: [VSidebarCamera] = vSidebarPreviewCameras()
+    var groups: [VSidebarGroup] = vSidebarPreviewGroups()
+    var search = VSidebarSearch()
+    var layout: VGridLayout? = .mosaic4x3
+    var bitrate: Double? = 1_800_000_000
+    var drop: VSidebarDropPosition? = nil
+    var selectsFirst = true
+    var height: CGFloat = 760
+
+    private var tree: VSidebarTree {
+        VSidebarTree(cameras: cameras,
+                     groups: groups,
+                     search: search,
+                     eventBadge: 12,
+                     recordingCount: 41,
+                     bookmarkCount: 3)
+    }
+
+    private var selection: VSidebarSelectionState {
+        guard selectsFirst, let first = cameras.first else { return VSidebarSelectionState() }
+        return VSidebarSelectionState(focus: .camera(first.id),
+                                      cameras: [first.id],
+                                      anchor: first.id)
+    }
+
+    var body: some View {
+        VPulseClock {
+            VSidebarView(tree: tree,
+                         selection: selection,
+                         search: search,
+                         layout: layout,
+                         aggregateBitsPerSecond: bitrate,
+                         dropPosition: drop,
+                         motionSamples: { id in
+                             vSidebarPreviewMotion(id, buckets: VSidebarMetrics.sparkBuckets)
+                         },
+                         thumbnail: { camera in vSidebarPreviewPicture(camera) })
+        }
+        .frame(width: VTheme.Metrics.sidebarWidth, height: height)
+        .background(VTheme.Color.Layer.canvas)
     }
 }
 
 #Preview("Sidebar — populated") {
-    let cameras = vSidebarPreviewCameras()
-    let groups = vSidebarPreviewGroups()
-    let tree = VSidebarTree(cameras: cameras,
-                            groups: groups,
-                            eventBadge: 12,
-                            recordingCount: 41,
-                            bookmarkCount: 3)
-    let focused = cameras.first.map { VSidebarSelection.camera($0.id) } ?? .live
-    return VPulseClock {
-        VSidebarView(tree: tree,
-                     selection: VSidebarSelectionState(focus: focused,
-                                                       cameras: Set(cameras.prefix(1).map(\.id))),
-                     layout: .mosaic4x3,
-                     aggregateBitsPerSecond: 1_800_000_000,
-                     motionSamples: { id in
-                         vSidebarPreviewMotion(abs(id.short.hashValue % 7))
-                     },
-                     thumbnail: vSidebarPreviewPicture)
-    }
-    .frame(width: VTheme.Metrics.sidebarWidth, height: 760)
-    .background(VTheme.Color.Layer.canvas)
+    VSidebarPreviewHost()
 }
 
 #Preview("Sidebar — empty library") {
-    VPulseClock {
-        VSidebarView(tree: VSidebarTree(cameras: []),
-                     selection: VSidebarSelectionState(),
-                     layout: .grid2x2,
-                     thumbnail: vSidebarPreviewPicture)
-    }
-    .frame(width: VTheme.Metrics.sidebarWidth, height: 420)
-    .background(VTheme.Color.Layer.canvas)
+    VSidebarPreviewHost(cameras: [],
+                        groups: [],
+                        layout: .grid2x2,
+                        bitrate: nil,
+                        selectsFirst: false,
+                        height: 420)
 }
 
 #Preview("Sidebar — no search results") {
-    let search = VSidebarSearch(query: "zzz")
-    let tree = VSidebarTree(cameras: vSidebarPreviewCameras(),
-                            groups: vSidebarPreviewGroups(),
-                            search: search)
-    return VPulseClock {
-        VSidebarView(tree: tree,
-                     selection: VSidebarSelectionState(),
-                     search: search,
-                     layout: .grid3x3,
-                     aggregateBitsPerSecond: 4_200_000,
-                     thumbnail: vSidebarPreviewPicture)
-    }
-    .frame(width: VTheme.Metrics.sidebarWidth, height: 460)
-    .background(VTheme.Color.Layer.canvas)
+    VSidebarPreviewHost(search: VSidebarSearch(query: "zzz"),
+                        layout: .grid3x3,
+                        bitrate: 4_200_000,
+                        selectsFirst: false,
+                        height: 460)
 }
 
-#Preview("Sidebar — degraded footer") {
-    let cameras = vSidebarPreviewCameras()
-    let tree = VSidebarTree(cameras: cameras, groups: vSidebarPreviewGroups())
-    return VPulseClock {
-        VSidebarView(tree: tree,
-                     selection: VSidebarSelectionState(),
-                     layout: .single,
-                     aggregateBitsPerSecond: 820_000,
-                     dropPosition: .between(index: 2),
-                     thumbnail: vSidebarPreviewPicture)
-    }
-    .frame(width: VTheme.Metrics.sidebarWidth, height: 760)
-    .background(VTheme.Color.Layer.canvas)
+#Preview("Sidebar — drop between rows") {
+    VSidebarPreviewHost(layout: .single,
+                        bitrate: 820_000,
+                        drop: .between(index: 2),
+                        selectsFirst: false)
 }
 
 #endif

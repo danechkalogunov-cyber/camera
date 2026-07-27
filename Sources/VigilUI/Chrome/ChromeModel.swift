@@ -34,11 +34,10 @@ package struct VThroughput: Sendable, Hashable {
 
     // MARK: - Units
 
-    /// The three units the readout can print. Raw values are the printed suffixes.
-    ///
-    /// ⚠️ Deliberately **not** localised, for the reason `InspectorStat` gives for its own units: a
-    /// telemetry readout is a diagnostic that gets pasted into a bug report, and `Мбит/с` in one
-    /// screenshot and `Mb/s` in another make one fault look like two.
+    /// The three units the readout can print. Raw values are the **English** suffixes, which are
+    /// also the localisation keys: `VStatusBarView` renders `"%@ Gb/s"` and friends through
+    /// `Bundle.vigilUI`, so a Russian footer reads `Гбит/с`. The raw value is what a diagnostic
+    /// paste or a screenshot comparison sees, and ``label`` keeps that form deliberately.
     package enum Unit: String, Sendable, Hashable, CaseIterable {
 
         /// Below 1 Mb/s, printed with no decimals — `380 kb/s`.
@@ -147,7 +146,12 @@ package struct VThroughput: Sendable, Hashable {
         }
     }
 
-    /// Value and unit, as the status bar prints them — `1.8 Gb/s`.
+    /// Value and unit in English — `1.8 Gb/s`.
+    ///
+    /// The **diagnostic** form, for a tooltip, a log line or a pasted bug report, and the form the
+    /// tests assert on. The status bar composes the same two parts through a localised unit key so
+    /// the visible footer is translated; this one deliberately is not, so two screenshots of the
+    /// same fault taken in two locales still read the same.
     package var label: String {
         value + " " + unit.rawValue
     }

@@ -21,6 +21,10 @@ import SwiftUI
 /// internals rather than tokens shared across the app. Everything the token layer already names —
 /// the 320 pt width, the 20 pt window inset, the 8 pt stack gap, `radius.xl`, the E2 level, the
 /// spacing ladder — comes from `VTheme` and is not restated.
+///
+/// `@MainActor` to match `VTheme`'s own geometry namespaces, so a value derived from a token can be
+/// added here later without the namespace having to change isolation.
+@MainActor
 package enum VToastMetrics {
 
     /// 44 pt. §9.17's minimum card height; the card grows for a second line.
@@ -326,7 +330,7 @@ package struct VToastView: View {
     /// pause rather than a restart (§9.17).
     private func pauseCountdown(_ hovering: Bool) {
         guard hovering, let startedAt = countdownStartedAt else { return }
-        elapsed += .seconds(Date.now.timeIntervalSince(startedAt))
+        elapsed += Duration.seconds(Date.now.timeIntervalSince(startedAt))
         countdownStartedAt = nil
     }
 }
