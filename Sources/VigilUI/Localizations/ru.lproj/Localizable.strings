@@ -443,3 +443,17 @@
 "No bookmarks yet" = "Закладок пока нет";
 "Mark a moment while reviewing an archive and it appears here." = "Отметьте момент при просмотре архива — он появится здесь.";
 "Delete bookmark" = "Удалить закладку";
+
+/* PALETTE — the ⌘K command palette and the "…" overflow menu */
+"Type a command" = "Введите команду";
+"Layout" = "Раскладка";
+"View" = "Вид";
+"Camera" = "Камера";
+"Recording" = "Запись";
+"Application" = "Программа";
+"No matching commands" = "Команды не найдены";
+"Try a camera name, a layout, or a recording action." = "Попробуйте имя камеры, раскладку или действие записи.";
+"Video Wall" = "Видеостена";
+"Picture in Picture" = "Картинка в картинке";
+"Discover Cameras" = "Найти камеры";
+"Stream Doctor" = "Диагностика потока";

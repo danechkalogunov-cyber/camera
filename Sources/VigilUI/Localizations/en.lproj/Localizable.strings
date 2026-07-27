@@ -463,3 +463,17 @@
 "No bookmarks yet" = "No bookmarks yet";
 "Mark a moment while reviewing an archive and it appears here." = "Mark a moment while reviewing an archive and it appears here.";
 "Delete bookmark" = "Delete bookmark";
+
+/* PALETTE — the ⌘K command palette and the "…" overflow menu */
+"Type a command" = "Type a command";
+"Layout" = "Layout";
+"View" = "View";
+"Camera" = "Camera";
+"Recording" = "Recording";
+"Application" = "Application";
+"No matching commands" = "No matching commands";
+"Try a camera name, a layout, or a recording action." = "Try a camera name, a layout, or a recording action.";
+"Video Wall" = "Video Wall";
+"Picture in Picture" = "Picture in Picture";
+"Discover Cameras" = "Discover Cameras";
+"Stream Doctor" = "Stream Doctor";

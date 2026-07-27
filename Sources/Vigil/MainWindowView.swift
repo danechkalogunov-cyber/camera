@@ -60,7 +60,7 @@ struct MainWindowView: View {
                         .frame(width: VTheme.Metrics.sidebarWidth)
                 }
 
-                stage
+                stageRoute
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if window.isInspectorVisible {
@@ -104,6 +104,56 @@ struct MainWindowView: View {
                      },
                      onClearSearch: { window.searchText = "" },
                      thumbnail: { _ in Color.clear })
+    }
+
+    /// What the centre of the window shows.
+    ///
+    /// The stage is a router (UX.md §5.9): selecting Recordings, Events or Bookmarks in the sidebar
+    /// replaces the tiles *inside this window* rather than opening anything. `VLibrarySection`'s
+    /// failable initialiser is the whole decision — it answers `nil` for the live selections, which
+    /// is exactly the "stay on the tiles" case.
+    ///
+    /// Without this, the three LIBRARY rows changed the selection and nothing else, which is what
+    /// made the screens behind them look absent.
+    @ViewBuilder
+    private var stageRoute: some View {
+        if let section = VLibrarySection(window.sidebarSelection.focus) {
+            VLibraryScreen(section: section, state: libraryState, actions: libraryActions)
+        } else {
+            stage
+        }
+    }
+
+    /// What the three library screens read.
+    ///
+    /// Every collection is empty and `archive` is `nil`, because nothing records, no event stream is
+    /// subscribed and no archive day has been loaded. That is not a placeholder standing in for real
+    /// data — it is the truthful state, and each screen's empty state says what would fill it.
+    private var libraryState: VLibraryState {
+        VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()))
+    }
+
+    /// The library gestures the app can honour today.
+    ///
+    /// Only the two that need no data behind them. Everything else keeps its no-op default: playing,
+    /// revealing and deleting a clip need clips, and scrubbing needs a loaded day. A handler that
+    /// fired against an empty list would be a button pretending to work.
+    private var libraryActions: VLibraryActions {
+        var actions = VLibraryActions()
+        actions.onOpenRecordingsFolder = { openRecordingsFolder() }
+        actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
+        return actions
+    }
+
+    /// Reveals the recordings destination in the Finder, creating nothing.
+    ///
+    /// `RecordingDestination` owns where clips go; until the app drives it, the folder may not exist
+    /// yet, and `activateFileViewerSelecting` on a missing path silently does nothing rather than
+    /// failing — which is the right outcome for a button whose whole job is "show me where".
+    private func openRecordingsFolder() {
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)
+        guard let folder = movies.first else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     /// The tile stage.
