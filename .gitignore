@@ -20,3 +20,6 @@ design/shots/_smoke.png
 # agent scratch logs
 .rtpb-logs/
 .*-logs/
+
+# SwiftPM scratch path that got committed once; see the note in ЗАПУСК.md
+.b/
