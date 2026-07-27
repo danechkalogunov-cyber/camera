@@ -281,8 +281,11 @@ package struct VSidebarRowView<Thumbnail: View>: View {
                 isHovering = hovering
             }
         }
-        .onTapGesture(count: 2) { onActivate() }
+        // Single tap first, double as a simultaneous gesture. With `count: 2` attached ahead of
+        // `count: 1`, SwiftUI holds the single tap for the full double-click interval before
+        // committing it — the same lag that made the library rows feel broken (VSidebarChrome).
         .onTapGesture { onSelect(VSidebarClick.current) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { onActivate() })
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(verbatim: camera.name))
         .accessibilityValue(accessibilityStatus)

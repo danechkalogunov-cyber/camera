@@ -123,13 +123,23 @@ package struct VSidebarLinkRow: View {
                                      isHovering: isHovering,
                                      isDropTarget: isDropTarget))
         .padding(.leading, CGFloat(indent) * VSidebarMetrics.indentStep)
+        // Without this the row is hit-testable only where it is opaque — the glyph and the label —
+        // because the rest is a `Spacer` over a background that is `clear` at rest. That made hover
+        // appear broken and left most of the row's width unclickable. `VSidebarRowView` already does
+        // this for camera rows, which is why those behaved and these did not.
+        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(VTheme.Motion.resolved(VTheme.Motion.micro, reduced: !motionEnabled)) {
                 isHovering = hovering
             }
         }
-        .onTapGesture(count: 2) { onActivate() }
+        // Single tap first and the double as a *simultaneous* gesture, not a competing one. Attaching
+        // `count: 2` ahead of `count: 1` makes SwiftUI hold the single tap for the whole double-click
+        // interval to see whether a second click arrives, which is felt as a selection that lags
+        // behind the mouse. Simultaneously means selection commits on mouse-up and a double click
+        // additionally activates — which is also what the Finder does.
         .onTapGesture { onSelect(VSidebarClick.current) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { onActivate() })
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
