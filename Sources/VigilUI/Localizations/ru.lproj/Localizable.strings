@@ -426,3 +426,20 @@
 "Stop Recording" = "Остановить запись";
 "In use" = "Занято";
 "Needs attention" = "Требует внимания";
+
+/* LIBRARY — recordings, events, bookmarks */
+"Open folder" = "Открыть папку";
+"No recordings yet" = "Записей пока нет";
+"Clips you record appear here, newest first." = "Записанные ролики появятся здесь, новые сверху.";
+"Delete clip" = "Удалить ролик";
+"Filter events" = "Фильтр событий";
+"No events yet" = "Событий пока нет";
+"Nothing matches" = "Ничего не найдено";
+"Motion and tamper alerts appear here as cameras report them." = "Движение и вскрытие корпуса появятся здесь, как только камера о них сообщит.";
+"No events of the selected kinds. Clear the filter to see the rest." = "Событий выбранных видов нет. Снимите фильтр, чтобы увидеть остальные.";
+"Notification settings" = "Настройки уведомлений";
+"Clear filter" = "Снять фильтр";
+"Delete event" = "Удалить событие";
+"No bookmarks yet" = "Закладок пока нет";
+"Mark a moment while reviewing an archive and it appears here." = "Отметьте момент при просмотре архива — он появится здесь.";
+"Delete bookmark" = "Удалить закладку";

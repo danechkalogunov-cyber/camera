@@ -446,3 +446,20 @@
 "Stop Recording" = "Stop Recording";
 "In use" = "In use";
 "Needs attention" = "Needs attention";
+
+/* LIBRARY — recordings, events, bookmarks */
+"Open folder" = "Open folder";
+"No recordings yet" = "No recordings yet";
+"Clips you record appear here, newest first." = "Clips you record appear here, newest first.";
+"Delete clip" = "Delete clip";
+"Filter events" = "Filter events";
+"No events yet" = "No events yet";
+"Nothing matches" = "Nothing matches";
+"Motion and tamper alerts appear here as cameras report them." = "Motion and tamper alerts appear here as cameras report them.";
+"No events of the selected kinds. Clear the filter to see the rest." = "No events of the selected kinds. Clear the filter to see the rest.";
+"Notification settings" = "Notification settings";
+"Clear filter" = "Clear filter";
+"Delete event" = "Delete event";
+"No bookmarks yet" = "No bookmarks yet";
+"Mark a moment while reviewing an archive and it appears here." = "Mark a moment while reviewing an archive and it appears here.";
+"Delete bookmark" = "Delete bookmark";
