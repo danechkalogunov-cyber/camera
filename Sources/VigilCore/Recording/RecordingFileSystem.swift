@@ -70,15 +70,25 @@ public protocol RecordingFileSystem: Sendable {
 /// operation couldn’t be completed", so the numeric domain and code are always included.
 public struct SystemRecordingFileSystem: RecordingFileSystem {
 
-    private let manager: FileManager
+    /// `FileManager.default`, reached through a computed property rather than stored.
+    ///
+    /// Storing it does not compile: `FileManager` is a non-`Sendable` class, and a `Sendable`-
+    /// conforming struct may not hold one. Documented thread-safety is not what the checker asks
+    /// about — it asks whether the *type* is `Sendable`, and `NSFileManager` says nothing.
+    ///
+    /// The injection point that made storing it look useful is removed rather than made unsafe,
+    /// because it was never the real seam. This type's whole purpose is that the seam is the
+    /// `RecordingFileSystem` protocol above: a test fakes the seven operations — a full disk, a
+    /// read-only volume, a name collision — none of which handing in a different `FileManager`
+    /// could have arranged anyway. Nothing in the tree constructed this with a custom manager.
+    ///
+    /// Computing it costs nothing: `FileManager.default` is a shared instance, not an allocation,
+    /// and the operations used here are the ones Apple documents as safe to call on it from any
+    /// thread.
+    private var manager: FileManager { .default }
 
     /// Builds a file system over `FileManager.default`.
-    ///
-    /// `FileManager.default` is documented as thread-safe for the operations used here, which is what
-    /// lets this be a `Sendable` value type rather than an actor.
-    public init(manager: FileManager = .default) {
-        self.manager = manager
-    }
+    public init() {}
 
     public func itemExists(at url: URL) -> Bool {
         manager.fileExists(atPath: url.path)

@@ -399,7 +399,7 @@ public actor EventMonitorService {
                 totals.terminalAuthFailed += 1
                 giveUp(key: key, state: state)
                 return
-            case .idle, .connecting, .streaming, .failed, .polling, .stopped:
+            case .idle, .connecting, .failed, .polling, .stopped:
                 break                   // the monitor's own ladder owns these
             }
         }
