@@ -9,6 +9,7 @@
 
 #if os(macOS)
 
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -63,13 +64,21 @@ struct MainWindowView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if window.isInspectorVisible {
-                    VInspectorView(tab: $window.inspectorTab, state: inspectorState)
+                    VInspectorView(tab: $window.inspectorTab,
+                                   state: inspectorState,
+                                   actions: inspectorActions)
                         .frame(width: VTheme.Metrics.inspectorWidth)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            VStatusBarView(status: chromeStatus)
+            // Only when the list is hidden. `VSidebarView` draws its own footer carrying the same
+            // counters (UX.md §3.3), and the mockup puts the status inside the sidebar column rather
+            // than across the window — so showing both stacked two status lines on top of each other.
+            // The bar is kept for the collapsed case, where the sidebar's footer goes with it.
+            if !window.isSidebarVisible {
+                VStatusBarView(status: chromeStatus)
+            }
         }
         .background(VTheme.Color.Layer.canvas)
         .overlay(alignment: .bottom) { toastOverlay }
@@ -168,7 +177,57 @@ struct MainWindowView: View {
     /// panel renders its own "not available" treatment rather than a fabricated number — the same
     /// reason `stats:` is left off the stage tile above.
     private var inspectorState: VInspectorState {
-        VInspectorState(camera: identity, connection: session.liveState, now: Date())
+        VInspectorState(camera: identity,
+                        connection: session.liveState,
+                        now: Date(),
+                        identity: deviceIdentity)
+    }
+
+    /// The address half of the Info tab.
+    ///
+    /// Only the fields the app already holds: host, ports, channel and TLS come from the `Camera`
+    /// record, or from the typed request before that record exists. Model, firmware, serial, MAC and
+    /// uptime stay empty and render as `—`, because they arrive from the ISAPI device-info endpoint
+    /// and the single-camera slice never calls it. An empty identity was why the Info tab showed a
+    /// bare `:554` — the port with no host in front of it.
+    private var deviceIdentity: InspectorDeviceIdentity {
+        let camera = session.camera
+        return InspectorDeviceIdentity(channel: camera?.channel ?? .first,
+                                       host: camera?.host ?? session.form.request.host,
+                                       rtspPort: camera?.rtspPort ?? 554,
+                                       httpPort: camera?.httpPort ?? 80,
+                                       usesTLS: camera?.useTLS ?? false)
+    }
+
+    /// The inspector buttons the slice can actually honour.
+    ///
+    /// Three of the six. `onRunStreamDoctor` and `onRetryDevice` need the diagnosis sequence and the
+    /// ISAPI reboot endpoint respectively, and `onCopySerial` needs a serial to copy — none of which
+    /// the single-camera slice has. They keep their no-op defaults rather than being given something
+    /// approximate, because a button that does *nearly* the right thing is worse than one that
+    /// visibly does nothing.
+    private var inspectorActions: VInspectorActions {
+        var actions = VInspectorActions()
+        actions.onOpenWebPage = { openDeviceWebPage() }
+        actions.onRequestKeyframe = { session.recoverStalledPicture() }
+        actions.onReconnect = { session.perform(.retry) }
+        return actions
+    }
+
+    /// Opens the camera's own web interface in the default browser.
+    ///
+    /// Built from the same host and HTTP port the inspector shows, so the two cannot disagree. A host
+    /// that will not form a URL — empty, before a connection — simply does nothing rather than
+    /// force-unwrapping into a crash.
+    private func openDeviceWebPage() {
+        let identity = deviceIdentity
+        guard !identity.host.isEmpty else { return }
+        var components = URLComponents()
+        components.scheme = identity.usesTLS ? "https" : "http"
+        components.host = identity.host
+        components.port = identity.httpPort
+        guard let url = components.url else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// The status bar's counters.
