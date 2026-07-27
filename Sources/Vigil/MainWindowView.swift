@@ -49,10 +49,14 @@ struct MainWindowView: View {
                          isInspectorVisible: window.isInspectorVisible,
                          layout: window.layout,
                          searchText: $window.searchText,
+                         isCycling: window.cycle.isRunning,
                          showsSeparator: true,
                          onToggleSidebar: { window.isSidebarVisible.toggle() },
                          onToggleInspector: { window.isInspectorVisible.toggle() },
-                         onSelectLayout: { window.layout = $0 })
+                         onSelectLayout: { selectLayout($0) },
+                         onToggleCycle: { window.cycle = window.cycle.toggledRunning() },
+                         onOpenPalette: { openPalette() },
+                         onShowMore: { window.isOverflowMenuOpen = true })
 
             HStack(spacing: 0) {
                 if window.isSidebarVisible {
@@ -82,6 +86,171 @@ struct MainWindowView: View {
         }
         .background(VTheme.Color.Layer.canvas)
         .overlay(alignment: .bottom) { toastOverlay }
+        .overlay(alignment: .topTrailing) { overflowMenu }
+        .overlay { paletteOverlay }
+        // A zero-sized button is how a window-wide shortcut is declared in pure SwiftUI. It carries
+        // no label and cannot be reached by the pointer or by focus; only ⌘K triggers it.
+        .background {
+            Button("", action: { openPalette() })
+                .keyboardShortcut("k", modifiers: .command)
+                .hidden()
+        }
+        .task(id: cycleTick) { await runCycle() }
+    }
+
+    // MARK: - Overlays
+
+    /// The ⌘K palette, over everything.
+    @ViewBuilder
+    private var paletteOverlay: some View {
+        if window.isPaletteOpen {
+            VCommandPaletteView(commands: commandCatalogue,
+                                query: $window.paletteQuery,
+                                selection: $window.paletteSelection,
+                                onRun: { run($0) },
+                                onDismiss: { window.isPaletteOpen = false })
+        }
+    }
+
+    /// The overflow menu, hung under the toolbar's "…" button.
+    ///
+    /// An anchored overlay rather than a `.popover`: `VOverflowMenuView` carries its own E2 glass,
+    /// and a popover would draw a second system chrome around it.
+    @ViewBuilder
+    private var overflowMenu: some View {
+        if window.isOverflowMenuOpen {
+            VOverflowMenuView(disabledItems: unavailableOverflowItems,
+                              onSelect: { select($0) },
+                              onDismiss: { window.isOverflowMenuOpen = false })
+                .padding(.top, VTheme.Metrics.toolbarHeight)
+                .padding(.trailing, VTheme.Space.lg)
+        }
+    }
+
+    // MARK: - Palette, menu and cycle
+
+    /// Opens the palette with an empty query.
+    ///
+    /// Cleared on *open* rather than on close: a query that survived dismissal would silently filter
+    /// the next invocation, and the first keystroke would land in the middle of stale text.
+    private func openPalette() {
+        window.paletteQuery = ""
+        window.paletteSelection = nil
+        window.isPaletteOpen = true
+    }
+
+    /// Every command the window can honour right now.
+    ///
+    /// Titles are plain resolved strings by design — `VCommand.title` is not a `LocalizedStringKey`,
+    /// because a key is opaque to the character-level folding the ranker does and would score against
+    /// English text in a Russian build.
+    ///
+    /// The catalogue is deliberately short. Only the layout switches and the two panel toggles do
+    /// anything today; listing commands the app cannot perform would make the palette a menu of
+    /// disappointments.
+    private var commandCatalogue: [VCommand] {
+        var commands = VGridLayout.allCases.map { layout in
+            VCommand(id: "layout.\(layout.rawValue)",
+                     title: Self.layoutTitle(layout),
+                     shortcut: String(layout.shortcutDigit),
+                     category: .layout,
+                     isEnabled: layout != window.layout)
+        }
+        commands.append(VCommand(id: "view.sidebar",
+                                 title: Self.localized("Toggle Sidebar"),
+                                 category: .view))
+        commands.append(VCommand(id: "view.inspector",
+                                 title: Self.localized("Toggle Inspector"),
+                                 category: .view))
+        commands.append(VCommand(id: "view.cycle",
+                                 title: Self.localized("Cycle cameras"),
+                                 category: .view,
+                                 isEnabled: window.cycle.canCycle(cameraCount: 1,
+                                                                  layout: window.layout)))
+        return commands
+    }
+
+    /// A command title in the user's language, as a plain `String`.
+    ///
+    /// `VCommand.title` is a `String` and not a `LocalizedStringKey` on purpose — the ranker folds
+    /// and scores individual characters, and a key is opaque to that, so a Russian build would rank
+    /// against English text. The lookup therefore happens here, through the same bundle every other
+    /// `VigilUI` string uses.
+    private static func localized(_ key: String) -> String {
+        Bundle.vigilUI.localizedString(forKey: key, value: key, table: nil)
+    }
+
+    /// The layout's name, sharing `VChromeLayoutSwitcher`'s wording so the palette and the toolbar's
+    /// tooltip cannot describe the same layout differently.
+    private static func layoutTitle(_ layout: VGridLayout) -> String {
+        switch layout {
+        case .single:    return localized("Single view")
+        case .grid2x2:   return localized("Two by two")
+        case .hero1p5:   return localized("Hero and five")
+        case .grid3x3:   return localized("Three by three")
+        case .grid4x4:   return localized("Four by four")
+        case .hero1p7:   return localized("Hero and seven")
+        case .dual2p8:   return localized("Two heroes and eight")
+        case .mosaic4x3: return localized("Mosaic")
+        }
+    }
+
+    /// Performs a command and closes the palette.
+    private func run(_ command: VCommand) {
+        window.isPaletteOpen = false
+        switch command.id {
+        case "view.sidebar":   window.isSidebarVisible.toggle()
+        case "view.inspector": window.isInspectorVisible.toggle()
+        case "view.cycle":     window.cycle = window.cycle.toggledRunning()
+        default:
+            if let layout = VGridLayout(rawValue: String(command.id.dropFirst("layout.".count))) {
+                selectLayout(layout)
+            }
+        }
+    }
+
+    /// Overflow entries with nothing behind them yet, dimmed rather than hidden.
+    ///
+    /// Removing them would make the menu's shape change as features land, and a user who learned
+    /// where Settings sits would find it somewhere else next month.
+    private var unavailableOverflowItems: Set<VOverflowItem> {
+        [.videoWall, .pictureInPicture, .discovery, .streamDoctor, .settings]
+    }
+
+    /// Handles an overflow choice. Every item is disabled today, so this only closes the menu.
+    private func select(_ item: VOverflowItem) {
+        window.isOverflowMenuOpen = false
+    }
+
+    /// Applies a layout and re-anchors the cycle, so a page index cannot survive into a layout that
+    /// has fewer pages than it.
+    private func selectLayout(_ layout: VGridLayout) {
+        window.layout = layout
+        window.cycle = window.cycle.retargeted(cameraCount: 1, layout: layout)
+    }
+
+    /// What restarts the cycle timer: whether it is ticking, how fast, and over what.
+    ///
+    /// A value rather than a `Bool`, so changing the interval or the layout mid-cycle restarts the
+    /// sleep instead of waiting out the old one.
+    private var cycleTick: CycleTick {
+        CycleTick(isTicking: window.cycle.isTicking,
+                  interval: window.cycle.interval,
+                  layout: window.layout)
+    }
+
+    /// The cycle's clock. The model is pure and holds no timer — this is the only thing that ticks.
+    private func runCycle() async {
+        while !Task.isCancelled, window.cycle.isTicking {
+            let nanoseconds = UInt64(window.cycle.interval * 1_000_000_000)
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return                  // cancelled: the task id changed, or the view went away
+            }
+            guard !Task.isCancelled else { return }
+            window.cycle = window.cycle.next(cameraCount: 1, layout: window.layout)
+        }
     }
 
     // MARK: - Panels
@@ -343,6 +512,25 @@ struct MainWindowView: View {
             return .offline(retryInSeconds: nil)
         }
     }
+}
+
+// MARK: - CycleTick
+
+/// What a change to restarts the cycle timer.
+///
+/// A value rather than a `Bool` so `.task(id:)` re-runs when the interval or the layout changes, not
+/// only when the cycle is switched on and off — otherwise a new interval would not take effect until
+/// the old sleep had finished.
+struct CycleTick: Equatable {
+
+    /// Whether the cycle should be advancing at all.
+    let isTicking: Bool
+
+    /// Seconds between advances.
+    let interval: TimeInterval
+
+    /// The layout, which decides how many pages there are to advance through.
+    let layout: VGridLayout
 }
 
 #endif  // os(macOS)

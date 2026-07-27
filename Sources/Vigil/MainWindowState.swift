@@ -68,6 +68,27 @@ final class MainWindowState {
     /// populated library, which is the right default once there is more than one camera to identify.
     var inspectorTab: VInspectorTab = .stream
 
+    // MARK: - Palette and menus
+
+    /// Whether the ⌘K command palette is up.
+    var isPaletteOpen = false
+
+    /// The palette's query. Cleared on open, not on close, so a mistyped query is still there to
+    /// correct rather than retyped from scratch.
+    var paletteQuery = ""
+
+    /// The palette's highlighted command id, or `nil` before the first result exists.
+    var paletteSelection: String?
+
+    /// Whether the overflow menu is up.
+    var isOverflowMenuOpen = false
+
+    // MARK: - Cycle
+
+    /// Automatic page advance. A value type — every mutator returns a new one — so the window's
+    /// timer can only ever replace it, never mutate it half-way through a render.
+    var cycle = VCycleModel()
+
     // MARK: - Transient
 
     /// The most recent advisory to show over the stage, or `nil` when there is nothing to say.
