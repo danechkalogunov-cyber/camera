@@ -22,6 +22,7 @@
 
 #if os(macOS)
 
+import Foundation
 import SwiftUI
 
 import VigilISAPI
@@ -314,9 +315,11 @@ package struct VTimelineView: View {
     @ViewBuilder
     private func previewCard(width: CGFloat) -> some View {
         if let preview, let hoverX, width > 0 {
+            // Hoisted: the guide closure escapes, and every `VTheme`-derived value is `@MainActor`.
+            let gap = VTimelineMetrics.previewGap
             VTimelinePreviewCard(preview: preview, clock: clock)
                 .alignmentGuide(VerticalAlignment.top) { dimensions in
-                    dimensions[VerticalAlignment.bottom] + VTimelineMetrics.previewGap
+                    dimensions[VerticalAlignment.bottom] + gap
                 }
                 .offset(x: cardX(hoverX: hoverX, width: width))
         }

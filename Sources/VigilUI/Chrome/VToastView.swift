@@ -205,7 +205,7 @@ package struct VToastView: View {
     /// `[16][icon 15 pt][10]` — §9.17's leading run.
     private var icon: some View {
         kind.image
-            .symbolRenderingMode(.monochrome)
+            .symbolRenderingMode(kind.symbol.rendering)
             .vIcon(size: VTheme.Icon.lg, weight: VTheme.Icon.Weight.lg)
             .foregroundStyle(kind.tint)
             .accessibilityHidden(true)

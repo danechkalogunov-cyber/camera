@@ -123,14 +123,18 @@ package struct VStatusBarView: View {
         }
     }
 
-    /// The aggregate rate, with the unit taken from the module's `"%@ <unit>" ` keys so that a
-    /// Russian footer reads `1,8 Гбит/с`.
+    /// The aggregate rate, with the unit taken from this module's `%@ Gb/s` family of keys, so a
+    /// Russian footer reads `Гбит/с`.
     ///
-    /// The digits stay `Text(verbatim:)` inside the interpolation — ``VThroughput`` formats them
-    /// locale-independently on purpose (a telemetry figure is a diagnostic, and a comma decimal
-    /// separator in one screenshot makes one fault look like two), while the *unit* is a word and
-    /// is translated. The local is named `value` because that is the interpolation name
-    /// `Scripts/check-localizations.py` resolves to `%@`.
+    /// The digits are interpolated as an already-formatted `String`, which `LocalizedStringKey`
+    /// inserts verbatim as `%@` rather than re-formatting for the locale. That is deliberate:
+    /// ``VThroughput`` prints a telemetry figure, and a comma decimal separator in one screenshot
+    /// and a full stop in another make one fault look like two. Only the *unit* is a word, and only
+    /// the unit is translated.
+    ///
+    /// The local is named `value` because that is the interpolation name
+    /// `Scripts/check-localizations.py` already maps to `%@` when it proves every key still
+    /// resolves to a literal in the source.
     private var rate: some View {
         let value = status.throughput.value
         return unitText(value)

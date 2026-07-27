@@ -14,6 +14,7 @@
 
 #if os(macOS)
 
+import Foundation
 import SwiftUI
 
 // MARK: - VTimelineHover
