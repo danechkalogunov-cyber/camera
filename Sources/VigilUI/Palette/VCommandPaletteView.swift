@@ -328,7 +328,7 @@ package struct VCommandPaletteView: View {
             .padding(.horizontal, VTheme.Space.lg)
             .frame(height: VPaletteMetrics.rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? VTheme.Color.Tint.selected : SwiftUI.Color.clear,
+            .background(isSelected ? VTheme.Color.Semantic.Tint.selected : SwiftUI.Color.clear,
                         in: VTheme.Radius.shape(VTheme.Radius.sm))
             .padding(.horizontal, VTheme.Space.xs)
             .opacity(isEnabled ? 1 : VPaletteMetrics.disabledOpacity)

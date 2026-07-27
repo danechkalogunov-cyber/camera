@@ -200,7 +200,7 @@ package struct VOverflowMenuView: View {
             .padding(.horizontal, VTheme.Space.sm)
             .frame(height: VOverflowMetrics.rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isHighlighted ? VTheme.Color.Tint.selected : SwiftUI.Color.clear,
+            .background(isHighlighted ? VTheme.Color.Semantic.Tint.selected : SwiftUI.Color.clear,
                         in: VTheme.Radius.shape(VTheme.Radius.sm))
             .padding(.horizontal, VTheme.Space.xxs)
             .contentShape(Rectangle())
