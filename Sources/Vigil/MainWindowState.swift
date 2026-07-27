@@ -89,7 +89,13 @@ final class MainWindowState {
 ///
 /// `kind` chooses the semantic colour and the dwell policy through `VToastPolicy.resolved(for:…)`;
 /// the view layer owns both, so this type carries only what the window decides.
-struct MainWindowToast: Identifiable, Sendable {
+///
+/// **Not `Sendable`, deliberately.** It holds a `LocalizedStringKey`, which SwiftUI does not declare
+/// `Sendable`, so the conformance does not compile. Dropping it costs nothing: this value is created
+/// in a view callback, stored in `MainWindowState` and read in a view body — all on the main actor,
+/// never across an isolation boundary. Reaching for `@unchecked Sendable` to keep a conformance
+/// nothing needs would be asserting a guarantee in exchange for no benefit.
+struct MainWindowToast: Identifiable {
 
     /// Distinguishes one advisory from the next so SwiftUI animates a replacement rather than
     /// mutating the visible one in place.
@@ -108,7 +114,10 @@ struct MainWindowToast: Identifiable, Sendable {
     let actionTitle: LocalizedStringKey?
 
     /// What the action button performs.
-    let action: (@Sendable () -> Void)?
+    ///
+    /// Plain rather than `@Sendable`: the toast is main-actor-only, and requiring `@Sendable` here
+    /// would stop a caller closing over the window state the action almost always needs to touch.
+    let action: (() -> Void)?
 
     /// Builds an advisory.
     ///
@@ -120,7 +129,7 @@ struct MainWindowToast: Identifiable, Sendable {
     init(kind: VToastKind,
          message: String,
          actionTitle: LocalizedStringKey? = nil,
-         action: (@Sendable () -> Void)? = nil) {
+         action: (() -> Void)? = nil) {
         self.kind = kind
         self.message = message
         self.actionTitle = actionTitle

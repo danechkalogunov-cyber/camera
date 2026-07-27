@@ -56,7 +56,7 @@ struct MainWindowView: View {
             HStack(spacing: 0) {
                 if window.isSidebarVisible {
                     sidebar
-                        .frame(width: VTheme.Space.sidebarWidth)
+                        .frame(width: VTheme.Metrics.sidebarWidth)
                 }
 
                 stage
@@ -64,7 +64,7 @@ struct MainWindowView: View {
 
                 if window.isInspectorVisible {
                     VInspectorView(tab: $window.inspectorTab, state: inspectorState)
-                        .frame(width: VTheme.Space.inspectorWidth)
+                        .frame(width: VTheme.Metrics.inspectorWidth)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -227,6 +227,8 @@ struct MainWindowView: View {
                 return .degraded(.decodeQueue(frames: frames))
             case .lowFrameRate(let fps, _):
                 return .degraded(.lowFrameRate(fps: fps))
+            case .switchedToTCP:
+                return .degraded(.switchedToTCP)
             }
         case .offline:
             return .offline(retryInSeconds: nil)
