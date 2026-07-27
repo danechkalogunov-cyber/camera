@@ -103,6 +103,12 @@ final class AppSessionModel {
     var renderState: TileRenderState?
 
     /// The latest 1 Hz telemetry, used for the degraded banner's measured cause.
+    /// The negotiated stream format, once the camera has described it.
+    ///
+    /// Stored because recording needs the codec, the parameter sets and the resolution up front, and
+    /// `formatResolved` is the only place they arrive. `nil` until the DESCRIBE lands.
+    var format: StreamFormat?
+
     var statistics = StreamStatistics()
 
     /// The named cause of the current failure, in `VigilUI`'s vocabulary.
@@ -122,6 +128,12 @@ final class AppSessionModel {
     let frames = FrameStreamHandle()
 
     let dependencies: CoreDependencies
+    /// The recorder's inlet into the encoded-frame path.
+    ///
+    /// Owned here because the decode loop is created here, and handed to `RecordingCoordinator`,
+    /// which decides when it holds a recorder. Empty means nothing is being written.
+    let recordingTap = RecordingTap()
+
     let credentials: CredentialStore
     let defaults: UserDefaults
     let tileSink = TileVideoSink()

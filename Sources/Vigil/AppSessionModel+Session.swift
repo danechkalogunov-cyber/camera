@@ -212,9 +212,17 @@ extension AppSessionModel {
         //
         // Nothing in the loop needs main-actor state: `frameStream` is `Sendable` because
         // `EncodedFrame` is, and `pipeline` is an actor.
+        // `recordingTap` is a `Sendable` box, not the recorder itself: recording starts long after
+        // this loop does, so the loop cannot capture a recorder that does not exist yet — and it must
+        // not capture `self`, which is `@MainActor`. Reading it costs one uncontended lock per frame,
+        // and answers `nil` whenever nothing is being written.
+        let recordingTap = self.recordingTap
         decodeTask = Task.detached {
             for await frame in frameStream {
                 await pipeline.submit(frame)
+                if let recorder = recordingTap.recorder() {
+                    await recorder.append(frame)
+                }
             }
         }
         let controller = StreamController(camera: camera,
@@ -306,6 +314,8 @@ extension AppSessionModel {
             if !named.allowsAutomaticRetry { LastConnection.clear(in: defaults) }
             present(named)
             if let rejected { deleteRejectedCredential(rejected) }
+        case .formatResolved(let resolved):
+            format = resolved
         default:
             break
         }

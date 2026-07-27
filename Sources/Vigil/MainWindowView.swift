@@ -49,6 +49,9 @@ struct MainWindowView: View {
     /// logger and clock, which arrive with the session.
     @State private var deviceInfo: DeviceInfoService
 
+    /// Starts and stops clip recording.
+    @State private var recording: RecordingCoordinator
+
     // MARK: - Initialisation
 
     /// Builds the window over a session.
@@ -61,6 +64,9 @@ struct MainWindowView: View {
         self.window = window
         _deviceInfo = State(initialValue: DeviceInfoService(logger: session.dependencies.logger,
                                                             clock: session.dependencies.clock))
+        _recording = State(initialValue: RecordingCoordinator(tap: session.recordingTap,
+                                                              logger: session.dependencies.logger,
+                                                              clock: session.dependencies.clock))
     }
 
     // MARK: - Body
@@ -115,6 +121,9 @@ struct MainWindowView: View {
         .background {
             Button("", action: { openPalette() })
                 .keyboardShortcut("k", modifiers: .command)
+                .hidden()
+            Button("", action: { toggleRecording() })
+                .keyboardShortcut("r", modifiers: .command)
                 .hidden()
         }
         .task(id: cycleTick) { await runCycle() }
@@ -197,6 +206,13 @@ struct MainWindowView: View {
         commands.append(VCommand(id: "view.inspector",
                                  title: Self.localized("Toggle Inspector"),
                                  category: .view))
+        commands.append(VCommand(id: "record.toggle",
+                                 title: recording.isRecording
+                                     ? Self.localized("Stop Recording")
+                                     : Self.localized("Start Recording"),
+                                 shortcut: "R",
+                                 category: .recording,
+                                 isEnabled: session.format != nil && session.camera != nil))
         commands.append(VCommand(id: "view.cycle",
                                  title: Self.localized("Cycle cameras"),
                                  category: .view,
@@ -237,11 +253,30 @@ struct MainWindowView: View {
         case "view.sidebar":   window.isSidebarVisible.toggle()
         case "view.inspector": window.isInspectorVisible.toggle()
         case "view.cycle":     window.cycle = window.cycle.toggledRunning()
+        case "record.toggle":  toggleRecording()
         default:
             if let layout = VGridLayout(rawValue: String(command.id.dropFirst("layout.".count))) {
                 selectLayout(layout)
             }
         }
+    }
+
+    /// Starts or stops a clip.
+    ///
+    /// Needs the negotiated format: `ClipRecorder` is a passthrough writer, so it must be told the
+    /// codec before the first frame rather than inferring it. Silent before the DESCRIBE lands,
+    /// which is also when the palette entry is disabled.
+    private func toggleRecording() {
+        if recording.isRecording {
+            recording.stop()
+            return
+        }
+        guard let camera = session.camera, let format = session.format else { return }
+        recording.start(camera: camera,
+                        codec: format.videoCodec,
+                        parameterSets: format.parameterSets,
+                        resolution: format.resolution,
+                        requestKeyframe: { })
     }
 
     /// Overflow entries with nothing behind them yet, dimmed rather than hidden.
