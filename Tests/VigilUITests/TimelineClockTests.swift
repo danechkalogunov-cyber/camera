@@ -31,12 +31,14 @@ import VigilProtocols
 // MARK: - Day length
 
 @Test func timelineClockReportsATwentyThreeHourDayOnTheSpringForwardTransition() throws {
-    let zone = try #require(TimelineTZ.newYork, "America/New_York must resolve for this test to mean anything")
+    let zone = try #require(TimelineTZ.newYork,
+                            "America/New_York must resolve for this test to mean anything")
     let clock = TimelineClock(calendar: timelineCalendar(zone), now: Date(timeIntervalSince1970: 0),
                               locale: timelineTestLocale)
     let day = try #require(clock.day(year: 2026, month: 3, day: 8))
 
-    #expect(day.spanSeconds == 82_800, "8 March 2026 in New York is 23 hours, not \(day.spanSeconds / 3600) h")
+    #expect(day.spanSeconds == 82_800,
+            "8 March 2026 in New York is 23 hours, not \(day.spanSeconds / 3600) h")
     #expect(day.hasDaylightSavingTransition)
     // Both ends are still local midnight.
     #expect(clock.wallClock(day.start).hour == 0)
