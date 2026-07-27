@@ -411,6 +411,79 @@ private func sidebarViewTags(_ tree: VSidebarTree) -> [String] {
     #expect(tree.degradedCount == 1)
 }
 
+// MARK: - Drop indicators
+
+/// `between(index:)` puts the insertion line on the **leading** edge of the row at that index, and
+/// nowhere else — two lines for one drop would be worse than none.
+@Test func sidebarViewDropBetweenMarksTheLeadingEdgeOfOneRow() {
+    let ids = [CameraID(), CameraID(), CameraID()]
+    let edges = ids.map { VSidebarDrop.edge(for: .between(index: 1), camera: $0, in: ids) }
+    #expect(edges == [nil, .above, nil])
+}
+
+/// A drop after the last camera is the one position no leading edge can express, so it becomes the
+/// trailing edge of the final row.
+@Test func sidebarViewDropPastTheEndMarksTheLastRowsTrailingEdge() {
+    let ids = [CameraID(), CameraID(), CameraID()]
+    let edges = ids.map { VSidebarDrop.edge(for: .between(index: 3), camera: $0, in: ids) }
+    #expect(edges == [nil, nil, .below])
+}
+
+/// A drop before the first camera marks the first row, which is the position a user reaches by
+/// dragging to the very top of the list.
+@Test func sidebarViewDropAtZeroMarksTheFirstRow() {
+    let ids = [CameraID(), CameraID()]
+    #expect(VSidebarDrop.edge(for: .between(index: 0), camera: ids[0], in: ids) == .above)
+    #expect(VSidebarDrop.edge(for: .between(index: 0), camera: ids[1], in: ids) == nil)
+}
+
+/// An index outside `0...count` draws nothing rather than clamping: a line at the wrong end of the
+/// list is worse than no line, because the user would drop where it points.
+@Test func sidebarViewDropOutOfRangeDrawsNothing() {
+    let ids = [CameraID(), CameraID()]
+    for index in [-1, 3, 99] {
+        let edges = ids.map { VSidebarDrop.edge(for: .between(index: index), camera: $0, in: ids) }
+        #expect(edges.allSatisfy { $0 == nil })
+    }
+}
+
+/// The other two drop positions never produce an insertion line: `onGroup` highlights a group row
+/// and `rejected` shows nothing at all (UX.md §4.3).
+@Test func sidebarViewDropOnGroupAndRejectedDrawNoInsertionLine() {
+    let ids = [CameraID()]
+    #expect(VSidebarDrop.edge(for: .onGroup(index: 0), camera: ids[0], in: ids) == nil)
+    #expect(VSidebarDrop.edge(for: .rejected, camera: ids[0], in: ids) == nil)
+    #expect(VSidebarDrop.edge(for: nil, camera: ids[0], in: ids) == nil)
+}
+
+/// A camera that is not on screen — filtered out, or inside a collapsed device — never carries an
+/// indicator, whatever the drag is proposing.
+@Test func sidebarViewDropIgnoresCamerasThatAreNotVisible() {
+    let visible = [CameraID(), CameraID()]
+    let hidden = CameraID()
+    #expect(VSidebarDrop.edge(for: .between(index: 0), camera: hidden, in: visible) == nil)
+    #expect(VSidebarDrop.edge(for: .between(index: 2), camera: hidden, in: visible) == nil)
+}
+
+/// `onGroup(index:)` counts group rows, so the ordinals have to come from the tree in row order.
+@Test func sidebarViewGroupOrdinalsFollowRowOrder() {
+    let groups = [
+        VSidebarGroup(id: GroupID(), name: "Perimeter"),
+        VSidebarGroup(id: GroupID(), name: "Indoors"),
+        VSidebarGroup(id: GroupID(), name: "Gate"),
+    ]
+    let tree = VSidebarTree(cameras: [sidebarViewCamera("Front Door")], groups: groups)
+    let ordinals = VSidebarDrop.groupOrdinals(tree.rows)
+    #expect(ordinals[groups[0].id] == 0)
+    #expect(ordinals[groups[1].id] == 1)
+    #expect(ordinals[groups[2].id] == 2)
+    #expect(VSidebarDrop.targetsGroup(.onGroup(index: 1), ordinal: ordinals[groups[1].id]))
+    #expect(!VSidebarDrop.targetsGroup(.onGroup(index: 1), ordinal: ordinals[groups[2].id]))
+    #expect(!VSidebarDrop.targetsGroup(.between(index: 1), ordinal: 1))
+    #expect(!VSidebarDrop.targetsGroup(nil, ordinal: 1))
+    #expect(!VSidebarDrop.targetsGroup(.onGroup(index: 1), ordinal: nil))
+}
+
 // MARK: - Geometry
 
 /// The row heights the view frames each kind at, so a change to one of them shows up here rather

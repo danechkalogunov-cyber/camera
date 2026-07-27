@@ -284,3 +284,145 @@
    переходит к одному событию, сколько бы их ни было. */
 "Next event" = "Следующее событие";
 "Previous event" = "Предыдущее событие";
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Инспектор — Sources/VigilUI/Inspector/VInspector*.swift (docs/UX.md §6).
+
+   Заголовки разделов хранятся в обычном регистре: верхний регистр задаётся стилем
+   Caption2 при отрисовке (DESIGN.md §4.2).
+
+   Сами числа телеметрии в таблице отсутствуют намеренно: это диагностические
+   значения, которые попадают в отчёты об ошибках, и разделитель дробной части не
+   должен меняться вместе с локалью. Локализуется только фраза «74 % из 4.0 ТБ»,
+   где переводится соединительное слово.
+   ══════════════════════════════════════════════════════════════════════════════ */
+"Inspector" = "Инспектор";
+"Info" = "Сведения";
+"Stream" = "Поток";
+"PTZ" = "PTZ";
+"Image" = "Изображение";
+"Rec" = "Запись";
+"No camera selected." = "Камера не выбрана.";
+"Choose a camera in the sidebar to inspect it." = "Выберите камеру в боковой панели, чтобы увидеть её параметры.";
+"Unavailable" = "Недоступно";
+"No data yet" = "Данных пока нет";
+"%@ of %@" = "%@ из %@";
+"Bitrate — last 60 s" = "Битрейт — последние 60 с";
+"Bitrate" = "Битрейт";
+"Resolution" = "Разрешение";
+"Framerate" = "Частота кадров";
+"Keyframe int." = "Интервал ключевых";
+"Transport health" = "Состояние транспорта";
+"Packet loss" = "Потери пакетов";
+"Jitter" = "Джиттер";
+"Reordered" = "Переупорядочено";
+"Decode queue" = "Очередь декодирования";
+"Latency" = "Задержка";
+"Decode" = "Декодирование";
+"Transport" = "Транспорт";
+"Stream in use" = "Используемый поток";
+"Reconnects" = "Переподключений";
+"Session" = "Сессия";
+"Last error" = "Последняя ошибка";
+"Hardware" = "Аппаратное";
+"Software" = "Программное";
+"Device" = "Устройство";
+"Model" = "Модель";
+"Uptime" = "Время работы";
+"Storage" = "Накопитель";
+"Actions" = "Действия";
+"Request Keyframe" = "Запросить ключевой кадр";
+"Reconnect" = "Переподключиться";
+"Copy Diagnostics" = "Скопировать диагностику";
+"Switch Transport" = "Сменить транспорт";
+"Identity" = "Идентификация";
+"Device name" = "Имя устройства";
+"Firmware" = "Прошивка";
+"Serial" = "Серийный номер";
+"Copy" = "Скопировать";
+"MAC" = "MAC-адрес";
+"Channel" = "Канал";
+"Host" = "Хост";
+"Secure" = "Защищённое соединение";
+"Device storage" = "Накопитель устройства";
+"A volume on this camera needs attention." = "Один из томов этой камеры требует внимания.";
+"Capabilities" = "Возможности";
+"Open Web UI" = "Открыть веб-интерфейс";
+"Move" = "Движение";
+"Up" = "Вверх";
+"Down" = "Вниз";
+"Left" = "Влево";
+"Right" = "Вправо";
+"Up and left" = "Вверх и влево";
+"Up and right" = "Вверх и вправо";
+"Down and left" = "Вниз и влево";
+"Down and right" = "Вниз и вправо";
+"Home" = "Исходная позиция";
+"Speed" = "Скорость";
+"Movement stopped automatically." = "Движение остановлено автоматически.";
+"Lens" = "Объектив";
+"Zoom" = "Зум";
+"Focus" = "Фокус";
+"Focus near" = "Фокус ближе";
+"Focus far" = "Фокус дальше";
+"Iris" = "Диафрагма";
+"Iris open" = "Открыть диафрагму";
+"Iris close" = "Закрыть диафрагму";
+"Presets" = "Предустановки";
+"No presets saved yet." = "Предустановки ещё не сохранены.";
+"This camera does not store presets." = "Эта камера не хранит предустановки.";
+"Go to preset" = "Перейти к предустановке";
+"Set to Current" = "Задать текущее положение";
+"Delete preset" = "Удалить предустановку";
+"Patrols" = "Патрули";
+"Start patrol" = "Запустить патруль";
+"Stop patrol" = "Остановить патруль";
+"Stops: %@" = "Точек: %@";
+"This camera has no PTZ." = "У этой камеры нет PTZ.";
+"It is a fixed camera. You can still zoom digitally." = "Это фиксированная камера. Цифровое увеличение доступно.";
+"Adjustments" = "Настройка";
+"Brightness" = "Яркость";
+"Contrast" = "Контраст";
+"Saturation" = "Насыщенность";
+"Sharpness" = "Резкость";
+"Adjust my view only" = "Менять только моё изображение";
+"Local changes stay in Vigil's own render path and are never written to the camera, so they cannot affect anyone else watching it." = "Локальные изменения остаются в конвейере отрисовки Vigil и никогда не записываются в камеру, поэтому они не влияют на других зрителей.";
+"Exposure" = "Экспозиция";
+"Wide dynamic range" = "Широкий динамический диапазон";
+"Level" = "Уровень";
+"Day / night" = "День / ночь";
+"Infrared light" = "ИК-подсветка";
+"Orientation" = "Ориентация";
+"Flip" = "Отражение";
+"Reset to Defaults" = "Сбросить к заводским";
+"Off" = "Выкл.";
+"On" = "Вкл.";
+"Auto" = "Авто";
+"Day" = "День";
+"Night" = "Ночь";
+"Schedule" = "Расписание";
+"Centre" = "Центр";
+"Horizontal" = "Горизонтально";
+"Vertical" = "Вертикально";
+"No events yet." = "Событий пока нет.";
+"Motion detection may be disabled on this camera." = "Возможно, детекция движения на этой камере отключена.";
+"Filters" = "Фильтры";
+"All" = "Все";
+"No events of this type." = "Событий этого типа нет.";
+"Open in playback" = "Открыть в архиве";
+"Motion" = "Движение";
+"Line crossing" = "Пересечение линии";
+"Intrusion" = "Вторжение";
+"Tamper" = "Саботаж";
+"Video loss" = "Потеря видео";
+"Alarm" = "Тревога";
+"Local recording" = "Локальная запись";
+"Elapsed" = "Прошло";
+"Clips today" = "Клипов за сегодня";
+"Destination" = "Папка назначения";
+"Reveal in Finder" = "Показать в Finder";
+"Start Recording" = "Начать запись";
+"Stop Recording" = "Остановить запись";
+"In use" = "Занято";
+"Needs attention" = "Требует внимания";

@@ -301,3 +301,148 @@
    action moves to one event, however many there are. */
 "Next event" = "Next event";
 "Previous event" = "Previous event";
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Inspector panel — Sources/VigilUI/Inspector/VInspector*.swift (docs/UX.md §6).
+
+   Section eyebrows are stored sentence-case: `Caption2` applies .textCase(.uppercase)
+   at render time (DESIGN.md §4.2), and Russian has no equivalent of English's
+   "small caps as a heading" convention, so the casing is a type decision rather
+   than a translation one.
+
+   Telemetry NUMBERS are deliberately absent from this table. A readout is a
+   diagnostic value that gets pasted into a bug report, so its decimal separator
+   must not change with the locale (see InspectorHealth.fixed(_:places:)). The one
+   sentence built around two of them, "74 % of 4.0 TB", is here because the joining
+   word is prose.
+   ══════════════════════════════════════════════════════════════════════════════ */
+"Inspector" = "Inspector";
+"Info" = "Info";
+"Stream" = "Stream";
+"PTZ" = "PTZ";
+"Image" = "Image";
+"Rec" = "Rec";
+"No camera selected." = "No camera selected.";
+"Choose a camera in the sidebar to inspect it." = "Choose a camera in the sidebar to inspect it.";
+"Unavailable" = "Unavailable";
+"No data yet" = "No data yet";
+"%@ of %@" = "%@ of %@";
+"Bitrate — last 60 s" = "Bitrate — last 60 s";
+"Bitrate" = "Bitrate";
+"Resolution" = "Resolution";
+"Framerate" = "Framerate";
+"Keyframe int." = "Keyframe int.";
+"Transport health" = "Transport health";
+"Packet loss" = "Packet loss";
+"Jitter" = "Jitter";
+"Reordered" = "Reordered";
+"Decode queue" = "Decode queue";
+"Latency" = "Latency";
+"Decode" = "Decode";
+"Transport" = "Transport";
+"Stream in use" = "Stream in use";
+"Reconnects" = "Reconnects";
+"Session" = "Session";
+"Last error" = "Last error";
+"Hardware" = "Hardware";
+"Software" = "Software";
+"Device" = "Device";
+"Model" = "Model";
+"Uptime" = "Uptime";
+"Storage" = "Storage";
+"Actions" = "Actions";
+"Request Keyframe" = "Request Keyframe";
+"Reconnect" = "Reconnect";
+"Copy Diagnostics" = "Copy Diagnostics";
+"Switch Transport" = "Switch Transport";
+"Identity" = "Identity";
+"Device name" = "Device name";
+"Firmware" = "Firmware";
+"Serial" = "Serial";
+"Copy" = "Copy";
+"MAC" = "MAC";
+"Channel" = "Channel";
+"Host" = "Host";
+"Secure" = "Secure";
+"Device storage" = "Device storage";
+"A volume on this camera needs attention." = "A volume on this camera needs attention.";
+"Capabilities" = "Capabilities";
+"Open Web UI" = "Open Web UI";
+"Move" = "Move";
+"Up" = "Up";
+"Down" = "Down";
+"Left" = "Left";
+"Right" = "Right";
+"Up and left" = "Up and left";
+"Up and right" = "Up and right";
+"Down and left" = "Down and left";
+"Down and right" = "Down and right";
+"Home" = "Home";
+"Speed" = "Speed";
+"Movement stopped automatically." = "Movement stopped automatically.";
+"Lens" = "Lens";
+"Zoom" = "Zoom";
+"Focus" = "Focus";
+"Focus near" = "Focus near";
+"Focus far" = "Focus far";
+"Iris" = "Iris";
+"Iris open" = "Iris open";
+"Iris close" = "Iris close";
+"Presets" = "Presets";
+"No presets saved yet." = "No presets saved yet.";
+"This camera does not store presets." = "This camera does not store presets.";
+"Go to preset" = "Go to preset";
+"Set to Current" = "Set to Current";
+"Delete preset" = "Delete preset";
+"Patrols" = "Patrols";
+"Start patrol" = "Start patrol";
+"Stop patrol" = "Stop patrol";
+"Stops: %@" = "Stops: %@";
+"This camera has no PTZ." = "This camera has no PTZ.";
+"It is a fixed camera. You can still zoom digitally." = "It is a fixed camera. You can still zoom digitally.";
+"Adjustments" = "Adjustments";
+"Brightness" = "Brightness";
+"Contrast" = "Contrast";
+"Saturation" = "Saturation";
+"Sharpness" = "Sharpness";
+"Adjust my view only" = "Adjust my view only";
+"Local changes stay in Vigil's own render path and are never written to the camera, so they cannot affect anyone else watching it." = "Local changes stay in Vigil's own render path and are never written to the camera, so they cannot affect anyone else watching it.";
+"Exposure" = "Exposure";
+"Wide dynamic range" = "Wide dynamic range";
+"Level" = "Level";
+"Day / night" = "Day / night";
+"Infrared light" = "Infrared light";
+"Orientation" = "Orientation";
+"Flip" = "Flip";
+"Reset to Defaults" = "Reset to Defaults";
+"Off" = "Off";
+"On" = "On";
+"Auto" = "Auto";
+"Day" = "Day";
+"Night" = "Night";
+"Schedule" = "Schedule";
+"Centre" = "Centre";
+"Horizontal" = "Horizontal";
+"Vertical" = "Vertical";
+"No events yet." = "No events yet.";
+"Motion detection may be disabled on this camera." = "Motion detection may be disabled on this camera.";
+"Filters" = "Filters";
+"All" = "All";
+"No events of this type." = "No events of this type.";
+"Open in playback" = "Open in playback";
+"Motion" = "Motion";
+"Line crossing" = "Line crossing";
+"Intrusion" = "Intrusion";
+"Tamper" = "Tamper";
+"Video loss" = "Video loss";
+"Alarm" = "Alarm";
+"Local recording" = "Local recording";
+"Elapsed" = "Elapsed";
+"Clips today" = "Clips today";
+"Destination" = "Destination";
+"Reveal in Finder" = "Reveal in Finder";
+"Start Recording" = "Start Recording";
+"Stop Recording" = "Stop Recording";
+"In use" = "In use";
+"Needs attention" = "Needs attention";

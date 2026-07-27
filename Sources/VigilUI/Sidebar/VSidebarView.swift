@@ -5,11 +5,15 @@
 //  The main window's left panel: LIVE, GROUPS, CAMERAS and LIBRARY over a status footer. Every row
 //  comes from ``VSidebarTree``, every highlight from ``VSidebarSelectionState``, and every string
 //  from the module's own bundle — the view itself owns no state but hover.
+//  The rows live in VSidebarRowView.swift and VSidebarChrome.swift, and everything they are drawn
+//  from in SidebarPresentation.swift; the four files are one component split only for length.
 //  macOS-only. Implements docs/UX.md §4.1 (fixed sections), §4.2, §4.3, §4.4 and §3.3 (footer),
 //  with docs/DESIGN.md §9.12 (rows), §2.4 (the sidebar material) and §5.4 (hairlines).
 //
 
 #if os(macOS)
+
+import Foundation
 
 import SwiftUI
 
@@ -150,11 +154,14 @@ package struct VSidebarView<Thumbnail: View>: View {
     package var body: some View {
         // Computed once per structural update rather than per row: resolving
         // `onGroup(index:)` inside the row builder would make it quadratic.
-        let ordinals = groupOrdinals
+        let ordinals = VSidebarDrop.groupOrdinals(tree.rows)
         VStack(spacing: 0) {
             scroller(ordinals: ordinals)
             hairline(VTheme.Color.Stroke.subtle)
-            footer
+            VSidebarFooterView(liveCount: tree.liveCount,
+                               degradedCount: tree.degradedCount,
+                               bitsPerSecond: aggregateBitsPerSecond,
+                               onOpenSettings: onOpenSettings)
         }
         .background { panelBackground }
         .overlay(alignment: .trailing) { trailingEdge }
@@ -289,7 +296,8 @@ package struct VSidebarView<Thumbnail: View>: View {
                         badge: memberCount.formatted(.number),
                         isSelected: selection.isFocused(.group(group.id)),
                         isFocused: selection.isFocused(.group(group.id)),
-                        isDropTarget: isGroupDropTarget(ordinal),
+                        isDropTarget: VSidebarDrop.targetsGroup(dropPosition,
+                                                               ordinal: ordinal),
                         onSelect: { click in onSelect(.group(group.id), click) },
                         onActivate: { onActivate(.group(group.id)) })
     }
@@ -321,8 +329,12 @@ package struct VSidebarView<Thumbnail: View>: View {
                         onSelect: { click in onSelect(.camera(camera.id), click) },
                         onActivate: { onActivate(.camera(camera.id)) },
                         thumbnail: { thumbnail(camera) })
-            .overlay(alignment: .top) { insertionLine(visible: dropsAbove(camera)) }
-            .overlay(alignment: .bottom) { insertionLine(visible: dropsBelow(camera)) }
+            .overlay(alignment: .top) {
+                insertionLine(visible: dropEdge(camera) == .above)
+            }
+            .overlay(alignment: .bottom) {
+                insertionLine(visible: dropEdge(camera) == .below)
+            }
     }
 
     // MARK: LIBRARY
@@ -387,41 +399,10 @@ package struct VSidebarView<Thumbnail: View>: View {
 
     // MARK: - Drop indicators
 
-    /// The position of each group row among the group rows, which is what
-    /// ``VSidebarDropPosition/onGroup(index:)`` counts.
-    private var groupOrdinals: [GroupID: Int] {
-        var out: [GroupID: Int] = [:]
-        var next = 0
-        for row in tree.rows {
-            guard case .group(let group, _) = row.kind else { continue }
-            out[group.id] = next
-            next += 1
-        }
-        return out
-    }
-
-    private func isGroupDropTarget(_ ordinal: Int?) -> Bool {
-        guard let ordinal, let position = dropPosition else { return false }
-        guard case .onGroup(let index) = position else { return false }
-        return index == ordinal
-    }
-
-    private func dropsAbove(_ camera: VSidebarCamera) -> Bool {
-        guard let index = betweenIndex,
-              let position = tree.visibleCameras.firstIndex(of: camera.id) else { return false }
-        return position == index
-    }
-
-    /// The one case the leading edge cannot express: a drop after the very last camera.
-    private func dropsBelow(_ camera: VSidebarCamera) -> Bool {
-        guard let index = betweenIndex, index == tree.visibleCameras.count else { return false }
-        return tree.visibleCameras.last == camera.id
-    }
-
-    private var betweenIndex: Int? {
-        guard let position = dropPosition else { return nil }
-        guard case .between(let index) = position else { return nil }
-        return index
+    /// Which edge of `camera`'s row the insertion line goes on, if either. The reading of a
+    /// ``VSidebarDropPosition`` is in ``VSidebarDrop``, where it is tested.
+    private func dropEdge(_ camera: VSidebarCamera) -> VSidebarDrop.Edge? {
+        VSidebarDrop.edge(for: dropPosition, camera: camera.id, in: tree.visibleCameras)
     }
 
     /// A 2 pt accent line with round caps, inset 12 pt (DESIGN.md §9.12).
@@ -434,64 +415,6 @@ package struct VSidebarView<Thumbnail: View>: View {
                 .padding(.horizontal, VSidebarMetrics.dropLineInset)
                 .allowsHitTesting(false)
         }
-    }
-
-    // MARK: - Footer
-
-    /// `⚙ 6 live · 1.8 Gb/s`, or `⚙ 6 live · 1 degraded` when anything is impaired (UX.md §3.3).
-    ///
-    /// The counts are `Text(verbatim:)` around a `FormatStyle` result rather than an interpolated
-    /// localised sentence, because "{n} live" is a count-bearing phrase and Russian needs one/few/
-    /// many for it. Keeping the number and the word as separate runs keeps the pair out of the
-    /// plural table entirely, which is what the invariable `в эфире` translation is chosen for.
-    private var footer: some View {
-        HStack(spacing: VTheme.Space.xs) {
-            VButton(symbol: .settings,
-                    style: .icon,
-                    size: .xs,
-                    accessibilityLabel: "Settings",
-                    action: onOpenSettings)
-            Text(verbatim: tree.liveCount.formatted(.number))
-                .vType(VTheme.Typography.mono.numeric)
-                .foregroundStyle(summaryTint)
-            Text("live", bundle: .vigilUI)
-                .vType(VTheme.Typography.caption1)
-                .foregroundStyle(summaryTint)
-            summaryTail
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, VTheme.Space.md)
-        .frame(height: VSidebarMetrics.footerHeight)
-        .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder
-    private var summaryTail: some View {
-        if tree.degradedCount > 0 {
-            separator
-            Text(verbatim: tree.degradedCount.formatted(.number))
-                .vType(VTheme.Typography.mono.numeric)
-                .foregroundStyle(VTheme.Color.Semantic.warn)
-            Text("degraded", bundle: .vigilUI)
-                .vType(VTheme.Typography.caption1)
-                .foregroundStyle(VTheme.Color.Semantic.warn)
-        } else if let rate = aggregateBitsPerSecond {
-            separator
-            VSidebarBitrate.text(rate)
-                .vType(VTheme.Typography.mono.numeric)
-                .foregroundStyle(VTheme.Color.Text.secondary)
-        }
-    }
-
-    private var separator: some View {
-        Text(verbatim: "·")
-            .vType(VTheme.Typography.caption1)
-            .foregroundStyle(VTheme.Color.Text.disabled)
-    }
-
-    /// The whole footer turns `warn` the moment any camera is degraded (UX.md §3.3).
-    private var summaryTint: SwiftUI.Color {
-        tree.degradedCount > 0 ? VTheme.Color.Semantic.warn : VTheme.Color.Text.tertiary
     }
 
     // MARK: - Chrome
