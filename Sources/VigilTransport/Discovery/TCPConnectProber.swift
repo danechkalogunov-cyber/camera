@@ -65,7 +65,7 @@ public struct TCPConnectProber: TCPProbing {
         // business reaching this Mac's own services or standing up an AWDL link to a nearby phone.
         parameters.prohibitedInterfaceTypes = [.loopback]
         parameters.includePeerToPeer = false
-        if let interfaceName, let interface = await NWInterfaceIndex.shared.interface(interfaceName) {
+        if let interfaceName, let interface = NWInterfaceIndex.named(interfaceName) {
             parameters.requiredInterface = interface
         }
         // IPv4 only. Discovery sweeps an IPv4 prefix; letting the stack pick v6 would probe an
@@ -185,27 +185,46 @@ private struct OnceBox: Sendable {
 ///
 /// The monitor is started once and left running. It is one object for the process and it is how the
 /// list stays correct across a cable being plugged in mid-sweep.
-actor NWInterfaceIndex {
+/// ⚠️ A `final class` over a lock, not an actor, and that is forced rather than chosen: the
+/// datagram channels are **synchronous initialisers** that need an interface before they can build
+/// their `NWParameters`, and an initialiser cannot `await`. The first version of this was an actor
+/// and could not be called from either of them.
+///
+/// ⚠️ `@unchecked` is spent here and it is the only one in this directory — everything else got a
+/// checked `Sendable` over an `OSAllocatedUnfairLock`. It cannot be avoided: `NWPathMonitor` is not
+/// `Sendable` in the SDK, so it can neither be a stored property of a checked-`Sendable` type nor
+/// live inside the lock's state. What makes it safe is that the monitor is written once under the
+/// lock and only ever *read* afterwards, and `currentPath` is documented as safe to read from any
+/// thread.
+final class NWInterfaceIndex: @unchecked Sendable {
 
     /// The shared index.
     static let shared = NWInterfaceIndex()
 
     private let monitor = NWPathMonitor()
-    private var started = false
+    private let started = OSAllocatedUnfairLock<Bool>(initialState: false)
 
     /// The interface with this BSD name, or `nil` when the system does not currently have one.
     ///
     /// A `nil` is not an error and must not fail a probe: an interface can disappear between the
     /// planner choosing it and the probe running, and an unpinned probe still reaches most hosts.
-    func interface(_ name: String) -> NWInterface? {
+    static func named(_ name: String) -> NWInterface? {
+        shared.lookUp(name)
+    }
+
+    private func lookUp(_ name: String) -> NWInterface? {
         start()
         return monitor.currentPath.availableInterfaces.first { $0.name == name }
     }
 
-    /// Starts the monitor on first use.
+    /// Starts the monitor on first use, and leaves it running: it is one object for the process and
+    /// it is how the list stays correct across a cable being plugged in mid-sweep.
     private func start() {
-        guard !started else { return }
-        started = true
+        let shouldStart = started.withLock { flag -> Bool in
+            defer { flag = true }
+            return !flag
+        }
+        guard shouldStart else { return }
         // A handler is required for the monitor to run; the path is read synchronously above, so
         // there is nothing to do when it changes.
         monitor.pathUpdateHandler = { _ in }
