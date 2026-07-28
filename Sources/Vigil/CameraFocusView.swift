@@ -75,6 +75,42 @@ struct CameraFocusView<Video: View>: View {
 
     @Environment(\.vMotionEnabled) private var motionEnabled
 
+    // MARK: - Initialisation
+
+    /// Creates the surface.
+    ///
+    /// Spelled out rather than left to the memberwise initialiser. The two hover flags are
+    /// `private`, and Swift lowers a synthesised memberwise initialiser to the least accessible
+    /// stored property it includes — which would make it `private` to this file and unreachable
+    /// from the window that presents it. An explicit `init` is not worth guessing about.
+    ///
+    /// - Parameters:
+    ///   - archive: the day to scrub, or `nil` when the camera has no index.
+    ///   - clock: the calendar the ruler and the day label are rendered in.
+    ///   - video: the picture, built by the caller so `VigilRender` stays out of this file.
+    ///   - onSelectDay: steps the day the timeline shows.
+    ///   - onScrub: forwarded to the scrubber.
+    ///   - onZoom: forwarded to the scrubber.
+    ///   - onActivateMarker: forwarded to the scrubber.
+    ///   - onClose: returns to the tile stage.
+    init(archive: VLibraryArchive?,
+         clock: TimelineClock,
+         @ViewBuilder video: @escaping () -> Video,
+         onSelectDay: @escaping (TimelineDay) -> Void,
+         onScrub: @escaping (VTimelineScrubPhase, Date) -> Void,
+         onZoom: @escaping (TimelineZoom) -> Void,
+         onActivateMarker: @escaping (TimelineMarkerCluster) -> Void,
+         onClose: @escaping () -> Void) {
+        self.archive = archive
+        self.clock = clock
+        self.video = video
+        self.onSelectDay = onSelectDay
+        self.onScrub = onScrub
+        self.onZoom = onZoom
+        self.onActivateMarker = onActivateMarker
+        self.onClose = onClose
+    }
+
     // MARK: - View
 
     var body: some View {

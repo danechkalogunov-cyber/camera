@@ -107,8 +107,14 @@ package struct VTileActions {
 
 // MARK: - Environment
 
+/// ⛔ No `@MainActor` here, and it is not an oversight — `Sources/VigilUI/Theme/Environment.swift`
+/// records the same rule for its own keys. `EnvironmentKey.defaultValue` is a `nonisolated` static
+/// requirement, so a main-actor-isolated property cannot witness it and the conformance fails to
+/// compile. A computed `static var` is used rather than a `static let` because ``VTileActions``
+/// holds closures and is therefore not `Sendable`; a stored global of a non-`Sendable` type would
+/// need `nonisolated(unsafe)` to say the same thing less honestly.
 private struct VTileActionsKey: EnvironmentKey {
-    @MainActor static var defaultValue: VTileActions { VTileActions() }
+    static var defaultValue: VTileActions { VTileActions() }
 }
 
 extension EnvironmentValues {

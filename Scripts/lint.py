@@ -186,6 +186,36 @@ def check_static_stored_in_generic(path: pathlib.Path, lines: list[str]) -> list
     return out
 
 
+def check_environment_key_isolation(path: pathlib.Path, lines: list[str]) -> list[Violation]:
+    """Defect 5: `@MainActor` on an `EnvironmentKey`'s `defaultValue` does not compile.
+
+    `EnvironmentKey.defaultValue` is a `nonisolated` static requirement, so a main-actor-isolated
+    property cannot witness it: Swift 6 rejects the conformance with `#ConformanceIsolation`. The
+    mistake is easy to make because every *view* nearby is `@MainActor`, and it is invisible on
+    Linux — `VigilUI` is never compiled here — so it costs a round trip to a Mac to find.
+    """
+    out: list[Violation] = []
+    rel = str(path.relative_to(ROOT))
+    inside = False
+    for n, raw in enumerate(lines, 1):
+        code = strip_comments_and_strings(raw)
+        if "EnvironmentKey" in code and ("struct" in code or "enum" in code):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if code.strip() == "}":
+            inside = False
+            continue
+        if "defaultValue" in code and "@MainActor" in code:
+            out.append((rel, n, "environment-isolation",
+                        "@MainActor on an EnvironmentKey's defaultValue does not compile: the "
+                        "protocol requirement is nonisolated, so a main-actor-isolated property "
+                        "cannot witness it (#ConformanceIsolation). Drop the attribute; a computed "
+                        "'static var defaultValue' needs no isolation and no Sendable conformance."))
+    return out
+
+
 def check_duplicate_test_names() -> list[Violation]:
     """Defect 4: two agents choosing the same obvious @Test name break the whole target.
 
@@ -275,12 +305,14 @@ def main() -> int:
         violations += check_trailing_whitespace(path, lines)
         violations += check_file_header(path, lines)
         violations += check_static_stored_in_generic(path, lines)
+        violations += check_environment_key_isolation(path, lines)
 
     for path in swift_files("Tests"):
         lines = path.read_text().splitlines()
         violations += check_line_length(path, lines)
         violations += check_trailing_whitespace(path, lines)
         violations += check_static_stored_in_generic(path, lines)
+        violations += check_environment_key_isolation(path, lines)
 
     violations += check_duplicate_test_names()
     violations += check_plists()
