@@ -236,6 +236,18 @@ final class DeviceInfoService {
     /// When the published values were last replaced, for a future "as of" line.
     private(set) var updatedAt: Date?
 
+    /// The camera's own JPEG snapshot, decoded small, for the sidebar's thumbnail.
+    ///
+    /// **Why the device and not the video path.** The decode pipeline is passthrough: an
+    /// `EncodedFrame` becomes a `CMBlockBuffer` and then a `CMSampleBuffer` of *compressed* data,
+    /// which `AVSampleBufferDisplayLayer` decodes internally and never hands back
+    /// (`.vigil/SLICE.md`: "No `VTDecompressionSession`"). There is no decoded pixel buffer anywhere
+    /// in this app, so a thumbnail cannot be taken from the stream at all.
+    ///
+    /// The camera will render one itself over ISAPI as a JPEG. One small HTTP GET every few seconds
+    /// costs nothing on the media path and needs no decoding here.
+    private(set) var poster: CGImage?
+
     // MARK: - Dependencies
     //
     // Internal rather than private: `DeviceInfoService+Fetch.swift` reads all four, and Swift's
