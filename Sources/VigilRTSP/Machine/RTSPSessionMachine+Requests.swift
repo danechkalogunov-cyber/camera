@@ -21,7 +21,7 @@ extension RTSPSessionMachine {
     /// `CSeq`, `Session`, `Authorization`, `User-Agent`, method-specific headers, then the body
     /// headers. A retry after `401` always takes a **new** `CSeq`; reusing one breaks Hikvision's
     /// pipeline bookkeeping.
-    private mutating func request(_ method: RTSPMethod,
+    mutating func request(_ method: RTSPMethod,
                                   uri: String,
                                   extra: [(String, String)] = [],
                                   body: Data = Data(),
@@ -57,12 +57,12 @@ extension RTSPSessionMachine {
                 .setTimer(.requestTimeout(cseq: cseq), deadline: now + timeout)]
     }
 
-    private mutating func describeRequest(now: MediaInstant) -> [RTSPAction] {
+    mutating func describeRequest(now: MediaInstant) -> [RTSPAction] {
         request(.describe, uri: config.url.requestLineForm,
                 extra: [("Accept", "application/sdp")], now: now)
     }
 
-    private mutating func sendPlay(now: MediaInstant) -> [RTSPAction] {
+    mutating func sendPlay(now: MediaInstant) -> [RTSPAction] {
         var extra: [(String, String)] = [("Range", requestedRangeText ?? "npt=0.000-")]
         if let scale = requestedScale, scale != 1.0 {
             extra.append(("Scale", RTSPScale.serialized(scale)))
@@ -74,7 +74,7 @@ extension RTSPSessionMachine {
             + request(.play, uri: aggregateURI, extra: extra, now: now)
     }
 
-    private mutating func sendKeepalive(now: MediaInstant) -> [RTSPAction] {
+    mutating func sendKeepalive(now: MediaInstant) -> [RTSPAction] {
         counters.keepalivesSent += 1
         var actions: [RTSPAction] = [.log(.keepaliveSent(method: keepaliveMethod))]
         if keepaliveMethod == .setParameter {

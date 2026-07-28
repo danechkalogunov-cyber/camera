@@ -57,7 +57,7 @@ extension ClipRecorder {
     }
 
     /// Opens a segment if needed and writes one sample into it.
-    private func write(_ frame: EncodedFrame, format: CMVideoFormatDescription,
+    func write(_ frame: EncodedFrame, format: CMVideoFormatDescription,
                        timing: RecordingSampleTiming) async {
         if writer == nil {
             guard await openSegment(format: format) else { return }
@@ -322,13 +322,13 @@ extension ClipRecorder {
     /// Bytes in the current file, from the file system when it can answer and from the appended
     /// payload otherwise. The file system's number includes container overhead, which is what the
     /// size limit is actually about.
-    private func currentSegmentBytes() -> Int64 {
+    func currentSegmentBytes() -> Int64 {
         guard let writer else { return 0 }
         return fileSystem.fileSize(at: writer.outputURL) ?? writer.appendedByteCount
     }
 
     /// Builds the record for a finished file.
-    private func record(for writer: RecordingClipWriter, startedAt: Date, url: URL,
+    func record(for writer: RecordingClipWriter, startedAt: Date, url: URL,
                         isPartial: Bool, reason: RecordingEndReason,
                         mediaSeconds: Double? = nil) -> RecordingSegmentRecord {
         RecordingSegmentRecord(

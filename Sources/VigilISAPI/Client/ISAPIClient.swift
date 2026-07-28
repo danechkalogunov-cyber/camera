@@ -82,7 +82,7 @@ public actor ISAPIClient {
     public nonisolated let endpoint: ISAPIEndpoint
 
     /// The account. Replaced by `setCredential(_:)` when the user supplies a new one.
-    private var credential: Credential
+    var credential: Credential
 
     /// Tunables in force.
     let configuration: Configuration

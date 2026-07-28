@@ -17,7 +17,7 @@ extension RTSPSessionMachine {
 
     // MARK: - Media
 
-    private mutating func handleMedia(channel: UInt8,
+    mutating func handleMedia(channel: UInt8,
                                       payload: Data,
                                       now: MediaInstant) -> [RTSPAction] {
         counters.interleavedFrames += 1
@@ -48,7 +48,7 @@ extension RTSPSessionMachine {
     /// Folds the framing decoder's resync counter into ours and enforces the rate policy: more
     /// than `maxResyncsPerMinute` in a 60 s window means the link is broken, and one reconnect is
     /// better than endless silent resyncing.
-    private mutating func noteResyncs(now: MediaInstant) -> [RTSPAction] {
+    mutating func noteResyncs(now: MediaInstant) -> [RTSPAction] {
         let observed = decoder.statistics.resyncEvents
         guard observed > counters.framingResyncs else { return [] }
         let added = observed - counters.framingResyncs
@@ -67,7 +67,7 @@ extension RTSPSessionMachine {
 
     // MARK: - Authentication
 
-    private mutating func handleUnauthorized(_ response: RTSPResponse,
+    mutating func handleUnauthorized(_ response: RTSPResponse,
                                              request: PendingRequest,
                                              now: MediaInstant) -> [RTSPAction] {
         counters.authChallenges += 1
@@ -109,7 +109,7 @@ extension RTSPSessionMachine {
 
     // MARK: - Redirects and failure statuses
 
-    private mutating func handleRedirect(_ response: RTSPResponse,
+    mutating func handleRedirect(_ response: RTSPResponse,
                                          now: MediaInstant) -> [RTSPAction] {
         guard let location = response.headers.first("Location"),
               let url = RTSPURL(string: location) else {
@@ -123,7 +123,7 @@ extension RTSPSessionMachine {
                 .reconnect(to: url, resetAuthState: true)]
     }
 
-    private mutating func handleFailureStatus(_ response: RTSPResponse,
+    mutating func handleFailureStatus(_ response: RTSPResponse,
                                               request: PendingRequest,
                                               now: MediaInstant) -> [RTSPAction] {
         let code = response.status.rawValue
@@ -154,7 +154,7 @@ extension RTSPSessionMachine {
 
     /// A path-shaped failure during `DESCRIBE` closes with `.ladderAdvance`, which is how the R1.2
     /// probe ladder learns to try the next candidate without the user ever seeing a URL.
-    private mutating func advanceLadderOrFail(_ error: RTSPError) -> [RTSPAction] {
+    mutating func advanceLadderOrFail(_ error: RTSPError) -> [RTSPAction] {
         var actions: [RTSPAction] = []
         switch machineState {
         case .awaitingDescribe, .authenticating(.describe):
@@ -167,7 +167,7 @@ extension RTSPSessionMachine {
 
     // MARK: - Server-initiated messages
 
-    private mutating func handle(serverRequest: RTSPRequest, now: MediaInstant) -> [RTSPAction] {
+    mutating func handle(serverRequest: RTSPRequest, now: MediaInstant) -> [RTSPAction] {
         counters.serverRequestsReceived += 1
         let notice = serverRequest.headers.first("Notice")
         var actions: [RTSPAction] = [.log(.serverRequest(method: serverRequest.method,
@@ -230,13 +230,13 @@ extension RTSPSessionMachine {
 
     // MARK: - State plumbing
 
-    private mutating func transition(to newState: RTSPSessionState) -> [RTSPAction] {
+    mutating func transition(to newState: RTSPSessionState) -> [RTSPAction] {
         guard machineState != newState else { return [] }
         machineState = newState
         return [.stateChanged(newState)]
     }
 
-    private mutating func closeNormally() -> [RTSPAction] {
+    mutating func closeNormally() -> [RTSPAction] {
         pending = nil
         commandQueue.removeAll()
         return transition(to: .closed) + [.closeTransport(reason: .normal)]
@@ -244,7 +244,7 @@ extension RTSPSessionMachine {
 
     /// Ends the session. `.fail` is the **last** action ever produced; every later entry point
     /// returns `[]`, except one `handle(.teardown)`.
-    private mutating func terminate(_ error: RTSPError) -> [RTSPAction] {
+    mutating func terminate(_ error: RTSPError) -> [RTSPAction] {
         guard !isTerminated else { return [] }
         isTerminated = true
         pending = nil

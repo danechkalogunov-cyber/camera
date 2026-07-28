@@ -137,7 +137,7 @@ extension RTPTrackReceiver {
     /// Hikvision NVRs change SSRC when a shared session switches channel and after an internal
     /// encoder restart. Treating that as loss instead of a reset produces a permanently broken
     /// stream, which is why every unwrapper, the gate and the clock all restart here.
-    private mutating func adoptSSRC(_ packet: RTPPacket, at now: MediaInstant,
+    mutating func adoptSSRC(_ packet: RTPPacket, at now: MediaInstant,
                                     into result: inout RTPIngestResult) {
         if packet.ssrc == reportBuilder.ourSSRC {
             // RFC 3550 §8.2: a source using our SSRC means we must pick another.
@@ -165,7 +165,7 @@ extension RTPTrackReceiver {
     // MARK: - Private: reorder output
 
     /// Folds one reorder-buffer output into statistics, events and frames.
-    private mutating func absorb(_ output: ReorderBuffer.Output, at now: MediaInstant,
+    mutating func absorb(_ output: ReorderBuffer.Output, at now: MediaInstant,
                                  into result: inout RTPIngestResult) {
         accumulator.noteReorder(late: output.late, duplicates: output.duplicates,
                                 reordered: output.reordered)
@@ -265,13 +265,13 @@ extension RTPTrackReceiver {
     // MARK: - Private: reporting
 
     /// Publishes the reorder buffer's occupancy into the statistics.
-    private mutating func publishBufferDepth(at now: MediaInstant) {
+    mutating func publishBufferDepth(at now: MediaInstant) {
         accumulator.noteBufferDepth(packets: reorder.depth,
                                     milliseconds: reorder.bufferedMilliseconds(at: now))
     }
 
     /// Emits a `malformed` event at most once per reason per five seconds.
-    private mutating func emitLimited(_ reason: MalformedReason, at now: MediaInstant,
+    mutating func emitLimited(_ reason: MalformedReason, at now: MediaInstant,
                                       into result: inout RTPIngestResult) {
         guard limiter.admit(reason.limiterKey, at: now) else { return }
         result.events.append(.malformed(reason))

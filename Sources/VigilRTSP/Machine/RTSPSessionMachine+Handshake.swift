@@ -17,7 +17,7 @@ extension RTSPSessionMachine {
 
     // MARK: - OPTIONS
 
-    private mutating func onOptions(_ response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
+    mutating func onOptions(_ response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
         if let publicValue = response.headers.first("Public") {
             serverPublicMethods = RTSPResponseFields.methods(publicValue)
         }
@@ -39,7 +39,7 @@ extension RTSPSessionMachine {
 
     // MARK: - DESCRIBE
 
-    private mutating func onDescribe(_ response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
+    mutating func onDescribe(_ response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
         let parsed: SDPDocument
         do {
             parsed = try SDPParser.parse(response.body)
@@ -175,7 +175,7 @@ extension RTSPSessionMachine {
         return actions
     }
 
-    private mutating func onSetup(_ response: RTSPResponse,
+    mutating func onSetup(_ response: RTSPResponse,
                                   request: PendingRequest,
                                   now: MediaInstant) -> [RTSPAction] {
         var actions: [RTSPAction] = []
@@ -222,7 +222,7 @@ extension RTSPSessionMachine {
 
     // MARK: - PLAY
 
-    private mutating func onPlay(_ response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
+    mutating func onPlay(_ response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
         playRangeText = response.headers.first("Range") ?? requestedRangeText
         playScale = response.headers.first("Scale").flatMap(Double.init) ?? requestedScale ?? 1.0
         playRateControlDisabled = SDPText.lowercasedASCII(

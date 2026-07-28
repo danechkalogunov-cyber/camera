@@ -70,7 +70,7 @@ public actor CameraLibrary {
     private var subscribers: [UUID: AsyncStream<LibraryChange>.Continuation] = [:]
 
     var isDirty = false
-    private var firstDirtyAt: MediaInstant?
+    var firstDirtyAt: MediaInstant?
     var saveTask: Task<Void, Never>?
     var saveGeneration = 0
 
@@ -78,7 +78,7 @@ public actor CameraLibrary {
     ///
     /// Non-`nil` means there are unsaved changes: the store keeps the dirty state and the UI owes
     /// the user the "Vigil can't save your settings" banner (docs/spec-core.md §5.5 step 10).
-    public private(set) var lastSaveError: StorageError?
+    public internal(set) var lastSaveError: StorageError?
 
     /// How many change subscribers are attached. Diagnostics and tests only.
     public var subscriberCount: Int { subscribers.count }

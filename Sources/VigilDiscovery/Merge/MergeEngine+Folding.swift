@@ -27,7 +27,7 @@ extension MergeEngine {
     }
 
     /// Applies an observation's fields to a record and returns the keys that actually changed.
-    private mutating func apply(_ observation: DeviceObservation, to index: Int) -> Set<DeviceFieldKey> {
+    mutating func apply(_ observation: DeviceObservation, to index: Int) -> Set<DeviceFieldKey> {
         var device = entries[index].device
         var changed: Set<DeviceFieldKey> = []
         let stamp = FieldStamp(source: observation.source, observedAt: observation.observedAt)
@@ -204,7 +204,7 @@ extension MergeEngine {
 
     /// Promotes the record's `id` to the strongest identity bound to it, and keeps every other
     /// identity as an alternate. This is the rung-climbing of §7.1: `endpoint` → `serial` → `mac`.
-    private mutating func promoteIdentity(of index: Int) {
+    mutating func promoteIdentity(of index: Int) {
         var device = entries[index].device
         var candidates = device.alternateIdentities
         candidates.insert(device.id)
@@ -225,7 +225,7 @@ extension MergeEngine {
     }
 
     /// Recomputes reachability from the plan. Returns true when it changed.
-    private mutating func updateReachability(of index: Int) -> Bool {
+    mutating func updateReachability(of index: Int) -> Bool {
         guard !plannedSubnets.isEmpty else { return false }
         let device = entries[index].device
         let resolved: Reachability
@@ -243,7 +243,7 @@ extension MergeEngine {
 
     /// Recomputes the confidence score from scratch (§7.6). Never merged, always derived, so two
     /// runs that saw the same evidence agree on the number.
-    private mutating func rescore(_ index: Int) {
+    mutating func rescore(_ index: Int) {
         let entry = entries[index]
         let device = entry.device
         var score = max(0, entry.verdict.confidenceDelta)
@@ -265,7 +265,7 @@ extension MergeEngine {
     /// camera name, an "Update" action. A **different** device at a saved address is
     /// `.addressReused`: the new device is listed as new and the saved camera is left pointing where
     /// it was. Each is emitted at most once per record, snapshot and address pair.
-    private mutating func knownDeviceEvents(for index: Int) -> [DiscoveryEvent] {
+    mutating func knownDeviceEvents(for index: Int) -> [DiscoveryEvent] {
         guard !knownDevices.isEmpty else { return [] }
         let device = entries[index].device
         var events: [DiscoveryEvent] = []
@@ -320,7 +320,7 @@ extension MergeEngine {
     // MARK: - Field access
 
     /// Reads a field out of a record as a `FieldValue`, for change detection and for absorbing.
-    private func value(of key: DeviceFieldKey, in device: DiscoveredDevice) -> FieldValue? {
+    func value(of key: DeviceFieldKey, in device: DiscoveredDevice) -> FieldValue? {
         switch key {
         case .address: .ipv4(device.address)
         case .httpPort: .port(device.httpPort)

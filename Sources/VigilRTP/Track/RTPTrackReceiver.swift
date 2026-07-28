@@ -180,13 +180,13 @@ public struct RTPTrackReceiver: Sendable {
     public let format: RTPTrackFormat
 
     /// Cumulative counts of packets the header parser refused.
-    public private(set) var parseFailures = RTPParseFailureCounts()
+    public internal(set) var parseFailures = RTPParseFailureCounts()
 
     /// The drift-correcting media→host clock. Not a pacing mechanism (API_CONTRACT §2 R-26).
-    public private(set) var presentationClock: PresentationClock
+    public internal(set) var presentationClock: PresentationClock
 
     /// The NTP ⇄ RTP mapping from the most recent Sender Report, once one has arrived.
-    public private(set) var wallClockMapping: RTPWallClockMapping?
+    public internal(set) var wallClockMapping: RTPWallClockMapping?
 
     /// The CNAME the camera advertised in SDES, when it sent one.
     public private(set) var remoteCNAME: String?
@@ -195,7 +195,7 @@ public struct RTPTrackReceiver: Sendable {
     public private(set) var remoteTool: String?
 
     /// The SSRC currently being received, once the first packet has arrived.
-    public private(set) var currentSSRC: UInt32?
+    public internal(set) var currentSSRC: UInt32?
 
     /// The codec half of the pipeline.
     var depacketizer: AnyDepacketizer?
@@ -204,7 +204,7 @@ public struct RTPTrackReceiver: Sendable {
     var reorder: ReorderBuffer
 
     /// RFC 3550 A.1 / A.8 state for the source being received.
-    private var source: RTPSourceState
+    var source: RTPSourceState
 
     /// Unwraps the 32-bit RTP timestamp for discontinuity detection.
     var packetTimestamps = TimestampUnwrapper()
@@ -231,7 +231,7 @@ public struct RTPTrackReceiver: Sendable {
     var limiter = EventRateLimiter()
 
     /// Injected randomness for the SSRC and the RTCP interval.
-    private var random: any RandomSource
+    var random: any RandomSource
 
     /// When this receiver started, for uptime and for the first RTCP interval.
     private let startTime: MediaInstant

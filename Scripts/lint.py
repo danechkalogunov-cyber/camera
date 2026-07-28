@@ -457,97 +457,230 @@ def check_split_file_access() -> list[Violation]:
     """`private` is FILE-scoped in Swift, so splitting a type across files breaks every private
     member the other half touches.
 
-    This is the rule that cost the most to learn, twice. Extensions of one type live in
+    This is the rule that cost the most to learn, three times. Extensions of one type live in
     `Foo.swift` + `Foo+Bar.swift`, and a member left `private` in one is simply invisible to the
-    other — 40-odd errors on the first Mac build, none of them visible here.
+    other — 40-odd errors on the first Mac build, 200-odd on the third, none of them visible here.
 
-    Two traps this checks that a naive scan misses:
+    Four shapes the compiler rejects, all of them checked:
 
-      1. Attributes may precede the access modifier. `@State private var archive` does not match a
-         pattern anchored on `private` at the start, which is exactly how eleven properties got
-         through an earlier version of this check.
-      2. `private(set)` scopes only the *setter*. Reading such a property from the other file is
-         fine; assigning to it is not, so only assignments are reported.
+      1. A `private` member of one file used by another. Attributes may precede the modifier, so
+         `@State private var archive` has to match too — anchoring on `private` at the start of the
+         line is how eleven properties got through the first version of this check.
+      2. `public private(set) var x` mutated from the other file. The **`public` comes first**, so a
+         pattern that expects the access modifier to lead misses every one of these; that is how
+         `RTSPWireDecoder.statistics` and four of `RTPTrackReceiver`'s counters slipped through.
+      3. A `private` nested type — `private enum Phase` — referenced by the other file, including
+         through its cases alone (`phase = .atBoundary`).
+      4. A `private` nested type used in the *signature* of a non-private member **in its own
+         file**: "property must be declared private because its type uses a private type". No
+         sibling is involved, and widening a member's access is what usually triggers it, so it is
+         checked on every file rather than only on split ones.
 
-    Files are grouped by the base name before `+`, which is this repo's convention for "extensions
-    of the same type".
-
-    ⚠️ This is a text scan, not a type checker, so it is deliberately **conservative**: a name that
-    the other file also declares — as a parameter, a local, an enum case, or its own member — is
-    skipped, because the reference there is far more likely to be that one. Without this the rule
-    fired on `StreamStatisticsRollup(historyWindow: historyWindow)` (an argument label plus a local
-    parameter), on `VTheme.Symbol.stop`, and on `Stroke.contrast` — seven false alarms in a tree
-    that compiles. A lint rule that cries wolf gets switched off, and the real compiler on the Mac
-    is still the backstop; missing a case here is cheaper than being ignored.
+    ⚠️ Still a text scan, not a type checker. The earlier version bought its accuracy by skipping
+    any name the other file also bound — as a local, a parameter, or an argument label — and that
+    single line is why the third Mac build failed: `request`, `plan`, `credential`, `terminate` and
+    thirty more were all suppressed by a same-named local next door. The skip is now narrow: a name
+    is only ignored when the sibling declares it **as a type-level member of its own**, which is
+    the one case where the two cannot be the same entity. That keeps the three known false alarms
+    quiet — `VTheme.Symbol.stop`, `Stroke.contrast`, and a doc comment mentioning `displayScale` —
+    and reports everything else, which is the correct trade for a rule whose misses cost a build.
     """
     out: list[Violation] = []
     groups: dict[pathlib.Path, dict[str, list[pathlib.Path]]] = defaultdict(lambda: defaultdict(list))
     for path in swift_files("Sources"):
         groups[path.parent][path.stem.split("+")[0]].append(path)
 
-    decl = re.compile(
-        r"^    (?:@\w+(?:\([^)]*\))?\s+)*"
-        r"(private\(set\)|private|fileprivate)\s+"
-        r"(?:@\w+(?:\([^)]*\))?\s+)*"
-        r"(?:static\s+|nonisolated\s+|final\s+|lazy\s+|weak\s+|unowned\s+)*"
-        r"(?:func|var|let|struct|enum|class|typealias)\s+(\w+)")
+    # A type-level member: four spaces of indent, any attributes, any access level.
+    ACCESS = r"(?:public\s+|package\s+|open\s+|internal\s+)?"
+    MODIFIERS = (r"(?:static\s+|class\s+|final\s+|mutating\s+|nonmutating\s+|nonisolated\s+"
+                 r"|lazy\s+|weak\s+|unowned\s+|indirect\s+|override\s+)*")
+    KIND = r"(?:func|var|let|struct|enum|class|actor|typealias)"
+
+    # Indent is `( {4})?` rather than `    `: a top-level `private let` is file-scoped in exactly
+    # the same way, and `vigilFullFsyncCommand` is one the sibling half of LibraryStore calls.
+    private_decl = re.compile(
+        r"^(?: {4})?(?:@\w+(?:\([^)]*\))?\s+)*" + ACCESS
+        + r"(?:@\w+(?:\([^)]*\))?\s+)*"
+        + r"(private\(set\)|fileprivate\(set\)|private|fileprivate)\s+"
+        + MODIFIERS + r"(" + KIND + r")\s+(\w+)")
+    member_decl = re.compile(
+        r"^\s{4,}(?:@\w+(?:\([^)]*\))?\s+)*"
+        + r"(?:(?:public|package|open|internal|private|fileprivate)(?:\(set\))?\s+)*"
+        + MODIFIERS + r"(?:(" + KIND + r")|case)\s+(\w+)")
 
     def stripped(path: pathlib.Path) -> str:
-        body = "\n".join(l for l in path.read_text().splitlines()
-                         if not l.lstrip().startswith("//"))
-        return re.sub(r'"(?:[^"\\]|\\.)*"', '""', body)
+        """The file with comments gone and string *literals* blanked — but interpolations kept.
 
-    def declares(body: str) -> set[str]:
-        """Every name the file binds itself: members, locals, parameters, enum cases."""
+        A literal with an interpolation in it contains real code: `"\(Self.premigrationPrefix)v"`
+        is a use of `premigrationPrefix`, and blanking the whole literal is what hid it. Those are
+        left intact — a stray word inside one can only ever cost a false alarm, and the balance
+        this rule needs is the other way round.
+        """
+        body = "\n".join("" if l.lstrip().startswith("//") else l
+                         for l in path.read_text().splitlines())
+        return re.sub(r'"(?:[^"\\]|\\.)*"',
+                      lambda m: m.group(0) if r"\(" in m.group(0) else '""',
+                      body)
+
+    def key_of(kind: str, name: str, rest: str) -> str:
+        """A member's identity for shadowing purposes.
+
+        Functions are keyed by name **and first argument label**, because overloads coexist: the
+        third Mac build failed on `handle(serverRequest:)` precisely because the sibling's own
+        `handle(_ command:)` made a name-only comparison call it "already declared next door".
+        """
+        if kind != "func":
+            return name
+        label = re.match(r"\s*\(\s*(\w+)", rest)
+        return f"{name}({label.group(1) if label else ''}"
+
+    def members(path: pathlib.Path) -> set[str]:
+        """Keys the file declares as members of a type — the one binding that cannot coexist with
+        the sibling's declaration of the same one. `case a, b, c` binds all three, and a nested
+        type indents its members further, so the indent floor is four spaces, not exactly four."""
         names: set[str] = set()
-        names |= set(re.findall(r"\b(?:func|typealias|struct|enum|class)\s+(\w+)", body))
-        # `case a, b, c` and `let x, y` bind every name in the list, not just the first — which is
-        # how `VTheme.Symbol`'s one-line `case snapshot, …, stop, …` slipped through and reported
-        # three false alarms.
-        for kind, rest in re.findall(r"\b(let|var|case)\s+([^\n:=({]*)", body):
-            for piece in rest.split(","):
-                m = re.match(r"\s*(\w+)", piece)
-                if m:
-                    names.add(m.group(1))
-        # Parameter labels and names: `foo bar: T`, `_ bar: T`, `foo: T`.
-        names |= set(re.findall(r"[(,]\s*(?:\w+\s+)?(\w+)\s*:", body))
+        for raw in path.read_text().splitlines():
+            m = member_decl.match(raw)
+            if m:
+                names.add(key_of(m.group(1) or "", m.group(2), raw[m.end(2):]))
+            if re.match(r"^\s{4,}case\s", raw):
+                names |= set(re.findall(r"(\w+)", raw.split("case", 1)[1].split(":")[0]))
         return names
+
+    def shadows(body: str, name: str, at: int) -> bool:
+        """Whether `name` at line `at` is bound by the enclosing member rather than by the type.
+
+        A parameter or a local of the same name is the one thing a text scan genuinely cannot tell
+        apart from a member reference, and both are common: `hairline(_ displayScale:)` uses its
+        parameter, `let tracks = myTracks` its local. Rather than skipping the name everywhere —
+        the mistake that cost a whole build — only the occurrences actually inside such a scope are
+        discounted, by walking back to the enclosing type-level declaration.
+        """
+        lines = body.splitlines()
+        head = None
+        for i in range(min(at, len(lines)) - 1, -1, -1):
+            if re.match(r"^    (?:@|\w)", lines[i]):
+                head = i
+                break
+        if head is None:
+            return False
+        # The signature may wrap over several lines; take everything up to the opening brace.
+        signature = []
+        for i in range(head, min(at, len(lines))):
+            signature.append(lines[i])
+            if "{" in lines[i]:
+                break
+        joined = " ".join(signature)
+        if re.search(r"[(,]\s*(?:\w+\s+)?" + re.escape(name) + r"\s*:", joined):
+            return True
+        scope = "\n".join(lines[head:at - 1])
+        return bool(re.search(r"\b(?:let|var|for|inout)\s+" + re.escape(name) + r"\b", scope)
+                    or re.search(r"\b(?:guard|if|case)\s+let\s+" + re.escape(name) + r"\b", scope))
+
+    def cases_of(body: str, name: str) -> list[str]:
+        """Case names of a nested enum, which are invisible wherever the enum itself is."""
+        m = re.search(r"enum\s+" + re.escape(name) + r"\b[^\n{]*\{", body)
+        if not m:
+            return []
+        depth, end = 0, len(body)
+        for i in range(m.end() - 1, len(body)):
+            depth += (body[i] == "{") - (body[i] == "}")
+            if depth == 0:
+                end = i
+                break
+        return re.findall(r"^\s*case\s+(\w+)", body[m.end():end], re.M)
 
     for _, families in groups.items():
         for _, files in families.items():
             if len(files) < 2:
                 continue
-            others = {p: stripped(p) for p in files}
-            bound = {p: declares(body) for p, body in others.items()}
+            bodies = {p: stripped(p) for p in files}
+            declared = {p: members(p) for p in files}
             for owner in files:
+                own = bodies[owner]
                 for n, raw in enumerate(owner.read_text().splitlines(), 1):
-                    m = decl.match(raw)
+                    m = private_decl.match(raw)
                     if not m:
                         continue
-                    access, name = m.group(1), m.group(2)
+                    access, kind, name = m.group(1), m.group(2), m.group(3)
                     for other in files:
                         if other is owner:
                             continue
-                        # See the docstring: if the other file binds this name itself, the
-                        # reference over there is almost certainly to its own.
-                        if name in bound[other]:
+                        # The one safe skip: the sibling declares this name as a member of its own,
+                        # so the reference over there is to that and cannot be to this.
+                        if key_of(kind, name, raw[m.end(3):]) in declared[other]:
                             continue
-                        body = others[other]
-                        if access == "private(set)":
-                            hit = re.search(r"^\s*(?:self\.)?" + re.escape(name)
-                                            + r"\s*(?:=[^=]|[+\-*/]=)", body, re.M)
+                        body = bodies[other]
+                        if access.endswith("(set)"):
+                            # Not just `x = 1`. A setter is equally required by `x.count += 1`,
+                            # by `x.reset()` and by `x[i] = y` — `statistics.messagesDecoded += 1`
+                            # is exactly the shape that reached the user as "setter is
+                            # inaccessible" after a name-only assignment pattern found nothing.
+                            escaped = re.escape(name)
+                            head = r"^\s*(?:self\.)?" + escaped + r"\b"
+                            patterns = [(name, head + r"[^\n=]*[-+*/&|^%]?=(?!=)"),
+                                        (name, head + r"(?:\.\w+|\[[^\n]*\])*\.\w+\(")]
                             what = "assigned to"
                         else:
-                            # Not an argument label, and not a member of something else.
-                            hit = re.search(r"(?<![\w.(,])" + re.escape(name) + r"\b(?!\s*:)", body) \
-                                or re.search(r"(?:self|Self)\." + re.escape(name) + r"\b", body)
+                            # `(` and `,` are deliberately **not** in the lookbehind: an argument
+                            # position is an ordinary use, and excluding it is what hid
+                            # `hairline(displayScale)`. A leading `.` still is, so `format.codec`
+                            # does not count as a use of some other type's `codec` — except for a
+                            # call, where `rollup.adopt(…)` is exactly how a sibling reaches a
+                            # private method on a value of the type declared next door.
+                            patterns = [(name, r"(?<![\w.])" + re.escape(name) + r"\b(?!\s*:)"),
+                                        (name, r"(?:self|Self)\." + re.escape(name) + r"\b")]
+                            if kind == "func":
+                                patterns.append((name, r"\.\s*" + re.escape(name) + r"\s*\("))
+                            if kind == "enum":
+                                patterns += [(c, r"(?<![\w])\." + re.escape(c) + r"\b")
+                                             for c in cases_of(own, name)]
                             what = "used"
-                        if hit:
+                        where = None
+                        for bound, pattern in patterns:
+                            for found in re.finditer(pattern, body, re.M):
+                                line = body.count("\n", 0, found.start()) + 1
+                                if shadows(body, bound, line):
+                                    continue
+                                where = line
+                                break
+                            if where:
+                                break
+                        if where:
                             out.append((str(owner.relative_to(ROOT)), n, "split-access",
                                         f"{name!r} is {access} in {owner.name} but {what} in "
-                                        f"{other.name} — Swift scopes {access} to one file, so the "
-                                        f"other half of this type cannot see it"))
+                                        f"{other.name}:{where} — Swift scopes {access} to one "
+                                        f"file, so the other half of this type cannot see it"))
                             break
+
+    # Shape 4: a private nested type in the signature of a non-private member of the same file.
+    # Anchored at exactly four spaces of indent: a `let` eight spaces in is a local, and a local may
+    # name a private type freely — it is only a *member* whose visibility has to be justified.
+    top_member = re.compile(
+        r"^    (?! )(?:@\w+(?:\([^)]*\))?\s+)*"
+        + r"(?:(?:public|package|open|internal|private|fileprivate)(?:\(set\))?\s+)*"
+        + MODIFIERS + r"(" + KIND + r")\s+(\w+)")
+    for path in swift_files("Sources"):
+        lines = path.read_text().splitlines()
+        nested: dict[str, int] = {}
+        for n, raw in enumerate(lines, 1):
+            m = private_decl.match(raw)
+            if m and m.group(2) in {"struct", "enum", "class", "actor", "typealias"}:
+                nested[m.group(3)] = n
+        if not nested:
+            continue
+        for raw in lines:
+            m = top_member.match(raw)
+            if not m or private_decl.match(raw):
+                continue
+            signature = re.sub(r'"(?:[^"\\]|\\.)*"', '""', raw[m.end(2):])
+            for name, n in nested.items():
+                if re.search(r"(?<![\w.])" + re.escape(name) + r"\b", signature):
+                    out.append((str(path.relative_to(ROOT)), n, "split-access",
+                                f"{name!r} is private but appears in the signature of "
+                                f"{m.group(2)!r}, which is not — Swift rejects a member whose type "
+                                f"is less visible than the member itself"))
+                    break
     return out
 
 

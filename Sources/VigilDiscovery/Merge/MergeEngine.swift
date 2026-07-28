@@ -28,7 +28,7 @@ public struct MergeEngine: Sendable {
     // MARK: - Stored state
 
     /// One record plus the bookkeeping that is not part of the public model.
-    private struct Entry: Sendable {
+    struct Entry: Sendable {
         var device: DiscoveredDevice
         /// The best vendor verdict seen so far, arbitrated per §6.8.
         var verdict: ClassificationVerdict

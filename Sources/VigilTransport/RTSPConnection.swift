@@ -161,7 +161,7 @@ public actor RTSPConnection {
     // MARK: - Nested types
 
     /// Where this connection is. Strictly increasing: nothing ever moves backwards.
-    private enum Lifecycle: Sendable, Hashable {
+    enum Lifecycle: Sendable, Hashable {
         case idle, connecting, running, closing, closed
     }
 
@@ -244,7 +244,7 @@ public actor RTSPConnection {
     /// interface: it delivers state changes and I/O completions to a `DispatchQueue`, so the hop
     /// from that queue into this actor has to be written by hand. Every such hop in this file is
     /// marked with a comment saying which direction it crosses.
-    private let queue: DispatchQueue
+    let queue: DispatchQueue
 
     // MARK: - Session
 
@@ -285,7 +285,7 @@ public actor RTSPConnection {
 
     var eventSink: AsyncStream<RTSPConnectionEvent>.Continuation?
     var hasReportedFailure = false
-    private var closeTask: Task<Void, Never>?
+    var closeTask: Task<Void, Never>?
     var drops = RTSPConnectionEventDrops()
 
     // MARK: - Initialisation

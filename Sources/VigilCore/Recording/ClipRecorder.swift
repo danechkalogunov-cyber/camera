@@ -113,15 +113,15 @@ public actor ClipRecorder {
 
     /// The format description every sample and the writer's `sourceFormatHint` are built from.
     /// Not `Sendable`, and never leaves this actor.
-    private var formatDescription: CMVideoFormatDescription?
+    var formatDescription: CMVideoFormatDescription?
 
     /// The codec the recording was started for. A codec change is an incompatible format change.
-    private var codec: VideoCodec?
+    var codec: VideoCodec?
 
     /// Picture size, for `{res}`. Best effort: `nil` renders as `unknown`.
-    private var resolution: Resolution?
+    var resolution: Resolution?
 
-    private var writer: RecordingClipWriter?
+    var writer: RecordingClipWriter?
     var timeline = RecordingTimeline()
     var planner: RecordingSegmentPlanner
     var gate: RecordingKeyframeGate
@@ -138,7 +138,7 @@ public actor ClipRecorder {
     /// Media seconds across finished files, so `totalSeconds` survives a rotation.
     var finishedMediaSeconds: Double = 0
 
-    private var samplesDropped = 0
+    var samplesDropped = 0
     var freeBytes: Int64
     var bytesSinceFreeSpaceCheck: Int64 = 0
 

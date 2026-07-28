@@ -29,13 +29,13 @@
 #if canImport(Darwin)
 import Darwin
 /// Darwin's `F_FULLFSYNC`: flush the drive's cache, not merely the OS page cache.
-private let vigilFullFsyncCommand = Int32(F_FULLFSYNC)
+let vigilFullFsyncCommand = Int32(F_FULLFSYNC)
 #elseif canImport(Glibc)
 import Glibc
 /// The numeric value of Darwin's `F_FULLFSYNC`, spelled so the shared call site below compiles in
 /// the Linux shadow harness. Linux answers `EINVAL`, which the caller treats as "fall back to
 /// `fsync`" — the correct behaviour on a platform without a full-sync command.
-private let vigilFullFsyncCommand = Int32(51)
+let vigilFullFsyncCommand = Int32(51)
 #endif
 
 import Foundation
@@ -136,14 +136,14 @@ public actor LibraryStore {
     private static let secondBackupSuffix = ".bak2"
     static let temporaryPrefix = "library.json.tmp-"
     static let quarantinePrefix = "library.json.corrupt-"
-    private static let premigrationPrefix = "library.json.premigration-"
+    static let premigrationPrefix = "library.json.premigration-"
 
     // MARK: Stored properties
 
     /// The directory holding the document and its generations.
     public let directory: URL
 
-    private let options: Options
+    let options: Options
     let wallClock: any WallClock
     let logger: any LoggerProtocol
     let fileManager: FileManager
@@ -153,7 +153,7 @@ public actor LibraryStore {
     /// This is what makes "skip the write when nothing changed" work. Comparing the *final* bytes
     /// could never match, because `updatedAt` is refreshed on every save — spec-core §5.5 has that
     /// backwards, and following it literally would rewrite the file on every mutation attempt.
-    private var lastWrittenContent: Data?
+    var lastWrittenContent: Data?
 
     // MARK: Initialisation
 

@@ -61,9 +61,9 @@ public struct RTSPSessionMachine: Sendable {
     var setupCursor = 0
     var aggregateURI: String
     var sessionIdentifier: String?
-    private var sessionTimeout: Duration
+    var sessionTimeout: Duration
     var didAdoptSessionTimeout = false
-    private var serverPublicMethods: Set<RTSPMethod> = []
+    var serverPublicMethods: Set<RTSPMethod> = []
     var keepaliveMethod: RTSPMethod = .options
     var isProbe = false
 
@@ -316,7 +316,7 @@ public struct RTSPSessionMachine: Sendable {
 
     // MARK: - Response dispatch
 
-    private mutating func handle(response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
+    mutating func handle(response: RTSPResponse, now: MediaInstant) -> [RTSPAction] {
         counters.responsesReceived += 1
         guard let request = pending, response.cseq == nil || response.cseq == request.cseq else {
             return [.log(.unsolicitedResponse(cseq: response.cseq))]

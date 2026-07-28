@@ -19,7 +19,7 @@ extension DiscoveryCoordinator {
 
     /// The listening window, as fixed at the start of the run: run start to the last probe plus the
     /// listen tail — 10 ms + 1 000 ms + 2 500 ms = 3 510 ms with the shipping schedule (§2.2).
-    private var multicastWindow: Duration { multicastWindowValue }
+    var multicastWindow: Duration { multicastWindowValue }
 
     /// Computes that window, once, before any channel opens.
     ///
@@ -143,7 +143,7 @@ extension DiscoveryCoordinator {
 
     /// The `MessageID` for WS-Discovery probe `index`, all of which are in the run's expected set so
     /// an answer can be correlated (§5.3).
-    private func messageID(at index: Int) -> UUID {
+    func messageID(at index: Int) -> UUID {
         guard index < wsdMessageIDs.count else { return environment.uuidGenerator() }
         return wsdMessageIDs[index]
     }

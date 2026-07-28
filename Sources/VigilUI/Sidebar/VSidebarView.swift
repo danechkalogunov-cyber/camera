@@ -110,10 +110,10 @@ package struct VSidebarView<Thumbnail: View>: View {
     /// The right-click menu for one group row. Same contract.
     package let groupMenu: (VSidebarGroup) -> [VSidebarMenuItem]
 
-    private let motionSamples: (CameraID) -> [Double]
-    private let thumbnail: (VSidebarCamera) -> Thumbnail
+    let motionSamples: (CameraID) -> [Double]
+    let thumbnail: (VSidebarCamera) -> Thumbnail
 
-    @Environment(\.displayScale) private var displayScale
+    @Environment(\.displayScale) var displayScale
     @Environment(\.accessibilityReduceTransparency) var reduceTransparency
 
     // MARK: - Initialisation

@@ -123,7 +123,7 @@ public actor ISAPIDeviceSession {
 
     /// How many keyframe requests the rate limit swallowed. Read by the diagnostics panel, and by
     /// the tests instead of a wall clock.
-    public private(set) var suppressedKeyFrameRequests = 0
+    public internal(set) var suppressedKeyFrameRequests = 0
 
     // MARK: Constants
 

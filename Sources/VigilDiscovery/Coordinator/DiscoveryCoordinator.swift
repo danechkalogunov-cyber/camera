@@ -83,7 +83,7 @@ public actor DiscoveryCoordinator {
     /// which a cancelled run still opens a socket.
     var stopping = false
 
-    private var plan: DiscoveryPlan?
+    var plan: DiscoveryPlan?
     var merge = MergeEngine()
     var estimator = DiscoveryProgressEstimator(hostsPlanned: 0)
     var runStart = MediaInstant.zero
@@ -94,7 +94,7 @@ public actor DiscoveryCoordinator {
     var diagnosticsSeen: Set<DiscoveryDiagnostic> = []
     var phaseSummaries: [PhaseSummary] = []
     var accumulators: [DiscoveryPhase: PhaseAccumulator] = [:]
-    private var activePhases: Set<DiscoveryPhase> = []
+    var activePhases: Set<DiscoveryPhase> = []
 
     /// Multicast is skipped and the sweep promoted. Decided from the entitlement status up front and
     /// again empirically if a channel refuses to open (§9.3).
@@ -102,7 +102,7 @@ public actor DiscoveryCoordinator {
     /// True for `.single(address:)`: one named address, no group probe, and therefore no multicast
     /// diagnostic and no `.fail` policy — the caller asked about one host, not about the network.
     var isSingleAddressRun = false
-    private var entitlements: EntitlementStatus
+    var entitlements: EntitlementStatus
     /// The multicast listening window, fixed once at the start of the run so that a channel failing
     /// halfway through cannot shorten the window the other interfaces are still listening on.
     var multicastWindowValue = Duration.zero
@@ -112,7 +112,7 @@ public actor DiscoveryCoordinator {
     var sadpLimiter = SADPIngestLimiter()
     var wsdDedupe = WSDDedupeSet()
 
-    private var datagramsSent = 0
+    var datagramsSent = 0
     var datagramsReceived = 0
     var tcpConnects = 0
     var httpRequests = 0

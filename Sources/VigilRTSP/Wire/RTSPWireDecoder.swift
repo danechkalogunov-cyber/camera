@@ -92,7 +92,7 @@ public struct RTSPWireDecoder: Sendable {
     // MARK: - Phase
 
     /// Where the parser is. `.failed` is terminal.
-    private enum Phase {
+    enum Phase {
         case atBoundary
         case startLine
         case headers
@@ -138,7 +138,7 @@ public struct RTSPWireDecoder: Sendable {
     var paddingSkipped = 0
 
     /// Counters, readable at any time.
-    public private(set) var statistics = DecoderStatistics()
+    public internal(set) var statistics = DecoderStatistics()
 
     /// Creates a decoder. The default limits are the specified ones; a test may tighten them to
     /// reach a boundary without building a megabyte of input.

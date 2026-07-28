@@ -241,7 +241,7 @@ extension StreamStatisticsRollup {
     }
 
     /// Adopts the negotiated stream shape.
-    private mutating func adopt(_ format: StreamFormat) {
+    mutating func adopt(_ format: StreamFormat) {
         adopt(codec: format.videoCodec,
               width: format.resolution?.width ?? 0,
               height: format.resolution?.height ?? 0)

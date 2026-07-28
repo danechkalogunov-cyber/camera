@@ -259,7 +259,7 @@ extension RTSPConnection {
     /// Turns an `NWError` into the outcome the read loop wants.
     ///
     /// A locally cancelled socket is `.torndown`, not a failure: it is what `close()` does.
-    private static func outcome(for error: NWError) -> ReceiveOutcome {
+    static func outcome(for error: NWError) -> ReceiveOutcome {
         if case .posix(let code) = error, code == .ECANCELED {
             return .torndown
         }

@@ -19,7 +19,7 @@ extension RTSPWireDecoder {
     // MARK: - Header block completion
 
     /// Decides the body length and either emits the message or moves to `.body`.
-    private mutating func finishHeaderBlock(into events: inout [RTSPIncoming]) -> Bool {
+    mutating func finishHeaderBlock(into events: inout [RTSPIncoming]) -> Bool {
         guard let message = pending else {
             phase = .atBoundary
             return true
@@ -76,7 +76,7 @@ extension RTSPWireDecoder {
     }
 
     /// Emits the pending message and returns to a unit boundary.
-    private mutating func emitPending(body: Data, into events: inout [RTSPIncoming]) {
+    mutating func emitPending(body: Data, into events: inout [RTSPIncoming]) {
         defer {
             pending = nil
             phase = .atBoundary
@@ -103,7 +103,7 @@ extension RTSPWireDecoder {
     /// missing reason phrase, and `RTSP/1.1` treated as 1.0. An `HTTP/1.x` status line is singled
     /// out because an HTTP server on port 554 is a common misconfiguration and "not RTSP at all"
     /// is a far more useful diagnosis than "malformed".
-    private mutating func parseStartLine(_ text: String,
+    mutating func parseStartLine(_ text: String,
                                          into events: inout [RTSPIncoming]) -> Pending.Start? {
         var cursor = text.startIndex
         let head = RTSPWireDecoder.takeField(text, from: &cursor)
@@ -186,7 +186,7 @@ extension RTSPWireDecoder {
     // MARK: - Resynchronization
 
     /// Enters resynchronization.
-    private mutating func beginResync() {
+    mutating func beginResync() {
         statistics.resyncEvents += 1
         pending = nil
         paddingSkipped = 0
@@ -200,7 +200,7 @@ extension RTSPWireDecoder {
     /// evidence — never on "the buffer happens to end here" — because a decision that depends on
     /// where a TCP segment boundary fell would break split invariance, which is the one property
     /// this whole file is built to keep.
-    private mutating func stepResync(scanned: Int, into events: inout [RTSPIncoming]) -> Bool {
+    mutating func stepResync(scanned: Int, into events: inout [RTSPIncoming]) -> Bool {
         var offset = 0
         while true {
             if scanned + offset > limits.maxResyncScan {
@@ -291,7 +291,7 @@ extension RTSPWireDecoder {
     // MARK: - Faults
 
     /// Records a terminal fault: emit it, drop the buffer, answer nothing ever again.
-    private mutating func fail(_ fault: RTSPFramingFault, into events: inout [RTSPIncoming]) {
+    mutating func fail(_ fault: RTSPFramingFault, into events: inout [RTSPIncoming]) {
         events.append(.malformed(fault))
         phase = .failed(fault)
         pending = nil
@@ -314,7 +314,7 @@ extension RTSPWireDecoder {
     ///
     /// Compaction thresholds keep the amortized cost linear: without them, `Data.removeFirst` per
     /// message is quadratic in the stream length, which is measurable at sixteen 1080p streams.
-    private mutating func consume(_ count: Int) {
+    mutating func consume(_ count: Int) {
         readIndex += count
         if readIndex > 8_192 || readIndex > buffer.count / 2 {
             buffer.removeFirst(readIndex)
@@ -327,7 +327,7 @@ extension RTSPWireDecoder {
     /// Returns `.needMore` when no LF has arrived yet — including the case where the CR of a CRLF
     /// is the last byte of a chunk, which is why the terminator search looks for LF and inspects
     /// the byte before it rather than searching for the two-byte sequence.
-    private mutating func takeLine(maxLength: Int) -> LineOutcome {
+    mutating func takeLine(maxLength: Int) -> LineOutcome {
         var index = readIndex
         while index < buffer.count {
             guard buffer[index] == 0x0A else {
