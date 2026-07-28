@@ -16,11 +16,11 @@ import SwiftUI
 
 /// A recorded clip, playing.
 ///
-/// **Why `VideoPlayer` and not the live path.** `VideoTileView` exists to show a stream whose frames
-/// arrive one at a time from the network; a file on disk is the opposite problem, and it needs
-/// seeking, a scrubber and a play/pause the live path deliberately does not have. `VideoPlayer` is
-/// AVKit's own control set, so scrubbing, ±10 s, volume and full screen come from the system rather
-/// than being re-implemented — and they behave the way every other Mac video surface behaves.
+/// **Why AVKit and not the live path.** `VideoTileView` exists to show a stream whose frames arrive
+/// one at a time from the network; a file on disk is the opposite problem, and it needs seeking, a
+/// scrubber and a play/pause the live path deliberately does not have. `AVPlayerView` is AVKit's own
+/// control set, so scrubbing, skip, volume and full screen come from the system rather than being
+/// re-implemented — and they behave the way every other Mac video surface behaves.
 ///
 /// The player is rebuilt whenever the URL changes, because `AVPlayer.replaceCurrentItem` leaves the
 /// old item's transport state behind: a clip opened after a paused one would arrive paused, which
@@ -92,9 +92,12 @@ package struct VClipPlayerView: View {
     @ViewBuilder
     private var surface: some View {
         if let player {
-            // `VideoPlayer` brings AVKit's transport bar: scrub, skip, volume, full screen.
-            VideoPlayer(player: player)
-                .aspectRatio(16 / 9, contentMode: .fit)
+            // `AVPlayerView`, not SwiftUI's `VideoPlayer`. The latter crashed on first use:
+            //   getSuperclassMetadata + 828 → fatalError, inside _AVKit_SwiftUI
+            // The Swift runtime could not build metadata for the representable `VideoPlayer` wraps.
+            // `AVPlayerView` is the AppKit control underneath it, carries the same transport bar,
+            // and instantiates as a plain NSView with no generic metadata to resolve.
+            VClipPlayerSurface(player: player)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             unavailable
@@ -130,6 +133,36 @@ package struct VClipPlayerView: View {
         player.isMuted = true
         self.player = player
         player.play()
+    }
+}
+
+// MARK: - VClipPlayerSurface
+
+/// `AVPlayerView` as a SwiftUI view.
+///
+/// Deliberately thin: the control brings its own scrubber, skip buttons, volume and full-screen
+/// toggle, so there is nothing here to configure beyond handing it the player and letting it size
+/// itself. `controlsStyle` is `.inline` because the surface sits inside a panel rather than filling a
+/// window, and `.floating` would put a translucent bar over a picture only 360 pt tall.
+@MainActor
+private struct VClipPlayerSurface: NSViewRepresentable {
+
+    /// The player to show.
+    let player: AVPlayer
+
+    /// Builds the view. `AVPlayerView()` takes no arguments; every property is set after.
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = true
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    /// Re-points the view when the clip changes.
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player { nsView.player = player }
     }
 }
 
