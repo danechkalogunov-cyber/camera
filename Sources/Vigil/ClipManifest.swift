@@ -113,7 +113,8 @@ final class ClipManifest {
     ///   - root: the recordings root, so paths are stored relative to it.
     func record(_ segments: [RecordingSegmentRecord], cameraID: CameraID, root: URL) {
         for segment in segments where !segment.isPartial {
-            let path = Self.relativePath(of: segment.url, under: root)
+            let path = Self.key(for: segment.url, under: root, logger: logger)
+            logger.debug(.storage, "clip manifest: vouching for \(path)")
             entries[path] = ClipManifestEntry(relativePath: path,
                                               cameraID: cameraID.rawValue,
                                               startedAt: segment.startedAt,
@@ -131,9 +132,12 @@ final class ClipManifest {
     /// under a build that kept no record. From the next clip onwards the manifest is authoritative,
     /// and a file that appears without one is not listed.
     ///
-    /// Does nothing once a manifest exists, so it cannot be used to launder a file dropped in later.
+    /// Gated on the manifest being *empty*, not merely absent. An earlier build wrote the file
+    /// before this migration existed, so "the file exists" was true while it vouched for nothing —
+    /// and adoption never ran, which left every clip on disk unlisted. One entry is enough to close
+    /// the gate for good.
     func adopt(_ found: [(relativePath: String, cameraID: CameraID, modifiedAt: Date, bytes: Int64)]) {
-        guard !existedOnDisk else { return }
+        guard entries.isEmpty else { return }
         for item in found where entries[item.relativePath] == nil {
             entries[item.relativePath] = ClipManifestEntry(relativePath: item.relativePath,
                                                            cameraID: item.cameraID.rawValue,
@@ -184,11 +188,22 @@ final class ClipManifest {
         return support?.appending(path: "Vigil/clips.json")
     }
 
-    /// A path relative to the recordings root.
-    static func relativePath(of url: URL, under root: URL) -> String {
-        let full = url.standardizedFileURL.path
-        let base = root.standardizedFileURL.path
-        guard full.hasPrefix(base) else { return url.lastPathComponent }
+    /// A path relative to the recordings root — the manifest's key, and the listing's lookup.
+    ///
+    /// **One implementation on purpose.** Writing and reading used to compute this separately, and a
+    /// key computed two ways is a key that silently misses. Symlinks are resolved because the
+    /// sandbox's `Data/Movies` is one: the recorder can hand back a URL through the link while a
+    /// fresh resolve returns the target, and unresolved those two strings do not share a prefix.
+    ///
+    /// A URL genuinely outside the root falls back to its file name, and says so — that is a bug
+    /// somewhere else, and it should not be absorbed quietly.
+    static func key(for url: URL, under root: URL, logger: (any LoggerProtocol)? = nil) -> String {
+        let full = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let base = root.resolvingSymlinksInPath().standardizedFileURL.path
+        guard full.hasPrefix(base) else {
+            logger?.error(.storage, "clip path outside the recordings root: \(full) vs \(base)")
+            return url.lastPathComponent
+        }
         return String(full.dropFirst(base.count).drop(while: { $0 == "/" }))
     }
 }

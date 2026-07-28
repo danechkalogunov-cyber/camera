@@ -428,7 +428,7 @@ struct MainWindowView: View {
         // Two passes on the first run only: the first adopts whatever predates the manifest, the
         // second lists against it. Without this, introducing the manifest would hide every clip the
         // user had already recorded.
-        if !manifest.existedOnDisk {
+        if manifest.entries.isEmpty {
             adoptExistingClips()
         }
         let logger = session.dependencies.logger
@@ -473,7 +473,7 @@ struct MainWindowView: View {
             // Movies: anything dropped into it would otherwise be listed as a recording, complete
             // with a camera name it never came from. A clip still being written has no entry yet and
             // is allowed through, because the writer holding it open is this process.
-            let relative = Self.relativePath(of: url, under: folder)
+            let relative = ClipManifest.key(for: url, under: folder, logger: logger)
             let vouched = manifest.entry(for: relative)
             if !isPartial {
                 guard let vouched else {
@@ -558,18 +558,6 @@ struct MainWindowView: View {
         }
     }
 
-    /// The clip's path relative to the recordings root.
-    ///
-    /// Not the bare file name: the default template nests clips two directories deep, so the name
-    /// alone cannot be rebuilt into a URL and Reveal in Finder would select nothing. The row
-    /// truncates in the middle, which is the right place to lose a date folder.
-    private static func relativePath(of url: URL, under root: URL) -> String {
-        let full = url.standardizedFileURL.path
-        let base = root.standardizedFileURL.path
-        guard full.hasPrefix(base) else { return url.lastPathComponent }
-        return String(full.dropFirst(base.count).drop(while: { $0 == "/" }))
-    }
-
     /// A UUID derived from the file's path, so a row keeps its identity across a refresh.
     ///
     /// Hashing the path rather than minting a fresh UUID matters: `ForEach` would otherwise rebuild
@@ -620,7 +608,7 @@ struct MainWindowView: View {
             guard ["mp4", "mov"].contains(url.pathExtension.lowercased()) else { continue }
             let values = try? url.resourceValues(forKeys: Set(keys))
             guard values?.isRegularFile != false else { continue }
-            adoptable.append((Self.relativePath(of: url, under: folder),
+            adoptable.append((ClipManifest.key(for: url, under: folder),
                               cameraID,
                               values?.contentModificationDate ?? Date(),
                               Int64(values?.fileSize ?? 0)))
