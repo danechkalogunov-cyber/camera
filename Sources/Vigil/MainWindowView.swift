@@ -1304,6 +1304,7 @@ struct MainWindowView: View {
                                      archive.movePlayhead(to: instant,
                                                           isScrubbing: phase != .ended)
                                  },
+                                 onHoverInstant: { instant in archive.preview(at: instant) },
                                  onZoom: { stop in archive.zoom(stop) },
                                  onActivateMarker: { cluster in
                                      // A cluster is one or more markers at the same x; the earliest
@@ -1311,6 +1312,8 @@ struct MainWindowView: View {
                                      guard let first = cluster.markers.first else { return }
                                      archive.movePlayhead(to: first.instant, isScrubbing: false)
                                  },
+                                 onStep: { seconds in archive.stepPlayhead(by: seconds) },
+                                 onStepToEdge: { forward in archive.stepToEdge(forward: forward) },
                                  onDismiss: { window.showsTimeline = false })
         }
     }

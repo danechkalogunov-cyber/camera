@@ -43,8 +43,15 @@ struct StageTimelineOverlay: View {
 
     /// Forwarded to `VTimelineView`.
     let onScrub: (VTimelineScrubPhase, Date) -> Void
+    let onHoverInstant: (Date?) -> Void
     let onZoom: (TimelineZoom) -> Void
     let onActivateMarker: (TimelineMarkerCluster) -> Void
+
+    /// Steps the playhead by a number of seconds, positive or negative.
+    let onStep: (Double) -> Void
+
+    /// Moves to the next or previous edge of recorded footage.
+    let onStepToEdge: (Bool) -> Void
 
     /// Puts the timeline away.
     let onDismiss: () -> Void
@@ -70,15 +77,21 @@ struct StageTimelineOverlay: View {
          clock: TimelineClock,
          onSelectDay: @escaping (TimelineDay) -> Void,
          onScrub: @escaping (VTimelineScrubPhase, Date) -> Void,
+         onHoverInstant: @escaping (Date?) -> Void,
          onZoom: @escaping (TimelineZoom) -> Void,
          onActivateMarker: @escaping (TimelineMarkerCluster) -> Void,
+         onStep: @escaping (Double) -> Void,
+         onStepToEdge: @escaping (Bool) -> Void,
          onDismiss: @escaping () -> Void) {
         self.archive = archive
         self.clock = clock
         self.onSelectDay = onSelectDay
         self.onScrub = onScrub
+        self.onHoverInstant = onHoverInstant
         self.onZoom = onZoom
         self.onActivateMarker = onActivateMarker
+        self.onStep = onStep
+        self.onStepToEdge = onStepToEdge
         self.onDismiss = onDismiss
     }
 
@@ -90,11 +103,33 @@ struct StageTimelineOverlay: View {
             chrome
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .background {
+        .background { shortcuts }
+    }
+
+    // MARK: - Keyboard
+
+    /// UX.md §7.3's timeline keys, as zero-sized buttons.
+    ///
+    /// Declared here and not on the scrubber because they must work while the pointer is anywhere
+    /// over the stage — the whole point of a keyboard step is not having to aim first. They exist
+    /// only while the overlay does, so ← and → still belong to whatever else wants them when the
+    /// timeline is away.
+    private var shortcuts: some View {
+        ZStack {
             Button("", action: onDismiss)
                 .keyboardShortcut(.cancelAction)
-                .hidden()
+            Button("", action: { onStep(-10) }).keyboardShortcut(.leftArrow, modifiers: [])
+            Button("", action: { onStep(10) }).keyboardShortcut(.rightArrow, modifiers: [])
+            Button("", action: { onStep(-60) }).keyboardShortcut(.leftArrow, modifiers: .shift)
+            Button("", action: { onStep(60) }).keyboardShortcut(.rightArrow, modifiers: .shift)
+            // ⌘← / ⌘→ jump to the edge of the next run of footage. On a day with twenty minutes
+            // recorded out of twenty-four hours, stepping ten seconds at a time is not navigation.
+            Button("", action: { onStepToEdge(false) })
+                .keyboardShortcut(.leftArrow, modifiers: .command)
+            Button("", action: { onStepToEdge(true) })
+                .keyboardShortcut(.rightArrow, modifiers: .command)
         }
+        .hidden()
     }
 
     // MARK: - Private Helpers
@@ -127,6 +162,7 @@ struct StageTimelineOverlay: View {
                               magnetismEnabled: archive.magnetismEnabled,
                               preview: archive.preview,
                               onScrub: onScrub,
+                              onHoverInstant: onHoverInstant,
                               onZoom: onZoom,
                               onActivateMarker: onActivateMarker)
             }
