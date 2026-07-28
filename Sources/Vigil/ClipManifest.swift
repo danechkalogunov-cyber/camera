@@ -125,6 +125,27 @@ final class ClipManifest {
         save()
     }
 
+    /// Vouches for one file recovered from an interrupted recording.
+    ///
+    /// Separate from ``record(_:cameraID:root:)`` because there is no `RecordingSegmentRecord` to
+    /// pass: that type carries the writer's own sample counts and end reason, and a recovery scan
+    /// knows none of them. Filling them in with zeroes would put invented numbers in a record whose
+    /// whole purpose is to say what was actually observed.
+    ///
+    /// `mediaSeconds` is `0` for the same reason — the length is unknown until something reads the
+    /// file, and the listing already treats zero as "never measured" and reads it from the asset.
+    func recordRecovered(url: URL, cameraID: CameraID, root: URL, at instant: Date, bytes: Int64) {
+        let path = Self.key(for: url, under: root, logger: logger)
+        entries[path] = ClipManifestEntry(relativePath: path,
+                                          cameraID: cameraID.rawValue,
+                                          startedAt: instant,
+                                          endedAt: instant,
+                                          mediaSeconds: 0,
+                                          byteCount: bytes)
+        logger.info(.storage, "clip manifest: vouching for a recovered clip")
+        save()
+    }
+
     /// Takes responsibility for clips that were on disk before the manifest existed.
     ///
     /// Called once, on the first run after this file was introduced. Everything in the recordings

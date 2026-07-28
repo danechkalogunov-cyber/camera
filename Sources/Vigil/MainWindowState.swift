@@ -173,8 +173,12 @@ enum MainWindowSheet: Identifiable, Hashable {
     /// Renaming an existing one.
     case renameGroup(GroupID)
 
-    /// Marking the current moment, with a title and a note.
-    case newBookmark
+    /// Marking a moment, with a title and a note.
+    ///
+    /// Carries the instant rather than reading "now" when the sheet saves. The two differ whenever
+    /// the timeline is up: marking what you are looking at on the scrubber and marking the moment
+    /// you happened to press Save are different acts, and only the first is useful.
+    case newBookmark(Date)
 
     /// Editing a bookmark that already exists.
     case editBookmark(UUID)
@@ -185,7 +189,7 @@ enum MainWindowSheet: Identifiable, Hashable {
         case .cameraSettings:           return "cameraSettings"
         case .newGroup:                 return "newGroup"
         case .renameGroup(let group):   return "renameGroup.\(group)"
-        case .newBookmark:              return "newBookmark"
+        case .newBookmark(let instant): return "newBookmark.\(instant.timeIntervalSince1970)"
         case .editBookmark(let mark):   return "editBookmark.\(mark)"
         }
     }

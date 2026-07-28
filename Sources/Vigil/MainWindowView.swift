@@ -181,7 +181,7 @@ struct MainWindowView: View {
             Button("", action: { toggleRecording() })
                 .keyboardShortcut("r", modifiers: .command)
                 .hidden()
-            Button("", action: { window.sheet = .newBookmark })
+            Button("", action: { window.sheet = .newBookmark(markableInstant) })
                 .keyboardShortcut("d", modifiers: .command)
                 .hidden()
             Button("", action: { takeSnapshot() })
@@ -222,6 +222,10 @@ struct MainWindowView: View {
         .task { await pollTelemetry() }
         .task(id: session.camera?.id) { await pollPoster() }
         .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
+        // Looking at the feed is what marks it read. Anything else — a button, a per-row gesture —
+        // leaves a badge that counts events the user has already seen, which is a badge nobody
+        // believes after the first time.
+        .task(id: isEventsScreenOpen) { await markEventsRead() }
         // Only when the Image tab is actually looked at: these are four HTTP reads per channel.
         .task(id: window.inspectorTab) { await loadImageIfShown() }
         // The capability read is cached for 24 h by the session, so re-running this on a tab change
@@ -276,15 +280,12 @@ struct MainWindowView: View {
                                window.sheet = nil
                            },
                            onCancel: { window.sheet = nil })
-        case .newBookmark:
-            // `Date()` and not the stream's own clock: the archive scrubber that would give a
-            // playback position is not wired, so "now" is the only instant this build can honestly
-            // mark. A bookmark made while reviewing a recording will need the scrubber's instant.
-            BookmarkSheet(instant: Date(),
+        case .newBookmark(let instant):
+            BookmarkSheet(instant: instant,
                           isNew: true,
                           onSave: { title, note in
                               bookmarks.add(cameraID: cameraID,
-                                            instant: Date(),
+                                            instant: instant,
                                             title: title,
                                             note: note)
                               window.sheet = nil
@@ -569,6 +570,36 @@ struct MainWindowView: View {
         }
     }
 
+    /// Brings the scrubber up on the day an instant falls in, with the playhead on it.
+    ///
+    /// What "open this event" and "open this bookmark" both mean. UX.md §9.1 gives the event feed a
+    /// five-second lead-in — you want to see what happened *before* the camera decided something
+    /// had — and that is applied here rather than in the timeline, because the timeline's own
+    /// lead-in is three seconds and the two surfaces are allowed to differ.
+    private func openArchive(at instant: Date) {
+        let clock = libraryClock
+        let lead = instant.addingTimeInterval(-Self.eventLeadInSeconds)
+        focusCamera(cameraID)
+        window.showsTimeline = true
+        archive.load(day: clock.day(containing: lead),
+                     clock: clock,
+                     localClips: timelineLocalClips,
+                     markers: timelineMarkers)
+        archive.movePlayhead(to: lead, isScrubbing: false)
+    }
+
+    /// UX.md §9.1: the event feed opens five seconds early.
+    private static let eventLeadInSeconds: TimeInterval = 5
+
+    /// The moment ⌘D marks: the playhead when the scrubber is up, otherwise now.
+    ///
+    /// Marking "now" while looking at yesterday's footage would file the note against a moment the
+    /// user never saw, and they would find it in the wrong place tomorrow.
+    private var markableInstant: Date {
+        guard window.showsTimeline, let playhead = archive.archive?.playhead else { return Date() }
+        return playhead
+    }
+
     /// Opens a row: a double-click, or a click on the row that is already selected.
     ///
     /// For a camera that means the review surface — UX.md §4.3 calls it "open the row", and it is
@@ -661,7 +692,7 @@ struct MainWindowView: View {
             VSidebarMenuItem(id: "camera.bookmark",
                              title: Self.localized("Bookmark This Moment…"),
                              symbol: .bookmark,
-                             action: { window.sheet = .newBookmark }),
+                             action: { window.sheet = .newBookmark(markableInstant) }),
             .separator(id: "camera.rule1"),
             VSidebarMenuItem(id: "camera.copyAddress",
                              title: Self.localized("Copy Address"),
@@ -921,6 +952,22 @@ struct MainWindowView: View {
         }
     }
 
+    /// Whether the Events screen is the stage's current route.
+    private var isEventsScreenOpen: Bool {
+        VLibrarySection(window.sidebarSelection.focus) == .events
+    }
+
+    /// Clears the unread badge once the feed has actually been looked at.
+    ///
+    /// Delayed rather than immediate: opening Events and leaving in the same second has not read
+    /// anything, and a badge that clears on a mis-click stops being worth glancing at.
+    private func markEventsRead() async {
+        guard isEventsScreenOpen, eventFeed.unreadCount > 0 else { return }
+        try? await Task.sleep(for: .seconds(1))
+        guard !Task.isCancelled, isEventsScreenOpen else { return }
+        await eventFeed.markAllRead(camera: session.camera)
+    }
+
     /// The recordings folder as a user would recognise it, for the empty state's "where would a clip
     /// appear" answer. Abbreviated with a tilde rather than shown as a container path.
     private var recordingsFolderLabel: String? {
@@ -940,6 +987,7 @@ struct MainWindowView: View {
         if manifest.entries.isEmpty {
             adoptExistingClips()
         }
+        recoverOrphanedClips()
         let logger = session.dependencies.logger
         guard let folder = recording.clipsDirectory() else {
             logger.error(.storage, "clip listing: no usable destination")
@@ -1094,7 +1142,8 @@ struct MainWindowView: View {
         actions.onRevealClip = { clip in revealClip(clip) }
         actions.onDeleteClip = { clip in deleteClip(clip) }
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
-        actions.onOpenBookmark = { bookmark in window.sheet = .editBookmark(bookmark.id) }
+        actions.onOpenEvent = { event in openArchive(at: event.occurredAt) }
+        actions.onOpenBookmark = { bookmark in openArchive(at: bookmark.instant) }
         actions.onDeleteBookmark = { bookmark in bookmarks.delete(bookmark.id) }
         actions.onDeleteEvent = { event in
             Task { await eventFeed.delete(event.id, camera: session.camera) }
@@ -1142,6 +1191,60 @@ struct MainWindowView: View {
                               Int64(values?.fileSize ?? 0)))
         }
         manifest.adopt(adoptable)
+    }
+
+    /// Finishes the `.partial` files a crash left behind.
+    ///
+    /// `ClipRecorder` writes to `name.mp4.partial` and renames on a clean finish, so a file still
+    /// carrying that suffix while nothing is recording is the remains of an interrupted session —
+    /// a crash, a force quit, a power cut. It is **playable**: the writer is fragmented, so
+    /// everything up to the last completed fragment is intact, which is precisely why it is
+    /// recovered rather than deleted. Someone who recorded for an hour and lost the app in the last
+    /// minute should not lose the hour.
+    ///
+    /// Renamed and vouched for so it appears in the list like any other clip. The manifest entry is
+    /// what makes it appear at all — an unvouched file is treated as something dropped into the
+    /// folder by hand, which this is not.
+    ///
+    /// Silent about a file it cannot move: another process holding it open is the one case where
+    /// leaving it alone is right, and it will be recovered on the next launch instead.
+    private func recoverOrphanedClips() {
+        guard !recording.isRecording, let folder = recording.clipsDirectory() else { return }
+        let logger = session.dependencies.logger
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        guard let walker = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return }
+
+        var recovered = 0
+        for case let url as URL in walker where url.lastPathComponent.hasSuffix(".partial") {
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            guard values?.isRegularFile != false else { continue }
+            let bytes = Int64(values?.fileSize ?? 0)
+            // A zero-length partial never got a keyframe and holds nothing. Those are dropped:
+            // recovering an empty file would put a clip in the list that plays as a black frame.
+            guard bytes > 0 else {
+                try? FileManager.default.removeItem(at: url)
+                continue
+            }
+            let finished = url.deletingPathExtension()
+            guard !FileManager.default.fileExists(atPath: finished.path) else { continue }
+            do {
+                try FileManager.default.moveItem(at: url, to: finished)
+            } catch {
+                logger.info(.storage, "could not recover an interrupted clip: \(error)")
+                continue
+            }
+            manifest.recordRecovered(url: finished,
+                                     cameraID: cameraID,
+                                     root: folder,
+                                     at: values?.contentModificationDate ?? Date(),
+                                     bytes: bytes)
+            recovered += 1
+        }
+        if recovered > 0 {
+            logger.info(.storage, "recovered \(recovered) interrupted clip(s)")
+        }
     }
 
     /// Adds the clips the last recording produced to the manifest.
