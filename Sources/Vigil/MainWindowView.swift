@@ -66,6 +66,9 @@ struct MainWindowView: View {
     /// The moments the user has marked.
     @State private var bookmarks: BookmarkStore
 
+    /// Pan, tilt, zoom, focus, iris, presets and patrols.
+    @State private var ptz: PTZCoordinator
+
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
@@ -100,6 +103,7 @@ struct MainWindowView: View {
                                                           credentials: session.credentials))
         _groups = State(initialValue: CameraGroupStore(logger: session.dependencies.logger))
         _bookmarks = State(initialValue: BookmarkStore(logger: session.dependencies.logger))
+        _ptz = State(initialValue: PTZCoordinator(logger: session.dependencies.logger))
     }
 
     // MARK: - Body
@@ -188,6 +192,10 @@ struct MainWindowView: View {
         .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
         // Only when the Image tab is actually looked at: these are four HTTP reads per channel.
         .task(id: window.inspectorTab) { await loadImageIfShown() }
+        // The capability read is cached for 24 h by the session, so re-running this on a tab change
+        // costs nothing after the first time — and the coordinator ignores a repeat for the same
+        // channel anyway.
+        .task(id: deviceInfoReady) { followPTZ() }
     }
 
     // MARK: - Sheets
@@ -1108,6 +1116,10 @@ struct MainWindowView: View {
                         stream: streamDescription,
                         statistics: telemetry.statistics,
                         recentStatistics: telemetry.recentStatistics,
+                        ptz: ptz.capability,
+                        presets: ptz.presets,
+                        patrols: ptz.patrols,
+                        runningPatrol: ptz.runningPatrol,
                         image: deviceInfo.image ?? InspectorImageSettings(),
                         recording: recordingState)
     }
@@ -1143,7 +1155,44 @@ struct MainWindowView: View {
         actions.onCopySerial = { copySerial() }
         actions.onImageSettings = { settings in writeImage(settings) }
         actions.onResetImage = { resetImage() }
+        actions.onPTZ = { action in performPTZ(action) }
+        actions.onPTZNudge = { vector in ptz.nudge(vector) }
+        actions.onPTZHome = { ptz.home() }
+        actions.onPTZFocus = { velocity in ptz.focus(velocity) }
+        actions.onPTZIris = { velocity in ptz.iris(velocity) }
+        actions.onPTZGoToPreset = { number in ptz.goToPreset(number) }
+        actions.onPTZSavePreset = { number in ptz.savePreset(number) }
+        actions.onPTZDeletePreset = { number in ptz.deletePreset(number) }
+        actions.onPTZStartPatrol = { number in ptz.startPatrol(number) }
+        actions.onPTZStopPatrol = { number in ptz.stopPatrol(number) }
         return actions
+    }
+
+    /// Turns the pad's hold state into a movement command.
+    ///
+    /// Both stop cases go to the same call. `InspectorPTZHold` distinguishes a release from the
+    /// eight-second safety expiry so the *panel* can say which happened; the camera is stopped the
+    /// same way either way, and routing them differently would be two paths to one outcome.
+    private func performPTZ(_ action: InspectorPTZHoldAction) {
+        switch action {
+        case .none:                 break
+        case .start(let vector):    ptz.move(vector)
+        case .stop, .stopExpired:   ptz.stop()
+        }
+    }
+
+    /// Points the PTZ coordinator at the device once there is a session to ask.
+    ///
+    /// Keyed on ``deviceInfoReady`` rather than on the camera: the ISAPI session is built by
+    /// `DeviceInfoService.load`, so following the camera id would run this before there was
+    /// anything to follow and the PTZ tab would stay empty until something else invalidated it.
+    private func followPTZ() {
+        ptz.follow(session: deviceInfo.session, channel: session.camera?.channel)
+    }
+
+    /// What decides the PTZ probe is worth running: a session exists, and for which camera.
+    private var deviceInfoReady: String {
+        "\(session.camera?.id.rawValue.uuidString ?? "-")/\(deviceInfo.session == nil ? 0 : 1)"
     }
 
     /// Puts the device's serial on the pasteboard.
