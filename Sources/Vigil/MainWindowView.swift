@@ -597,6 +597,9 @@ struct MainWindowView: View {
     private func pollTelemetry() async {
         while !Task.isCancelled {
             let now = session.dependencies.clock.now()
+            // The deepest the frame backlog got in the last second, not its depth at this instant —
+            // see `FrameBacklog.takePeak()` for why the instantaneous value is always zero.
+            session.telemetry.noteDecodeQueueDepth(session.backlog.takePeak())
             session.telemetry.tick(at: now)
             telemetry = session.telemetry.telemetry(at: now)
             do {

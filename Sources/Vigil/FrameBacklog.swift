@@ -34,14 +34,18 @@ import os
 /// one integer operation, which is what the per-frame path can afford.
 final class FrameBacklog: Sendable {
 
-    private let depthValue = OSAllocatedUnfairLock<Int>(initialState: 0)
+    /// Current depth and the highest it has reached since the last read.
+    private let state = OSAllocatedUnfairLock<(depth: Int, peak: Int)>(initialState: (0, 0))
 
     /// Creates an empty backlog.
     init() {}
 
-    /// Records a frame entering the stream.
+    /// Records a frame entering the stream, and updates the peak.
     func arrived() {
-        depthValue.withLock { $0 &+= 1 }
+        state.withLock {
+            $0.depth &+= 1
+            $0.peak = Swift.max($0.peak, $0.depth)
+        }
     }
 
     /// Records a frame handed to the decoder.
@@ -50,17 +54,32 @@ final class FrameBacklog: Sendable {
     /// full, so departures can legitimately be fewer than arrivals and the difference must not
     /// underflow into a huge unsigned-looking depth.
     func departed() {
-        depthValue.withLock { $0 = Swift.max(0, $0 &- 1) }
+        state.withLock { $0.depth = Swift.max(0, $0.depth &- 1) }
     }
 
     /// The current depth in frames.
     func depth() -> Int {
-        depthValue.withLock { $0 }
+        state.withLock { $0.depth }
+    }
+
+    /// The deepest the backlog got since this was last called, and resets the peak.
+    ///
+    /// **Why the peak and not the instantaneous depth.** At 25 fps a frame arrives every 40 ms and
+    /// the loop drains it in far less, so the queue is empty almost all of the time and a 1 Hz
+    /// sample of it is a coin flip that lands on zero. The peak answers the question the panel is
+    /// actually asking — did the decoder fall behind at any point in the last second — and it reads
+    /// zero only when the answer is genuinely no.
+    func takePeak() -> Int {
+        state.withLock {
+            let peak = $0.peak
+            $0.peak = $0.depth
+            return peak
+        }
     }
 
     /// Forgets the count, for a reconnect.
     func reset() {
-        depthValue.withLock { $0 = 0 }
+        state.withLock { $0 = (0, 0) }
     }
 }
 

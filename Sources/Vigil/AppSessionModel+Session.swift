@@ -230,11 +230,10 @@ extension AppSessionModel {
                                     isKeyframe: frame.isKeyframe,
                                     at: mediaClock.now())
                 await pipeline.submit(frame)
-                // Counted after the submit returns, so the depth reflects what is still waiting
-                // rather than what is being worked on. Reported here rather than polled, because
-                // this is the only place that knows a frame has left the stream.
+                // Only the departure is recorded here. Reporting the depth at this point sampled
+                // the minimum of the cycle — one frame had just been drained — so it read zero even
+                // under load. The window reports the peak instead, once a second.
                 backlog.departed()
-                telemetry.noteDecodeQueueDepth(backlog.depth())
                 if let recorder = recordingTap.recorder() {
                     await recorder.append(frame)
                 }
