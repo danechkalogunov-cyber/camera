@@ -681,6 +681,71 @@ def check_split_file_access() -> list[Violation]:
                                 f"{m.group(2)!r}, which is not — Swift rejects a member whose type "
                                 f"is less visible than the member itself"))
                     break
+
+    # Shape 5: a *top-level* private declaration used by another file of the same target.
+    #
+    # Everything above keys off the `Foo.swift` / `Foo+Bar.swift` convention, and not every split in
+    # this tree followed it: `VToolbarView.swift`'s three controls moved to
+    # `VToolbarSearchField.swift`, a name that shares no prefix with the file still calling them, so
+    # the family grouping never compared the two and the Mac reported "cannot find
+    # 'VToolbarLayoutSwitcher' in scope". Naming is not evidence of a relationship — the whole
+    # target has to be the search space.
+    top_private = re.compile(
+        r"^(?:@\w+(?:\([^)]*\))?\s+)*(?:private|fileprivate)\s+"
+        + MODIFIERS + r"(struct|enum|class|actor|func|let|var|typealias|protocol)\s+(\w+)")
+    anywhere = re.compile(
+        r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
+        r"(?:(?:public|package|open|internal|private|fileprivate)(?:\(set\))?\s+)*"
+        + MODIFIERS + r"(?:" + KIND + r"|protocol|case)\s+(\w+)")
+
+    by_target: dict[str, list[pathlib.Path]] = defaultdict(list)
+    for path in swift_files("Sources"):
+        by_target[path.relative_to(ROOT / "Sources").parts[0]].append(path)
+
+    for _, files in sorted(by_target.items()):
+        bodies = {p: stripped(p) for p in files}
+        # Any declaration at any depth: a `static var previewCamera` on a type in the other file is
+        # a different entity from a top-level `private let previewCamera` here, and the reference
+        # over there resolves to its own.
+        names = {p: {m.group(1) for m in map(anywhere.match, bodies[p].splitlines()) if m}
+                 for p in files}
+        for path in files:
+            lines = path.read_text().splitlines()
+            # `private extension String { … }` makes every member fileprivate without the word
+            # `private` appearing on any of them, so the members are collected here rather than by
+            # the pattern above. The extension runs to the first `}` in column zero.
+            in_private_extension = False
+            extension_members: list[tuple[str, int]] = []
+            for n, raw in enumerate(lines, 1):
+                if re.match(r"^(?:private|fileprivate)\s+extension\b", raw):
+                    in_private_extension = True
+                    continue
+                if in_private_extension:
+                    if raw.startswith("}"):
+                        in_private_extension = False
+                    elif (found := anywhere.match(raw)):
+                        extension_members.append((found.group(1), n))
+
+            candidates = [(m.group(2), n, False) for n, raw in enumerate(lines, 1)
+                          if (m := top_private.match(raw))]
+            candidates += [(name, n, True) for name, n in extension_members]
+            for name, n, is_extension_member in candidates:
+                # A member added by an extension is only ever reached through a value, so for those
+                # the dot is required rather than forbidden — the opposite of a top-level type.
+                pattern = (r"\.\s*" + re.escape(name) + r"\b" if is_extension_member
+                           else r"(?<![\w.])" + re.escape(name) + r"\b")
+                for other in files:
+                    if other is path or name in names[other]:
+                        continue
+                    found = re.search(pattern, bodies[other])
+                    if not found:
+                        continue
+                    line = bodies[other].count("\n", 0, found.start()) + 1
+                    out.append((str(path.relative_to(ROOT)), n, "split-access",
+                                f"top-level {name!r} is private in {path.name} but used in "
+                                f"{other.name}:{line} — `private` at file scope means one file, "
+                                f"whatever the two files are called"))
+                    break
     return out
 
 

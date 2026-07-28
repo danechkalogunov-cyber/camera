@@ -6,6 +6,11 @@
 //  macOS-only. Split from VToolbarView.swift, which docs/API_CONTRACT.md §7.2 caps at 600
 //  lines. ⚠️ Separate top-level types, not extensions.
 //
+//  ⚠️ These three are `internal`, not `private`. `VToolbarView.body` builds all of them, and
+//  `private` at top level means *this file* — the file name sharing no prefix with the caller's
+//  changes nothing. `Scripts/lint.py`'s `split-access` rule now compares the whole target rather
+//  than files paired by name, because that mismatch is what let this reach a Mac build.
+//
 
 #if os(macOS)
 
@@ -24,7 +29,7 @@ import VigilProtocols
 /// `Esc` is two-stage, as §9.6 requires: it clears a non-empty field and blurs an empty one, so a
 /// single key never both discards a query and loses the cursor.
 @MainActor
-private struct VToolbarSearchField: View {
+struct VToolbarSearchField: View {
 
     @Binding var text: String
 
@@ -151,7 +156,7 @@ private struct VToolbarSearchField: View {
 /// of `Theme/Environment.swift`). A local namespace is correct in the meantime: nothing outside this
 /// control participates in the thumb's geometry.
 @MainActor
-private struct VToolbarLayoutSwitcher: View {
+struct VToolbarLayoutSwitcher: View {
 
     let current: VGridLayout
     let onSelect: (VGridLayout) -> Void
@@ -291,7 +296,7 @@ private struct VToolbarKeyCap: View {
 /// chrome rather than as a tooltip. Everything else — the fill, the stroke, the focus ring, the
 /// hit target — is the same token set `VButton(.secondary)` resolves to.
 @MainActor
-private struct VToolbarPaletteButton: View {
+struct VToolbarPaletteButton: View {
 
     let action: () -> Void
 
