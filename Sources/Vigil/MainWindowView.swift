@@ -174,6 +174,8 @@ struct MainWindowView: View {
         .task { await pollTelemetry() }
         .task(id: session.camera?.id) { await pollPoster() }
         .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
+        // Only when the Image tab is actually looked at: these are four HTTP reads per channel.
+        .task(id: window.inspectorTab) { await loadImageIfShown() }
     }
 
     // MARK: - Overlays
@@ -206,6 +208,12 @@ struct MainWindowView: View {
     }
 
     // MARK: - Palette, menu and cycle
+
+    /// Reads the picture controls, but only when the Image tab is on screen.
+    private func loadImageIfShown() async {
+        guard window.inspectorTab == .image, let channel = session.camera?.channel else { return }
+        await deviceInfo.loadImageSettings(channel: channel)
+    }
 
     /// Asks the camera who it is, once there is a camera to ask.
     ///
@@ -855,6 +863,7 @@ struct MainWindowView: View {
                         isDeviceLoading: deviceInfo.isLoading,
                         isDeviceUnavailable: deviceInfo.isUnavailable,
                         stream: streamDescription,
+                        image: deviceInfo.image ?? InspectorImageSettings(),
                         statistics: telemetry.statistics,
                         recentStatistics: telemetry.recentStatistics,
                         recording: recordingState)
@@ -888,7 +897,38 @@ struct MainWindowView: View {
         actions.onReconnect = { session.perform(.retry) }
         actions.onRetryDevice = { deviceInfo.retry() }
         actions.onToggleRecording = { toggleRecording() }
+        actions.onCopySerial = { copySerial() }
+        actions.onImageSettings = { settings in writeImage(settings) }
         return actions
+    }
+
+    /// Puts the device's serial on the pasteboard.
+    ///
+    /// The full value, not the masked one the row shows: masking exists so a serial does not end up
+    /// in a screenshot, and someone who pressed Copy is asking for the number itself.
+    private func copySerial() {
+        let serial = deviceInfo.identity.serialNumber
+        guard !serial.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(serial, forType: .string)
+    }
+
+    /// Writes the picture controls back to the camera.
+    ///
+    /// The panel hands over the whole set, so all three colour values go in one request rather than
+    /// three — `/Image/channels/N/color` is a single node and writing it once is both fewer round
+    /// trips and fewer chances for the camera to be left half-adjusted.
+    ///
+    /// Sharpness, WDR and the IR cut filter are separate ISAPI nodes with their own write paths and
+    /// are not sent yet; the panel shows them read-only until they are.
+    private func writeImage(_ settings: InspectorImageSettings) {
+        guard let channel = session.camera?.channel else { return }
+        Task {
+            await deviceInfo.writeImageColor(channel: channel,
+                                             brightness: settings.brightness,
+                                             contrast: settings.contrast,
+                                             saturation: settings.saturation)
+        }
     }
 
     /// Opens the camera's own web interface in the default browser.

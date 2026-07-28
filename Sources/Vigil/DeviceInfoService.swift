@@ -248,6 +248,12 @@ final class DeviceInfoService {
     /// costs nothing on the media path and needs no decoding here.
     private(set) var poster: CGImage?
 
+    /// The camera's picture controls, as the device reports them.
+    ///
+    /// `nil` until the Image tab has been opened once — these are four HTTP reads per channel and
+    /// there is no reason to spend them on a panel nobody has looked at.
+    private(set) var image: InspectorImageSettings?
+
     // MARK: - Dependencies
     //
     // Internal rather than private: `DeviceInfoService+Fetch.swift` reads all four, and Swift's
@@ -396,6 +402,70 @@ final class DeviceInfoService {
         } catch {
             logger.debug(.isapi, "device snapshot unavailable: \(String(describing: error))")
         }
+    }
+
+    /// Reads the camera's picture controls into ``image``.
+    ///
+    /// Silent on failure, like the poster: a firmware that does not expose a control leaves that row
+    /// at its default rather than failing the whole panel. `ImageSettings` is `Optional` field by
+    /// field for the same reason.
+    func loadImageSettings(channel: ChannelID, force: Bool = false) async {
+        guard let session else { return }
+        do {
+            let settings = try await session.imageSettings(channel: channel, force: force)
+            image = Self.inspectorImage(from: settings)
+        } catch {
+            logger.debug(.isapi, "image settings unavailable: \(String(describing: error))")
+        }
+    }
+
+    /// Writes brightness, contrast, saturation and sharpness back to the camera.
+    ///
+    /// Republishes whatever the device answers rather than the value that was sent: a camera is free
+    /// to clamp or ignore, and showing the requested number would make a slider lie about the
+    /// picture.
+    func writeImageColor(channel: ChannelID,
+                         brightness: Int?, contrast: Int?,
+                         saturation: Int?) async {
+        guard let session else { return }
+        do {
+            let settings = try await session.setImageColor(channel: channel,
+                                                           brightness: brightness,
+                                                           contrast: contrast,
+                                                           saturation: saturation)
+            image = Self.inspectorImage(from: settings)
+        } catch {
+            logger.error(.isapi, "image write refused: \(String(describing: error))")
+        }
+    }
+
+    /// Restates the device's picture controls in the panel's vocabulary.
+    ///
+    /// Every field the device omits keeps the panel's default, which is what `InspectorImageSettings`
+    /// renders as unavailable — never a fabricated midpoint.
+    private static func inspectorImage(from settings: ImageSettings) -> InspectorImageSettings {
+        var out = InspectorImageSettings()
+        if let value = settings.brightness { out.brightness = value }
+        if let value = settings.contrast { out.contrast = value }
+        if let value = settings.saturation { out.saturation = value }
+        if let value = settings.sharpness { out.sharpness = value }
+        if let wdr = settings.wdr {
+            switch wdr.mode {
+            case .open:  out.wdrMode = .on
+            case .close: out.wdrMode = .off
+            case .auto:  out.wdrMode = .auto
+            }
+            if let level = wdr.level { out.wdrLevel = level }
+        }
+        if let ir = settings.irCut {
+            switch ir.mode {
+            case .day:   out.dayNightMode = .day
+            case .night: out.dayNightMode = .night
+            case .auto:  out.dayNightMode = .auto
+            default:     break
+            }
+        }
+        return out
     }
 
     /// Repeats the last load, bypassing every cache. Wired to `VInspectorActions.onRetryDevice`.
