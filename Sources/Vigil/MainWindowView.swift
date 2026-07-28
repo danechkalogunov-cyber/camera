@@ -178,6 +178,20 @@ struct MainWindowView: View {
             Button("", action: { takeSnapshot() })
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .hidden()
+            // ↑/↓ walk the list. Declared here rather than on the sidebar because the panel is a
+            // `ScrollView` over a `LazyVStack` — chosen so DESIGN.md §9.12's row surface could be
+            // drawn at all — and that gives up the system list's own keyboard handling.
+            Button("", action: { stepSidebar(-1) })
+                .keyboardShortcut(.upArrow, modifiers: [])
+                .hidden()
+            Button("", action: { stepSidebar(1) })
+                .keyboardShortcut(.downArrow, modifiers: [])
+                .hidden()
+            Button("", action: {
+                window.sidebarSelection.selectAll(in: sidebarTree.visibleCameras)
+            })
+                .keyboardShortcut("a", modifiers: .command)
+                .hidden()
         }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
         .task(id: cycleTick) { await runCycle() }
@@ -505,7 +519,8 @@ struct MainWindowView: View {
                      collapsed: window.collapsedRows,
                      layout: window.layout,
                      aggregateBitsPerSecond: telemetry.bitsPerSecond,
-                     onSelect: { selection, _ in window.sidebarSelection.select(selection) },
+                     onSelect: { selection, click in selectInSidebar(selection, click) },
+                     onActivate: { selection in window.sidebarSelection.select(selection) },
                      onToggleCollapse: { rowID in
                          if window.collapsedRows.contains(rowID) {
                              window.collapsedRows.remove(rowID)
@@ -518,6 +533,40 @@ struct MainWindowView: View {
                      cameraMenu: { camera in cameraMenu(camera) },
                      groupMenu: { group in groupMenu(group) },
                      thumbnail: { _ in cameraThumbnail })
+    }
+
+    /// Applies a sidebar click, honouring the modifier that was held.
+    ///
+    /// `VSidebarSelectionState` has carried ranges, an anchor and toggling since it was written; the
+    /// window discarded the modifier and always plain-selected, so ⌘-click and ⇧-click did the same
+    /// thing as an ordinary click. Only camera rows take a modifier — extending a range from a
+    /// library link is not a meaningful gesture, and treating it as one would clear the selection.
+    private func selectInSidebar(_ selection: VSidebarSelection, _ click: VSidebarClick) {
+        let order = sidebarTree.visibleCameras
+        switch (selection, click) {
+        case (.camera(let id), .toggle):
+            window.sidebarSelection.toggle(id, in: order)
+        case (.camera(let id), .extend):
+            window.sidebarSelection.extend(to: id, in: order)
+        default:
+            window.sidebarSelection.select(selection)
+        }
+    }
+
+    /// Moves the focused camera one row up or down the *visible* list.
+    ///
+    /// Visible and not library order: a search or a collapsed device changes what ↓ should reach,
+    /// and walking the library instead would step onto rows the user cannot see.
+    private func stepSidebar(_ delta: Int) {
+        let tree = sidebarTree
+        guard let current = window.sidebarSelection.focus.selectedCamera else {
+            guard let first = tree.visibleCameras.first else { return }
+            window.sidebarSelection.select(.camera(first))
+            return
+        }
+        let next = delta < 0 ? tree.camera(before: current) : tree.camera(after: current)
+        guard let next else { return }
+        window.sidebarSelection.select(.camera(next))
     }
 
     /// The right-click menu on the camera row.
