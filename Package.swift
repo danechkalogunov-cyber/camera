@@ -137,10 +137,11 @@ let package = Package(
 
         .target(
             name: "VigilTransport",
-            // VigilDiscovery was listed here but no file imports it, which meant the target could
-            // not build in isolation. The discovery sockets that would need it are a later wave;
-            // add the edge back when a file actually imports the module.
-            dependencies: ["VigilProtocols", "VigilRTSP"],
+            // The edge to VigilDiscovery is back: `Sources/VigilTransport/Discovery/` now conforms
+            // to that module's transport protocols, which is the wave the note here anticipated.
+            // The dependency runs this way round on purpose — VigilDiscovery stays Foundation-only
+            // and Linux-testable, and every socket lives on this side of the line.
+            dependencies: ["VigilProtocols", "VigilRTSP", "VigilDiscovery"],
             path: "Sources/VigilTransport",
             swiftSettings: apple
         ),
