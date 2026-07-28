@@ -1751,7 +1751,23 @@ struct MainWindowView: View {
             elapsedSeconds: recording.elapsed(now: recordingTick)
                 .map { Double($0.components.seconds) } ?? 0,
             destination: recordingsFolderLabel,
-            clipsToday: window.clips.count)
+            // ⚠️ Every clip in the folder, not today's. There is no per-day filter yet and
+            // labelling the total as "today" would be a wrong number wearing a confident label —
+            // the row is renamed in the tab instead once the filter exists.
+            clipsToday: window.clips.count,
+            storedClips: window.clips.isEmpty ? nil : window.clips.count,
+            storedBytes: storedClipBytes,
+            oldestClipAt: window.clips.map(\.startedAt).min())
+    }
+
+    /// What Vigil's own clips weigh on this Mac.
+    ///
+    /// Summed from the listing rather than re-walking the folder: `reloadClips` already read every
+    /// file's size, and a second traversal on every inspector render would be disk work for a number
+    /// that cannot have changed since.
+    private var storedClipBytes: Int64? {
+        let sizes = window.clips.compactMap(\.byteCount)
+        return sizes.isEmpty ? nil : sizes.reduce(0, +)
     }
 
     /// The status bar's counters.

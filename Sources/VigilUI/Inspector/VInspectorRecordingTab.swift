@@ -22,6 +22,7 @@
 
 #if os(macOS)
 
+import Foundation
 import SwiftUI
 
 import VigilISAPI
@@ -64,12 +65,29 @@ package struct VInspectorRecordingTab: View {
             VInspectorMonoValue(VInspectorFormat.count(state.recording.clipsToday), isLive: true)
         }
         VInspectorRow("Destination") { VInspectorMonoValue(state.recording.destination) }
+        VInspectorRow("On this Mac") { VInspectorMonoValue(storedLabel) }
+        VInspectorRow("Oldest clip") { VInspectorMonoValue(oldestClipLabel) }
         // `.group` is the theme's `folder` glyph; DESIGN.md §8.3 has no dedicated
         // "reveal in Finder" case and a folder is what the Finder's own menu item shows.
         VButton("Reveal in Finder", symbol: .group, style: .ghost, size: .sm,
                 action: actions.onRevealRecordings)
             .disabled(state.recording.destination == nil)
             .padding(.top, VTheme.Space.xxs)
+    }
+
+    /// `12 · 4.2 GB`, or `nil` before the folder has been read.
+    ///
+    /// One row rather than two: a count without a size does not answer the question anyone is
+    /// actually asking, and a size without a count does not say what it is made of.
+    private var storedLabel: String? {
+        guard let clips = state.recording.storedClips,
+              let bytes = state.recording.storedBytes else { return nil }
+        return "\(clips) · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    /// The date of the oldest clip.
+    private var oldestClipLabel: String? {
+        state.recording.oldestClipAt.map(VInspectorRecordingChrome.day.string(from:))
     }
 
     /// Start or stop, with the `live` dot breathing off the window-wide clock while it runs.
@@ -205,5 +223,20 @@ package struct VInspectorRecordingTab: View {
     .background(VTheme.Color.Layer.surface)
 }
 #endif
+
+// MARK: - VInspectorRecordingChrome
+
+/// Formatting for this tab. A namespace because a `DateFormatter` is expensive to rebuild and the
+/// tab re-renders once a second while recording.
+private enum VInspectorRecordingChrome {
+
+    /// The oldest clip's date, in the user's own locale.
+    static let day: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+}
 
 #endif  // os(macOS)

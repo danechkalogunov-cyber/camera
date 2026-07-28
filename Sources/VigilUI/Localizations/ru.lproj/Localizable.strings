@@ -522,3 +522,7 @@
 "Stream quality" = "Качество потока";
 "Fit or fill" = "Вписать или заполнить";
 "Timeline" = "Шкала времени";
+
+/* REC TAB — what is on disk */
+"On this Mac" = "На этом Mac";
+"Oldest clip" = "Самый старый ролик";

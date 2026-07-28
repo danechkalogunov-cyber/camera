@@ -123,15 +123,32 @@ package struct VInspectorRecordingState: Sendable, Hashable {
     /// How many clips this camera produced today.
     package var clipsToday: Int
 
+    /// Every clip Vigil has written to this Mac, and what they weigh.
+    ///
+    /// Shown because the honest answer to "what is this app putting on my disk" is a number on
+    /// screen, not a promise in a manual. `nil` before the folder has been read.
+    package var storedClips: Int?
+    package var storedBytes: Int64?
+
+    /// When the oldest clip was written, or `nil` when there are none. Answers "is this growing
+    /// without bound" without anyone having to open the Finder.
+    package var oldestClipAt: Date?
+
     /// Creates a recording summary. The defaults describe a camera that is not recording.
     package init(isRecording: Bool = false,
                  elapsedSeconds: Double = 0,
                  destination: String? = nil,
-                 clipsToday: Int = 0) {
+                 clipsToday: Int = 0,
+                 storedClips: Int? = nil,
+                 storedBytes: Int64? = nil,
+                 oldestClipAt: Date? = nil) {
         self.isRecording = isRecording
         self.elapsedSeconds = elapsedSeconds
         self.destination = destination
         self.clipsToday = clipsToday
+        self.storedClips = storedClips
+        self.storedBytes = storedBytes
+        self.oldestClipAt = oldestClipAt
     }
 }
 

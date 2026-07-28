@@ -542,3 +542,7 @@
 "Stream quality" = "Stream quality";
 "Fit or fill" = "Fit or fill";
 "Timeline" = "Timeline";
+
+/* REC TAB — what is on disk */
+"On this Mac" = "On this Mac";
+"Oldest clip" = "Oldest clip";
