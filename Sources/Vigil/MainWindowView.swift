@@ -72,6 +72,9 @@ struct MainWindowView: View {
     /// Stills written to the user's Pictures folder.
     @State private var snapshots: SnapshotCoordinator
 
+    /// The camera's own recording index, which is what the timeline scrubs.
+    @State private var archive: ArchiveCoordinator
+
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
@@ -109,6 +112,7 @@ struct MainWindowView: View {
         _ptz = State(initialValue: PTZCoordinator(logger: session.dependencies.logger))
         _snapshots = State(initialValue: SnapshotCoordinator(logger: session.dependencies.logger,
                                                              clock: session.dependencies.clock))
+        _archive = State(initialValue: ArchiveCoordinator(logger: session.dependencies.logger))
     }
 
     // MARK: - Body
@@ -218,6 +222,9 @@ struct MainWindowView: View {
         // costs nothing after the first time — and the coordinator ignores a repeat for the same
         // channel anyway.
         .task(id: deviceInfoReady) { followPTZ() }
+        // The index is only worth reading when the Recordings screen is actually on the stage:
+        // it is a paged search at the device and a camera with a full card answers slowly.
+        .task(id: archiveTrigger) { loadArchive() }
     }
 
     // MARK: - Sheets
@@ -721,11 +728,63 @@ struct MainWindowView: View {
     /// ruler, playhead, marker lane — is written, tested and never seen. That is the truthful state
     /// rather than a placeholder, and the screen's empty half says what would fill it.
     private var libraryState: VLibraryState {
-        VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()),
+        VLibraryState(clock: libraryClock,
                       clips: window.clips,
                       events: eventFeed.events,
                       bookmarks: libraryBookmarks,
+                      archive: archive.archive,
                       recordingsFolder: recordingsFolderLabel)
+    }
+
+    /// The calendar, zone and instant every library surface shares.
+    ///
+    /// One value, built once per body evaluation: a row and its day header computing `Date()`
+    /// separately can land either side of midnight and disagree about which day a clip is on.
+    private var libraryClock: TimelineClock {
+        TimelineClock(calendar: .autoupdatingCurrent, now: Date())
+    }
+
+    /// What decides the archive is worth reading: the screen being open, and for which camera.
+    private var archiveTrigger: String {
+        let isOpen = VLibrarySection(window.sidebarSelection.focus) == .recordings
+        return "\(isOpen)/\(session.camera?.id.rawValue.uuidString ?? "-")"
+            + "/\(deviceInfo.session == nil ? 0 : 1)"
+    }
+
+    /// Reads the camera's index for the day the timeline is showing.
+    private func loadArchive() {
+        archive.follow(session: deviceInfo.session, channel: session.camera?.channel)
+        guard VLibrarySection(window.sidebarSelection.focus) == .recordings else { return }
+        let clock = libraryClock
+        let day = archive.archive?.day ?? clock.day(containing: clock.now)
+        archive.load(day: day,
+                     clock: clock,
+                     localClips: timelineLocalClips,
+                     markers: timelineMarkers)
+    }
+
+    /// Vigil's own clips as timeline blocks, so the scrubber shows them against the device's.
+    ///
+    /// A clip still being written has no duration yet and is skipped: a block of zero width draws
+    /// as a hairline at the wrong instant rather than as "recording now".
+    private var timelineLocalClips: [VTimelineLocalClip] {
+        window.clips.compactMap { clip in
+            guard let seconds = clip.durationSeconds, seconds > 0 else { return nil }
+            return VTimelineLocalClip(id: clip.id,
+                                      start: clip.startedAt,
+                                      end: clip.startedAt.addingTimeInterval(seconds),
+                                      title: clip.fileName)
+        }
+    }
+
+    /// The event feed as timeline markers.
+    private var timelineMarkers: [TimelineMarker] {
+        eventFeed.events.map { event in
+            TimelineMarker(id: event.id,
+                           instant: event.occurredAt,
+                           kind: event.kind,
+                           label: event.label)
+        }
     }
 
     /// The stored bookmarks in the shape the screen reads.
@@ -920,6 +979,20 @@ struct MainWindowView: View {
         actions.onDeleteBookmark = { bookmark in bookmarks.delete(bookmark.id) }
         actions.onDeleteEvent = { event in
             Task { await eventFeed.delete(event.id, camera: session.camera) }
+        }
+        actions.onScrub = { phase, instant in
+            // Only `.ended` would issue a seek — and there is nothing to seek yet, because playing
+            // the device's archive needs the playback pipeline `VigilVideo` does not have. The
+            // playhead still follows the pointer, so the scrubber reads its own position honestly.
+            archive.movePlayhead(to: instant, isScrubbing: phase != .ended)
+        }
+        actions.onZoom = { stop in archive.zoom(stop) }
+        actions.onActivateMarker = { cluster in
+            // A cluster is one or more markers at the same x; the earliest is the one the badge is
+            // anchored on, and jumping to it is what "open this cluster" means before there is a
+            // popover to list the rest.
+            guard let first = cluster.markers.first else { return }
+            archive.movePlayhead(to: first.instant, isScrubbing: false)
         }
         return actions
     }
