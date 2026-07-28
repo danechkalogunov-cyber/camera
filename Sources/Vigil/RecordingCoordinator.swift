@@ -70,6 +70,9 @@ final class RecordingCoordinator {
     /// The clips finished in this session, newest last.
     private(set) var completed: [RecordingSegmentRecord] = []
 
+    /// The segments the last `stop()` produced, for the manifest to vouch for.
+    private(set) var lastFinished: [RecordingSegmentRecord] = []
+
     /// Why the last attempt failed, or `nil` when the last attempt succeeded or none has been made.
     private(set) var lastFailure: String?
 
@@ -184,6 +187,7 @@ final class RecordingCoordinator {
         Task {
             let finished = await recorder.finish(reason: .userStopped)
             completed.append(contentsOf: finished)
+            lastFinished = finished
             if finished.isEmpty {
                 lastFailure = "the clip closed without producing a file"
                 logger.error(.storage, "recording stopped but wrote no file")

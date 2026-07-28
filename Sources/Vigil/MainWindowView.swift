@@ -54,6 +54,9 @@ struct MainWindowView: View {
     /// Starts and stops clip recording.
     @State private var recording: RecordingCoordinator
 
+    /// Which files in the recordings folder Vigil actually wrote.
+    @State private var manifest: ClipManifest
+
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
@@ -83,6 +86,7 @@ struct MainWindowView: View {
         _recording = State(initialValue: RecordingCoordinator(tap: session.recordingTap,
                                                               logger: session.dependencies.logger,
                                                               clock: session.dependencies.clock))
+        _manifest = State(initialValue: ClipManifest(logger: session.dependencies.logger))
     }
 
     // MARK: - Body
@@ -147,7 +151,10 @@ struct MainWindowView: View {
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
         .task(id: session.camera?.id) { loadDeviceInfo() }
         // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
-        .task(id: recording.completed.count) { reloadClips() }
+        .task(id: recording.completed.count) {
+            vouchForFinishedClips()
+            reloadClips()
+        }
         .task(id: recording.isRecording) {
             // Also re-read on start, so the `.partial` file appears while it is being written
             // rather than only once the clip closes.
@@ -441,6 +448,8 @@ struct MainWindowView: View {
         let camera = VLibraryCamera(id: cameraID, name: identity.name)
         var found: [VLibraryClip] = []
         var seen = 0
+        var foreign = 0
+        var altered = 0
         for case let url as URL in walker {
             seen += 1
             // A clip still being written is `name.mp4.partial`, whose `pathExtension` is "partial",
@@ -453,18 +462,40 @@ struct MainWindowView: View {
             }
             let values = try? url.resourceValues(forKeys: Set(keys))
             guard values?.isRegularFile != false else { continue }
+
+            // Only files Vigil wrote. The recordings folder is an ordinary directory in the user's
+            // Movies: anything dropped into it would otherwise be listed as a recording, complete
+            // with a camera name it never came from. A clip still being written has no entry yet and
+            // is allowed through, because the writer holding it open is this process.
+            let relative = Self.relativePath(of: url, under: folder)
+            let vouched = manifest.entry(for: relative)
+            if !isPartial {
+                guard let vouched else {
+                    foreign += 1
+                    continue
+                }
+                // Size at close is what the recorder observed. A mismatch means the file changed
+                // after Vigil finished with it, so it is no longer the clip the manifest describes.
+                if let size = values?.fileSize, Int64(size) != vouched.byteCount {
+                    altered += 1
+                    continue
+                }
+            }
             found.append(VLibraryClip(id: Self.stableID(for: url),
                                       camera: camera,
                                       startedAt: values?.contentModificationDate ?? Date(),
-                                      durationSeconds: nil,
+                                      durationSeconds: manifest.entry(for: relative)?.mediaSeconds,
                                       byteCount: values?.fileSize.map(Int64.init),
-                                      fileName: Self.relativePath(of: url, under: folder),
+                                      fileName: relative,
                                       url: url,
                                       thumbnail: window.posters[url],
                                       isRecording: isPartial))
         }
         window.clips = found
-        logger.info(.storage, "clip listing: \(found.count) clips of \(seen) entries under \(folder.path)")
+        logger.info(.storage,
+                    "clip listing: \(found.count) clips of \(seen) entries under \(folder.path)"
+                    + (foreign > 0 ? ", \(foreign) not written by Vigil" : "")
+                    + (altered > 0 ? ", \(altered) altered since recording" : ""))
         Task { await enrich(found) }
     }
 
@@ -548,6 +579,7 @@ struct MainWindowView: View {
         var actions = VLibraryActions()
         actions.onOpenRecordingsFolder = { openRecordingsFolder() }
         actions.onRevealClip = { clip in revealClip(clip) }
+        actions.onDeleteClip = { clip in deleteClip(clip) }
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
         return actions
     }
@@ -557,6 +589,32 @@ struct MainWindowView: View {
     /// `RecordingDestination` owns where clips go; until the app drives it, the folder may not exist
     /// yet, and `activateFileViewerSelecting` on a missing path silently does nothing rather than
     /// failing — which is the right outcome for a button whose whole job is "show me where".
+    /// Adds the clips the last recording produced to the manifest.
+    private func vouchForFinishedClips() {
+        let finished = recording.lastFinished
+        guard !finished.isEmpty,
+              let camera = session.camera,
+              let root = recording.clipsDirectory() else { return }
+        manifest.record(finished, cameraID: camera.id, root: root)
+    }
+
+    /// Deletes a clip and forgets it.
+    ///
+    /// The manifest entry goes with the file. Leaving it behind would make a later file of the same
+    /// name inherit this one's vouching, which is exactly the substitution the manifest exists to
+    /// prevent.
+    private func deleteClip(_ clip: VLibraryClip) {
+        guard let url = clip.url else { return }
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            manifest.forget(clip.fileName)
+            session.dependencies.logger.info(.storage, "clip moved to trash")
+            reloadClips()
+        } catch {
+            session.dependencies.logger.error(.storage, "could not delete clip: \(error)")
+        }
+    }
+
     /// Reveals one clip in the Finder.
     private func revealClip(_ clip: VLibraryClip) {
         guard let folder = recording.clipsDirectory() else { return }
