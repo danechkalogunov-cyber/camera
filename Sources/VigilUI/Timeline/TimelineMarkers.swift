@@ -186,6 +186,33 @@ package enum TimelineMarkerLayout {
         markers.filter { $0.instant < instant }.max { $0.instant < $1.instant }
     }
 
+    /// The marker to land on when stepping event-to-event from `playhead`.
+    ///
+    /// ⛔ Compares ``TimelineMarker/seekInstant``, **not** `instant`, and that is the whole reason
+    /// this exists beside ``next(after:in:)``. Landing on a marker puts the playhead three seconds
+    /// *before* it — so the marker just jumped to still satisfies `instant > playhead`, and a
+    /// stepper built on the raw instant returns that same marker on every subsequent press. The
+    /// rotor action had exactly that bug: "Next Event" invoked twice never left the first event.
+    ///
+    /// - Parameters:
+    ///   - playhead: where the playhead is now, which after any previous step is a seek instant.
+    ///   - markers: in any order.
+    ///   - forward: `.` when `true`, `,` when `false`.
+    /// - Returns: the marker to seek to, or `nil` at either end of the day.
+    package static func stepping(from playhead: Date, in markers: [TimelineMarker],
+                                 forward: Bool) -> TimelineMarker? {
+        // Ties broken by id so two events in the same millisecond step deterministically rather
+        // than by whatever order the feed happened to deliver them in.
+        let order: (TimelineMarker, TimelineMarker) -> Bool = { a, b in
+            a.seekInstant == b.seekInstant
+                ? a.id.uuidString < b.id.uuidString
+                : a.seekInstant < b.seekInstant
+        }
+        return forward
+            ? markers.filter { $0.seekInstant > playhead }.min(by: order)
+            : markers.filter { $0.seekInstant < playhead }.max(by: order)
+    }
+
     /// The marker instants inside `window`, for scrub magnetism.
     package static func magnetismCandidates(in window: TimelineWindow,
                                             markers: [TimelineMarker]) -> [Date] {

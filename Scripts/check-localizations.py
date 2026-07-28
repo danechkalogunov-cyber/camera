@@ -188,7 +188,8 @@ source_keys = set()
 SPEC_MAP = {"host": "%@", "minutes": "%lld", "httpPort": "%lld", "rtspPort": "%lld",
             "codec": "%@", "camera.name": "%@", "value": "%@", "frames": "%lld",
             "shown": "%@", "expected": "%@", "seconds": "%lld", "detail.attempt": "%lld",
-            "stamp": "%@", "track.name": "%@", "primaryName": "%@", "day": "%lld"}
+            "stamp": "%@", "track.name": "%@", "primaryName": "%@", "day": "%lld",
+            "cluster.count": "%lld"}
 
 
 def join_multiline(lines):

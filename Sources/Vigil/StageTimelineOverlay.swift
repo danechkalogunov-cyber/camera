@@ -66,6 +66,12 @@ struct StageTimelineOverlay: View {
     /// Moves to the next or previous edge of recorded footage.
     let onStepToEdge: (Bool) -> Void
 
+    /// Moves to the next or previous event marker — `.` and `,`.
+    let onStepToMarker: (Bool) -> Void
+
+    /// Home and End: the day's first or last instant.
+    let onGoToDayEdge: (Bool) -> Void
+
     /// Puts the timeline away.
     let onDismiss: () -> Void
 
@@ -106,6 +112,8 @@ struct StageTimelineOverlay: View {
          onActivateMarker: @escaping (TimelineMarkerCluster) -> Void,
          onStep: @escaping (Double) -> Void,
          onStepToEdge: @escaping (Bool) -> Void,
+         onStepToMarker: @escaping (Bool) -> Void,
+         onGoToDayEdge: @escaping (Bool) -> Void,
          onDismiss: @escaping () -> Void) {
         self.archive = archive
         self.clock = clock
@@ -120,6 +128,8 @@ struct StageTimelineOverlay: View {
         self.onActivateMarker = onActivateMarker
         self.onStep = onStep
         self.onStepToEdge = onStepToEdge
+        self.onStepToMarker = onStepToMarker
+        self.onGoToDayEdge = onGoToDayEdge
         self.onDismiss = onDismiss
     }
 
@@ -165,8 +175,36 @@ struct StageTimelineOverlay: View {
             Button("", action: onGoToNow)
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(archive == nil)
+            // `,` / `.` walk the day's events. Unmodified on purpose (§7.3): the timeline has no
+            // text field, so the bare punctuation keys are free, and an event-to-event key that
+            // needs a modifier is one the user has to think about.
+            Button("", action: { onStepToMarker(false) }).keyboardShortcut(",", modifiers: [])
+            Button("", action: { onStepToMarker(true) }).keyboardShortcut(".", modifiers: [])
+            Button("", action: { onGoToDayEdge(true) })
+                .keyboardShortcut(KeyEquivalent.home, modifiers: [])
+            Button("", action: { onGoToDayEdge(false) })
+                .keyboardShortcut(KeyEquivalent.end, modifiers: [])
+            zoomShortcuts
         }
         .hidden()
+    }
+
+    /// ⌘= / ⌘- step the zoom ladder, ⌘0 fits the day (§7.3).
+    ///
+    /// Split out rather than inlined above: `ZStack` builds at most ten children before SwiftUI
+    /// needs a `Group`, and the shortcut list is already at that limit.
+    @ViewBuilder
+    private var zoomShortcuts: some View {
+        if let archive {
+            Group {
+                Button("", action: { onZoom(archive.zoom.tighter) })
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("", action: { onZoom(archive.zoom.wider) })
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("", action: { onZoom(TimelineZoom.widest) })
+                    .keyboardShortcut("0", modifiers: .command)
+            }
+        }
     }
 
     // MARK: - Private Helpers

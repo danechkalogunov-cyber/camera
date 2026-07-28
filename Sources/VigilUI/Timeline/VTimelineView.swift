@@ -22,6 +22,7 @@
 
 #if os(macOS)
 
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -249,6 +250,7 @@ package struct VTimelineView: View {
                 ForEach(tracks) { track in
                     VTimelineBarView(track: track,
                                      geometry: geometry,
+                                     clock: clock,
                                      isPrimary: track.id == tracks.first?.id,
                                      isLoading: isLoading,
                                      onActivateMarker: onActivateMarker)
@@ -365,7 +367,22 @@ package struct VTimelineView: View {
                                                                                     day: day),
                                       markers: primary?.markers ?? [],
                                       day: day,
-                                      magnetism: magnetismEnabled)
+                                      magnetism: magnetismEnabled && !Self.isOptionHeld)
+    }
+
+    /// Whether ⌥ is down right now, which defeats snapping (UX.md §7.3).
+    ///
+    /// Read from AppKit at the instant the drag event is delivered, exactly as ``VSidebarClick``
+    /// does and for the same reason: a `DragGesture`'s value carries no modifier flags on macOS 14,
+    /// and `modifierKeyAlternate(_:_:)` arrived in macOS 15.
+    ///
+    /// ⚠️ Deliberately *not* a `@State` flag fed by a key-down monitor. Magnetism is a release-time
+    /// snap, so the only moment its answer matters is the moment the pointer comes up — and a
+    /// mirrored flag can be stale at exactly that moment, if ⌥ went down while the pointer was over
+    /// another window or the key-up was swallowed by a menu.
+    @MainActor
+    private static var isOptionHeld: Bool {
+        NSEvent.modifierFlags.contains(.option)
     }
 
     // MARK: - Accessibility actions
@@ -386,10 +403,8 @@ package struct VTimelineView: View {
     /// lead-in instant, which is what a click on it would do.
     private func jumpToMarker(next: Bool) {
         let markers = tracks.first?.markers ?? []
-        let target = next
-            ? TimelineMarkerLayout.next(after: playhead, in: markers)
-            : TimelineMarkerLayout.previous(before: playhead, in: markers)
-        guard let target else { return }
+        guard let target = TimelineMarkerLayout.stepping(from: playhead, in: markers,
+                                                         forward: next) else { return }
         onScrub(VTimelineScrubPhase.ended, day.clamp(target.seekInstant))
     }
 }

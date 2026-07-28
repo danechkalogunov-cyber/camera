@@ -56,8 +56,18 @@ package struct VTimelineBarView: View {
     /// drawn as "no recording" (UX.md §7.4).
     package let isLoading: Bool
 
-    /// Called when a marker or cluster is activated by click or by `Return`.
+    /// Called when a marker or a *lone*-marker cluster is activated by click or by `Return`.
+    ///
+    /// ⚠️ Not called when a collapsed cluster's badge is clicked — that opens the list instead, and
+    /// the callback then arrives once the user picks a row from it. A badge reading `40` that seeks
+    /// straight to the first of the forty makes the other thirty-nine unreachable at that zoom.
     package let onActivateMarker: (TimelineMarkerCluster) -> Void
+
+    /// The zone and hour cycle the expanded cluster's times are shown in.
+    package let clock: TimelineClock
+
+    /// The cluster whose list is open, by its identity.
+    @State private var expanded: UUID?
 
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiate
 
@@ -66,11 +76,13 @@ package struct VTimelineBarView: View {
     /// Creates a lane.
     package init(track: VTimelineTrack,
                  geometry: TimelineGeometry,
+                 clock: TimelineClock,
                  isPrimary: Bool = true,
                  isLoading: Bool = false,
                  onActivateMarker: @escaping (TimelineMarkerCluster) -> Void = { _ in }) {
         self.track = track
         self.geometry = geometry
+        self.clock = clock
         self.isPrimary = isPrimary
         self.isLoading = isLoading
         self.onActivateMarker = onActivateMarker
@@ -263,11 +275,40 @@ package struct VTimelineBarView: View {
             // A transparent filler so the row keeps its height with no markers on it at all.
             SwiftUI.Color.clear
             ForEach(clusters) { cluster in
-                VTimelineMarkerGlyph(cluster: cluster) { onActivateMarker(cluster) }
+                VTimelineMarkerGlyph(cluster: cluster) { activate(cluster) }
+                    .popover(isPresented: isExpanded(cluster), arrowEdge: .bottom) {
+                        VTimelineClusterList(cluster: cluster, clock: clock) { marker in
+                            expanded = nil
+                            // Rewrapped as a cluster of one so the callback's contract does not
+                            // change: every caller of `onActivateMarker` seeks to `markers.first`,
+                            // and handing it the chosen marker alone is what makes the row the user
+                            // clicked the row they land on.
+                            onActivateMarker(TimelineMarkerCluster(markers: [marker], x: cluster.x))
+                        }
+                    }
                     .position(x: CGFloat(cluster.x), y: VTimelineMetrics.markerRow / 2)
             }
         }
         .frame(height: VTimelineMetrics.markerRow)
+    }
+
+    /// A lone marker seeks; a collapsed cluster expands.
+    private func activate(_ cluster: TimelineMarkerCluster) {
+        if cluster.isCluster { expanded = cluster.id } else { onActivateMarker(cluster) }
+    }
+
+    /// A per-cluster presentation binding over the single `expanded` identity.
+    ///
+    /// One piece of state rather than one flag per cluster: the clusters are rebuilt on every zoom
+    /// and pan, so anything stored per cluster would be discarded on the next redraw — and only one
+    /// popover can be open at a time regardless.
+    private func isExpanded(_ cluster: TimelineMarkerCluster) -> Binding<Bool> {
+        Binding(get: { expanded == cluster.id },
+                set: { isOpen in
+                    if isOpen { expanded = cluster.id } else if expanded == cluster.id {
+                        expanded = nil
+                    }
+                })
     }
 }
 

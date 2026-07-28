@@ -301,6 +301,26 @@ final class ArchiveCoordinator {
         movePlayhead(to: instant, isScrubbing: false)
     }
 
+    /// Moves to the next or previous event marker — `.` and `,` (UX.md §7.3).
+    ///
+    /// Strictly past the playhead, so holding the key walks the day's events rather than sticking on
+    /// the one already under it. Lands on the marker's ``TimelineMarker/seekInstant`` — three
+    /// seconds early — because an event's timestamp is the moment detection *fired*, which is
+    /// already after the thing that caused it entered frame.
+    func stepToMarker(forward: Bool) {
+        guard let current = archive, let markers = current.tracks.first?.markers else { return }
+        guard let target = TimelineMarkerLayout.stepping(from: current.playhead,
+                                                         in: markers,
+                                                         forward: forward) else { return }
+        movePlayhead(to: target.seekInstant, isScrubbing: false)
+    }
+
+    /// Home and End: the first or last instant of the day being shown (UX.md §7.3).
+    func moveToDayEdge(start: Bool) {
+        guard let current = archive else { return }
+        movePlayhead(to: start ? current.day.start : current.day.end, isScrubbing: false)
+    }
+
     /// What kind of recording covers an instant, or `nil` when it lies in a gap.
     private static func kind(at instant: Date, in archive: VLibraryArchive) -> VTimelineSegmentKind? {
         guard let index = archive.tracks.first?.index,

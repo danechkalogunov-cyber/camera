@@ -1,21 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!--
-  Localizable.stringsdict (ru)
-  VigilUI — все строки, текст которых зависит от числа.
-
-  В русском четыре категории: one (1, 21, 31…), few (2–4, 22–24…), many (0, 5–20, 25–30…)
-  и other (дробные значения). В плоском .strings это не выразить, поэтому такие ключи есть
-  только здесь и отсутствуют в Localizable.strings.
-
-  NSStringFormatValueTypeKey — "lld": SwiftUI подставляет Int как %lld.
-
-  Если у ключа больше одного аргумента, формат целиком позиционный (%1$@, %2$#@minutes@,
-  и %2$lld внутри форм), иначе после подстановки смешаются позиционные и непозиционные
-  спецификаторы.
-
-  В XML внутри комментария запрещён двойной дефис. Файл сгенерирован и проверен plistlib.
--->
 <plist version="1.0">
 <dict>
 	<key>%@ locked this account after too many failed sign-ins. It usually unlocks in about %lld minutes.</key>
@@ -36,6 +20,26 @@
 			<string>%2$lld минуту</string>
 			<key>other</key>
 			<string>%2$lld минуты</string>
+		</dict>
+	</dict>
+	<key>%lld events</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@events@</string>
+		<key>events</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>few</key>
+			<string>%lld события</string>
+			<key>many</key>
+			<string>%lld событий</string>
+			<key>one</key>
+			<string>%lld событие</string>
+			<key>other</key>
+			<string>%lld события</string>
 		</dict>
 	</dict>
 	<key>%lld frames waiting to decode — video may lag.</key>

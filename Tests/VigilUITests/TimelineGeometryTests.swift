@@ -561,6 +561,46 @@ import VigilProtocols
     #expect(TimelineMarkerLayout.previous(before: markers[0].instant, in: markers) == nil)
 }
 
+@Test func timelineMarkerSteppingAdvancesWhenRepeatedFromWhereItLanded() throws {
+    let index = TimelineFixture.mockupIndex()
+    let day = index.day
+    let markers = [9, 10, 11].map { hour in
+        TimelineMarker(id: UUID(), instant: day.instant(atOffset: TimelineFixture.at(hour)),
+                       kind: .motion, label: "\(hour)")
+    }
+
+    // Walk forward from before the first marker, landing where each step says to land — which is
+    // three seconds *before* the marker, not on it. This is the sequence `.` produces when held.
+    var playhead = day.start
+    var visited: [String] = []
+    while let next = TimelineMarkerLayout.stepping(from: playhead, in: markers, forward: true) {
+        visited.append(next.label)
+        playhead = next.seekInstant
+        if visited.count > 5 { break }      // a stepper that sticks would loop forever
+    }
+    #expect(visited == ["9", "10", "11"],
+            "each press must reach the next event; comparing raw instants sticks on the first")
+
+    // And back again from the far end.
+    playhead = day.end
+    var back: [String] = []
+    while let previous = TimelineMarkerLayout.stepping(from: playhead, in: markers,
+                                                       forward: false) {
+        back.append(previous.label)
+        playhead = previous.seekInstant
+        if back.count > 5 { break }
+    }
+    #expect(back == ["11", "10", "9"])
+
+    // Both ends terminate rather than wrapping: a stepper that wraps to the other end of the day
+    // moves the picture somewhere the user did not ask to go.
+    #expect(TimelineMarkerLayout.stepping(from: markers[2].seekInstant, in: markers,
+                                          forward: true) == nil)
+    #expect(TimelineMarkerLayout.stepping(from: markers[0].seekInstant, in: markers,
+                                          forward: false) == nil)
+    #expect(TimelineMarkerLayout.stepping(from: day.start, in: [], forward: true) == nil)
+}
+
 // MARK: - Magnetism
 
 @Test func timelineGeometrySnapsInPixelSpaceSoToleranceMeansTheSameAtEveryZoom() throws {

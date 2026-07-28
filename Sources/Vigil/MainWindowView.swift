@@ -1364,6 +1364,10 @@ struct MainWindowView: View {
                                  },
                                  onStep: { seconds in archive.stepPlayhead(by: seconds) },
                                  onStepToEdge: { forward in archive.stepToEdge(forward: forward) },
+                                 onStepToMarker: { forward in
+                                     archive.stepToMarker(forward: forward)
+                                 },
+                                 onGoToDayEdge: { start in archive.moveToDayEdge(start: start) },
                                  onDismiss: {
                                      window.showsTimeline = false
                                      // Closing the scrubber returns to live. A window left showing

@@ -1,23 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!--
-  Localizable.stringsdict (en)
-  VigilUI — every key whose text varies with a count.
-
-  These keys are absent from Localizable.strings on purpose: a key in both tables is
-  ambiguous. English needs two categories (one, other); Russian needs four (one, few, many,
-  other), which is the whole reason this file exists in ru.lproj.
-
-  NSStringFormatValueTypeKey is "lld" because SwiftUI's LocalizedStringKey interpolates an
-  Int as %lld. A value type that disagrees with the specifier in the key reads the argument
-  at the wrong width.
-
-  Where a key has more than one argument the format is positional throughout
-  (%1$@, %2$#@minutes@, and %2$lld inside the plural forms), so that the substituted result
-  never mixes positional and sequential specifiers.
-
-  XML forbids a double hyphen inside a comment. Generated and validated with plistlib.
--->
 <plist version="1.0">
 <dict>
 	<key>%@ locked this account after too many failed sign-ins. It usually unlocks in about %lld minutes.</key>
@@ -34,6 +16,22 @@
 			<string>%2$lld minute</string>
 			<key>other</key>
 			<string>%2$lld minutes</string>
+		</dict>
+	</dict>
+	<key>%lld events</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@events@</string>
+		<key>events</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld event</string>
+			<key>other</key>
+			<string>%lld events</string>
 		</dict>
 	</dict>
 	<key>%lld frames waiting to decode — video may lag.</key>
