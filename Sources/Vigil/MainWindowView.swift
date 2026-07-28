@@ -9,7 +9,9 @@
 
 #if os(macOS)
 
+import AVFoundation
 import AppKit
+import CoreMedia
 import Foundation
 import SwiftUI
 
@@ -457,10 +459,56 @@ struct MainWindowView: View {
                                       durationSeconds: nil,
                                       byteCount: values?.fileSize.map(Int64.init),
                                       fileName: Self.relativePath(of: url, under: folder),
+                                      url: url,
+                                      thumbnail: window.posters[url],
                                       isRecording: isPartial))
         }
         window.clips = found
         logger.info(.storage, "clip listing: \(found.count) clips of \(seen) entries under \(folder.path)")
+        Task { await enrich(found) }
+    }
+
+    /// Fills in the poster frame and the duration for clips that do not have them yet.
+    ///
+    /// Off the main actor and one clip at a time: `AVAssetImageGenerator` decodes a frame, and doing
+    /// that for a folder's worth of clips at once would compete with the live decoder for the very
+    /// hardware the picture depends on. Results are cached by URL, so scrolling the list or
+    /// re-reading the folder does no work twice.
+    private func enrich(_ clips: [VLibraryClip]) async {
+        for clip in clips {
+            guard let url = clip.url, !clip.isRecording, window.posters[url] == nil else { continue }
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 320, height: 180)
+            // A clip that is short, truncated, or whose moov atom never landed simply yields no
+            // image; the row keeps its tinted placeholder rather than the list stalling.
+            let poster = try? await generator.image(at: .zero).image
+            let duration = try? await asset.load(.duration)
+            await MainActor.run {
+                if let poster { window.posters[url] = poster }
+                if let duration, duration.isNumeric {
+                    window.durations[url] = duration.seconds
+                }
+            }
+        }
+        applyEnrichment()
+    }
+
+    /// Rebuilds the rows with whatever posters and durations have been extracted.
+    private func applyEnrichment() {
+        window.clips = window.clips.map { clip in
+            guard let url = clip.url else { return clip }
+            return VLibraryClip(id: clip.id,
+                                camera: clip.camera,
+                                startedAt: clip.startedAt,
+                                durationSeconds: clip.durationSeconds ?? window.durations[url],
+                                byteCount: clip.byteCount,
+                                fileName: clip.fileName,
+                                url: url,
+                                thumbnail: clip.thumbnail ?? window.posters[url],
+                                isRecording: clip.isRecording)
+        }
     }
 
     /// The clip's path relative to the recordings root.

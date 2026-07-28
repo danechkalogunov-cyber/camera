@@ -457,3 +457,8 @@
 "Picture in Picture" = "Картинка в картинке";
 "Discover Cameras" = "Найти камеры";
 "Stream Doctor" = "Диагностика потока";
+
+/* CLIP PLAYER */
+"Close player" = "Закрыть плеер";
+"Still recording" = "Ещё записывается";
+"This clip is not available" = "Этот ролик недоступен";

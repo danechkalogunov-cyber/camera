@@ -477,3 +477,8 @@
 "Picture in Picture" = "Picture in Picture";
 "Discover Cameras" = "Discover Cameras";
 "Stream Doctor" = "Stream Doctor";
+
+/* CLIP PLAYER */
+"Close player" = "Close player";
+"Still recording" = "Still recording";
+"This clip is not available" = "This clip is not available";

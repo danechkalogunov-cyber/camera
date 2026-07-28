@@ -9,6 +9,7 @@
 
 #if os(macOS)
 
+import CoreGraphics
 import Foundation
 
 import VigilProtocols
@@ -45,6 +46,16 @@ package struct VLibraryClip: Identifiable, Sendable, Hashable {
     /// The file's name as it appears in the Finder, so "reveal in Finder" and the row agree.
     package let fileName: String
 
+    /// Where the file is, for playback and for revealing it.
+    ///
+    /// Optional because a clip can be listed from a record that outlived its file — a card pulled,
+    /// a folder moved. A row with no URL still shows what was recorded and simply cannot be played.
+    package let url: URL?
+
+    /// A poster frame, once one has been extracted. `nil` until then, and for a clip still being
+    /// written, whose moov atom is not yet in place for a generator to read.
+    package let thumbnail: CGImage?
+
     /// Whether the recorder still holds this file open.
     ///
     /// A clip in this state is deliberately still listed. Hiding it until it closed would make
@@ -60,6 +71,8 @@ package struct VLibraryClip: Identifiable, Sendable, Hashable {
     ///   - durationSeconds: length, or `nil` while still recording.
     ///   - byteCount: size on disk, or `nil` while still recording.
     ///   - fileName: the name shown and revealed in the Finder.
+    ///   - url: the file, when it is still there.
+    ///   - thumbnail: a poster frame, when one has been extracted.
     ///   - isRecording: whether the file is still open.
     package init(id: UUID,
                  camera: VLibraryCamera,
@@ -67,6 +80,8 @@ package struct VLibraryClip: Identifiable, Sendable, Hashable {
                  durationSeconds: Double? = nil,
                  byteCount: Int64? = nil,
                  fileName: String,
+                 url: URL? = nil,
+                 thumbnail: CGImage? = nil,
                  isRecording: Bool = false) {
         self.id = id
         self.camera = camera
@@ -74,6 +89,8 @@ package struct VLibraryClip: Identifiable, Sendable, Hashable {
         self.durationSeconds = durationSeconds
         self.byteCount = byteCount
         self.fileName = fileName
+        self.url = url
+        self.thumbnail = thumbnail
         self.isRecording = isRecording
     }
 }

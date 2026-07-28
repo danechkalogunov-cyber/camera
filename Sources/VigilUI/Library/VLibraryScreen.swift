@@ -313,6 +313,10 @@ package enum VLibraryMetrics {
     /// 56 pt. An event row (UX.md §9.1: "list (☰, 56 pt rows)").
     package static let eventRow: CGFloat = 56
 
+    /// The clip player's height inside the Recordings screen. Tall enough for a 16:9 picture at the
+    /// panel's usual width without pushing the list off the bottom of a laptop display.
+    package static let playerHeight: CGFloat = 360
+
     /// 44 pt. A clip or bookmark row. Neither has a row height in the specification; the 44 pt
     /// `Row.camera` token is the one designed to hold a two-line label beside a leading mark, which
     /// is exactly this row's anatomy (R-37 exempts row heights from the five control heights).
@@ -662,7 +666,14 @@ package struct VLibraryDayHeader: View {
             .foregroundStyle(VTheme.Color.Text.tertiary)
             .padding(.top, VTheme.Space.lg)
             .padding(.bottom, VTheme.Space.xxs)
+            // Matches the rows' own inset. Without it the header sat flush against the panel edge
+            // while every row below it was indented, which read as a layout fault rather than as a
+            // heading.
+            .padding(.horizontal, VTheme.Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Pinned section headers scroll content underneath themselves; without an opaque
+            // background the rows show through the label.
+            .background(VTheme.Color.Layer.canvas)
             .accessibilityAddTraits(.isHeader)
     }
 

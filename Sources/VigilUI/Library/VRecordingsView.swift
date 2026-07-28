@@ -35,6 +35,11 @@ package struct VRecordingsView: View {
     /// What the rows and the scrubber can ask for.
     package let actions: VLibraryActions
 
+    /// The clip open in the player, if any. Local state: which clip is being previewed changes
+    /// nothing the app target needs to know about, and lifting it would make every row tap a round
+    /// trip through the window.
+    @State private var playing: VLibraryClip?
+
     // MARK: - Initialisation
 
     /// Creates the Recordings screen.
@@ -59,6 +64,11 @@ package struct VRecordingsView: View {
                             size: .sm,
                             action: actions.onOpenRecordingsFolder)
                 }
+            }
+
+            if let playing {
+                VClipPlayerView(clip: playing, onClose: { self.playing = nil })
+                    .frame(height: VLibraryMetrics.playerHeight)
             }
 
             archiveScrubber
@@ -121,7 +131,11 @@ package struct VRecordingsView: View {
                 ForEach(dayGroups) { group in
                     Section {
                         ForEach(group.items) { clip in
-                            VRecordingsRow(clip: clip, clock: state.clock, actions: actions)
+                            VRecordingsRow(clip: clip,
+                                           clock: state.clock,
+                                           isPlaying: playing?.id == clip.id,
+                                           actions: actions,
+                                           onPlay: { open(clip) })
                         }
                     } header: {
                         VLibraryDayHeader(day: group.day, clock: state.clock)
@@ -130,6 +144,12 @@ package struct VRecordingsView: View {
             }
             .padding(.bottom, VTheme.Space.lg)
         }
+    }
+
+    /// Opens a clip in the player, and tells the app so it can do anything else it wants to.
+    private func open(_ clip: VLibraryClip) {
+        playing = clip
+        actions.onPlayClip(clip)
     }
 
     /// Clips grouped into local days.
@@ -160,8 +180,14 @@ package struct VRecordingsRow: View {
     /// The clock its timestamp is rendered in.
     package let clock: TimelineClock
 
+    /// Whether this clip is the one open in the player.
+    package let isPlaying: Bool
+
     /// The handlers its controls call.
     package let actions: VLibraryActions
+
+    /// Opens this clip.
+    package let onPlay: () -> Void
 
     @State private var isHovering = false
 
@@ -173,10 +199,16 @@ package struct VRecordingsRow: View {
     ///   - clip: the clip to show.
     ///   - clock: the calendar and zone its start time is formatted in.
     ///   - actions: play, reveal and delete.
-    package init(clip: VLibraryClip, clock: TimelineClock, actions: VLibraryActions) {
+    package init(clip: VLibraryClip,
+                 clock: TimelineClock,
+                 isPlaying: Bool = false,
+                 actions: VLibraryActions = VLibraryActions(),
+                 onPlay: @escaping () -> Void = {}) {
         self.clip = clip
         self.clock = clock
+        self.isPlaying = isPlaying
         self.actions = actions
+        self.onPlay = onPlay
     }
 
     // MARK: - View
@@ -196,8 +228,9 @@ package struct VRecordingsRow: View {
         // fire over the text and nowhere else. The sidebar shipped exactly that bug once.
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
-        .onTapGesture { actions.onPlayClip(clip) }
+        .onTapGesture { onPlay() }
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isPlaying ? .isSelected : [])
     }
 
     // MARK: - Private Helpers
@@ -210,6 +243,16 @@ package struct VRecordingsRow: View {
         VTheme.Radius.shape(VTheme.Radius.sm)
             .fill(clip.camera.colour.opacity(Self.thumbnailTint))
             .frame(width: VLibraryMetrics.thumbnailWidth, height: VLibraryMetrics.thumbnailHeight)
+            .overlay {
+                if let poster = clip.thumbnail {
+                    Image(decorative: poster, scale: 1)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: VLibraryMetrics.thumbnailWidth,
+                               height: VLibraryMetrics.thumbnailHeight)
+                        .clipShape(VTheme.Radius.shape(VTheme.Radius.sm))
+                }
+            }
             .overlay {
                 if clip.isRecording {
                     // `VLiveDot` is a pulse wrapper around arbitrary content, not a status enum, and

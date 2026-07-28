@@ -9,6 +9,7 @@
 
 #if os(macOS)
 
+import CoreGraphics
 import Foundation
 import Observation
 import SwiftUI
@@ -93,6 +94,13 @@ final class MainWindowState {
 
     /// Clips found in the recordings folder, newest-first ordering applied by the screen.
     var clips: [VLibraryClip] = []
+
+    /// Poster frames already extracted, by file URL. Cached so re-reading the folder or scrolling
+    /// the list never decodes the same frame twice.
+    var posters: [URL: CGImage] = [:]
+
+    /// Clip durations already read, by file URL. Same reason.
+    var durations: [URL: Double] = [:]
 
     // MARK: - Transient
 
