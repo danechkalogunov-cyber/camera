@@ -863,9 +863,9 @@ struct MainWindowView: View {
                         isDeviceLoading: deviceInfo.isLoading,
                         isDeviceUnavailable: deviceInfo.isUnavailable,
                         stream: streamDescription,
-                        image: deviceInfo.image ?? InspectorImageSettings(),
                         statistics: telemetry.statistics,
                         recentStatistics: telemetry.recentStatistics,
+                        image: deviceInfo.image ?? InspectorImageSettings(),
                         recording: recordingState)
     }
 
