@@ -248,6 +248,7 @@ PENDING_OK = {
     "at the defaults.",
     "The camera refused to reset its picture settings: %@",
     "Connect a camera first",
+    "This camera has no reset command, so Vigil wrote the standard picture values instead.",
 }
 for key in sorted(en_keys):
     if key not in source_keys and key not in PENDING_OK:

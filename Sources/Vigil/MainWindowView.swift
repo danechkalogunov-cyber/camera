@@ -947,6 +947,11 @@ struct MainWindowView: View {
                 window.toast = MainWindowToast(
                     kind: .success,
                     message: Self.localized("Picture settings reset"))
+            case .documentedDefaults:
+                window.toast = MainWindowToast(
+                    kind: .info,
+                    message: Self.localized("This camera has no reset command, so Vigil wrote the "
+                                            + "standard picture values instead."))
             case .unchanged:
                 window.toast = MainWindowToast(
                     kind: .info,

@@ -207,6 +207,15 @@ enum ImageResetOutcome: Sendable, Hashable {
     /// The camera accepted it and its picture settings changed.
     case reset
 
+    /// The camera has no working reset command — it answered the device's own reset with the
+    /// carried reason — so Vigil wrote the documented default values through the sub-resources
+    /// instead, and those went through.
+    ///
+    /// Deliberately not folded into ``reset``. A device reset also restores the controls Vigil does
+    /// not model — exposure, white balance, gamma — and claiming one happened when it did not would
+    /// leave a user wondering why their exposure is still wrong.
+    case documentedDefaults(String)
+
     /// The camera accepted it and reported the same settings afterwards — which is the honest
     /// answer for a camera that was already sitting at its factory values.
     case unchanged
@@ -460,29 +469,37 @@ final class DeviceInfoService {
     /// `/Image/channels/{ch}/…` and the picture changes at the sensor, for everyone watching.
     /// ⚠️ That is also why "Adjust my view only" only *withholds* the write: honouring it properly
     /// needs a render-path adjustment stage that does not exist. Reported in ЧТО-НЕ-СДЕЛАНО.md.
-    func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) async {
-        guard let session else { return }
+    ///
+    /// - Returns: `false` when the device refused at least one of the nodes that changed. The panel
+    ///   ignores it — a refused write has already put the control back — but the reset fallback
+    ///   needs to know whether writing the standard values actually reached the camera.
+    @discardableResult
+    func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) async -> Bool {
+        guard let session else { return false }
         let previous = image ?? InspectorImageSettings()
         image = wanted
 
         guard !wanted.isLocalPreviewOnly else {
             logger.info(.isapi, "image write withheld: adjust-my-view-only is on")
-            return
+            return true
         }
+        var accepted = true
 
         if wanted.brightness != previous.brightness || wanted.contrast != previous.contrast
             || wanted.saturation != previous.saturation {
-            await apply(channel: channel) {
+            let ok = await apply(channel: channel) {
                 try await session.setImageColor(channel: channel,
                                                 brightness: wanted.brightness,
                                                 contrast: wanted.contrast,
                                                 saturation: wanted.saturation)
             }
+            accepted = accepted && ok
         }
         if wanted.sharpness != previous.sharpness {
-            await apply(channel: channel) {
+            let ok = await apply(channel: channel) {
                 try await session.setSharpness(channel: channel, wanted.sharpness)
             }
+            accepted = accepted && ok
         }
         if wanted.wdrMode != previous.wdrMode || wanted.wdrLevel != previous.wdrLevel {
             let mode: WDRSetting.Mode = switch wanted.wdrMode {
@@ -490,10 +507,11 @@ final class DeviceInfoService {
             case .off:  .close
             case .auto: .auto
             }
-            await apply(channel: channel) {
+            let ok = await apply(channel: channel) {
                 try await session.setWDR(channel: channel,
                                          WDRSetting(mode: mode, level: wanted.wdrLevel))
             }
+            accepted = accepted && ok
         }
         // `schedule` is deliberately not sent. `ISAPIDeviceSession.setIRCut` refuses it, because the
         // mode carries a switching schedule Vigil does not model and writing the mode alone would
@@ -506,7 +524,7 @@ final class DeviceInfoService {
             case .auto:     .auto
             case .schedule: .auto       // unreachable: excluded by the guard above
             }
-            await apply(channel: channel) {
+            let ok = await apply(channel: channel) {
                 // The two thresholds are `nil` on purpose. Every image write is a read-modify-write,
                 // so an omitted element keeps whatever the device already had — passing a guess here
                 // would overwrite the user's own night-to-day tuning with one.
@@ -515,6 +533,7 @@ final class DeviceInfoService {
                                                         nightToDayLevel: nil,
                                                         nightToDaySeconds: nil))
             }
+            accepted = accepted && ok
         }
         if wanted.irMode != previous.irMode || wanted.irLevel != previous.irLevel {
             // The panel's tri-state is two device fields. `off` closes the lamp; `auto` and `on`
@@ -524,9 +543,10 @@ final class DeviceInfoService {
                 mode: wanted.irMode == .off ? .close : .irLight,
                 regulation: wanted.irMode == .on ? .manual : .auto,
                 brightness: wanted.irLevel)
-            await apply(channel: channel) {
+            let ok = await apply(channel: channel) {
                 try await session.setSupplementLight(channel: channel, lamp)
             }
+            accepted = accepted && ok
         }
         if wanted.flip != previous.flip {
             let style: FlipSetting.Style? = switch wanted.flip {
@@ -535,13 +555,15 @@ final class DeviceInfoService {
             case .horizontal: .horizontal
             case .vertical:   .vertical
             }
-            await apply(channel: channel) {
+            let ok = await apply(channel: channel) {
                 // Switching off keeps the previous axis rather than clearing it, so turning the
                 // flip back on restores what the user chose instead of reverting to `CENTER`.
                 try await session.setFlip(channel: channel,
                                           FlipSetting(isEnabled: style != nil, style: style))
             }
+            accepted = accepted && ok
         }
+        return accepted
     }
 
     /// Restores the camera's factory picture settings and re-reads them.
@@ -555,6 +577,13 @@ final class DeviceInfoService {
     /// camera has accepted it, and several firmwares apply the values a moment later — so a single
     /// confirming read can legitimately still hold the old panel and make a successful reset look
     /// like a no-op.
+    ///
+    /// **The fallback, and why it is not cheating.** Plenty of firmwares answer this endpoint with
+    /// `statusCode 4 / invalidOperation` — the resource is documented (spec-isapi.md §17.2 row
+    /// "Defaults") but not implemented on that model. When that happens Vigil writes the documented
+    /// default values through the sub-resources that *do* work, which is what the button was asked
+    /// to achieve. It is announced as such rather than reported as a device reset, because the two
+    /// are not the same thing: a device reset also restores the controls Vigil does not model.
     @discardableResult
     func resetImage(channel: ChannelID) async -> ImageResetOutcome {
         guard let session else {
@@ -566,8 +595,8 @@ final class DeviceInfoService {
             try await session.resetImageDefaults(channel: channel)
         } catch {
             let reason = String(describing: error)
-            logger.error(.isapi, "image reset refused: \(reason)")
-            return .refused(reason)
+            logger.error(.isapi, "image reset refused by the device: \(reason)")
+            return await applyDocumentedDefaults(channel: channel, after: reason)
         }
         await loadImageSettings(channel: channel, force: true)
         if image != before {
@@ -584,17 +613,36 @@ final class DeviceInfoService {
         return .unchanged
     }
 
+    /// Writes the picture values the ISAPI specification gives as defaults.
+    ///
+    /// The set is `InspectorImageSettings()`'s own defaults, which are the documented ones:
+    /// brightness, contrast, saturation and sharpness at 50 (spec-isapi.md §17.2), WDR closed,
+    /// day/night automatic, the supplement lamp on automatic and no flip. `writeImage` already
+    /// sends only the nodes that differ and reconciles each with the device's answer, so a camera
+    /// that clamps a value still ends up showing what it actually kept.
+    private func applyDocumentedDefaults(channel: ChannelID,
+                                         after reason: String) async -> ImageResetOutcome {
+        let before = image
+        logger.info(.isapi, "writing the documented image defaults instead")
+        guard await writeImage(channel: channel, InspectorImageSettings()) else {
+            return .refused(reason)
+        }
+        return image == before ? .unchanged : .documentedDefaults(reason)
+    }
+
     /// Runs one image write and republishes whatever the device answers.
     ///
     /// On refusal the panel is put back to what the camera last reported, so a control cannot be
     /// left showing a value the device never accepted.
     private func apply(channel: ChannelID,
-                       _ write: () async throws -> ImageSettings) async {
+                       _ write: () async throws -> ImageSettings) async -> Bool {
         do {
             image = Self.inspectorImage(from: try await write())
+            return true
         } catch {
             logger.error(.isapi, "image write refused: \(String(describing: error))")
             await loadImageSettings(channel: channel, force: true)
+            return false
         }
     }
 

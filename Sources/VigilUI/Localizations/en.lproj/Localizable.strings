@@ -488,3 +488,4 @@
 "The camera accepted the reset and reported the same settings — its picture was already at the defaults." = "The camera accepted the reset and reported the same settings — its picture was already at the defaults.";
 "The camera refused to reset its picture settings: %@" = "The camera refused to reset its picture settings: %@";
 "Connect a camera first" = "Connect a camera first";
+"This camera has no reset command, so Vigil wrote the standard picture values instead." = "This camera has no reset command, so Vigil wrote the standard picture values instead.";
