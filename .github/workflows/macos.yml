@@ -1,0 +1,46 @@
+name: macos
+
+# The one that matters. Until this exists the only compiler in the project is one developer's Mac,
+# and every mistake in a macOS-only target — a missing AppKit method, a wrong SwiftUI signature, a
+# Swift 6 isolation error, a `private` member split across two files — costs a manual build cycle
+# to find. `Scripts/lint.py` encodes the ones that have already bitten; this catches the rest.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    # ⚠️ `macos-15`, where docs/API_CONTRACT.md §5 says `macos-14`. Package.swift is
+    # swift-tools-version 6.0 in language mode 6, which needs Xcode 16; the macos-14 image shipped
+    # Xcode 15 by default and the build would fail on the manifest before compiling a line. The
+    # deployment target is unchanged — Package.swift still says `.macOS(.v14)`, so the app still
+    # runs on Sonoma. This is only which machine compiles it.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Selected explicitly rather than trusting the image default, which changes without notice
+      # and has already been the difference between "Swift 6" and "not Swift 6".
+      - name: Select the newest Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      # Debug first: it is the configuration the tests run in, and it fails faster.
+      - name: Build
+        run: swift build
+
+      # 688 of these have never run. The first green run here is the single most informative event
+      # available to this project — see docs/BUILD-VERIFICATION.md.
+      - name: Test
+        run: swift test --parallel
+
+      - name: Release build
+        run: swift build -c release
+
+      - name: Assemble Vigil.app
+        run: Scripts/build-app.sh

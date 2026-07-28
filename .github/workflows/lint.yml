@@ -1,0 +1,23 @@
+name: lint
+
+# The cheap gate. Runs on Linux in seconds and catches the things that do not need a compiler:
+# forbidden constructs, line width, layering, cross-file `private`, and the localisation tables —
+# whose failure mode is silence rather than a build error.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static rules
+        run: python3 Scripts/lint.py
+
+      # Separate from the lint because a malformed .stringsdict does not break the build. It stops
+      # resolving, and the app shows a raw `%#@frames@` to a customer instead.
+      - name: Localisation tables
+        run: python3 Scripts/check-localizations.py

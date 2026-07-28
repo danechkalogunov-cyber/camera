@@ -1,0 +1,28 @@
+name: linux
+
+# Proves the portable half: the protocol, parsing and state-machine layers that carry the bulk of
+# this project's tests. Every macOS-only file is wrapped in `#if os(macOS)` and compiles to an empty
+# module here, so a green run says nothing about the app — that is what macos.yml is for.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⛔ The purity gate, and it runs FIRST on purpose. `VigilPure` is exactly the Foundation-only
+      # targets; if a platform framework import creeps into one, this fails here rather than at the
+      # bottom of a full build where the real cause is buried.
+      - name: Purity gate
+        run: swift build --product VigilPure
+
+      - name: Full package
+        run: swift build
+
+      - name: Portable tests
+        run: swift test --parallel
