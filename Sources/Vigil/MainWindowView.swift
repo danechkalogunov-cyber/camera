@@ -422,35 +422,57 @@ struct MainWindowView: View {
             window.clips = []
             return
         }
+        // Clips are NOT in this folder — they are under it. `RecordingNaming.defaultClipTemplate`
+        // is "{camera}/{yyyy}-{MM}-{dd}/{camera}_{HHmmss}_{trigger}", so the recorder creates two
+        // levels of directory per clip, and a flat `contentsOfDirectory` sees one subfolder and no
+        // media at all. That is what "0 of 1 entries" was reporting.
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
-        let listing = try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
-        guard let listing else {
+        guard let walker = FileManager.default.enumerator(
+            at: folder,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
             logger.error(.storage, "clip listing: cannot read \(folder.path)")
             window.clips = []
             return
         }
+
         let camera = VLibraryCamera(id: cameraID, name: identity.name)
-        window.clips = listing.compactMap { url -> VLibraryClip? in
-            // A clip still being written is `name.mp4.partial`, whose `pathExtension` is
-            // "partial" — filtering on the extension alone hid exactly the file the user is
-            // watching being recorded. RecordingNaming §253 documents both spellings.
+        var found: [VLibraryClip] = []
+        var seen = 0
+        for case let url as URL in walker {
+            seen += 1
+            // A clip still being written is `name.mp4.partial`, whose `pathExtension` is "partial",
+            // so testing the extension alone hides the file a user is watching get recorded.
             let name = url.lastPathComponent
             let isPartial = name.hasSuffix(".partial")
             let mediaName = isPartial ? String(name.dropLast(".partial".count)) : name
-            let mediaExtension = (mediaName as NSString).pathExtension.lowercased()
-            guard ["mp4", "mov"].contains(mediaExtension) else { return nil }
+            guard ["mp4", "mov"].contains((mediaName as NSString).pathExtension.lowercased()) else {
+                continue
+            }
             let values = try? url.resourceValues(forKeys: Set(keys))
-            return VLibraryClip(id: Self.stableID(for: url),
-                                camera: camera,
-                                startedAt: values?.contentModificationDate ?? Date(),
-                                durationSeconds: nil,
-                                byteCount: values?.fileSize.map(Int64.init),
-                                fileName: url.lastPathComponent,
-                                isRecording: isPartial)
+            guard values?.isRegularFile != false else { continue }
+            found.append(VLibraryClip(id: Self.stableID(for: url),
+                                      camera: camera,
+                                      startedAt: values?.contentModificationDate ?? Date(),
+                                      durationSeconds: nil,
+                                      byteCount: values?.fileSize.map(Int64.init),
+                                      fileName: Self.relativePath(of: url, under: folder),
+                                      isRecording: isPartial))
         }
-        logger.info(.storage,
-                    "clip listing: \(window.clips.count) of \(listing.count) entries in \(folder.path)")
+        window.clips = found
+        logger.info(.storage, "clip listing: \(found.count) clips of \(seen) entries under \(folder.path)")
+    }
+
+    /// The clip's path relative to the recordings root.
+    ///
+    /// Not the bare file name: the default template nests clips two directories deep, so the name
+    /// alone cannot be rebuilt into a URL and Reveal in Finder would select nothing. The row
+    /// truncates in the middle, which is the right place to lose a date folder.
+    private static func relativePath(of url: URL, under root: URL) -> String {
+        let full = url.standardizedFileURL.path
+        let base = root.standardizedFileURL.path
+        guard full.hasPrefix(base) else { return url.lastPathComponent }
+        return String(full.dropFirst(base.count).drop(while: { $0 == "/" }))
     }
 
     /// A UUID derived from the file's path, so a row keeps its identity across a refresh.
