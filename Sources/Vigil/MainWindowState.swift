@@ -89,6 +89,11 @@ final class MainWindowState {
     /// timer can only ever replace it, never mutate it half-way through a render.
     var cycle = VCycleModel()
 
+    // MARK: - Library
+
+    /// Clips found in the recordings folder, newest-first ordering applied by the screen.
+    var clips: [VLibraryClip] = []
+
     // MARK: - Transient
 
     /// The most recent advisory to show over the stage, or `nil` when there is nothing to say.

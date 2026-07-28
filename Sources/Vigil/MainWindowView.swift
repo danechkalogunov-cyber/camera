@@ -130,6 +130,8 @@ struct MainWindowView: View {
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
         .task(id: session.camera?.id) { loadDeviceInfo() }
+        // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
+        .task(id: recording.completed.count) { reloadClips() }
     }
 
     // MARK: - Overlays
@@ -369,7 +371,68 @@ struct MainWindowView: View {
     /// subscribed and no archive day has been loaded. That is not a placeholder standing in for real
     /// data — it is the truthful state, and each screen's empty state says what would fill it.
     private var libraryState: VLibraryState {
-        VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()))
+        VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()),
+                      clips: window.clips,
+                      recordingsFolder: Self.recordingsFolderLabel)
+    }
+
+    /// The recordings folder as a user would recognise it, for the empty state's "where would a clip
+    /// appear" answer. Abbreviated with a tilde rather than shown as a container path.
+    private static var recordingsFolderLabel: String? {
+        guard let folder = Self.recordingsFolder else { return nil }
+        return (folder.path as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// Where clips are written. `RecordingDestinationResolver` owns the real answer; this is the same
+    /// default location, used only for listing and revealing.
+    private static var recordingsFolder: URL? {
+        FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first?
+            .appending(path: "Vigil", directoryHint: .isDirectory)
+    }
+
+    /// Re-reads the clips folder into `window.clips`.
+    ///
+    /// Runs on appearance and every time a recording finishes, which is when the set can change. A
+    /// file still being written is listed with `isRecording` true rather than hidden, because hiding
+    /// it would make pressing Record look like it did nothing for as long as the clip ran.
+    private func reloadClips() {
+        guard let folder = Self.recordingsFolder else { return }
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        let listing = try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
+        guard let listing else {
+            window.clips = []
+            return
+        }
+        let camera = VLibraryCamera(id: cameraID, name: identity.name)
+        window.clips = listing.compactMap { url -> VLibraryClip? in
+            guard ["mp4", "mov"].contains(url.pathExtension.lowercased()) else { return nil }
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            let isPartial = url.lastPathComponent.hasSuffix(".partial")
+            return VLibraryClip(id: Self.stableID(for: url),
+                                camera: camera,
+                                startedAt: values?.contentModificationDate ?? Date(),
+                                durationSeconds: nil,
+                                byteCount: values?.fileSize.map(Int64.init),
+                                fileName: url.lastPathComponent,
+                                isRecording: isPartial)
+        }
+    }
+
+    /// A UUID derived from the file's path, so a row keeps its identity across a refresh.
+    ///
+    /// Hashing the path rather than minting a fresh UUID matters: `ForEach` would otherwise rebuild
+    /// every row on each reload, losing selection and restarting animations.
+    private static func stableID(for url: URL) -> UUID {
+        var hasher = Hasher()
+        hasher.combine(url.path)
+        let value = UInt64(bitPattern: Int64(hasher.finalize()))
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for index in 0..<8 { bytes[index] = UInt8((value >> (8 * UInt64(index))) & 0xFF) }
+        for index in 8..<16 { bytes[index] = bytes[index - 8] }
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+                           bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
+                           bytes[12], bytes[13], bytes[14], bytes[15]))
     }
 
     /// The library gestures the app can honour today.
@@ -380,6 +443,7 @@ struct MainWindowView: View {
     private var libraryActions: VLibraryActions {
         var actions = VLibraryActions()
         actions.onOpenRecordingsFolder = { openRecordingsFolder() }
+        actions.onRevealClip = { clip in revealClip(clip) }
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
         return actions
     }
@@ -389,6 +453,12 @@ struct MainWindowView: View {
     /// `RecordingDestination` owns where clips go; until the app drives it, the folder may not exist
     /// yet, and `activateFileViewerSelecting` on a missing path silently does nothing rather than
     /// failing — which is the right outcome for a button whose whole job is "show me where".
+    /// Reveals one clip in the Finder.
+    private func revealClip(_ clip: VLibraryClip) {
+        guard let folder = Self.recordingsFolder else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folder.appending(path: clip.fileName)])
+    }
+
     private func openRecordingsFolder() {
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)
         guard let folder = movies.first else { return }
@@ -457,7 +527,9 @@ struct MainWindowView: View {
     private var stageCameras: [VStageCamera] {
         [VStageCamera(camera: identity,
                       state: session.liveState,
-                      attemptStartedAt: session.attemptStartedAt)]
+                      attemptStartedAt: session.attemptStartedAt,
+                      isRecording: recording.isRecording,
+                      recordingElapsed: recording.elapsed())]
     }
 
     /// What the inspector shows.
