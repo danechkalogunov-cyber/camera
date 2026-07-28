@@ -64,7 +64,13 @@ final class ArchiveCoordinator {
         /// The device answered and has at least one enabled track on this channel.
         case present
 
-        /// The device answered and records nothing here. A bare IP camera with no card, usually.
+        /// The device answered the tracks query and offered nothing usable.
+        ///
+        /// ⛔ **Not** "the camera has no memory card." This says only that
+        /// `/ISAPI/ContentMgmt/record/tracks` returned no enabled track — which also happens on
+        /// firmware that does not implement the endpoint, and on a device that records to a card
+        /// it will not describe. Claiming the stronger fact was wrong: a camera reporting 75 %
+        /// storage in use is plainly writing somewhere.
         case none
 
         /// The device would not say, with its own reason.
@@ -177,6 +183,7 @@ final class ArchiveCoordinator {
         let found: [RecordTrack]
         do {
             found = try await session.recordTracks()
+            logger.info(.isapi, "recording tracks: \(found.count) listed")
         } catch {
             let reason = String(describing: error)
             logger.info(.isapi, "no recording tracks: \(reason)")
@@ -186,11 +193,32 @@ final class ArchiveCoordinator {
             return
         }
 
-        // Only this channel's tracks, and only the enabled ones. An NVR answers for every input,
-        // and drawing sixteen lanes for a window showing one camera is not a timeline.
-        let mine = found.filter { $0.channel == channel && $0.enabled }
+        // An NVR answers for every input, and drawing sixteen lanes for a window showing one camera
+        // is not a timeline — so prefer this channel's tracks.
+        let enabled = found.filter(\.enabled)
+        let onChannel = enabled.filter { $0.channel == channel }
+
+        // ⚠️ But the channel on a track is inferred, not given. `RecordTrack.list` reads `<Channel>`
+        // and falls back to `id / 100`, because Hikvision numbers a track `101` for channel 1's main
+        // stream. Plenty of single-channel cameras report `<id>1</id>` instead, which divides to
+        // channel **0** and matches nothing — so a camera that records perfectly well would report
+        // no tracks at all. When the filter empties a non-empty list, the filter is what is wrong:
+        // every track on a one-camera device belongs to that camera.
+        let mine: [RecordTrack]
+        if !onChannel.isEmpty {
+            mine = onChannel
+        } else if !enabled.isEmpty {
+            logger.info(.isapi, "recording tracks report channel "
+                + "\(enabled.map { String($0.channel.value) }.joined(separator: ",")) "
+                + "and the camera is channel \(channel.value); using them anyway")
+            mine = enabled
+        } else {
+            mine = []
+        }
+
         guard !mine.isEmpty else {
-            logger.info(.isapi, "channel \(channel.value) has no enabled recording track")
+            logger.info(.isapi, "the device listed \(found.count) recording track(s), "
+                + "none of them enabled")
             tracks = .none
             archive = nil
             return

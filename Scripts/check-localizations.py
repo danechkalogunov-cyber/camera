@@ -274,7 +274,7 @@ PENDING_OK = {
     "Snapshot saved",
     "The snapshot could not be taken: %@",
     "Diagnostics copied",
-    "This camera records nothing itself — no memory card and no recorder behind it. Vigil's own clips are listed below.",
+    "The camera did not list any recordings it can play back. Vigil's own clips are below.",
     "The camera would not list its recordings: %@",
     "Switching to the sub-stream — the picture will reconnect",
     "Switching to the main stream — the picture will reconnect",

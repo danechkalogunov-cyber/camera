@@ -785,11 +785,14 @@ struct MainWindowView: View {
             return
         case .none:
             window.hasExplainedArchive = true
+            // ⛔ Says what was observed, not what it implies. The earlier wording claimed the camera
+            // had no memory card — which was an invention: the Info tab was showing storage in use
+            // at the same moment. All that is actually known is that the tracks endpoint offered
+            // nothing, and firmware that simply does not implement it looks identical from here.
             window.toast = MainWindowToast(
                 kind: .info,
-                message: Self.localized("This camera records nothing itself — no memory card and "
-                                        + "no recorder behind it. Vigil's own clips are listed "
-                                        + "below."))
+                message: Self.localized("The camera did not list any recordings it can play back. "
+                                        + "Vigil's own clips are below."))
         case .refused(let reason):
             window.hasExplainedArchive = true
             window.toast = MainWindowToast(
