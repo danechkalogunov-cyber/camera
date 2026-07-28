@@ -299,7 +299,13 @@ struct MainWindowView: View {
                         codec: format.videoCodec,
                         parameterSets: format.parameterSets,
                         resolution: format.resolution,
-                        requestKeyframe: { })
+                        requestKeyframe: {
+                            // Not an empty closure. `ClipRecorder` asks for an IDR after five
+                            // seconds without one and gives up at fifteen, so leaving this unwired
+                            // meant a camera with a long GOP silently never started writing — the
+                            // recorder waiting for a keyframe nobody had asked for.
+                            Task { @MainActor in session.recoverStalledPicture() }
+                        })
     }
 
     /// Overflow entries with nothing behind them yet, dimmed rather than hidden.
@@ -410,7 +416,9 @@ struct MainWindowView: View {
     /// file still being written is listed with `isRecording` true rather than hidden, because hiding
     /// it would make pressing Record look like it did nothing for as long as the clip ran.
     private func reloadClips() {
+        let logger = session.dependencies.logger
         guard let folder = recording.clipsDirectory() else {
+            logger.error(.storage, "clip listing: no usable destination")
             window.clips = []
             return
         }
@@ -418,6 +426,7 @@ struct MainWindowView: View {
         let listing = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
         guard let listing else {
+            logger.error(.storage, "clip listing: cannot read \(folder.path)")
             window.clips = []
             return
         }
@@ -440,6 +449,8 @@ struct MainWindowView: View {
                                 fileName: url.lastPathComponent,
                                 isRecording: isPartial)
         }
+        logger.info(.storage,
+                    "clip listing: \(window.clips.count) of \(listing.count) entries in \(folder.path)")
     }
 
     /// A UUID derived from the file's path, so a row keeps its identity across a refresh.
