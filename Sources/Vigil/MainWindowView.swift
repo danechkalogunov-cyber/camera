@@ -817,6 +817,26 @@ struct MainWindowView: View {
         }
     }
 
+    /// Plays the camera's archive from an instant, or says why it cannot.
+    ///
+    /// Refuses a moment with no footage rather than seeking near it: spec-isapi.md §15.6 is explicit
+    /// that an arbitrary time with nothing recorded yields a 404 or a stream that ends at once, and
+    /// "there is nothing here" is a better answer than a picture that dies in a second.
+    private func playArchive(from instant: Date) {
+        guard let locator = archive.locator(at: instant) else {
+            window.toast = MainWindowToast(
+                kind: .info,
+                message: Self.localized("Nothing was recorded at that moment"))
+            return
+        }
+        Task { await session.playArchive(locator) }
+    }
+
+    /// Puts the picture back on the live stream.
+    private func returnToLive() {
+        Task { await session.returnToLive() }
+    }
+
     /// Loads a different day into the timeline.
     private func loadArchiveDay(_ day: TimelineDay) {
         archive.load(day: day,
@@ -1303,6 +1323,12 @@ struct MainWindowView: View {
                                  onScrub: { phase, instant in
                                      archive.movePlayhead(to: instant,
                                                           isScrubbing: phase != .ended)
+                                     // Only the release seeks. `VLibraryActions.onScrub` says so,
+                                     // and the reason is the device: every seek is a fresh RTSP
+                                     // session, and issuing one per drag tick would open and tear
+                                     // down a hundred of them at a camera that allows a handful.
+                                     guard phase == .ended else { return }
+                                     playArchive(from: instant)
                                  },
                                  onHoverInstant: { instant in archive.preview(at: instant) },
                                  onZoom: { stop in archive.zoom(stop) },
@@ -1314,7 +1340,13 @@ struct MainWindowView: View {
                                  },
                                  onStep: { seconds in archive.stepPlayhead(by: seconds) },
                                  onStepToEdge: { forward in archive.stepToEdge(forward: forward) },
-                                 onDismiss: { window.showsTimeline = false })
+                                 onDismiss: {
+                                     window.showsTimeline = false
+                                     // Closing the scrubber returns to live. A window left showing
+                                     // yesterday with no scrubber to say so is the worst state this
+                                     // feature can produce: the picture looks live and is not.
+                                     returnToLive()
+                                 })
         }
     }
 

@@ -13,6 +13,7 @@ import AppKit
 import Foundation
 
 import VigilCore
+import VigilISAPI
 import VigilProtocols
 import VigilRender
 import VigilUI
@@ -422,6 +423,46 @@ extension AppSessionModel {
                        // from the host — storing that one would make "Camera 192.168.1.64" look
                        // like a deliberate choice on the next launch.
                        name: camera.name).save(to: defaults)
+    }
+
+    /// Plays the archive from one instant, through the same decode path as the live picture.
+    ///
+    /// **A different URL, not a different pipeline.** Hikvision serves recorded video as an
+    /// ordinary RTSP stream on `/Streaming/tracks/{id}?starttime=…` (spec-isapi.md §15.6), and the
+    /// bytes that come back are the same H.264 or H.265 the live path already decodes. So this
+    /// restarts the session against the locator's address and everything downstream — depacketiser,
+    /// pipeline, display layer, recorder tap — is untouched.
+    ///
+    /// The address rides in `rtspPathOverride`, which `Camera.rtspPath(for:)` honours ahead of the
+    /// probe ladder. That is right on both counts: a playback URI must not be probed for, and the
+    /// ladder's learned live path must not be overwritten by it — `resolvedPath` is left alone, so
+    /// ``returnToLive()`` puts the session back on the path R1.2 paid for.
+    func playArchive(_ locator: PlaybackLocator) async {
+        guard let camera, let activeRef else { return }
+        var target = camera
+        target.rtspPathOverride = locator.rawQuery.isEmpty
+            ? locator.path
+            : locator.path + "?" + locator.rawQuery
+        playback = locator
+        dependencies.logger.info(.app, "playing the archive")
+        stopSession()
+        beginConnecting()
+        await stream(camera: target, ref: activeRef)
+    }
+
+    /// Returns the picture to the live stream.
+    ///
+    /// Restores the override the camera had before playback rather than clearing it: a user who set
+    /// an explicit RTSP path in the connect form must get that path back, not the probe ladder.
+    func returnToLive() async {
+        guard playback != nil, let camera, let activeRef else { return }
+        var target = camera
+        target.rtspPathOverride = resolvedPath
+        playback = nil
+        dependencies.logger.info(.app, "returning to the live stream")
+        stopSession()
+        beginConnecting()
+        await stream(camera: target, ref: activeRef)
     }
 
     /// Stores a renamed camera, so the name outlives the window.

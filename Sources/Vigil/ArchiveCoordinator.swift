@@ -91,6 +91,13 @@ final class ArchiveCoordinator {
     /// The day currently shown, so a repeat request for it is ignored.
     private var loadedDay: TimelineDay?
 
+    /// The device's own track behind the first lane.
+    ///
+    /// Kept because `VTimelineTrack.id` is a `UUID` derived from it and the derivation is one-way —
+    /// and playback addresses a `TrackID`, not a lane. Only the first: the scrubber draws one
+    /// camera, so the lane the playhead belongs to is the lane the picture came from.
+    private var primaryTrack: TrackID?
+
     // MARK: - Initialisation
 
     /// Creates a coordinator with nothing loaded.
@@ -109,8 +116,26 @@ final class ArchiveCoordinator {
         self.channel = channel
         archive = nil
         loadedDay = nil
+        primaryTrack = nil
         tracks = .unknown
         lastFailure = nil
+    }
+
+    /// The address to play from an instant, or `nil` when nothing was recorded there.
+    ///
+    /// **No `endtime`.** spec-isapi.md §15.6 calls that "play to the end of available footage",
+    /// which is what a scrub release means — the user picked a moment and wants it to run on, not
+    /// to stop at a segment boundary they cannot see. Stopping at the segment's own end would also
+    /// make a recording that spans two files halt in the middle for no reason the user can name.
+    ///
+    /// Refuses an instant in a gap rather than seeking near it. §15.6 is explicit that an arbitrary
+    /// time with no footage yields a 404 or a stream that ends immediately, and the honest answer
+    /// to "play here" when there is nothing here is to say so.
+    func locator(at instant: Date) -> PlaybackLocator? {
+        guard let track = primaryTrack,
+              let index = archive?.tracks.first?.index,
+              index.containing(instant) != nil else { return nil }
+        return PlaybackLocator(track: track, start: instant, end: nil)
     }
 
     /// Loads one day's index, unless it is already the day on screen.
@@ -273,6 +298,7 @@ final class ArchiveCoordinator {
         }
         tracks = .present
 
+        primaryTrack = mine.first?.id
         var built: [VTimelineTrack] = []
         for (position, track) in mine.enumerated() {
             guard !Task.isCancelled else { return }

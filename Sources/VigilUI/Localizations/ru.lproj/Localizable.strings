@@ -526,3 +526,6 @@
 /* REC TAB — what is on disk */
 "On this Mac" = "На этом Mac";
 "Oldest clip" = "Самый старый ролик";
+
+/* ARCHIVE PLAYBACK */
+"Nothing was recorded at that moment" = "В этот момент ничего не записано";

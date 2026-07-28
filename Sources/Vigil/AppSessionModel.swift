@@ -13,6 +13,7 @@ import Foundation
 import Observation
 
 import VigilCore
+import VigilISAPI
 import VigilProtocols
 import VigilRender
 import VigilUI
@@ -181,6 +182,14 @@ final class AppSessionModel {
 
     /// Set by the "Try Port 8554" remedy, and only by it.
     var rtspPort: Int = 554
+
+    /// The archive address being played, or `nil` when the picture is live.
+    ///
+    /// Published so the window can say which of the two the user is looking at. A recorded stream
+    /// and a live one are pixel-identical on screen and arrive through exactly the same decode
+    /// path — without this the app would have no way to tell the user which they are watching, and
+    /// neither would the user.
+    var playback: PlaybackLocator?
 
     /// Whether the launch-time resume has already been attempted.
     var hasResumed = false

@@ -250,12 +250,34 @@ public extension Camera {
 
     /// The stream URL for an explicit path. Used by the probe ladder, which owns the path it is
     /// testing rather than taking it from the record it is about to fill in.
+    /// - Parameter path: a path, optionally with a query — `/Streaming/tracks/101?starttime=…`.
+    ///
+    /// **The query is split out rather than left in the path**, and that is load-bearing for
+    /// playback. `RTSPURL.formWithoutQuery` is rung 1 of the Digest URI-fallback ladder
+    /// (spec-rtsp.md §6.8): some firmware hashes `uri=` without the query, and the ladder only
+    /// works if `RTSPURL` knows which part *is* the query. Leaving `?starttime=…` inside `path`
+    /// produces a string that looks right, authenticates on most cameras, and fails with an endless
+    /// 401 loop on the ones the ladder exists for — the classic "playback works on some cameras"
+    /// bug spec-isapi.md §15.6 warns about.
     func rtspURL(path: String) -> RTSPURL {
-        RTSPURL(scheme: transport == .tcpTLS ? "rtsps" : "rtsp",
-                host: host,
-                port: rtspPort,
-                path: path,
-                isIPv6Literal: host.contains(":"))
+        let (bare, query) = Self.splitQuery(path)
+        return RTSPURL(scheme: transport == .tcpTLS ? "rtsps" : "rtsp",
+                       host: host,
+                       port: rtspPort,
+                       path: bare,
+                       query: query,
+                       isIPv6Literal: host.contains(":"))
+    }
+
+    /// Everything before the first `?`, and the query without it.
+    ///
+    /// Not `URLComponents`: it rejects `rtsp://h/a?b=1;c=2`, which Hikvision emits, and has been
+    /// observed to reorder query items — and spec-isapi.md §15.6 rule 2 requires the query to be
+    /// passed through verbatim.
+    private static func splitQuery(_ path: String) -> (path: String, query: String?) {
+        guard let mark = path.firstIndex(of: "?") else { return (path, nil) }
+        let query = String(path[path.index(after: mark)...])
+        return (String(path[..<mark]), query.isEmpty ? nil : query)
     }
 
     /// Filesystem-safe name used for folders, diagnostics and file names.
