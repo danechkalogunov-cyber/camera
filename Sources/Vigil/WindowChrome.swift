@@ -81,10 +81,20 @@ enum WindowChrome {
         else {
             return nil
         }
-        let origin = baseline ?? container.frame.origin
-        container.setFrameOrigin(CGPoint(x: 20 - 7, y: origin.y - 10))
-        container.superview?.needsLayout = true
-        return origin
+        // Deliberately does not move them any more.
+        //
+        // It used to set the container's origin directly, to centre the buttons in a 52 pt bar. Two
+        // problems, both seen: the offset was measured against a baseline captured once, and AppKit
+        // re-lays the buttons out on every full-screen transition — so after one the stored baseline
+        // was stale and the buttons drifted. And the horizontal nudge to x = 13 put them under the
+        // toolbar's own reserved inset, so they collided with the sidebar toggle.
+        //
+        // Two systems computing the same geometry from different constants cannot stay in agreement.
+        // AppKit owns the buttons' position now, and `VToolbarView.trafficLightInset` is the single
+        // place that says how much room to leave for them. The buttons sit where every other Mac app
+        // puts them, and nothing can drift because nothing is being moved.
+        _ = baseline
+        return container.frame.origin
     }
 
     /// `NSWindow` frame autosave name, so the window comes back where the user left it.

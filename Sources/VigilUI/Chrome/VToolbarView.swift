@@ -39,16 +39,20 @@ package enum VToolbarMetrics {
     /// A standard window button is 14 pt across.
     private static let trafficLightDiameter: CGFloat = 14
 
-    /// The leading inset that clears the traffic lights, 79 pt.
+    /// The leading inset that clears the traffic lights.
     ///
     /// `WindowChrome.applyTrafficLightInset(to:baseline:)` puts the close button's centre at
     /// `VTheme.Metrics.trafficLightLeading` 20 pt, and the other two follow at 20 pt intervals, so
     /// the zoom button's trailing edge is 20 + 2 × 20 + 7 = 67 pt. The first toolbar control starts
     /// one `space.md` after that.
     package static var trafficLightInset: CGFloat {
+        // Past the rightmost button's trailing *edge*, plus a gap. The old formula added half a
+        // diameter, which lands on that button's centre-plus-radius — its edge exactly — so the
+        // sidebar toggle began where the zoom button ended and the two appeared to touch.
         VTheme.Metrics.trafficLightLeading
             + 2 * trafficLightSpacing
-            + trafficLightDiameter / 2
+            + trafficLightDiameter
+            + VTheme.Space.md
             + VTheme.Space.md
     }
 
