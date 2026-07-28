@@ -140,9 +140,9 @@ struct MainWindowView: View {
 
                 stageRoute
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // One place, and it reaches both the tile stage and the focused camera —
-                    // which is the whole reason this is an environment value rather than an
-                    // argument threaded through three initialisers.
+                    // One place, and it reaches every tile on the stage — which is the whole
+                    // reason this is an environment value rather than an argument threaded through
+                    // three initialisers.
                     .vShowsVideoOverlay(window.showsVideoOverlay)
                     .vTileActions(tileActions)
 
@@ -577,25 +577,21 @@ struct MainWindowView: View {
     private func activateInSidebar(_ selection: VSidebarSelection) {
         window.sidebarSelection.select(selection)
         guard case .camera(let id) = selection else { return }
-        openCamera(id)
+        focusCamera(id)
     }
 
-    /// Opens one camera across the stage, and gives it the sidebar's width.
+    /// Brings the window to one camera.
     ///
-    /// Collapsing the panel is the point of the gesture: "open this camera" means *show me more of
-    /// it*, and a full-bleed picture next to an unchanged list is barely different from the tile it
-    /// replaced. What the panel was doing is remembered so closing puts it back — a user who had
-    /// hidden it themselves must not find it restored by an unrelated action.
-    private func openCamera(_ id: CameraID) {
-        window.sidebarWasVisible = window.isSidebarVisible
-        window.isSidebarVisible = false
-        window.focusedCamera = id
-    }
-
-    /// Returns to the tile stage and restores the panel to whatever it was.
-    private func closeFocusedCamera() {
-        window.focusedCamera = nil
-        window.isSidebarVisible = window.sidebarWasVisible
+    /// **A layout change, not a different screen.** The stage already knows how to show a single
+    /// camera — that is `.single` — so opening one selects it, switches the grid, and puts the
+    /// inspector away to give the picture the width. The camera list stays: it is how you get to
+    /// the next camera, and hiding it would make the gesture feel like leaving the app rather than
+    /// looking closer. An earlier attempt built a separate full-bleed surface for this and it read
+    /// as a second window opening, which is the opposite of what was wanted.
+    private func focusCamera(_ id: CameraID) {
+        window.sidebarSelection.select(.camera(id))
+        selectLayout(.single)
+        window.isInspectorVisible = false
     }
 
     /// Moves the focused camera one row up or down the *visible* list.
@@ -623,7 +619,7 @@ struct MainWindowView: View {
     /// cameras is a row nobody can learn.
     private var tileActions: VTileActions {
         var actions = VTileActions()
-        actions.enabled = [.snapshot, .record, .ptz, .quality, .fit]
+        actions.enabled = [.snapshot, .record, .ptz, .quality, .fit, .timeline]
         actions.isFilled = window.fillsTile
         actions.perform = { action in
             switch action {
@@ -634,6 +630,11 @@ struct MainWindowView: View {
                 window.inspectorTab = .ptz
             case .quality:  cycleStreamQuality()
             case .fit:      window.fillsTile.toggle()
+            case .timeline:
+                // Brings the window to the same one-camera shape first: a scrubber over a 4 × 4
+                // grid would be a control for a camera the user has not said they are looking at.
+                focusCamera(cameraID)
+                window.showsTimeline = true
             case .mute, .close:
                 break
             }
@@ -780,41 +781,9 @@ struct MainWindowView: View {
     private var stageRoute: some View {
         if let section = VLibrarySection(window.sidebarSelection.focus) {
             VLibraryScreen(section: section, state: libraryState, actions: libraryActions)
-        } else if window.focusedCamera != nil {
-            focusedCamera
         } else {
             stage
         }
-    }
-
-    /// One camera, full bleed, with the archive timeline at the bottom edge.
-    ///
-    /// Opened by activating a camera row — a double-click, or a click on the row that is already
-    /// selected. That is UX.md §4.3's "open the row", and it is the gesture that means *look at this
-    /// one* rather than *select this one*.
-    private var focusedCamera: some View {
-        CameraFocusView(archive: archive.archive,
-                        clock: libraryClock,
-                        video: {
-                            VideoTile(cameraID: cameraID,
-                                      frames: session.frames,
-                                      logger: session.dependencies.logger,
-                                      onKeyframeNeeded: { session.recoverStalledPicture() },
-                                      onDecodeFailure: { session.handleDecodeFailure($0) },
-                                      onFramesDropped: {
-                                          session.handleFramesDropped($0, reason: $1)
-                                      })
-                        },
-                        onSelectDay: { day in loadArchiveDay(day) },
-                        onScrub: { phase, instant in
-                            archive.movePlayhead(to: instant, isScrubbing: phase != .ended)
-                        },
-                        onZoom: { stop in archive.zoom(stop) },
-                        onActivateMarker: { cluster in
-                            guard let first = cluster.markers.first else { return }
-                            archive.movePlayhead(to: first.instant, isScrubbing: false)
-                        },
-                        onClose: { closeFocusedCamera() })
     }
 
     /// Loads a different day into the timeline.
@@ -841,7 +810,7 @@ struct MainWindowView: View {
                       // surface — a video canvas with the scrubber beneath it — and putting it in
                       // this *list* screen sat a scrubber on a light canvas between a row of legend
                       // chips and a table of files. Recordings lists what is on this Mac; reviewing
-                      // footage happens on the focused camera, where `CameraFocusView` mounts it.
+                      // footage happens over the picture, where `StageTimelineOverlay` mounts it.
                       archive: nil,
                       recordingsFolder: recordingsFolderLabel)
     }
@@ -856,7 +825,7 @@ struct MainWindowView: View {
 
     /// What decides the archive is worth reading: the screen being open, and for which camera.
     private var archiveTrigger: String {
-        let isOpen = window.focusedCamera != nil
+        let isOpen = window.showsTimeline
         return "\(isOpen)/\(session.camera?.id.rawValue.uuidString ?? "-")"
             + "/\(deviceInfo.session == nil ? 0 : 1)"
     }
@@ -870,7 +839,7 @@ struct MainWindowView: View {
     /// opens would be nagging about a fact that has not changed.
     private func loadArchive() async {
         archive.follow(session: deviceInfo.session, channel: session.camera?.channel)
-        guard window.focusedCamera != nil else { return }
+        guard window.showsTimeline else { return }
         let clock = libraryClock
         let day = archive.archive?.day ?? clock.day(containing: clock.now)
         archive.load(day: day,
@@ -1218,11 +1187,38 @@ struct MainWindowView: View {
     /// every callback and the logger are named explicitly, because each one has a default that
     /// compiles and reports nothing, which is the "no video, no error" shape this project refuses.
     private var stage: some View {
+        stageGrid.overlay(alignment: .bottom) { timelineOverlay }
+    }
+
+    /// The scrubber over the bottom edge, once it has been asked for.
+    @ViewBuilder
+    private var timelineOverlay: some View {
+        if window.showsTimeline {
+            StageTimelineOverlay(archive: archive.archive,
+                                 clock: libraryClock,
+                                 onSelectDay: { day in loadArchiveDay(day) },
+                                 onScrub: { phase, instant in
+                                     archive.movePlayhead(to: instant,
+                                                          isScrubbing: phase != .ended)
+                                 },
+                                 onZoom: { stop in archive.zoom(stop) },
+                                 onActivateMarker: { cluster in
+                                     // A cluster is one or more markers at the same x; the earliest
+                                     // is what the badge is anchored on.
+                                     guard let first = cluster.markers.first else { return }
+                                     archive.movePlayhead(to: first.instant, isScrubbing: false)
+                                 },
+                                 onDismiss: { window.showsTimeline = false })
+        }
+    }
+
+    private var stageGrid: some View {
         VGridStageView(assignment: stageAssignment,
                        cameras: stageCameras,
                        selection: cameraID,
                        onRetry: { _ in session.perform(.retry) },
                        onRemedy: { _, remedy in session.perform(remedy) },
+                       onToggleFullscreen: { id in focusCamera(id) },
                        video: { _ in
                            VideoTile(cameraID: cameraID,
                                      frames: session.frames,

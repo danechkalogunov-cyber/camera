@@ -38,6 +38,14 @@ package enum VTileAction: String, Sendable, Hashable, CaseIterable, Identifiable
     /// Aspect fit ↔ fill.
     case fit
 
+    /// Open the archive timeline for this camera.
+    ///
+    /// ⚠️ An eighth button, where UX.md §5.3 fixes seven. It is here because the timeline needs a
+    /// way in from the picture and the plan's own answer — a separate Playback *scene* (§1.2) —
+    /// does not exist yet. When that window lands this button becomes the thing that opens it, so
+    /// the affordance stays and only its destination changes.
+    case timeline
+
     /// Clear the cell.
     case close
 
@@ -58,6 +66,7 @@ package enum VTileAction: String, Sendable, Hashable, CaseIterable, Identifiable
         case .ptz:      return .ptzPad
         case .quality:  return .mainstream
         case .fit:      return isFilled ? .aspectFit : .aspectFill
+        case .timeline: return .clock
         case .close:    return .close
         }
     }
@@ -71,6 +80,7 @@ package enum VTileAction: String, Sendable, Hashable, CaseIterable, Identifiable
         case .ptz:      return "PTZ"
         case .quality:  return "Stream quality"
         case .fit:      return "Fit or fill"
+        case .timeline: return "Timeline"
         case .close:    return "Close"
         }
     }
@@ -208,6 +218,15 @@ package enum VTileActionMetrics {
 
     /// Between buttons.
     package static let spacing: CGFloat = 4
+
+    /// How wide the whole row is, buttons plus gaps plus its own padding.
+    ///
+    /// Computed rather than written down, so adding a button cannot leave the tile's "does it fit"
+    /// test measuring against a stale number.
+    package static var width: CGFloat {
+        let count = CGFloat(VTileAction.allCases.count)
+        return count * hit + (count - 1) * spacing + VTheme.Space.xs * 2
+    }
 }
 
 #endif  // os(macOS)

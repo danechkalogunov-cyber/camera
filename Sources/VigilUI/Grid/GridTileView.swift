@@ -130,12 +130,18 @@ package struct VGridTileView<Video: View>: View {
                       onRetry: onRetry,
                       onRemedy: onRemedy,
                       video: video)
+            // The picture is inset by the widest stroke this tile can draw, so the frame contains
+            // it instead of sitting on top of it. Without this the video runs to the outer edge and
+            // the recording border is painted over the last three points of the image — which reads
+            // exactly as "the picture is slightly too big for its frame", because it is.
+            .padding(VTheme.Border.recording)
             // The well is clipped on the layer, not by a SwiftUI `clipShape` over the video — a
             // clip on this subtree would force the tile offscreen and break the display layer's
             // direct composition (see the header of VigilRender/Interop/VideoTile.swift).
             .overlay(alignment: .topTrailing) { statsReadout }
             .overlay(alignment: .bottomLeading) { elapsedReadout }
             .overlay(alignment: .bottomTrailing) { actionBar }
+            .background { sizeReader }
             .overlay { cornerCover }
             .overlay { borders }
             .onHover { hovering in
@@ -162,6 +168,9 @@ package struct VGridTileView<Video: View>: View {
 
     /// What the hover buttons do. Supplied by the app through the environment.
     @Environment(\.vTileActions) private var tileActions
+
+    /// The tile's measured size. See ``sizeReader``.
+    @State private var size: CGSize = .zero
 
     /// The top-trailing telemetry, on a `scrim.base` pill and never on a material.
     ///
@@ -198,10 +207,34 @@ package struct VGridTileView<Video: View>: View {
     /// wall of tiles each wearing seven buttons is not a wall of pictures.
     @ViewBuilder
     private var actionBar: some View {
-        if showsOverlay, isHovering || isFocused {
+        if showsOverlay, hasRoomForActions, isHovering || isFocused {
             VTileActionBar(isRecording: isRecording, actions: tileActions)
                 .padding(VTheme.Metrics.tileChromeInset)
                 .transition(.opacity)
+        }
+    }
+
+    /// Whether the tile is wide enough to carry the button row.
+    ///
+    /// The bar and the camera-name chip share the bottom edge from opposite ends, so on a narrow
+    /// tile they meet in the middle and overlap. The buttons are what goes: the name answers "which
+    /// camera is this", which is the question a wall of small tiles exists to answer, and the
+    /// actions are all reachable from the tile's menu and the palette.
+    private var hasRoomForActions: Bool {
+        size.width >= VGridTileMetrics.actionBarMinimumWidth
+            && size.height >= VGridTileMetrics.actionBarMinimumHeight
+    }
+
+    /// The tile's measured size, for the responsive decisions above.
+    ///
+    /// Measured rather than derived from the layout: a 2 × 2 grid in a narrow window and a 4 × 4 in
+    /// a wide one can produce the same tile size, so the grid's shape is not the question — the
+    /// number of points actually available is.
+    private var sizeReader: some View {
+        GeometryReader { proxy in
+            SwiftUI.Color.clear
+                .onAppear { size = proxy.size }
+                .onChange(of: proxy.size) { _, updated in size = updated }
         }
     }
 
@@ -370,6 +403,28 @@ package struct FrameDimensions: Sendable, Hashable {
     package var label: String {
         "\(width)×\(height)"
     }
+}
+
+// MARK: - VGridTileMetrics
+
+/// Sizes the tile decides with.
+package enum VGridTileMetrics {
+
+    /// Below this width the button row is dropped.
+    ///
+    /// The row's own width, plus room for the camera-name chip beside it and the chrome inset at
+    /// both ends. Narrower than this and the two overlap in the middle.
+    package static var actionBarMinimumWidth: CGFloat {
+        VTileActionMetrics.width + VGridTileMetrics.nameChipReserve
+            + VTheme.Metrics.tileChromeInset * 2
+    }
+
+    /// Below this height the row is dropped too: a very short tile puts the buttons over the
+    /// picture's only usable band.
+    package static let actionBarMinimumHeight: CGFloat = 160
+
+    /// Room kept for the camera-name chip at the other end of the same edge.
+    package static let nameChipReserve: CGFloat = 120
 }
 
 // MARK: - VTileStatsView

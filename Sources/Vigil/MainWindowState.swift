@@ -111,17 +111,13 @@ final class MainWindowState {
     /// sheets at once" unrepresentable instead of merely unlikely.
     var sheet: MainWindowSheet?
 
-    /// The camera opened full-bleed for review, or `nil` when the stage is showing tiles.
+    /// Whether the archive scrubber is laid over the bottom of the stage.
     ///
-    /// UX.md §1.2 gives playback its own scene; until that window exists this is the route inside
-    /// the main window that puts the picture and the timeline where §7.1 draws them.
-    var focusedCamera: CameraID?
-
-    /// What the sidebar was doing before a camera was opened full-bleed.
-    ///
-    /// Opening a camera collapses the panel; closing restores this rather than simply showing it,
-    /// so a user who had hidden the panel themselves does not find it back for no reason.
-    var sidebarWasVisible = true
+    /// Opening a camera is a layout change — `.single` with the inspector away — and this is the
+    /// separate question of whether that camera's recordings are being reviewed. They are separate
+    /// because looking closely at a live picture and scrubbing yesterday are different intents, and
+    /// one gesture should not commit the user to the other.
+    var showsTimeline = false
 
     /// Whether the picture fills its tile rather than fitting inside it.
     ///
