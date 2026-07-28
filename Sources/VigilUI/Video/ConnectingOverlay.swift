@@ -118,7 +118,7 @@ package struct ConnectingOverlay: View {
                           onVideo: true)
             Text(verbatim: camera.name)
                 .vType(VTheme.Typography.title3)
-                .foregroundStyle(VTheme.Color.Text.primary)
+                .foregroundStyle(VTheme.Color.Text.onVideo)
             narrationBlock
             if isSlow {
                 slowRow

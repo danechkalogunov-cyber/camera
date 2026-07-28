@@ -182,6 +182,20 @@ extension VTheme.Color.Text {
     /// Ink on a warm or green fill. Warm and green fills always take ink text, never white:
     /// `text.inverse` on `warn`/`motion`/`ok` measures 13.69 / 9.51 / 10.21.
     public static let inverse = SwiftUI.Color(light: 0xFFFFFF, dark: 0x0B0C0F)
+
+    /// Text sitting on a scrim over video. **The same colour in both appearances**, on purpose.
+    ///
+    /// ⛔ Do not substitute ``primary`` here. `Scrim.base` is black α 0.62 and its documented
+    /// 5.20:1 was measured "over an all-white frame" — over a *bright* picture, where dark ink
+    /// reads. Over a dark one, and over the black letterbox bars a 16:9 stream leaves in a taller
+    /// tile, black α 0.62 composites to near-black and `primary`'s light-appearance `#14161A`
+    /// disappears entirely. That was a real, reported defect: the camera-name and LIVE chips were
+    /// invisible on the letterbox.
+    ///
+    /// A fixed near-white is the only value that survives both extremes: over an all-white frame
+    /// the scrim composites to `#616161`, giving 5.3:1, and over black it is white on black.
+    /// Appearance must not enter into it — the surface underneath is the video, not the app.
+    public static let onVideo = SwiftUI.Color(light: 0xF2F4F8, dark: 0xF2F4F8)
 }
 
 // MARK: - Stroke

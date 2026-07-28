@@ -70,7 +70,7 @@ package struct OfflineOverlay: View {
             glyph
             title
                 .vType(VTheme.Typography.headline)
-                .foregroundStyle(VTheme.Color.Text.primary)
+                .foregroundStyle(VTheme.Color.Text.onVideo)
                 .multilineTextAlignment(.center)
             subtitle
                 .vType(VTheme.Typography.caption1Numeric)

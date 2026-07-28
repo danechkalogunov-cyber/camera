@@ -102,7 +102,7 @@ package struct VChip<Content: View>: View {
 
     private var foreground: SwiftUI.Color {
         switch style {
-        case .onVideo: return VTheme.Color.Text.primary
+        case .onVideo: return VTheme.Color.Text.onVideo
         case .neutral: return VTheme.Color.Text.secondary
         case .selected: return VTheme.Color.Semantic.accent
         }

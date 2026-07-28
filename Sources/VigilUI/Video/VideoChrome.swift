@@ -116,7 +116,7 @@ package struct DegradedBanner: View {
                 .accessibilityHidden(true)
             cause.message
                 .vType(VTheme.Typography.caption1Numeric)
-                .foregroundStyle(VTheme.Color.Text.primary)
+                .foregroundStyle(VTheme.Color.Text.onVideo)
                 .lineLimit(1)
             Spacer(minLength: VTheme.Space.xs)
             if let remedy = cause.remedy {

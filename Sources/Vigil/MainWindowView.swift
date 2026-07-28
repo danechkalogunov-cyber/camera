@@ -1173,6 +1173,15 @@ struct MainWindowView: View {
                        video: { _ in
                            VideoTile(cameraID: cameraID,
                                      frames: session.frames,
+                                     // The picture rounds itself. `GridTileView` draws its border
+                                     // as a 20 pt rounded stroke but deliberately does not
+                                     // `clipShape` the video — a SwiftUI clip over that subtree
+                                     // would break the display layer's direct composition — so the
+                                     // radius has to reach the layer, and this is the only way it
+                                     // does. Left at the default 0, the video's square corners
+                                     // simply overhang the frame.
+                                     options: TileRenderOptions(
+                                         cornerRadiusPt: VTheme.Radius.xl),
                                      logger: session.dependencies.logger,
                                      onKeyframeNeeded: { session.recoverStalledPicture() },
                                      onDecodeFailure: { session.handleDecodeFailure($0) },

@@ -170,7 +170,7 @@ package struct VGridTileView<Video: View>: View {
         if isRecording, let recordingElapsed {
             Text(verbatim: VTileStats.timecode(recordingElapsed))
                 .vType(VTheme.Typography.monoLarge.numeric)
-                .foregroundStyle(VTheme.Color.Text.primary)
+                .foregroundStyle(VTheme.Color.Text.onVideo)
                 .vReserved(VTheme.Typography.Reserved.timecode, alignment: .leading)
                 .padding(.horizontal, VTheme.Space.xs)
                 .padding(.vertical, VTheme.Space.xxs)
@@ -381,7 +381,7 @@ package struct VTileStatsView: View {
                                value: pulsePhase)
                 Text("REC", bundle: .vigilUI)
                     .vType(VTheme.Typography.caption2)
-                    .foregroundStyle(VTheme.Color.Text.primary)
+                    .foregroundStyle(VTheme.Color.Text.onVideo)
             }
         }
     }
