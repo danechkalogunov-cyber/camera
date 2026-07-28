@@ -408,6 +408,10 @@ package struct FrameDimensions: Sendable, Hashable {
 // MARK: - VGridTileMetrics
 
 /// Sizes the tile decides with.
+///
+/// ⛔ `@MainActor` for the same reason as ``VTileActionMetrics``: the theme namespaces these read
+/// are main-actor isolated, so a nonisolated static cannot touch them.
+@MainActor
 package enum VGridTileMetrics {
 
     /// Below this width the button row is dropped.

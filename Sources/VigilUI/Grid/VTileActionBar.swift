@@ -211,6 +211,11 @@ package struct VTileActionBar: View {
 // MARK: - VTileActionMetrics
 
 /// The bar's sizes, from §5.3.
+///
+/// ⛔ `@MainActor`, because `VTheme.Space` and `VTheme.Metrics` are — every theme namespace is
+/// declared that way in `VTheme.swift`. A nonisolated static that reads one does not compile, and
+/// the error surfaces only on a Mac: `VigilUI` is never built on Linux.
+@MainActor
 package enum VTileActionMetrics {
 
     /// The hit target. The glyph inside it is `Icon.sm`.

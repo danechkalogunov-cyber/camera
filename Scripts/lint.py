@@ -139,6 +139,10 @@ STATIC_STORED = re.compile(
     r"^\s*(?:public |package |internal |private |fileprivate )?static\s+(let|var)\s+(\w+)")
 
 
+TYPE_DECL = re.compile(
+    r"^\s*(?:package |public |private |internal |fileprivate )?(?:final )?"
+    r"(?:struct|enum|class|actor)\s+(\w+)")
+
 def check_static_stored_in_generic(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     """Swift forbids static STORED properties in a generic type. Computed ones are fine.
 
@@ -213,6 +217,79 @@ def check_environment_key_isolation(path: pathlib.Path, lines: list[str]) -> lis
                         "protocol requirement is nonisolated, so a main-actor-isolated property "
                         "cannot witness it (#ConformanceIsolation). Drop the attribute; a computed "
                         "'static var defaultValue' needs no isolation and no Sendable conformance."))
+    return out
+
+
+ISOLATED_THEME = re.compile(r"@MainActor\s+public enum\s+(\w+)")
+
+
+def isolated_theme_namespaces() -> set[str]:
+    """The theme namespaces declared `@MainActor`, read from VTheme.swift rather than listed here.
+
+    Listing them would rot the moment one is added or an isolation is dropped, and a rule that
+    describes the code inaccurately is worse than no rule.
+    """
+    source = ROOT / "Sources/VigilUI/Theme/VTheme.swift"
+    if not source.exists():
+        return set()
+    return set(ISOLATED_THEME.findall(source.read_text()))
+
+
+def check_theme_isolation(path: pathlib.Path, lines: list[str]) -> list[Violation]:
+    """Defect 6: a nonisolated static that reads an @MainActor theme namespace does not compile.
+
+    `VTheme.Space`, `VTheme.Metrics`, `VTheme.Color.Text` and most of their siblings are declared
+    `@MainActor`. A `static let`/`static var` in a type that is *not* isolated cannot touch one:
+
+        error: main actor-isolated static property 'tileChromeInset' can not be referenced
+               from a nonisolated context
+
+    Invisible on Linux, because `VigilUI` is never compiled here, so it costs a round trip to a Mac.
+    Views are almost always `@MainActor` already; the trap is a plain `enum` of metrics beside one.
+
+    ⚠️ Only a *member* access is flagged. Actor isolation does not propagate into a nested type, so
+    `VTheme.Typography.Scale.standard` is legal from anywhere — `Scale` is its own, unisolated type —
+    and a rule that flagged it would be telling the truth about the attribute and a lie about the
+    language. The distinguishing test is the case of the segment after the isolated namespace.
+    """
+    namespaces = isolated_theme_namespaces()
+    if not namespaces:
+        return []
+    reads = re.compile(r"VTheme(?:\.\w+)*?\.(" + "|".join(sorted(namespaces)) + r")\.([A-Za-z_]\w*)")
+    out: list[Violation] = []
+    rel = str(path.relative_to(ROOT))
+    stack: list[tuple[str, int, bool]] = []   # (name, depth, is main-actor isolated)
+    depth = 0
+    isolated_next = False
+    for n, raw in enumerate(lines, 1):
+        code = strip_comments_and_strings(raw)
+        stripped = raw.strip()
+        if stripped.startswith("@MainActor"):
+            isolated_next = True
+            if stripped == "@MainActor":
+                continue
+        decl = TYPE_DECL.match(raw)
+        if decl and "{" in code:
+            stack.append((decl.group(1), depth, isolated_next))
+            isolated_next = False
+        elif stripped and not stripped.startswith(("//", "@")):
+            isolated_next = False
+        depth += code.count("{") - code.count("}")
+        while stack and depth <= stack[-1][1]:
+            stack.pop()
+        if not stack or stack[-1][2]:
+            continue
+        if not re.match(r"\s*(?:package |public |private |internal |fileprivate )?static ", raw):
+            continue
+        for _, member in reads.findall(code):
+            if member[:1].isupper():
+                continue          # a nested type, which carries no isolation of its own
+            out.append((rel, n, "theme-isolation",
+                        f"a nonisolated static in {stack[-1][0]} reads a @MainActor theme "
+                        f"namespace ('{member}'). Swift rejects this on macOS with 'main "
+                        "actor-isolated static property ... can not be referenced from a "
+                        "nonisolated context'. Mark the enclosing type @MainActor."))
+            break
     return out
 
 
@@ -306,6 +383,7 @@ def main() -> int:
         violations += check_file_header(path, lines)
         violations += check_static_stored_in_generic(path, lines)
         violations += check_environment_key_isolation(path, lines)
+        violations += check_theme_isolation(path, lines)
 
     for path in swift_files("Tests"):
         lines = path.read_text().splitlines()
@@ -313,6 +391,7 @@ def main() -> int:
         violations += check_trailing_whitespace(path, lines)
         violations += check_static_stored_in_generic(path, lines)
         violations += check_environment_key_isolation(path, lines)
+        violations += check_theme_isolation(path, lines)
 
     violations += check_duplicate_test_names()
     violations += check_plists()
