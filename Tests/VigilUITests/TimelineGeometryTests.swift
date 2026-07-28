@@ -767,4 +767,67 @@ import VigilProtocols
     #expect(grid.unknownDayCount == 0, "every non-future day was reported")
 }
 
+@Test func timelineMonthGridDistinguishesUnknownDaysFromEmptyOnes() throws {
+    let clock = TimelineFixture.clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26)
+    // The device answered for the first ten days and said nothing about the rest.
+    var days = [MonthRecordCalendar.DayState?](repeating: nil, count: 31)
+    for index in 0..<10 { days[index] = .empty }
+    days[3] = .recorded([.alarm])
+    let calendar = MonthRecordCalendar(year: 2026, month: 7, track: TrackID(101), days: days)
+    let grid = try #require(TimelineMonthGrid.build(year: 2026, month: 7, calendar: calendar,
+                                                   selected: nil, clock: clock))
+
+    // The 4th was answered and holds an alarm; the 5th was answered and holds nothing; the 11th
+    // was not answered at all. All three are different, and only the middle one may be drawn as
+    // "nothing recorded" — claiming that about the 11th would invent a fact about the camera.
+    #expect(grid.days.first(where: { $0.day == 4 })?.hasFootage == true)
+    #expect(grid.days.first(where: { $0.day == 4 })?.dominantType == .alarm)
+    #expect(grid.days.first(where: { $0.day == 5 })?.isKnownEmpty == true)
+    #expect(grid.days.first(where: { $0.day == 11 })?.isKnownEmpty == false)
+    #expect(grid.days.first(where: { $0.day == 11 })?.hasFootage == false)
+    #expect(grid.days.first(where: { $0.day == 11 })?.dominantType == nil)
+
+    // Unanswered and not in the future: the 11th through the 26th, sixteen days. The five future
+    // days are unanswered too but are not counted — the camera cannot have recorded tomorrow.
+    #expect(grid.unknownDayCount == 16)
+}
+
+@Test func timelineMonthSteppingRollsTheYearInBothDirections() {
+    // Compared field by field rather than as tuples: `#expect` expands its argument, and a tuple
+    // `==` inside a macro is a needless thing to be clever about in a suite that has to compile
+    // on someone else's machine.
+    func step(_ year: Int, _ month: Int, by amount: Int) -> String {
+        let next = TimelineMonthGrid.stepped(year: year, month: month, by: amount)
+        return "\(next.year)-\(next.month)"
+    }
+
+    #expect(step(2026, 7, by: 1) == "2026-8")
+    #expect(step(2026, 7, by: -1) == "2026-6")
+
+    // The two boundaries. Stepping back from January is where a truncating `/` and a sign-taking
+    // `%` both go wrong at once: `-1 / 12` truncates to 0 (keeping the year) and `-1 % 12` is -1
+    // (making the month 0), so the naive version lands on a month `build` rejects.
+    #expect(step(2026, 1, by: -1) == "2025-12")
+    #expect(step(2026, 12, by: 1) == "2027-1")
+
+    // Whole years and more, in both directions.
+    #expect(step(2026, 1, by: -12) == "2025-1")
+    #expect(step(2026, 1, by: -13) == "2024-12")
+    #expect(step(2026, 12, by: 13) == "2028-1")
+    #expect(step(2026, 7, by: 0) == "2026-7")
+
+    // Every result is a month `build` will accept, from every starting month and every step in a
+    // three-year range either way. This is the property that matters: the picker's arrows must
+    // never produce a month the grid refuses, because that shows as a button that does nothing.
+    for month in 1...12 {
+        for step in -36...36 {
+            let next = TimelineMonthGrid.stepped(year: 2026, month: month, by: step)
+            #expect((1...12).contains(next.month),
+                    "month \(month) stepped by \(step) gave \(next.month)")
+            // The step is exactly `step` months away, counted in absolute months.
+            #expect(next.year * 12 + next.month - 1 == 2026 * 12 + month - 1 + step)
+        }
+    }
+}
+
 #endif  // os(macOS)

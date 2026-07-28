@@ -41,6 +41,19 @@ struct StageTimelineOverlay: View {
     /// Steps the day the timeline is showing.
     let onSelectDay: (TimelineDay) -> Void
 
+    /// The month behind ⌘G, or `nil` when the calendar has not been asked for yet.
+    let month: TimelineMonthGrid?
+
+    /// Whether that month is still being read from the device.
+    let isLoadingMonth: Bool
+
+    /// Asks for a month by year and 1-based month. Also called when the popover opens, to fetch the
+    /// month the current day sits in.
+    let onSelectMonth: (Int, Int) -> Void
+
+    /// Jumps to the live edge — ⇧⌘G, UX.md §14.2.
+    let onGoToNow: () -> Void
+
     /// Forwarded to `VTimelineView`.
     let onScrub: (VTimelineScrubPhase, Date) -> Void
     let onHoverInstant: (Date?) -> Void
@@ -64,6 +77,13 @@ struct StageTimelineOverlay: View {
     @State private var isNearBottom = false
     @State private var isOverChrome = false
 
+    /// Whether the ⌘G calendar is up.
+    ///
+    /// Counts as a third reason for the chrome to stay visible. A popover is its own window and the
+    /// pointer inside it is not over the chrome, so without this the calendar would take the
+    /// scrubber down with it the instant the pointer entered the very control it opened.
+    @State private var showsCalendar = false
+
     @Environment(\.vMotionEnabled) private var motionEnabled
 
     // MARK: - Initialisation
@@ -76,6 +96,10 @@ struct StageTimelineOverlay: View {
     init(archive: VLibraryArchive?,
          clock: TimelineClock,
          onSelectDay: @escaping (TimelineDay) -> Void,
+         month: TimelineMonthGrid?,
+         isLoadingMonth: Bool,
+         onSelectMonth: @escaping (Int, Int) -> Void,
+         onGoToNow: @escaping () -> Void,
          onScrub: @escaping (VTimelineScrubPhase, Date) -> Void,
          onHoverInstant: @escaping (Date?) -> Void,
          onZoom: @escaping (TimelineZoom) -> Void,
@@ -86,6 +110,10 @@ struct StageTimelineOverlay: View {
         self.archive = archive
         self.clock = clock
         self.onSelectDay = onSelectDay
+        self.month = month
+        self.isLoadingMonth = isLoadingMonth
+        self.onSelectMonth = onSelectMonth
+        self.onGoToNow = onGoToNow
         self.onScrub = onScrub
         self.onHoverInstant = onHoverInstant
         self.onZoom = onZoom
@@ -128,6 +156,15 @@ struct StageTimelineOverlay: View {
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             Button("", action: { onStepToEdge(true) })
                 .keyboardShortcut(.rightArrow, modifiers: .command)
+            // §14.2's pair: ⌘G opens the calendar, ⇧⌘G returns to the live edge. Both are disabled
+            // without an archive — there is no day to open a calendar around, and "go to now" on a
+            // camera with no index would only restart the stream that is already running.
+            Button("", action: { if let archive { openCalendar(around: archive.day) } })
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(archive == nil)
+            Button("", action: onGoToNow)
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(archive == nil)
         }
         .hidden()
     }
@@ -187,16 +224,13 @@ struct StageTimelineOverlay: View {
     /// `‹ 28 Jul 2026 ›`, the day stepper UX.md §7.2 puts in the playback toolbar.
     private func dayStepper(_ day: TimelineDay) -> some View {
         HStack(spacing: VTheme.Space.xs) {
-            VButton(symbol: VTheme.Symbol.back10,
+            VButton(symbol: VTheme.Symbol.stepBack,
                     style: .icon,
                     size: .sm,
                     accessibilityLabel: "Previous day",
                     action: { onSelectDay(clock.day(day, offsetByDays: -1)) })
-            Text(verbatim: StageTimelineChrome.dayLabel.string(from: day.start))
-                .vType(VTheme.Typography.mono.numeric)
-                .foregroundStyle(VTheme.Color.Text.primary)
-                .frame(minWidth: StageTimelineMetrics.dayLabelWidth, alignment: .leading)
-            VButton(symbol: VTheme.Symbol.forward10,
+            dayLabel(day)
+            VButton(symbol: VTheme.Symbol.stepForward,
                     style: .icon,
                     size: .sm,
                     accessibilityLabel: "Next day",
@@ -213,13 +247,68 @@ struct StageTimelineOverlay: View {
         }
     }
 
+    /// The date between the two steppers, which is also the calendar's button and its anchor.
+    ///
+    /// §7.2 puts the popover on the date itself rather than on a separate calendar glyph — the label
+    /// is already the thing the eye goes to when asking "which day am I on", so it is the thing to
+    /// click when the answer is "not this one".
+    private func dayLabel(_ day: TimelineDay) -> some View {
+        Button {
+            openCalendar(around: day)
+        } label: {
+            Text(verbatim: StageTimelineChrome.dayLabel.string(from: day.start))
+                .vType(VTheme.Typography.mono.numeric)
+                .foregroundStyle(VTheme.Color.Text.primary)
+                .frame(minWidth: StageTimelineMetrics.dayLabelWidth, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Go to date")
+        .popover(isPresented: $showsCalendar, arrowEdge: .top) {
+            calendar(around: day)
+        }
+    }
+
+    @ViewBuilder
+    private func calendar(around day: TimelineDay) -> some View {
+        if let month {
+            VTimelineMonthPicker(grid: month,
+                                 clock: clock,
+                                 isLoading: isLoadingMonth,
+                                 onSelectMonth: onSelectMonth,
+                                 onSelectDay: { chosen in
+                                     showsCalendar = false
+                                     onSelectDay(chosen)
+                                 })
+        } else {
+            // Reachable only if the window has not answered `onSelectMonth` yet. Sized so the
+            // popover does not open as a 1 pt sliver and then jump to full size.
+            SwiftUI.Color.clear
+                .frame(width: StageTimelineMetrics.calendarPlaceholder,
+                       height: StageTimelineMetrics.calendarPlaceholder)
+                .onAppear { openCalendar(around: day) }
+        }
+    }
+
+    /// Opens the popover, asking for the month the given day sits in.
+    ///
+    /// Asks every time rather than only on first open: the coordinator caches months, so a repeat
+    /// costs nothing, and going through it is what keeps the selected-day ring on the right cell
+    /// after the day has been stepped with the calendar shut.
+    private func openCalendar(around day: TimelineDay) {
+        let parts = clock.calendar.dateComponents([.year, .month], from: day.start)
+        guard let year = parts.year, let month = parts.month else { return }
+        onSelectMonth(year, month)
+        showsCalendar = true
+    }
+
     /// Whether the scrubber is up.
     ///
     /// ⚠️ §6.6 also brings chrome back on "any key", which this does not do: SwiftUI has no
     /// key-press-anywhere hook without an AppKit responder, and a responder that swallowed keys
     /// would take ⌘R and Escape with it. Pointer approach only, and said so rather than pretended.
     private var isVisible: Bool {
-        isNearBottom || isOverChrome
+        isNearBottom || isOverChrome || showsCalendar
     }
 }
 
@@ -249,6 +338,10 @@ private enum StageTimelineMetrics {
 
     /// Reserved width for the day label, so stepping a day does not shuffle the buttons either side.
     static let dayLabelWidth: CGFloat = 108
+
+    /// Placeholder square for the instant between the popover opening and the first grid arriving.
+    /// Roughly the calendar's own size, so the popover does not visibly resize under the pointer.
+    static let calendarPlaceholder: CGFloat = 260
 }
 
 #endif  // os(macOS)

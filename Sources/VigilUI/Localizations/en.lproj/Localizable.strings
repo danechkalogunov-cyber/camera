@@ -549,3 +549,15 @@
 
 /* ARCHIVE PLAYBACK */
 "Nothing was recorded at that moment" = "Nothing was recorded at that moment";
+
+/* THE ⌘G MONTH CALENDAR — UX.md §7.2. A day the camera did not answer for is "unknown",
+   never "empty": the two are drawn differently and read aloud differently, because saying
+   "nothing recorded" about a day the device would not describe is an invented fact. */
+"Go to date" = "Go to date";
+"Previous month" = "Previous month";
+"Next month" = "Next month";
+"Reading the month…" = "Reading the month…";
+"Some days are unknown — the camera did not answer for them." = "Some days are unknown — the camera did not answer for them.";
+"%lld: footage" = "%lld: footage";
+"%lld: nothing recorded" = "%lld: nothing recorded";
+"%lld: unknown" = "%lld: unknown";

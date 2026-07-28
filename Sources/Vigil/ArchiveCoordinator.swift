@@ -49,6 +49,16 @@ final class ArchiveCoordinator {
     /// What the device said when asked whether it records anything.
     private(set) var tracks: TrackAvailability = .unknown
 
+    /// The month the calendar popover is showing, or `nil` before one has been asked for.
+    ///
+    /// Always non-`nil` once the popover has been opened, even while the device is being asked — an
+    /// all-unknown grid is the honest picture of "we have not been told yet", and it lets the
+    /// calendar appear at once instead of after a round trip.
+    private(set) var month: TimelineMonthGrid?
+
+    /// Whether the month on screen is still being fetched, which the picker draws as a footnote.
+    private(set) var isLoadingMonth = false
+
     // MARK: - TrackAvailability
 
     /// Whether this camera records at all, as far as Vigil has been able to find out.
@@ -98,6 +108,24 @@ final class ArchiveCoordinator {
     /// camera, so the lane the playhead belongs to is the lane the picture came from.
     private var primaryTrack: TrackID?
 
+    /// Months already read from the device, so stepping back and forth costs nothing.
+    ///
+    /// Kept as the device's own answer rather than as built grids: the grid also encodes which day
+    /// is selected, and that changes without the month's contents changing at all.
+    private var monthCalendars: [MonthSlot: MonthRecordCalendar] = [:]
+
+    /// The month the popover is on, and the fetch for it.
+    private var visibleMonth: MonthSlot?
+    private var monthTask: Task<Void, Never>?
+
+    // MARK: - MonthSlot
+
+    /// A year and a 1-based month, as one key.
+    private struct MonthSlot: Sendable, Hashable {
+        let year: Int
+        let month: Int
+    }
+
     // MARK: - Initialisation
 
     /// Creates a coordinator with nothing loaded.
@@ -112,6 +140,8 @@ final class ArchiveCoordinator {
         guard self.session !== session || self.channel != channel else { return }
         task?.cancel()
         task = nil
+        monthTask?.cancel()
+        monthTask = nil
         self.session = session
         self.channel = channel
         archive = nil
@@ -119,6 +149,12 @@ final class ArchiveCoordinator {
         primaryTrack = nil
         tracks = .unknown
         lastFailure = nil
+        // ⛔ The month cache is keyed by year and month alone, so carrying it across a camera change
+        // would show one camera's recording days under another's name.
+        monthCalendars = [:]
+        visibleMonth = nil
+        month = nil
+        isLoadingMonth = false
     }
 
     /// The address to play from an instant, or `nil` when nothing was recorded there.
@@ -170,6 +206,47 @@ final class ArchiveCoordinator {
                              localClips: localClips,
                              markers: markers)
         }
+    }
+
+    /// Shows a month in the calendar popover, fetching it if it has not been read.
+    ///
+    /// **Publishes before it asks.** The grid goes up straight away — from the cache when the month
+    /// has been seen, otherwise as an all-unknown month — and is replaced when the device answers.
+    /// `TimelineMonthGrid` draws an unanswered day differently from an empty one, so an all-unknown
+    /// grid is not a lie about the camera's contents; it says "not told yet", which is true.
+    ///
+    /// - Parameters:
+    ///   - year: the calendar year.
+    ///   - month: 1…12. Out of range is ignored rather than clamped — a caller stepping past
+    ///     December should have rolled the year, and silently showing January of the same year
+    ///     would hide that bug behind plausible output.
+    ///   - selected: the day being reviewed, so one cell can be marked.
+    ///   - clock: the calendar the grid is laid out in.
+    func showMonth(year: Int, month: Int, selected: TimelineDay?, clock: TimelineClock) {
+        guard (1...12).contains(month) else { return }
+        let slot = MonthSlot(year: year, month: month)
+        visibleMonth = slot
+        publishMonth(slot, selected: selected, clock: clock)
+        // Cleared first so stepping from a month still being fetched to one already cached does not
+        // leave the previous month's spinner running over settled content.
+        isLoadingMonth = false
+
+        guard monthCalendars[slot] == nil, let session, let track = primaryTrack else { return }
+        isLoadingMonth = true
+        monthTask?.cancel()
+        monthTask = Task { [weak self] in
+            await self?.readMonth(session: session, track: track, slot: slot,
+                                  selected: selected, clock: clock)
+        }
+    }
+
+    /// Rebuilds the visible grid because the selected day moved, without re-reading the month.
+    ///
+    /// Stepping a day with the calendar open has to move the ring; re-fetching the month to do it
+    /// would spend a round trip on information already in hand.
+    func remarkMonth(selected: TimelineDay?, clock: TimelineClock) {
+        guard let slot = visibleMonth else { return }
+        publishMonth(slot, selected: selected, clock: clock)
     }
 
     /// Moves the playhead, without touching anything else.
@@ -340,6 +417,44 @@ final class ArchiveCoordinator {
                                   isLoading: false,
                                   preview: nil)
         logger.info(.isapi, "archive: \(built.count) track(s) for the selected day")
+    }
+
+    /// Reads one month's day distribution and republishes the grid.
+    ///
+    /// A refusal is not an error the user is shown: `dailyDistribution` is an optional endpoint and
+    /// plenty of firmware lacks it. The grid simply stays all-unknown, which is what the popover's
+    /// own footnote already explains — far better than an alert saying the camera is broken when it
+    /// is merely older than the feature.
+    private func readMonth(session: ISAPIDeviceSession,
+                           track: TrackID,
+                           slot: MonthSlot,
+                           selected: TimelineDay?,
+                           clock: TimelineClock) async {
+        defer { if visibleMonth == slot { isLoadingMonth = false } }
+        do {
+            let calendar = try await session.monthCalendar(track: track,
+                                                           year: slot.year,
+                                                           month: slot.month)
+            guard !Task.isCancelled else { return }
+            monthCalendars[slot] = calendar
+            logger.info(.isapi, "month \(slot.year)-\(slot.month): "
+                + "\(calendar.days.compactMap { $0 }.count) of 31 days answered")
+        } catch {
+            logger.info(.isapi, "no day distribution for \(slot.year)-\(slot.month): "
+                + String(describing: error))
+            return
+        }
+        guard visibleMonth == slot else { return }
+        publishMonth(slot, selected: selected, clock: clock)
+    }
+
+    /// Builds and publishes the grid for a slot from whatever is cached for it.
+    private func publishMonth(_ slot: MonthSlot, selected: TimelineDay?, clock: TimelineClock) {
+        month = TimelineMonthGrid.build(year: slot.year,
+                                        month: slot.month,
+                                        calendar: monthCalendars[slot],
+                                        selected: selected,
+                                        clock: clock)
     }
 
     /// The archive as it looks while a read is in flight.

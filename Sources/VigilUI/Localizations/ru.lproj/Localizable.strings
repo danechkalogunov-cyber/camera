@@ -529,3 +529,15 @@
 
 /* ARCHIVE PLAYBACK */
 "Nothing was recorded at that moment" = "В этот момент ничего не записано";
+
+/* THE ⌘G MONTH CALENDAR — UX.md §7.2. A day the camera did not answer for is "unknown",
+   never "empty": the two are drawn differently and read aloud differently, because saying
+   "nothing recorded" about a day the device would not describe is an invented fact. */
+"Go to date" = "Перейти к дате";
+"Previous month" = "Предыдущий месяц";
+"Next month" = "Следующий месяц";
+"Reading the month…" = "Читаем месяц…";
+"Some days are unknown — the camera did not answer for them." = "Про некоторые дни камера не ответила — что на них, неизвестно.";
+"%lld: footage" = "%lld: есть записи";
+"%lld: nothing recorded" = "%lld: ничего не записано";
+"%lld: unknown" = "%lld: неизвестно";

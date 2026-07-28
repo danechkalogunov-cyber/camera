@@ -188,7 +188,7 @@ source_keys = set()
 SPEC_MAP = {"host": "%@", "minutes": "%lld", "httpPort": "%lld", "rtspPort": "%lld",
             "codec": "%@", "camera.name": "%@", "value": "%@", "frames": "%lld",
             "shown": "%@", "expected": "%@", "seconds": "%lld", "detail.attempt": "%lld",
-            "stamp": "%@", "track.name": "%@", "primaryName": "%@"}
+            "stamp": "%@", "track.name": "%@", "primaryName": "%@", "day": "%lld"}
 
 
 def join_multiline(lines):
@@ -280,6 +280,7 @@ PENDING_OK = {
     "Close",
     "Previous day",
     "Next day",
+    "Go to date",
     "The camera did not list any recordings it can play back, so there is no timeline to scrub.",
     "The camera would not list its recordings: %@",
     "Switching to the sub-stream — the picture will reconnect",

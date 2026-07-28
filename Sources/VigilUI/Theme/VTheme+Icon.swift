@@ -114,6 +114,7 @@ extension VTheme {
         // App and navigation
         case brandMark, toggleSidebar, toggleInspector, commandPalette, search, settings, help
         case close, clear, disclosureCollapsed, disclosureExpanded, menuIndicator, overflow
+        case stepBack, stepForward
 
         // Cameras
         case camera, cameraOffline, addCamera, discover, device, channel, group, newGroup
@@ -180,6 +181,12 @@ extension VTheme.Symbol {
         case .disclosureExpanded: return "chevron.down"
         case .menuIndicator: return "chevron.up.chevron.down"
         case .overflow: return "ellipsis.circle"
+        // The date steppers — previous/next day beside the timeline's date, previous/next month in
+        // its calendar. Deliberately the same glyphs as the disclosure chevrons: §8.3's own preamble
+        // sanctions sharing a glyph between concepts, and the alternative in the playback row
+        // (`gobackward.10`) says "rewind ten seconds", which is a different promise entirely.
+        case .stepBack: return "chevron.left"
+        case .stepForward: return "chevron.right"
 
         // Cameras
         case .camera: return "video"
@@ -366,7 +373,8 @@ extension VTheme.Symbol {
     public var weight: Font.Weight {
         switch self {
         case .commandPalette, .close, .addCamera, .disclosureCollapsed, .disclosureExpanded,
-             .menuIndicator, .lineCrossing, .hardwareDecode, .softwareDecode:
+             .menuIndicator, .lineCrossing, .hardwareDecode, .softwareDecode,
+             .stepBack, .stepForward:
             return .semibold
         case .brandMark, .ptzPad:
             return .regular

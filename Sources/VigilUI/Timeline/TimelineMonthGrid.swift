@@ -173,6 +173,28 @@ package struct TimelineMonthGrid: Sendable, Hashable {
         self.weeks = weeks
     }
 
+    /// Steps a year and 1-based month by a whole number of months, rolling the year.
+    ///
+    /// Free-standing rather than inline in the picker's back/forward buttons so it can be tested:
+    /// Swift's `%` takes the sign of the *dividend*, so stepping back from January gives `-1 % 12`
+    /// = `-1`, and the naive `+ 1` turns that into month **0** — a value `build` rejects, which
+    /// would show as a calendar button that does nothing on exactly one month of the year. The
+    /// `+ 12` before the second `%` is what makes the result non-negative for any input.
+    ///
+    /// - Parameters:
+    ///   - year: the calendar year.
+    ///   - month: 1…12.
+    ///   - months: how far to step; negative goes back. Any magnitude, not just ±1.
+    /// - Returns: the year and 1-based month arrived at.
+    package static func stepped(year: Int, month: Int,
+                                by months: Int) -> (year: Int, month: Int) {
+        let zeroBased = month - 1 + months
+        // Floor division, not truncating: `-1 / 12` truncates to 0 and would leave January's
+        // "previous month" in the same year as December of the year before.
+        let yearsMoved = Int((Double(zeroBased) / 12).rounded(.down))
+        return (year + yearsMoved, (zeroBased % 12 + 12) % 12 + 1)
+    }
+
     /// The nearest day to `day` that is known to hold footage, searching outward.
     ///
     /// Answers the empty-day empty state, which names the closest day with footage

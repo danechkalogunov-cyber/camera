@@ -839,10 +839,25 @@ struct MainWindowView: View {
 
     /// Loads a different day into the timeline.
     private func loadArchiveDay(_ day: TimelineDay) {
+        let clock = libraryClock
         archive.load(day: day,
-                     clock: libraryClock,
+                     clock: clock,
                      localClips: timelineLocalClips,
                      markers: timelineMarkers)
+        // Keeps the calendar's selected-day ring on the day actually being shown. Cheap: this
+        // rebuilds the grid from the month already in hand and never touches the device.
+        archive.remarkMonth(selected: day, clock: clock)
+    }
+
+    /// ⇧⌘G — back to the live edge (UX.md §14.2).
+    ///
+    /// Both halves, because either alone leaves a half-truth on screen: returning the picture to
+    /// live while the scrubber still shows last Tuesday says the wrong day about a live image, and
+    /// moving the timeline to today while the stream still plays an archive says the wrong thing
+    /// about the picture.
+    private func goToLiveEdge() {
+        loadArchiveDay(libraryClock.day(containing: Date()))
+        returnToLive()
     }
 
     /// What the three library screens read.
@@ -1320,6 +1335,15 @@ struct MainWindowView: View {
             StageTimelineOverlay(archive: archive.archive,
                                  clock: libraryClock,
                                  onSelectDay: { day in loadArchiveDay(day) },
+                                 month: archive.month,
+                                 isLoadingMonth: archive.isLoadingMonth,
+                                 onSelectMonth: { year, month in
+                                     archive.showMonth(year: year,
+                                                       month: month,
+                                                       selected: archive.archive?.day,
+                                                       clock: libraryClock)
+                                 },
+                                 onGoToNow: { goToLiveEdge() },
                                  onScrub: { phase, instant in
                                      archive.movePlayhead(to: instant,
                                                           isScrubbing: phase != .ended)
