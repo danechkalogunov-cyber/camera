@@ -135,6 +135,14 @@ package struct VGridTileView<Video: View>: View {
             // the recording border is painted over the last three points of the image — which reads
             // exactly as "the picture is slightly too big for its frame", because it is.
             .padding(VTheme.Border.recording)
+            // ⛔ The double-tap belongs to the **picture**, not to the assembled tile, and the
+            // difference is felt rather than seen. A `count: 2` gesture on an ancestor forces
+            // SwiftUI to hold every single click for the double-click interval before it can decide
+            // the gesture missed — so with this applied after the overlays, every button in the
+            // hover row answered about a third of a second late. Attached here the buttons are
+            // siblings above the gesture rather than inside it, and they fire immediately.
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: onToggleFocus)
             // The well is clipped on the layer, not by a SwiftUI `clipShape` over the video — a
             // clip on this subtree would force the tile offscreen and break the display layer's
             // direct composition (see the header of VigilRender/Interop/VideoTile.swift).
@@ -149,7 +157,6 @@ package struct VGridTileView<Video: View>: View {
                     isHovering = hovering
                 }
             }
-            .onTapGesture(count: 2, perform: onToggleFocus)
             .contentShape(VTheme.Radius.shape(VTheme.Radius.xl))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(Text(verbatim: camera.name))
