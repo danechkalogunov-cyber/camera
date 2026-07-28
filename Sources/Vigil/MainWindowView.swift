@@ -146,7 +146,12 @@ struct MainWindowView: View {
         .task(id: session.camera?.id) { loadDeviceInfo() }
         // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
         .task(id: recording.completed.count) { reloadClips() }
-        .task(id: recording.isRecording) { await tickWhileRecording() }
+        .task(id: recording.isRecording) {
+            // Also re-read on start, so the `.partial` file appears while it is being written
+            // rather than only once the clip closes.
+            reloadClips()
+            await tickWhileRecording()
+        }
         .task { await pollTelemetry() }
     }
 
@@ -389,21 +394,14 @@ struct MainWindowView: View {
     private var libraryState: VLibraryState {
         VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()),
                       clips: window.clips,
-                      recordingsFolder: Self.recordingsFolderLabel)
+                      recordingsFolder: recordingsFolderLabel)
     }
 
     /// The recordings folder as a user would recognise it, for the empty state's "where would a clip
     /// appear" answer. Abbreviated with a tilde rather than shown as a container path.
-    private static var recordingsFolderLabel: String? {
-        guard let folder = Self.recordingsFolder else { return nil }
+    private var recordingsFolderLabel: String? {
+        guard let folder = recording.clipsDirectory() else { return nil }
         return (folder.path as NSString).abbreviatingWithTildeInPath
-    }
-
-    /// Where clips are written. `RecordingDestinationResolver` owns the real answer; this is the same
-    /// default location, used only for listing and revealing.
-    private static var recordingsFolder: URL? {
-        FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first?
-            .appending(path: "Vigil", directoryHint: .isDirectory)
     }
 
     /// Re-reads the clips folder into `window.clips`.
@@ -412,7 +410,10 @@ struct MainWindowView: View {
     /// file still being written is listed with `isRecording` true rather than hidden, because hiding
     /// it would make pressing Record look like it did nothing for as long as the clip ran.
     private func reloadClips() {
-        guard let folder = Self.recordingsFolder else { return }
+        guard let folder = recording.clipsDirectory() else {
+            window.clips = []
+            return
+        }
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
         let listing = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
@@ -422,9 +423,15 @@ struct MainWindowView: View {
         }
         let camera = VLibraryCamera(id: cameraID, name: identity.name)
         window.clips = listing.compactMap { url -> VLibraryClip? in
-            guard ["mp4", "mov"].contains(url.pathExtension.lowercased()) else { return nil }
+            // A clip still being written is `name.mp4.partial`, whose `pathExtension` is
+            // "partial" — filtering on the extension alone hid exactly the file the user is
+            // watching being recorded. RecordingNaming §253 documents both spellings.
+            let name = url.lastPathComponent
+            let isPartial = name.hasSuffix(".partial")
+            let mediaName = isPartial ? String(name.dropLast(".partial".count)) : name
+            let mediaExtension = (mediaName as NSString).pathExtension.lowercased()
+            guard ["mp4", "mov"].contains(mediaExtension) else { return nil }
             let values = try? url.resourceValues(forKeys: Set(keys))
-            let isPartial = url.lastPathComponent.hasSuffix(".partial")
             return VLibraryClip(id: Self.stableID(for: url),
                                 camera: camera,
                                 startedAt: values?.contentModificationDate ?? Date(),
@@ -471,13 +478,12 @@ struct MainWindowView: View {
     /// failing — which is the right outcome for a button whose whole job is "show me where".
     /// Reveals one clip in the Finder.
     private func revealClip(_ clip: VLibraryClip) {
-        guard let folder = Self.recordingsFolder else { return }
+        guard let folder = recording.clipsDirectory() else { return }
         NSWorkspace.shared.activateFileViewerSelecting([folder.appending(path: clip.fileName)])
     }
 
     private func openRecordingsFolder() {
-        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)
-        guard let folder = movies.first else { return }
+        guard let folder = recording.clipsDirectory() else { return }
         NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
@@ -694,7 +700,7 @@ struct MainWindowView: View {
             isRecording: recording.isRecording,
             elapsedSeconds: recording.elapsed(now: recordingTick)
                 .map { Double($0.components.seconds) } ?? 0,
-            destination: Self.recordingsFolderLabel,
+            destination: recordingsFolderLabel,
             clipsToday: window.clips.count)
     }
 

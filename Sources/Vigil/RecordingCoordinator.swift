@@ -193,6 +193,20 @@ final class RecordingCoordinator {
         }
     }
 
+    /// Where clips are actually written.
+    ///
+    /// Resolved through the same request the recorder uses, so the list and the writer can never
+    /// disagree about which folder to look in — guessing `~/Movies/Vigil` here worked only as long
+    /// as nothing changed the destination, and a listing that looks in the wrong place reports "no
+    /// recordings" for a folder full of them.
+    ///
+    /// Answers `nil` when the destination is unusable, which is the same condition that stops a
+    /// recording starting.
+    func clipsDirectory() -> URL? {
+        let request = RecordingDestinationRequest(kind: .clips)
+        return try? RecordingDestinationResolver.resolve(request, fileSystem: fileSystem).directory
+    }
+
     /// How long the current clip has been running, or `nil` when not recording.
     func elapsed(now: Date = Date()) -> Duration? {
         guard let startedAt else { return nil }
