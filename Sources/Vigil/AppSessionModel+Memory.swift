@@ -47,15 +47,28 @@ extension AppSessionModel {
     /// probe ladder. That is right on both counts: a playback URI must not be probed for, and the
     /// ladder's learned live path must not be overwritten by it — `resolvedPath` is left alone, so
     /// ``returnToLive()`` puts the session back on the path R1.2 paid for.
+    /// **Superseded seeks are dropped, not queued.** Each seek is a whole new RTSP session — five
+    /// round trips before a frame — so two clicks a moment apart used to build two of them, and the
+    /// user waited for the first to finish opening before the second even started. `seekGeneration`
+    /// makes the newest request win: an older one that is still mid-handshake stops as soon as it
+    /// notices it has been overtaken, and the camera is never asked to hold two playback sessions
+    /// for one viewer. On a camera that permits a handful of concurrent sessions, that mattered.
     func playArchive(_ locator: PlaybackLocator) async {
         guard let camera, let activeRef else { return }
+        seekGeneration &+= 1
+        let generation = seekGeneration
         var target = camera
         target.rtspPathOverride = locator.rawQuery.isEmpty
             ? locator.path
             : locator.path + "?" + locator.rawQuery
         playback = locator
-        dependencies.logger.info(.app, "playing the archive")
+        seekStartedAt = dependencies.clock.now()
+        dependencies.logger.info(.app, "seek: opening \(target.rtspPathOverride ?? "")")
         stopSession()
+        guard generation == seekGeneration else {
+            dependencies.logger.debug(.app, "seek \(generation) superseded before it began")
+            return
+        }
         beginConnecting()
         await stream(camera: target, ref: activeRef)
     }
@@ -69,6 +82,11 @@ extension AppSessionModel {
         var target = camera
         target.rtspPathOverride = resolvedPath
         playback = nil
+        // Bumped so a seek still opening does not finish into a session that has gone back to live,
+        // and cleared so the live stream's first frame is not reported as a seek that took as long
+        // as the user spent deciding to leave.
+        seekGeneration &+= 1
+        seekStartedAt = nil
         dependencies.logger.info(.app, "returning to the live stream")
         stopSession()
         beginConnecting()

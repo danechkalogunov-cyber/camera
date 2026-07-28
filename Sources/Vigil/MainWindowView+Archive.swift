@@ -113,7 +113,9 @@ extension MainWindowView {
     /// first two are worth a sentence, and only once — a toast every time the Recordings screen
     /// opens would be nagging about a fact that has not changed.
     func loadArchive() async {
-        archive.follow(session: deviceInfo.session, channel: session.camera?.channel)
+        archive.follow(session: deviceInfo.session,
+                       channel: session.camera?.channel,
+                       name: identity.name)
         guard window.showsTimeline else { return }
         let clock = libraryClock
         let day = archive.archive?.day ?? clock.day(containing: clock.now)

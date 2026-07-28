@@ -54,10 +54,16 @@ final class ArchiveCoordinator {
     /// Always non-`nil` once the popover has been opened, even while the device is being asked — an
     /// all-unknown grid is the honest picture of "we have not been told yet", and it lets the
     /// calendar appear at once instead of after a round trip.
-    private(set) var month: TimelineMonthGrid?
+    ///
+    /// ⚠️ Not `private(set)` like its neighbours, and the reason is Swift rather than intent:
+    /// `private(set)` scopes the *setter* to this file, and the only code that writes it lives in
+    /// `ArchiveCoordinator+Month.swift`. The window still only reads it.
+    var month: TimelineMonthGrid?
 
     /// Whether the month on screen is still being fetched, which the picker draws as a footnote.
-    private(set) var isLoadingMonth = false
+    ///
+    /// Writable for the same reason as ``month``.
+    var isLoadingMonth = false
 
     // MARK: - TrackAvailability
 
@@ -89,10 +95,10 @@ final class ArchiveCoordinator {
 
     // MARK: - Stored Properties
 
-    private let logger: any LoggerProtocol
+    let logger: any LoggerProtocol
 
     /// The session to ask, and the channel it answers for.
-    private var session: ISAPIDeviceSession?
+    var session: ISAPIDeviceSession?
     private var channel: ChannelID?
 
     /// The load in flight, cancelled when the day or the camera changes.
@@ -101,6 +107,13 @@ final class ArchiveCoordinator {
     /// The day currently shown, so a repeat request for it is ignored.
     private var loadedDay: TimelineDay?
 
+    /// Every track this camera records to, in the order the device listed them.
+    ///
+    /// Plural because a camera routinely has more than one — 101 and 103 with the day split between
+    /// them is ordinary Hikvision behaviour. Anything that asks the device "what is recorded" has to
+    /// ask all of them or it reports half a day as the whole day.
+    var myTracks: [TrackID] = []
+
     /// The device's own track behind the first lane.
     ///
     /// Kept because `VTimelineTrack.id` is a `UUID` derived from it and the derivation is one-way —
@@ -108,20 +121,23 @@ final class ArchiveCoordinator {
     /// camera, so the lane the playhead belongs to is the lane the picture came from.
     private var primaryTrack: TrackID?
 
+    /// What the lane is labelled with — the camera's name, not a track's.
+    private var cameraName = ""
+
     /// Months already read from the device, so stepping back and forth costs nothing.
     ///
     /// Kept as the device's own answer rather than as built grids: the grid also encodes which day
     /// is selected, and that changes without the month's contents changing at all.
-    private var monthCalendars: [MonthSlot: MonthRecordCalendar] = [:]
+    var monthCalendars: [MonthSlot: MonthRecordCalendar] = [:]
 
     /// The month the popover is on, and the fetch for it.
-    private var visibleMonth: MonthSlot?
-    private var monthTask: Task<Void, Never>?
+    var visibleMonth: MonthSlot?
+    var monthTask: Task<Void, Never>?
 
     // MARK: - MonthSlot
 
     /// A year and a 1-based month, as one key.
-    private struct MonthSlot: Sendable, Hashable {
+    struct MonthSlot: Sendable, Hashable {
         let year: Int
         let month: Int
     }
@@ -136,7 +152,14 @@ final class ArchiveCoordinator {
     // MARK: - API
 
     /// Points the coordinator at a device, or clears it.
-    func follow(session: ISAPIDeviceSession?, channel: ChannelID?) {
+    ///
+    /// - Parameters:
+    ///   - session: the ISAPI session to ask, or `nil` to clear.
+    ///   - channel: the channel the camera streams on.
+    ///   - name: what to label the lane. The camera's name and not a track's: the lane is one
+    ///     camera's footage however many device tracks the firmware filed it across.
+    func follow(session: ISAPIDeviceSession?, channel: ChannelID?, name: String) {
+        cameraName = name
         guard self.session !== session || self.channel != channel else { return }
         task?.cancel()
         task = nil
@@ -147,6 +170,7 @@ final class ArchiveCoordinator {
         archive = nil
         loadedDay = nil
         primaryTrack = nil
+        myTracks = []
         tracks = .unknown
         lastFailure = nil
         // ⛔ The month cache is keyed by year and month alone, so carrying it across a camera change
@@ -167,10 +191,16 @@ final class ArchiveCoordinator {
     /// Refuses an instant in a gap rather than seeking near it. §15.6 is explicit that an arbitrary
     /// time with no footage yields a 404 or a stream that ends immediately, and the honest answer
     /// to "play here" when there is nothing here is to say so.
+    ///
+    /// **The track comes from the segment, not from the camera.** A camera that files its day across
+    /// tracks 101 and 103 must be played from whichever of them actually holds the instant asked
+    /// for. Asking 101 for a time only 103 recorded is a request for footage that track does not
+    /// have, and the device answers it exactly as it answers a gap — a 404, or a stream that ends
+    /// the moment it starts.
     func locator(at instant: Date) -> PlaybackLocator? {
-        guard let track = primaryTrack,
-              let index = archive?.tracks.first?.index,
-              index.containing(instant) != nil else { return nil }
+        guard let index = archive?.tracks.first?.index,
+              let position = index.containing(instant) else { return nil }
+        let track = index.segments[position].track
         return PlaybackLocator(track: track, start: instant, end: nil)
     }
 
@@ -206,47 +236,6 @@ final class ArchiveCoordinator {
                              localClips: localClips,
                              markers: markers)
         }
-    }
-
-    /// Shows a month in the calendar popover, fetching it if it has not been read.
-    ///
-    /// **Publishes before it asks.** The grid goes up straight away — from the cache when the month
-    /// has been seen, otherwise as an all-unknown month — and is replaced when the device answers.
-    /// `TimelineMonthGrid` draws an unanswered day differently from an empty one, so an all-unknown
-    /// grid is not a lie about the camera's contents; it says "not told yet", which is true.
-    ///
-    /// - Parameters:
-    ///   - year: the calendar year.
-    ///   - month: 1…12. Out of range is ignored rather than clamped — a caller stepping past
-    ///     December should have rolled the year, and silently showing January of the same year
-    ///     would hide that bug behind plausible output.
-    ///   - selected: the day being reviewed, so one cell can be marked.
-    ///   - clock: the calendar the grid is laid out in.
-    func showMonth(year: Int, month: Int, selected: TimelineDay?, clock: TimelineClock) {
-        guard (1...12).contains(month) else { return }
-        let slot = MonthSlot(year: year, month: month)
-        visibleMonth = slot
-        publishMonth(slot, selected: selected, clock: clock)
-        // Cleared first so stepping from a month still being fetched to one already cached does not
-        // leave the previous month's spinner running over settled content.
-        isLoadingMonth = false
-
-        guard monthCalendars[slot] == nil, let session, let track = primaryTrack else { return }
-        isLoadingMonth = true
-        monthTask?.cancel()
-        monthTask = Task { [weak self] in
-            await self?.readMonth(session: session, track: track, slot: slot,
-                                  selected: selected, clock: clock)
-        }
-    }
-
-    /// Rebuilds the visible grid because the selected day moved, without re-reading the month.
-    ///
-    /// Stepping a day with the calendar open has to move the ring; re-fetching the month to do it
-    /// would spend a round trip on information already in hand.
-    func remarkMonth(selected: TimelineDay?, clock: TimelineClock) {
-        guard let slot = visibleMonth else { return }
-        publishMonth(slot, selected: selected, clock: clock)
     }
 
     /// Moves the playhead, without touching anything else.
@@ -401,20 +390,32 @@ final class ArchiveCoordinator {
         tracks = .present
 
         primaryTrack = mine.first?.id
-        var built: [VTimelineTrack] = []
-        for (position, track) in mine.enumerated() {
+        myTracks = mine.map(\.id)
+
+        // ⛔ Every one of this camera's device tracks goes into ONE lane, not a lane each.
+        //
+        // A Hikvision camera routinely records to more than one track — 101 and 103 on the same
+        // channel, for instance, with the day split between them. They are not two cameras and not
+        // two things to compare; they are one camera's footage, filed by the device however its
+        // firmware felt like filing it. A lane in UX.md §7.3 is a *camera*, for watching several at
+        // once in step. Mapping device tracks onto lanes put half of one camera's day in a second
+        // compact strip that reads as a different source, and — worse — left it unseekable, because
+        // everything that answers "what is at this instant" looked at the first lane only.
+        //
+        // Merging is lossless: `RecordSegment` carries its own `TrackID`, so the instant a scrub
+        // lands on still knows which track to play from. `TimelineSegmentIndex(raw:day:)` sorts and
+        // already tolerates overlap without inventing gaps, which is exactly the case here.
+        var segments: [RecordSegment] = []
+        var truncated = false
+        var answered = 0
+        for track in mine {
             guard !Task.isCancelled else { return }
             do {
                 let index = try await session.dayIndex(track: track.id, dayStartUTC: day.start)
-                built.append(VTimelineTrack(
-                    id: Self.identity(of: track.id),
-                    name: track.sourceName ?? "Track \(track.id)",
-                    identityIndex: position,
-                    index: TimelineSegmentIndex(dayIndex: index, day: day),
-                    markers: markers,
-                    // Only on the first lane. The clips are Vigil's, not any one device track's,
-                    // and repeating them under every lane would triple-count the same recording.
-                    localClips: position == 0 ? localClips : []))
+                segments.append(contentsOf: index.segments)
+                truncated = truncated || index.truncated
+                answered += 1
+                logger.info(.isapi, "track \(track.id): \(index.segments.count) segment(s)")
             } catch {
                 // One track that refuses does not lose the others: an NVR commonly has a track for
                 // a channel whose disk was pulled, and that is not a reason to show no timeline.
@@ -423,13 +424,24 @@ final class ArchiveCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
-        guard !built.isEmpty else {
+        guard answered > 0 else {
             let reason = "the device would not return a recording index for this day"
             lastFailure = reason
             tracks = .refused(reason)
             archive = nil
             return
         }
+        let merged = TimelineSegmentIndex(raw: segments, day: day, isTruncated: truncated)
+        let built = [VTimelineTrack(id: Self.identity(of: mine[0].id),
+                                    name: cameraName,
+                                    identityIndex: 0,
+                                    index: merged,
+                                    markers: markers,
+                                    localClips: localClips)]
+        let listed = mine.map { String($0.id.value) }.joined(separator: ",")
+        logger.info(.isapi, "archive: \(merged.segments.count) segment(s) merged from "
+            + "\(answered) of \(mine.count) track(s) [\(listed)]")
+
         lastFailure = nil
         archive = VLibraryArchive(tracks: built,
                                   day: day,
@@ -440,45 +452,6 @@ final class ArchiveCoordinator {
                                                                 clock: clock),
                                   isLoading: false,
                                   preview: nil)
-        logger.info(.isapi, "archive: \(built.count) track(s) for the selected day")
-    }
-
-    /// Reads one month's day distribution and republishes the grid.
-    ///
-    /// A refusal is not an error the user is shown: `dailyDistribution` is an optional endpoint and
-    /// plenty of firmware lacks it. The grid simply stays all-unknown, which is what the popover's
-    /// own footnote already explains — far better than an alert saying the camera is broken when it
-    /// is merely older than the feature.
-    private func readMonth(session: ISAPIDeviceSession,
-                           track: TrackID,
-                           slot: MonthSlot,
-                           selected: TimelineDay?,
-                           clock: TimelineClock) async {
-        defer { if visibleMonth == slot { isLoadingMonth = false } }
-        do {
-            let calendar = try await session.monthCalendar(track: track,
-                                                           year: slot.year,
-                                                           month: slot.month)
-            guard !Task.isCancelled else { return }
-            monthCalendars[slot] = calendar
-            logger.info(.isapi, "month \(slot.year)-\(slot.month): "
-                + "\(calendar.days.compactMap { $0 }.count) of 31 days answered")
-        } catch {
-            logger.info(.isapi, "no day distribution for \(slot.year)-\(slot.month): "
-                + String(describing: error))
-            return
-        }
-        guard visibleMonth == slot else { return }
-        publishMonth(slot, selected: selected, clock: clock)
-    }
-
-    /// Builds and publishes the grid for a slot from whatever is cached for it.
-    private func publishMonth(_ slot: MonthSlot, selected: TimelineDay?, clock: TimelineClock) {
-        month = TimelineMonthGrid.build(year: slot.year,
-                                        month: slot.month,
-                                        calendar: monthCalendars[slot],
-                                        selected: selected,
-                                        clock: clock)
     }
 
     /// The archive as it looks while a read is in flight.

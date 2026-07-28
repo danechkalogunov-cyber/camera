@@ -611,6 +611,47 @@ enum SearchFixtures {
         #expect(calendar.days[2] == nil)
     }
 
+    @Test func monthCalendarMergesTracksWithoutInventingEmptyDays() {
+        // A camera that files its month across tracks 101 and 103 — the case that made half a
+        // month grey out when only the first track was asked.
+        var first = [MonthRecordCalendar.DayState?](repeating: nil, count: 31)
+        first[0] = .recorded([.timing])       // day 1: footage on 101 only
+        first[1] = .empty                     // day 2: 101 says nothing here
+        first[2] = .empty                     // day 3: 101 says nothing here
+        first[3] = .recorded([.motion])       // day 4: motion on 101
+
+        var second = [MonthRecordCalendar.DayState?](repeating: nil, count: 31)
+        second[0] = .empty                    // day 1: nothing on 103
+        second[1] = .recorded([.alarm])       // day 2: footage on 103 only
+        second[2] = nil                       // day 3: 103 did not answer
+        second[3] = .recorded([.alarm])       // day 4: alarm on 103
+
+        let merged = MonthRecordCalendar(year: 2024, month: 5, track: TrackID(101), days: first)
+            .merging(MonthRecordCalendar(year: 2024, month: 5, track: TrackID(103), days: second))
+
+        // Footage on either track is footage on that day — this is the whole bug.
+        #expect(merged.days[0] == .recorded([.timing]))
+        #expect(merged.days[1] == .recorded([.alarm]))
+        // One track answering "empty" while the other stays silent is still a real "empty": the
+        // day is only unknown when nobody answered for it.
+        #expect(merged.days[2] == .empty)
+        // Both recorded: the types union rather than one winning.
+        #expect(merged.days[3] == .recorded([.motion, .alarm]))
+        // A day neither track mentioned stays unknown, and must NOT become empty.
+        #expect(merged.days[4] == nil)
+        #expect(merged.days.count == 31)
+
+        // Order does not matter.
+        let reversed = MonthRecordCalendar(year: 2024, month: 5, track: TrackID(103), days: second)
+            .merging(MonthRecordCalendar(year: 2024, month: 5, track: TrackID(101), days: first))
+        #expect(reversed.days == merged.days)
+
+        // A different month is a caller error and is refused rather than silently blended.
+        let other = MonthRecordCalendar(year: 2024, month: 6, track: TrackID(103), days: second)
+        #expect(MonthRecordCalendar(year: 2024, month: 5, track: TrackID(101), days: first)
+                    .merging(other).days == first)
+    }
+
     @Test func monthCalendarRequestBodyMatchesTheSpec() {
         #expect(MonthRecordCalendar.requestBody(track: TrackID(101), year: 2024, month: 5)
                     .stringValue == "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"

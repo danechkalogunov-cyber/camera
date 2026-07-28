@@ -314,6 +314,17 @@ extension AppSessionModel {
             rememberThisCamera()
             // The R1.7 number, in the log where the acceptance checklist can read it.
             dependencies.logger.info(.app, "first frame assembled after \(afterStart)")
+            // For an archive seek, the same number split at the point Vigil hands over. `afterStart`
+            // is the camera's half — handshake, opening the recording, first keyframe. The
+            // difference is Vigil's own: tearing the old session down and building the new one.
+            // Printed as two numbers because they have different owners and different fixes, and a
+            // single "one second" tells you which to work on only by accident.
+            if let seekStartedAt {
+                let total = dependencies.clock.now() - seekStartedAt
+                dependencies.logger.info(.app, "seek complete: \(total) total, "
+                    + "\(afterStart) of it after the socket opened")
+                self.seekStartedAt = nil
+            }
         case .pathResolved(let candidate, _):
             // Remembered at the first frame, not here: a path that answers `DESCRIBE` but never
             // delivers video is not the one to start from next time.

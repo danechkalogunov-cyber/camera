@@ -225,6 +225,54 @@ public struct MonthRecordCalendar: Sendable, Hashable, Codable {
         self.days = days
     }
 
+    /// Combines this month with another track's answer for the same month.
+    ///
+    /// **Why a camera needs this.** One camera routinely records to more than one track — 101 and
+    /// 103 on the same channel, with the day split between them, is ordinary Hikvision behaviour.
+    /// `dailyDistribution` answers per *track*, so asking only the first reports one track's month
+    /// as the camera's month and greys out every day whose footage lives on the other.
+    ///
+    /// The rules follow from what each state means, not from convenience:
+    ///
+    /// - `recorded` beats everything, and the record types are **unioned** — footage on either
+    ///   track is footage on that day, and a day that is motion on one and alarm on the other is
+    ///   honestly both.
+    /// - `empty` and `empty` is `empty`.
+    /// - `nil` (the device did not mention the day) loses to any real answer, but `nil` combined
+    ///   with `empty` stays `empty`: one track saying "nothing here" is a real fact about that
+    ///   track, and a day is only genuinely unknown when no track answered for it.
+    ///
+    /// ⚠️ `track` and the year and month are taken from `self`. The result no longer describes a
+    /// single track, which is exactly the point; the field is kept for the caller's diagnostics.
+    /// Merging two different months would be a caller error, so it is refused rather than guessed
+    /// at — mismatched inputs return `self` unchanged.
+    ///
+    /// - Parameter other: another track's answer, for the same year and month.
+    /// - Returns: the combined month, as long as one day array.
+    public func merging(_ other: MonthRecordCalendar) -> MonthRecordCalendar {
+        guard year == other.year, month == other.month else { return self }
+        let count = Swift.max(days.count, other.days.count)
+        var combined: [DayState?] = []
+        combined.reserveCapacity(count)
+        for index in 0..<count {
+            let mine = index < days.count ? days[index] : nil
+            let theirs = index < other.days.count ? other.days[index] : nil
+            combined.append(Self.merging(mine, theirs))
+        }
+        return MonthRecordCalendar(year: year, month: month, track: track, days: combined)
+    }
+
+    /// One day's rule. See ``merging(_:)``.
+    static func merging(_ a: DayState?, _ b: DayState?) -> DayState? {
+        switch (a, b) {
+        case let (.recorded(mine), .recorded(theirs)): return .recorded(mine.union(theirs))
+        case (.recorded, _):                           return a
+        case (_, .recorded):                           return b
+        case (.empty, _), (_, .empty):                 return .empty
+        default:                                       return nil
+        }
+    }
+
     /// The `<trackDailyParam>` request body.
     public static func requestBody(track: TrackID, year: Int, month: Int) -> XMLBuilder {
         var builder = XMLBuilder("trackDailyParam")

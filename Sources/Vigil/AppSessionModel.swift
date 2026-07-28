@@ -79,6 +79,21 @@ final class AppSessionModel {
     /// Time from `start()` to the first assembled access unit. The R1.7 measurement.
     var firstFrameLatency: Duration?
 
+    /// Counts archive seeks so a superseded one can stop instead of finishing into a stale session.
+    ///
+    /// `&+=` rather than `+=` at the call site: this only ever needs to differ from the last value,
+    /// and a viewer who somehow scrubbed 2^63 times should get a wrapped counter, not a crash.
+    var seekGeneration: UInt64 = 0
+
+    /// When the current archive seek was asked for, so the wait can be *measured* rather than
+    /// guessed at.
+    ///
+    /// The whole point is to split a number the user experiences as one second into the part Vigil
+    /// spends and the part the camera spends. `firstFrameLatency` already measures from
+    /// `StreamController.start()`; this measures from the click, so the difference is Vigil's own
+    /// teardown and setup. Without both numbers, "make the seek faster" is optimising in the dark.
+    var seekStartedAt: MediaInstant?
+
     /// The controller's last reported state.
     var streamState: StreamState = .idle
 
