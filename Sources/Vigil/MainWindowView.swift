@@ -644,9 +644,11 @@ struct MainWindowView: View {
 
     /// What the three library screens read.
     ///
-    /// Every collection is empty and `archive` is `nil`, because nothing records, no event stream is
-    /// subscribed and no archive day has been loaded. That is not a placeholder standing in for real
-    /// data — it is the truthful state, and each screen's empty state says what would fill it.
+    /// Clips, events and bookmarks all have sources now. `archive` does not, and stays `nil`: it is
+    /// the camera-side recording index the timeline scrubs, and nothing reads it off the device yet.
+    /// `VRecordingsView` mounts `VTimelineView` only when it is non-`nil`, so the whole scrubber —
+    /// ruler, playhead, marker lane — is written, tested and never seen. That is the truthful state
+    /// rather than a placeholder, and the screen's empty half says what would fill it.
     private var libraryState: VLibraryState {
         VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()),
                       clips: window.clips,
