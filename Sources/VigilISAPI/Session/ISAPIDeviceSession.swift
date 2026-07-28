@@ -360,6 +360,18 @@ public actor ISAPIDeviceSession {
         }
         let value = try DeviceTime(document: try await get(ISAPIResource.systemTime))
         timeBox = Timestamped(value: value, storedAt: now())
+        // The one place the device-local playback quirk can be caught cheaply, and the reason it is
+        // caught here rather than after a `PLAY`: this endpoint is read on the connect path, so the
+        // very first archive search is already corrected. Until this existed the quirk was declared
+        // in `DeviceQuirks`, honoured in three places, and **never set by anything** — so every
+        // archive time on an affected camera was silently wrong by the device's UTC offset.
+        if value.stampsLocalTimeAsUTC(reference: wallClock.now) {
+            logger.notice(.isapi, "device stamps local time as UTC", [
+                "offset": String(value.utcOffsetSeconds),
+                "zone": value.rawTimeZone,
+            ])
+            await learn(.playbackTimesAreDeviceLocal)
+        }
         return value
     }
 

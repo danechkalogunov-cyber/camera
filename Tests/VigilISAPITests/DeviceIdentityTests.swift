@@ -427,6 +427,53 @@ enum IdentityFixtures {
         #expect(abs(time.skew(against: reference.addingTimeInterval(-90)) - 90) < 0.001)
     }
 
+    @Test func deviceTimeDetectsAFirmwareThatStampsLocalTimeAsUTC() throws {
+        // The fixture carries an explicit `+08:00`, so it parses to the true instant and there is
+        // nothing wrong with it.
+        let correct = try DeviceTime(document: IdentityFixtures.document(
+            IdentityFixtures.systemTime))
+        let reference = Date(timeIntervalSince1970: 1_714_538_096)
+        #expect(correct.stampsLocalTimeAsUTC(reference: reference) == false)
+
+        // The defect: local wall-clock time written with a UTC marker. Parsed as UTC it runs ahead
+        // of real UTC by exactly the declared offset — which is the same formatter bug that makes
+        // `starttime=…Z` mean device-local on playback.
+        let quirky = DeviceTime(mode: "NTP",
+                                localTime: reference.addingTimeInterval(28_800),
+                                utcOffsetSeconds: 28_800,
+                                rawTimeZone: "CST-8:00:00")
+        #expect(quirky.stampsLocalTimeAsUTC(reference: reference))
+
+        // Clock drift inside the tolerance still reads as the quirk; the alternative is hours away.
+        let drifted = DeviceTime(mode: "NTP",
+                                 localTime: reference.addingTimeInterval(28_800 + 120),
+                                 utcOffsetSeconds: 28_800,
+                                 rawTimeZone: "CST-8:00:00")
+        #expect(drifted.stampsLocalTimeAsUTC(reference: reference))
+
+        // A clock that is merely wrong, by an amount that is not the offset, is not the quirk.
+        let wrongClock = DeviceTime(mode: "manual",
+                                    localTime: reference.addingTimeInterval(3_600),
+                                    utcOffsetSeconds: 28_800,
+                                    rawTimeZone: "CST-8:00:00")
+        #expect(wrongClock.stampsLocalTimeAsUTC(reference: reference) == false)
+
+        // ⛔ A device in UTC can never be detected, because local and UTC are the same reading.
+        // Reporting the quirk there would be a coin toss dressed as a fact.
+        let utcDevice = DeviceTime(mode: "NTP",
+                                   localTime: reference.addingTimeInterval(28_800),
+                                   utcOffsetSeconds: 0,
+                                   rawTimeZone: "UTC")
+        #expect(utcDevice.stampsLocalTimeAsUTC(reference: reference) == false)
+
+        // Symmetry: a device west of UTC gives itself away by running *behind*.
+        let west = DeviceTime(mode: "NTP",
+                              localTime: reference.addingTimeInterval(-18_000),
+                              utcOffsetSeconds: -18_000,
+                              rawTimeZone: "EST5:00:00")
+        #expect(west.stampsLocalTimeAsUTC(reference: reference))
+    }
+
     @Test func deviceTimeRequiresALocalTime() throws {
         let xml = "<Time><timeMode>NTP</timeMode><timeZone>CST-8:00:00</timeZone></Time>"
         #expect(throws: ISAPIError.self) {

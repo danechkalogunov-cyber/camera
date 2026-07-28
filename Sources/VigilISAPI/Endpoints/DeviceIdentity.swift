@@ -324,6 +324,40 @@ public struct DeviceTime: Sendable, Hashable, Codable {
     public func skew(against reference: Date) -> Double {
         localTime.timeIntervalSince(reference)
     }
+
+    /// Whether this device stamps **local** wall-clock time with a UTC marker.
+    ///
+    /// This is the detector for `DeviceQuirks.playbackTimesAreDeviceLocal`, and the reason it can
+    /// live here rather than in the RTSP layer. spec-isapi.md §15.3 proposes comparing the `Range`
+    /// echo after `PLAY`, which needs a signal carried from `VigilRTSP` back into this actor
+    /// through two modules. `/System/time` answers the same question in one request, on the
+    /// connect path, before any playback is attempted:
+    ///
+    /// A device whose date formatter writes local time and appends `Z` — which is exactly the
+    /// defect that makes `starttime=…Z` mean device-local — gives itself away here. Parsed as UTC,
+    /// its `localTime` runs **ahead of real UTC by its own declared offset**. A device that
+    /// formats correctly (either a real `Z` in UTC, or an explicit `+03:00`) parses to the true
+    /// instant and shows no such gap.
+    ///
+    /// ⚠️ **Not the same as a wrong clock**, and the discriminator is that the gap matches
+    /// ``utcOffsetSeconds`` almost exactly. A camera whose clock is genuinely three hours fast in a
+    /// UTC+3 zone is indistinguishable from this and will be treated as quirky — which is the safe
+    /// way round: on such a device every archive time is off by the offset either way, and this
+    /// makes the timeline agree with the footage rather than with the wrong clock.
+    ///
+    /// ⛔ Returns `false` for a device in UTC. There, local and UTC are the same and there is
+    /// nothing to detect, nothing to correct, and no way to tell the two apart.
+    ///
+    /// - Parameters:
+    ///   - reference: real "now", from a trusted clock.
+    ///   - toleranceSeconds: how far from the declared offset still counts as a match. Generous
+    ///     because a camera's clock drifts and NTP may be off; the alternative reading is hours
+    ///     away, so a wide window costs nothing.
+    /// - Returns: whether local times from this device arrive labelled as UTC.
+    public func stampsLocalTimeAsUTC(reference: Date, toleranceSeconds: Double = 300) -> Bool {
+        guard utcOffsetSeconds != 0 else { return false }
+        return abs(skew(against: reference) - Double(utcOffsetSeconds)) <= toleranceSeconds
+    }
 }
 
 // MARK: - NetworkInterfaceWire
