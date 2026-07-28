@@ -21,8 +21,12 @@
 //
 //  The fetch half lives in `DeviceInfoService+Fetch.swift` and the picture controls in
 //  `DeviceInfoService+Image.swift`; the members those touch are `internal` rather than `private`
-//  because Swift's `private` is file-scoped and the halves are separate files. The published state
-//  keeps `private(set)`, and every write to it is in one of those three files.
+//  because Swift's `private` is file-scoped and the halves are separate files.
+//
+//  ⚠️ That applies to `private(set)` too, and it is easy to miss: `private(set)` scopes the
+//  *setter* to one file, so a published property written from one of those extensions cannot keep
+//  it. `image` is the one such property — it is written by the picture-settings writer next door.
+//  Everything else here keeps `private(set)` and is written only in this file.
 //
 
 #if os(macOS)
@@ -285,7 +289,7 @@ final class DeviceInfoService {
     ///
     /// `nil` until the Image tab has been opened once — these are four HTTP reads per channel and
     /// there is no reason to spend them on a panel nobody has looked at.
-    private(set) var image: InspectorImageSettings?
+    var image: InspectorImageSettings?
 
     // MARK: - Image write state
     //

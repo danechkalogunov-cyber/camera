@@ -49,45 +49,45 @@ struct MainWindowView: View {
     /// a camera that refuses `/ISAPI/System/deviceInfo` still shows a picture, and a device-info
     /// timeout must not be able to disturb a session. Built in `init` because it needs the app's
     /// logger and clock, which arrive with the session.
-    @State private var deviceInfo: DeviceInfoService
+    @State var deviceInfo: DeviceInfoService
 
     /// Starts and stops clip recording.
-    @State private var recording: RecordingCoordinator
+    @State var recording: RecordingCoordinator
 
     /// Which files in the recordings folder Vigil actually wrote.
-    @State private var manifest: ClipManifest
+    @State var manifest: ClipManifest
 
     /// The camera's alert stream, which fills the Events screen and the sidebar's badge.
-    @State private var eventFeed: EventCoordinator
+    @State var eventFeed: EventCoordinator
 
     /// The user's groups, and which camera is in which.
-    @State private var groups: CameraGroupStore
+    @State var groups: CameraGroupStore
 
     /// The moments the user has marked.
-    @State private var bookmarks: BookmarkStore
+    @State var bookmarks: BookmarkStore
 
     /// Pan, tilt, zoom, focus, iris, presets and patrols.
-    @State private var ptz: PTZCoordinator
+    @State var ptz: PTZCoordinator
 
     /// Stills written to the user's Pictures folder.
-    @State private var snapshots: SnapshotCoordinator
+    @State var snapshots: SnapshotCoordinator
 
     /// The camera's own recording index, which is what the timeline scrubs.
-    @State private var archive: ArchiveCoordinator
+    @State var archive: ArchiveCoordinator
 
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
     /// so nothing invalidates the body as the clock moves — the counter would render once and then
     /// sit frozen. Ticking only while recording keeps the window idle the rest of the time.
-    @State private var recordingTick = Date()
+    @State var recordingTick = Date()
 
     /// The last telemetry snapshot, refreshed once a second while the window is up.
     ///
     /// Pulled rather than pushed: the collector is lock-guarded and lives off the main actor, and a
     /// per-frame push would put the media path on the UI thread — the exact thing DESIGN.md §7.9
     /// forbids. One read per second is what the Stream tab's `LAST 60 S` sparkline needs and no more.
-    @State private var telemetry = StreamTelemetrySnapshot.unmeasured
+    @State var telemetry = StreamTelemetrySnapshot.unmeasured
 
     // MARK: - Initialisation
 

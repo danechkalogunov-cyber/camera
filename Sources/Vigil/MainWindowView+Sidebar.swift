@@ -194,30 +194,47 @@ extension MainWindowView {
     ///
     /// `New Group…` is listed even when there are groups, because the moment a user wants a group is
     /// usually the moment they are looking at the camera that needs one.
+    ///
+    /// ⚠️ Every intermediate is annotated and the row is built by a named helper rather than inline
+    /// in a `map`. Swift's type checker gave up on the one-expression version — "unable to
+    /// type-check this expression in reasonable time" — because a closure returning a struct with
+    /// several defaulted arguments, one of which is another closure containing a ternary over an
+    /// `Optional`, is a large inference problem. Naming the types collapses it.
     func groupMembershipItems(for camera: CameraID) -> [VSidebarMenuItem] {
-        let current = groups.group(for: camera)
-        var items = groups.groups.map { group in
-            VSidebarMenuItem(id: "camera.group.\(group.id)",
-                             title: group.name,
-                             isOn: group.id == current,
-                             action: {
-                                 // Choosing the group a camera is already in takes it out again,
-                                 // which is what a ticked menu item means everywhere else.
-                                 groups.setGroup(group.id == current ? nil : group.id, for: camera)
-                             })
+        let current: GroupID? = groups.group(for: camera)
+        var items: [VSidebarMenuItem] = []
+        for group in groups.groups {
+            items.append(membershipRow(group, camera: camera, current: current))
         }
         if !items.isEmpty {
-            items.append(.separator(id: "camera.group.rule"))
+            items.append(VSidebarMenuItem.separator(id: "camera.group.rule"))
+            let clear: () -> Void = { groups.setGroup(nil, for: camera) }
             items.append(VSidebarMenuItem(id: "camera.group.none",
                                           title: Self.localized("None"),
                                           isEnabled: current != nil,
-                                          action: { groups.setGroup(nil, for: camera) }))
+                                          action: clear))
         }
         items.append(VSidebarMenuItem(id: "camera.group.new",
                                       title: Self.localized("New Group…"),
                                       symbol: .newGroup,
                                       action: { window.sheet = .newGroup }))
         return items
+    }
+
+    /// One group's row in the membership submenu.
+    ///
+    /// Split out of ``groupMembershipItems(for:)`` for the type checker's sake, not for tidiness.
+    private func membershipRow(_ group: CameraGroupRecord,
+                               camera: CameraID,
+                               current: GroupID?) -> VSidebarMenuItem {
+        // Choosing the group a camera is already in takes it out again, which is what a ticked
+        // menu item means everywhere else.
+        let target: GroupID? = group.id == current ? nil : group.id
+        let toggle: () -> Void = { groups.setGroup(target, for: camera) }
+        return VSidebarMenuItem(id: "camera.group.\(group.id)",
+                                title: group.name,
+                                isOn: group.id == current,
+                                action: toggle)
     }
 
     /// The right-click menu on a group row.

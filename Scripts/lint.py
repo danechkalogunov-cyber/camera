@@ -453,6 +453,104 @@ def check_duplicate_test_names() -> list[Violation]:
     return out
 
 
+def check_split_file_access() -> list[Violation]:
+    """`private` is FILE-scoped in Swift, so splitting a type across files breaks every private
+    member the other half touches.
+
+    This is the rule that cost the most to learn, twice. Extensions of one type live in
+    `Foo.swift` + `Foo+Bar.swift`, and a member left `private` in one is simply invisible to the
+    other — 40-odd errors on the first Mac build, none of them visible here.
+
+    Two traps this checks that a naive scan misses:
+
+      1. Attributes may precede the access modifier. `@State private var archive` does not match a
+         pattern anchored on `private` at the start, which is exactly how eleven properties got
+         through an earlier version of this check.
+      2. `private(set)` scopes only the *setter*. Reading such a property from the other file is
+         fine; assigning to it is not, so only assignments are reported.
+
+    Files are grouped by the base name before `+`, which is this repo's convention for "extensions
+    of the same type".
+
+    ⚠️ This is a text scan, not a type checker, so it is deliberately **conservative**: a name that
+    the other file also declares — as a parameter, a local, an enum case, or its own member — is
+    skipped, because the reference there is far more likely to be that one. Without this the rule
+    fired on `StreamStatisticsRollup(historyWindow: historyWindow)` (an argument label plus a local
+    parameter), on `VTheme.Symbol.stop`, and on `Stroke.contrast` — seven false alarms in a tree
+    that compiles. A lint rule that cries wolf gets switched off, and the real compiler on the Mac
+    is still the backstop; missing a case here is cheaper than being ignored.
+    """
+    out: list[Violation] = []
+    groups: dict[pathlib.Path, dict[str, list[pathlib.Path]]] = defaultdict(lambda: defaultdict(list))
+    for path in swift_files("Sources"):
+        groups[path.parent][path.stem.split("+")[0]].append(path)
+
+    decl = re.compile(
+        r"^    (?:@\w+(?:\([^)]*\))?\s+)*"
+        r"(private\(set\)|private|fileprivate)\s+"
+        r"(?:@\w+(?:\([^)]*\))?\s+)*"
+        r"(?:static\s+|nonisolated\s+|final\s+|lazy\s+|weak\s+|unowned\s+)*"
+        r"(?:func|var|let|struct|enum|class|typealias)\s+(\w+)")
+
+    def stripped(path: pathlib.Path) -> str:
+        body = "\n".join(l for l in path.read_text().splitlines()
+                         if not l.lstrip().startswith("//"))
+        return re.sub(r'"(?:[^"\\]|\\.)*"', '""', body)
+
+    def declares(body: str) -> set[str]:
+        """Every name the file binds itself: members, locals, parameters, enum cases."""
+        names: set[str] = set()
+        names |= set(re.findall(r"\b(?:func|typealias|struct|enum|class)\s+(\w+)", body))
+        # `case a, b, c` and `let x, y` bind every name in the list, not just the first — which is
+        # how `VTheme.Symbol`'s one-line `case snapshot, …, stop, …` slipped through and reported
+        # three false alarms.
+        for kind, rest in re.findall(r"\b(let|var|case)\s+([^\n:=({]*)", body):
+            for piece in rest.split(","):
+                m = re.match(r"\s*(\w+)", piece)
+                if m:
+                    names.add(m.group(1))
+        # Parameter labels and names: `foo bar: T`, `_ bar: T`, `foo: T`.
+        names |= set(re.findall(r"[(,]\s*(?:\w+\s+)?(\w+)\s*:", body))
+        return names
+
+    for _, families in groups.items():
+        for _, files in families.items():
+            if len(files) < 2:
+                continue
+            others = {p: stripped(p) for p in files}
+            bound = {p: declares(body) for p, body in others.items()}
+            for owner in files:
+                for n, raw in enumerate(owner.read_text().splitlines(), 1):
+                    m = decl.match(raw)
+                    if not m:
+                        continue
+                    access, name = m.group(1), m.group(2)
+                    for other in files:
+                        if other is owner:
+                            continue
+                        # See the docstring: if the other file binds this name itself, the
+                        # reference over there is almost certainly to its own.
+                        if name in bound[other]:
+                            continue
+                        body = others[other]
+                        if access == "private(set)":
+                            hit = re.search(r"^\s*(?:self\.)?" + re.escape(name)
+                                            + r"\s*(?:=[^=]|[+\-*/]=)", body, re.M)
+                            what = "assigned to"
+                        else:
+                            # Not an argument label, and not a member of something else.
+                            hit = re.search(r"(?<![\w.(,])" + re.escape(name) + r"\b(?!\s*:)", body) \
+                                or re.search(r"(?:self|Self)\." + re.escape(name) + r"\b", body)
+                            what = "used"
+                        if hit:
+                            out.append((str(owner.relative_to(ROOT)), n, "split-access",
+                                        f"{name!r} is {access} in {owner.name} but {what} in "
+                                        f"{other.name} — Swift scopes {access} to one file, so the "
+                                        f"other half of this type cannot see it"))
+                            break
+    return out
+
+
 def check_file_header(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     if not lines or not lines[0].startswith("//"):
         return [(str(path.relative_to(ROOT)), 1, "header",
@@ -533,6 +631,7 @@ def main() -> int:
         violations += check_theme_isolation(path, lines)
 
     violations += check_duplicate_test_names()
+    violations += check_split_file_access()
     violations += check_plists()
 
     if not violations:
