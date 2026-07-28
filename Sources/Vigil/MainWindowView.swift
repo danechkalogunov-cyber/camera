@@ -477,14 +477,20 @@ struct MainWindowView: View {
             let vouched = manifest.entry(for: relative)
             if !isPartial {
                 guard let vouched else {
+                    if foreign == 0 {
+                        logger.debug(.storage, "clip listing: no manifest entry for \(relative)")
+                    }
                     foreign += 1
                     continue
                 }
-                // Size at close is what the recorder observed. A mismatch means the file changed
-                // after Vigil finished with it, so it is no longer the clip the manifest describes.
+                // Size is reported, not enforced. `ClipRecorder` reads it at close, which can be
+                // before `AVAssetWriter` has finished appending the moov atom and before the
+                // `.partial` rename — so a legitimate clip can differ from its recorded size, and
+                // hiding it over that would lose the user's own recording. Membership in the
+                // manifest is the check that answers the question actually asked: was this file put
+                // here by Vigil, or dropped in.
                 if let size = values?.fileSize, Int64(size) != vouched.byteCount {
                     altered += 1
-                    continue
                 }
             }
             found.append(VLibraryClip(id: Self.stableID(for: url),
@@ -505,7 +511,7 @@ struct MainWindowView: View {
         logger.info(.storage,
                     "clip listing: \(found.count) clips of \(seen) entries under \(folder.path)"
                     + (foreign > 0 ? ", \(foreign) not written by Vigil" : "")
-                    + (altered > 0 ? ", \(altered) altered since recording" : ""))
+                    + (altered > 0 ? ", \(altered) whose size differs from the record" : ""))
         Task { await enrich(found) }
     }
 
