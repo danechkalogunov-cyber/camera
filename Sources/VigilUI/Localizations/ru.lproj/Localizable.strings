@@ -495,3 +495,10 @@
 "Camera Settings…" = "Настройки камеры…";
 "New Group…" = "Новая группа…";
 "Delete Group" = "Удалить группу";
+
+/* SNAPSHOT, DIAGNOSTICS, STREAM SWITCH */
+"Snapshot saved" = "Снимок сохранён";
+"The snapshot could not be taken: %@" = "Не удалось сделать снимок: %@";
+"Diagnostics copied" = "Диагностика скопирована";
+"Switching to the sub-stream — the picture will reconnect" = "Переключаюсь на дополнительный поток — картинка переподключится";
+"Switching to the main stream — the picture will reconnect" = "Переключаюсь на основной поток — картинка переподключится";

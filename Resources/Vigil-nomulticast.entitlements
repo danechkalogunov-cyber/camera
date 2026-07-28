@@ -82,6 +82,14 @@
     <key>com.apple.security.assets.movies.read-write</key>
     <true/>
 
+    <!-- Snapshots land in ~/Pictures/Vigil, the way clips land in ~/Movies/Vigil, and
+         they need their own grant: the two asset entitlements are separate keys. Without
+         this the sandbox refuses the write with NSCocoaErrorDomain 513 at a path that
+         looks perfectly ordinary — which is exactly how the movies grant was found
+         missing, after Record appeared to work and produced no file. -->
+    <key>com.apple.security.assets.pictures.read-write</key>
+    <true/>
+
     <key>com.apple.security.device.audio-input</key>
     <true/>
 

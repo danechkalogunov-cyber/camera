@@ -515,3 +515,10 @@
 "Camera Settings…" = "Camera Settings…";
 "New Group…" = "New Group…";
 "Delete Group" = "Delete Group";
+
+/* SNAPSHOT, DIAGNOSTICS, STREAM SWITCH */
+"Snapshot saved" = "Snapshot saved";
+"The snapshot could not be taken: %@" = "The snapshot could not be taken: %@";
+"Diagnostics copied" = "Diagnostics copied";
+"Switching to the sub-stream — the picture will reconnect" = "Switching to the sub-stream — the picture will reconnect";
+"Switching to the main stream — the picture will reconnect" = "Switching to the main stream — the picture will reconnect";

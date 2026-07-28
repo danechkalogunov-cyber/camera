@@ -271,6 +271,11 @@ PENDING_OK = {
     "Camera Settings…",
     "New Group…",
     "Delete Group",
+    "Snapshot saved",
+    "The snapshot could not be taken: %@",
+    "Diagnostics copied",
+    "Switching to the sub-stream — the picture will reconnect",
+    "Switching to the main stream — the picture will reconnect",
 }
 for key in sorted(en_keys):
     if key not in source_keys and key not in PENDING_OK:

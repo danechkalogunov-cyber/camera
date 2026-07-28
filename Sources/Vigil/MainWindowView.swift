@@ -69,6 +69,9 @@ struct MainWindowView: View {
     /// Pan, tilt, zoom, focus, iris, presets and patrols.
     @State private var ptz: PTZCoordinator
 
+    /// Stills written to the user's Pictures folder.
+    @State private var snapshots: SnapshotCoordinator
+
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
@@ -104,6 +107,8 @@ struct MainWindowView: View {
         _groups = State(initialValue: CameraGroupStore(logger: session.dependencies.logger))
         _bookmarks = State(initialValue: BookmarkStore(logger: session.dependencies.logger))
         _ptz = State(initialValue: PTZCoordinator(logger: session.dependencies.logger))
+        _snapshots = State(initialValue: SnapshotCoordinator(logger: session.dependencies.logger,
+                                                             clock: session.dependencies.clock))
     }
 
     // MARK: - Body
@@ -169,6 +174,9 @@ struct MainWindowView: View {
                 .hidden()
             Button("", action: { window.sheet = .newBookmark })
                 .keyboardShortcut("d", modifiers: .command)
+                .hidden()
+            Button("", action: { takeSnapshot() })
+                .keyboardShortcut("s", modifiers: [.command, .shift])
                 .hidden()
         }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
@@ -365,6 +373,11 @@ struct MainWindowView: View {
                                  shortcut: "R",
                                  category: .recording,
                                  isEnabled: session.format != nil && session.camera != nil))
+        commands.append(VCommand(id: "capture.snapshot",
+                                 title: Self.localized("Snapshot"),
+                                 shortcut: "⇧S",
+                                 category: .camera,
+                                 isEnabled: session.camera != nil))
         commands.append(VCommand(id: "view.cycle",
                                  title: Self.localized("Cycle cameras"),
                                  category: .view,
@@ -406,6 +419,7 @@ struct MainWindowView: View {
         case "view.inspector": window.isInspectorVisible.toggle()
         case "view.cycle":     window.cycle = window.cycle.toggledRunning()
         case "record.toggle":  toggleRecording()
+        case "capture.snapshot": takeSnapshot()
         default:
             if let layout = VGridLayout(rawValue: String(command.id.dropFirst("layout.".count))) {
                 selectLayout(layout)
@@ -855,6 +869,9 @@ struct MainWindowView: View {
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
         actions.onOpenBookmark = { bookmark in window.sheet = .editBookmark(bookmark.id) }
         actions.onDeleteBookmark = { bookmark in bookmarks.delete(bookmark.id) }
+        actions.onDeleteEvent = { event in
+            Task { await eventFeed.delete(event.id, camera: session.camera) }
+        }
         return actions
     }
 
@@ -1165,7 +1182,84 @@ struct MainWindowView: View {
         actions.onPTZDeletePreset = { number in ptz.deletePreset(number) }
         actions.onPTZStartPatrol = { number in ptz.startPatrol(number) }
         actions.onPTZStopPatrol = { number in ptz.stopPatrol(number) }
+        actions.onRevealRecordings = { openRecordingsFolder() }
+        actions.onCopyDiagnostics = { copyDiagnostics() }
+        actions.onCycleStream = { cycleStreamQuality() }
         return actions
+    }
+
+    /// Takes a still and says where it went.
+    private func takeSnapshot() {
+        guard let camera = session.camera else {
+            window.toast = MainWindowToast(kind: .warning,
+                                           message: Self.localized("Connect a camera first"))
+            return
+        }
+        Task {
+            switch await snapshots.capture(camera: camera,
+                                           client: deviceInfo.client,
+                                           model: deviceInfo.identity.model) {
+            case .saved(let url):
+                window.toast = MainWindowToast(
+                    kind: .success,
+                    message: Self.localized("Snapshot saved"),
+                    actionTitle: "Reveal in Finder",
+                    action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
+            case .failed(let reason):
+                window.toast = MainWindowToast(
+                    kind: .error,
+                    message: String(format: Self.localized("The snapshot could not be taken: %@"),
+                                    reason))
+            }
+        }
+    }
+
+    /// Puts a plain-text summary of the stream's state on the pasteboard.
+    ///
+    /// Not the diagnostics bundle `FEATURES.md` F-DAT-03 describes — that needs
+    /// `DiagnosticsBundleBuilder`, which does not exist. This is what the app can honestly produce
+    /// today: the numbers already on screen, in a form that can be pasted into a message. Nothing
+    /// here is a secret; the password never leaves the Keychain and the serial is the one the Info
+    /// tab already shows.
+    private func copyDiagnostics() {
+        let device = deviceInfo.identity
+        let stats = telemetry.statistics
+        let lines = [
+            "Vigil diagnostics",
+            "camera:     \(identity.name)",
+            "address:    \(device.host):\(device.httpPort) (RTSP \(device.rtspPort))",
+            "model:      \(device.model.isEmpty ? "—" : device.model)",
+            "firmware:   \(device.firmwareVersion.isEmpty ? "—" : device.firmwareVersion)",
+            "serial:     \(device.serialNumber.isEmpty ? "—" : device.serialNumber)",
+            "state:      \(String(describing: session.liveState))",
+            "codec:      \(session.format.map { String(describing: $0.videoCodec) } ?? "—")",
+            "bitrate:    \(Int(stats.bitsPerSecond)) bit/s",
+            "fps:        \(stats.framesPerSecond)",
+            "loss:       \(stats.lossFraction * 100)%",
+            "jitter:     \(stats.jitterMilliseconds) ms",
+            "decode q:   \(stats.decodeQueueDepth)",
+        ]
+        copyToPasteboard(lines.joined(separator: "\n"))
+        window.toast = MainWindowToast(kind: .success,
+                                       message: Self.localized("Diagnostics copied"))
+    }
+
+    /// Switches the live stream between the main and the sub stream.
+    ///
+    /// A reconnect, not a negotiation: `StreamController` resolves the quality when the session
+    /// starts, so the only way to change it is to build a new session. The picture drops for as long
+    /// as a normal reconnect takes, which is why this says so rather than appearing to stall.
+    private func cycleStreamQuality() {
+        guard var camera = session.camera else { return }
+        let next: StreamQuality = camera.preferredQuality == .sub ? .main : .sub
+        camera.preferredQuality = next
+        session.camera = camera
+        window.toast = MainWindowToast(
+            kind: .info,
+            message: next == .sub
+                ? Self.localized("Switching to the sub-stream — the picture will reconnect")
+                : Self.localized("Switching to the main stream — the picture will reconnect"))
+        session.perform(.retry)
     }
 
     /// Turns the pad's hold state into a movement command.

@@ -124,6 +124,24 @@ final class EventCoordinator {
         startDraining(camera: camera)
     }
 
+    /// Forgets one event.
+    ///
+    /// **Local only.** UX.md §9.1 is explicit that deleting an event never touches the device — the
+    /// camera's own log is the camera's, and an app that could quietly erase it would be the wrong
+    /// tool to hand a security operator. This removes Vigil's copy and nothing else.
+    func delete(_ id: UUID, camera: Camera?) async {
+        await store.delete([EventID(id)])
+        guard let camera else { return }
+        await refresh(camera: camera)
+    }
+
+    /// Marks everything currently shown as read, which is what clears the sidebar's badge.
+    func markAllRead(camera: Camera?) async {
+        await store.markRead(Set(events.map { EventID($0.id) }))
+        guard let camera else { return }
+        await refresh(camera: camera)
+    }
+
     /// Stops the feed and releases the subscription.
     func stop() async {
         drain?.cancel()
