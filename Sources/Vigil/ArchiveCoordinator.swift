@@ -65,6 +65,16 @@ final class ArchiveCoordinator {
     /// Writable for the same reason as ``month``.
     var isLoadingMonth = false
 
+    /// The instant after which the loaded day is **incomplete**, or `nil` when it is whole.
+    ///
+    /// ⛔ This exists because the alternative is a lie. The device's search is paged and capped; a
+    /// day that exceeds the cap comes back as its first N segments, which is chronologically the
+    /// *morning*. The timeline then draws footage up to some arbitrary hour and nothing after it —
+    /// indistinguishable, to the person looking at it, from a camera that stopped recording. The
+    /// index has carried an `isTruncated` flag since it was written and **nothing read it**, which
+    /// is precisely the "no data, no error" shape this project refuses.
+    private(set) var incompleteAfter: Date?
+
     // MARK: - TrackAvailability
 
     /// Whether this camera records at all, as far as Vigil has been able to find out.
@@ -168,6 +178,7 @@ final class ArchiveCoordinator {
         self.session = session
         self.channel = channel
         archive = nil
+        incompleteAfter = nil
         loadedDay = nil
         primaryTrack = nil
         myTracks = []
@@ -354,6 +365,7 @@ final class ArchiveCoordinator {
             lastFailure = reason
             tracks = .refused(reason)
             archive = nil
+            incompleteAfter = nil
             return
         }
 
@@ -385,6 +397,7 @@ final class ArchiveCoordinator {
                 + "none of them enabled")
             tracks = .none
             archive = nil
+            incompleteAfter = nil
             return
         }
         tracks = .present
@@ -415,7 +428,15 @@ final class ArchiveCoordinator {
                 segments.append(contentsOf: index.segments)
                 truncated = truncated || index.truncated
                 answered += 1
-                logger.info(.isapi, "track \(track.id): \(index.segments.count) segment(s)")
+                // The span, not just the count. A count alone cannot tell "this track holds the
+                // morning" from "this track holds the whole day", which is exactly the question
+                // when footage is missing after a certain hour.
+                let span = index.segments.isEmpty
+                    ? "empty"
+                    : "\(clock.hourMinuteSecond(index.segments[0].start))"
+                        + "…\(clock.hourMinuteSecond(index.segments[index.segments.count - 1].end))"
+                logger.info(.isapi, "track \(track.id): \(index.segments.count) segment(s) \(span)"
+                    + (index.truncated ? " TRUNCATED" : ""))
             } catch {
                 // One track that refuses does not lose the others: an NVR commonly has a track for
                 // a channel whose disk was pulled, and that is not a reason to show no timeline.
@@ -429,6 +450,7 @@ final class ArchiveCoordinator {
             lastFailure = reason
             tracks = .refused(reason)
             archive = nil
+            incompleteAfter = nil
             return
         }
         let merged = TimelineSegmentIndex(raw: segments, day: day, isTruncated: truncated)
@@ -441,6 +463,15 @@ final class ArchiveCoordinator {
         let listed = mine.map { String($0.id.value) }.joined(separator: ",")
         logger.info(.isapi, "archive: \(merged.segments.count) segment(s) merged from "
             + "\(answered) of \(mine.count) track(s) [\(listed)]")
+
+        // Published so the window can say so out loud. The last segment's end is where the truth
+        // stops, and it is the only instant worth naming: everything before it was read, everything
+        // after it is unknown rather than empty.
+        incompleteAfter = truncated ? merged.segments.last?.end : nil
+        if let incompleteAfter {
+            logger.warning(.isapi, "the day is INCOMPLETE after "
+                + "\(clock.hourMinuteSecond(incompleteAfter)) — the device's search hit its cap")
+        }
 
         lastFailure = nil
         archive = VLibraryArchive(tracks: built,

@@ -135,6 +135,12 @@ extension MainWindowView {
             try? await Task.sleep(for: .milliseconds(250))
             if Task.isCancelled { return }
         }
+        // ⛔ Checked before `hasExplainedArchive` and not gated by it. That flag suppresses the
+        // once-per-camera explanation of an *absent* scrubber; this is a fact about the day just
+        // loaded and changes as the user steps days, so silencing it after the first time would
+        // hide an incomplete Tuesday because Monday was already explained.
+        reportIncompleteDay()
+
         guard !window.hasExplainedArchive else { return }
         switch archive.tracks {
         case .unknown, .present:
@@ -157,6 +163,22 @@ extension MainWindowView {
                                                        + "%@"),
                                 reason))
         }
+    }
+
+    /// Says so when the day on screen is only part of the day.
+    ///
+    /// The symptom this answers is a user reporting "there is no recording after 06:30" about a
+    /// camera that recorded all day. The device's search is paged and capped; past the cap it stops
+    /// answering, and what comes back is the morning. A timeline that just ends looks exactly like a
+    /// camera that stopped, so it has to say which it is.
+    func reportIncompleteDay() {
+        guard let edge = archive.incompleteAfter else { return }
+        window.toast = MainWindowToast(
+            kind: .warning,
+            message: String(format: Self.localized("This day holds more recordings than Vigil "
+                                                   + "could read. The timeline is complete up to "
+                                                   + "%@ and unknown after it."),
+                            libraryClock.hourMinuteSecond(edge)))
     }
 
     /// Vigil's own clips as timeline blocks, so the scrubber shows them against the device's.

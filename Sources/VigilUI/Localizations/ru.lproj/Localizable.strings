@@ -541,3 +541,8 @@
 "%lld: footage" = "%lld: есть записи";
 "%lld: nothing recorded" = "%lld: ничего не записано";
 "%lld: unknown" = "%lld: неизвестно";
+
+/* AN INCOMPLETE DAY — the device's paged search hit its cap, so the timeline holds the
+   morning and nothing after it. Says which it is, because a timeline that simply ends
+   looks exactly like a camera that stopped recording. */
+"This day holds more recordings than Vigil could read. The timeline is complete up to %@ and unknown after it." = "В этом дне больше записей, чем Vigil смог прочитать. Шкала достоверна до %@, а что после — неизвестно.";

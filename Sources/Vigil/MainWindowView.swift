@@ -235,6 +235,10 @@ struct MainWindowView: View {
         // The index is only worth reading when the Recordings screen is actually on the stage:
         // it is a paged search at the device and a camera with a full card answers slowly.
         .task(id: archiveTrigger) { await loadArchive() }
+        // Fires on every day the user steps to, not just the first load. Stepping a day goes
+        // through `loadArchiveDay` rather than `loadArchive`, and an incomplete Tuesday must be
+        // announced even though Monday was already announced.
+        .onChange(of: archive.incompleteAfter) { _, _ in reportIncompleteDay() }
     }
 
     // MARK: - Sheets

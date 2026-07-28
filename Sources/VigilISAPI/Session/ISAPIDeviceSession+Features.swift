@@ -255,7 +255,12 @@ extension ISAPIDeviceSession {
     /// guard: a device that answers `MORE` with a positive `numberOfMatches` and an empty
     /// `<matchList>` advances the cursor for ever without the segment count ever reaching its cap,
     /// and one such NVR would otherwise hold this actor and its HTTP lane open until the app quits.
-    static let maximumSearchPages = 64
+    ///
+    /// ⚠️ Raised from 64 with the segment cap. At 40 segments a page, 64 pages stopped a search at
+    /// 2 560 — below the new cap, which would have made raising the cap pointless: the page limit
+    /// would have become the real ceiling and truncated the day just as silently. A busy day is
+    /// hundreds of pages, and each is one small POST the device answers from its own index.
+    static let maximumSearchPages = 512
 
     /// `GET /ISAPI/ContentMgmt/record/tracks`. Cached 5 min.
     public func recordTracks(force: Bool = false) async throws(ISAPIError) -> [RecordTrack] {

@@ -286,6 +286,8 @@ PENDING_OK = {
     "The camera would not list its recordings: %@",
     "Switching to the sub-stream — the picture will reconnect",
     "Switching to the main stream — the picture will reconnect",
+    "This day holds more recordings than Vigil could read. The timeline is complete up to "
+    "%@ and unknown after it.",
 }
 for key in sorted(en_keys):
     if key not in source_keys and key not in PENDING_OK:

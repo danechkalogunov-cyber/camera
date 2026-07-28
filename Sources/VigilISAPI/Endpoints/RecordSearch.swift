@@ -74,10 +74,20 @@ public struct RecordSearchQuery: Sendable, Hashable {
     /// `badParameters` on several firmwares and 50 itself is unreliable on 5.4.x DVRs.
     public var pageSize: Int
     /// Safety valve. A query that would return more than this stops and reports itself truncated.
+    ///
+    /// ⚠️ Raised from 2 000 to 20 000. Two thousand sounds generous and is not: a camera recording
+    /// continuously writes one file every few seconds to a minute, and record types do not merge
+    /// across a type change — so a single day of mixed timing-plus-motion recording passes 2 000
+    /// segments before lunchtime. The day then arrived truncated, showing footage up to some
+    /// arbitrary morning hour and nothing after it, which reads as "the camera stopped recording"
+    /// rather than "Vigil stopped asking".
+    ///
+    /// Raising it costs nothing on a quiet camera: the pager stops as soon as the device says it
+    /// has no more matches, so the cap is only ever reached by days that genuinely hold that much.
     public var hardSegmentCap: Int
 
     public init(track: TrackID, start: Date, end: Date, recordTypes: Set<RecordType> = [],
-                pageSize: Int = 40, hardSegmentCap: Int = 2000) {
+                pageSize: Int = 40, hardSegmentCap: Int = 20_000) {
         self.track = track
         self.start = start
         self.end = end
