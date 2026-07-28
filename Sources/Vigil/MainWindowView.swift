@@ -52,6 +52,13 @@ struct MainWindowView: View {
     /// Starts and stops clip recording.
     @State private var recording: RecordingCoordinator
 
+    /// Advances once a second while recording, purely to redraw the elapsed counter.
+    ///
+    /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
+    /// so nothing invalidates the body as the clock moves — the counter would render once and then
+    /// sit frozen. Ticking only while recording keeps the window idle the rest of the time.
+    @State private var recordingTick = Date()
+
     // MARK: - Initialisation
 
     /// Builds the window over a session.
@@ -132,6 +139,7 @@ struct MainWindowView: View {
         .task(id: session.camera?.id) { loadDeviceInfo() }
         // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
         .task(id: recording.completed.count) { reloadClips() }
+        .task(id: recording.isRecording) { await tickWhileRecording() }
     }
 
     // MARK: - Overlays
@@ -529,7 +537,37 @@ struct MainWindowView: View {
                       state: session.liveState,
                       attemptStartedAt: session.attemptStartedAt,
                       isRecording: recording.isRecording,
-                      recordingElapsed: recording.elapsed())]
+                      recordingElapsed: recording.elapsed(now: recordingTick),
+                      stats: tileStats)]
+    }
+
+    /// The tile's telemetry pill.
+    ///
+    /// Only the codec and the geometry, which the negotiated format already answers — bitrate and
+    /// frame rate need `StreamStatisticsCollector`, which is written but not yet fed. `nil` before
+    /// the DESCRIBE lands, which also hides the pill's REC badge, so the badge is not the only
+    /// signal that a clip is running: the elapsed counter at the bottom of the tile is unconditional.
+    private var tileStats: VTileStats? {
+        guard let format = session.format else { return nil }
+        let dimensions = format.resolution.map {
+            FrameDimensions(width: $0.width, height: $0.height)
+        }
+        return VTileStats(codec: format.videoCodec.rawValue.uppercased(),
+                          dimensions: dimensions,
+                          framesPerSecond: format.declaredFPS,
+                          isHardwareDecode: true)
+    }
+
+    /// Redraws once a second for as long as a clip is being written.
+    private func tickWhileRecording() async {
+        while !Task.isCancelled, recording.isRecording {
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch {
+                return
+            }
+            recordingTick = Date()
+        }
     }
 
     /// What the inspector shows.
@@ -544,7 +582,8 @@ struct MainWindowView: View {
                         identity: deviceIdentity,
                         storage: deviceInfo.storage,
                         isDeviceLoading: deviceInfo.isLoading,
-                        isDeviceUnavailable: deviceInfo.isUnavailable)
+                        isDeviceUnavailable: deviceInfo.isUnavailable,
+                        recording: recordingState)
     }
 
     /// The address half of the Info tab.
@@ -574,6 +613,7 @@ struct MainWindowView: View {
         actions.onRequestKeyframe = { session.recoverStalledPicture() }
         actions.onReconnect = { session.perform(.retry) }
         actions.onRetryDevice = { deviceInfo.retry() }
+        actions.onToggleRecording = { toggleRecording() }
         return actions
     }
 
@@ -591,6 +631,16 @@ struct MainWindowView: View {
         components.port = identity.httpPort
         guard let url = components.url else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    /// What the Rec tab shows.
+    private var recordingState: VInspectorRecordingState {
+        VInspectorRecordingState(
+            isRecording: recording.isRecording,
+            elapsedSeconds: recording.elapsed(now: recordingTick)
+                .map { Double($0.components.seconds) } ?? 0,
+            destination: Self.recordingsFolderLabel,
+            clipsToday: window.clips.count)
     }
 
     /// The status bar's counters.
