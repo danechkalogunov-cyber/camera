@@ -258,7 +258,7 @@ enum SessionFixtures {
     /// Refuses every image sub-resource except `kept`.
     ///
     /// `RequestDouble` matches routes by **suffix**, so there is no way to express "everything under
-    /// this prefix" in one route — each of the thirteen controls needs its own. Written out here
+    /// this prefix" in one route — each of the fourteen controls needs its own. Written out here
     /// rather than in each test so a new `ImageControl` case is covered automatically.
     static func refuseImageControls(_ double: RequestDouble,
                                     except kept: Set<ImageControl>) async {
@@ -953,7 +953,7 @@ enum SessionFixtures {
         #expect(settings.irCut?.mode == .auto)
     }
 
-    /// A device that refuses all thirteen is a normal camera without image controls, not an error.
+    /// A device that refuses all fourteen is a normal camera without image controls, not an error.
     @Test func deviceSessionReturnsEmptyImageSettingsWhenEveryControlIsRefused() async throws {
         let double = RequestDouble()
         await SessionFixtures.refuseImageControls(double, except: [])

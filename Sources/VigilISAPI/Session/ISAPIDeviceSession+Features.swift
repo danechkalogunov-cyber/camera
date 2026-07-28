@@ -524,7 +524,7 @@ extension ISAPIDeviceSession {
 
     /// How many image sub-resources are read at once (docs/spec-isapi.md §17.2).
     ///
-    /// Thirteen sub-resources with no limit is thirteen simultaneous requests at a device whose
+    /// Fourteen sub-resources with no limit is fourteen simultaneous requests at a device whose
     /// documented ceiling is three, and the answer to that is a `deviceBusy` storm that this
     /// session would then mis-learn as a permanent concurrency quirk.
     static let imageProbeConcurrency = 3
@@ -534,7 +534,7 @@ extension ISAPIDeviceSession {
     /// Each sub-resource is read independently and a `403`/`404` on one is not an error — it means
     /// the control does not exist, which is exactly what `available` reports and what the settings
     /// panel needs in order to show only the sliders that will work. A device that refuses all
-    /// thirteen yields an `ImageSettings` with an empty `available` and no thrown error, because a
+    /// fourteen yields an `ImageSettings` with an empty `available` and no thrown error, because a
     /// camera without image controls is a normal camera.
     public func imageSettings(channel: ChannelID,
                              force: Bool = false) async throws(ISAPIError) -> ImageSettings {
@@ -628,6 +628,28 @@ extension ISAPIDeviceSession {
         async throws(ISAPIError) -> ImageSettings {
         try await writeImage(channel: channel, control: .ircut) { node in
             ImageWrite.irCut(node, setting)
+        }
+    }
+
+    /// Writes the image flip.
+    @discardableResult
+    public func setFlip(channel: ChannelID, _ setting: FlipSetting)
+        async throws(ISAPIError) -> ImageSettings {
+        try await writeImage(channel: channel, control: .flip) { node in
+            ImageWrite.flip(node, setting)
+        }
+    }
+
+    /// Writes the supplement lamp's mode and brightness.
+    ///
+    /// Separate from ``setIRCut(channel:_:)`` because they are separate things: the filter decides
+    /// whether the sensor sees infrared, the lamp decides whether any is being emitted. A camera can
+    /// have either without the other.
+    @discardableResult
+    public func setSupplementLight(channel: ChannelID, _ setting: SupplementLightSetting)
+        async throws(ISAPIError) -> ImageSettings {
+        try await writeImage(channel: channel, control: .supplementLight) { node in
+            ImageWrite.supplementLight(node, setting)
         }
     }
 

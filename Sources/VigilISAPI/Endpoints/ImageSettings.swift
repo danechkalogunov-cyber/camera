@@ -23,7 +23,7 @@ import VigilProtocols
 /// One image sub-resource.
 public enum ImageControl: String, Sendable, Hashable, Codable, CaseIterable {
     case color, sharpness, wdr, blc, hlc, ircut, noiseReduce, whiteBalance
-    case exposure, shutter, gamma, flip, powerLine
+    case exposure, shutter, gamma, flip, powerLine, supplementLight
 
     /// The last path component of the sub-resource. Note the capitalisation: `WDR`, `BLC` and `HLC`
     /// are upper-case on the wire and `ircutFilter` is not the same string as the case name.
@@ -42,6 +42,7 @@ public enum ImageControl: String, Sendable, Hashable, Codable, CaseIterable {
         case .gamma: "gamma"
         case .flip: "imageFlip"
         case .powerLine: "powerLineFrequency"
+        case .supplementLight: "supplementLight"
         }
     }
 
@@ -61,7 +62,149 @@ public enum ImageControl: String, Sendable, Hashable, Codable, CaseIterable {
         case .gamma: "Gamma"
         case .flip: "ImageFlip"
         case .powerLine: "PowerLineFrequency"
+        case .supplementLight: "SupplementLight"
         }
+    }
+}
+
+// MARK: - FlipSetting
+
+/// Image flip: whether the sensor's picture is mirrored, and about which axis.
+///
+/// Two elements rather than one, because that is how the device models it: `<enabled>` decides
+/// whether flipping happens at all and `<ImageFlipStyle>` decides how. A firmware that has been
+/// switched off keeps its last style, so reading the style alone would report a flip that is not
+/// being applied.
+public struct FlipSetting: Sendable, Hashable, Codable {
+
+    /// The axis. The wire spellings are not the case names — `LEFTRIGHT` mirrors horizontally.
+    public enum Style: String, Sendable, Hashable, Codable {
+
+        /// Rotated 180°.
+        case centre
+
+        /// Mirrored left-to-right.
+        case horizontal
+
+        /// Mirrored top-to-bottom.
+        case vertical
+
+        /// What the device calls it.
+        public var wireValue: String {
+            switch self {
+            case .centre: "CENTER"
+            case .horizontal: "LEFTRIGHT"
+            case .vertical: "UPDOWN"
+            }
+        }
+
+        init?(raw: String?) {
+            switch ISAPIVocabulary.normalize(raw ?? "") {
+            case "center", "centre": self = .centre
+            case "leftright": self = .horizontal
+            case "updown": self = .vertical
+            default: return nil
+            }
+        }
+    }
+
+    /// Whether flipping is applied.
+    public var isEnabled: Bool
+
+    /// Which axis, when the device named one it understands. `nil` on a firmware that reports a
+    /// style Vigil has no case for — the flip is still known to be on or off.
+    public var style: Style?
+
+    public init(isEnabled: Bool, style: Style?) {
+        self.isEnabled = isEnabled
+        self.style = style
+    }
+
+    /// Decodes an `<ImageFlip>` document.
+    ///
+    /// A document with a style but no `<enabled>` is read as enabled: several firmwares omit the
+    /// element entirely and express "off" by not offering the resource at all.
+    public init(document: ISAPIDocument) {
+        let style = Style(raw: document["ImageFlipStyle|imageFlipStyle"].string)
+        let enabled = document["enabled"].bool
+        self.init(isEnabled: enabled ?? (style != nil), style: style)
+    }
+}
+
+// MARK: - SupplementLightSetting
+
+/// The infrared or white supplement light — the lamp, not the IR-cut filter.
+///
+/// Distinct from ``IRCutSetting`` and routinely confused with it: the filter decides whether the
+/// sensor sees infrared, the lamp decides whether there *is* any. A camera can have either without
+/// the other, which is why they are separate sub-resources and separate types here.
+public struct SupplementLightSetting: Sendable, Hashable, Codable {
+
+    /// What the lamp is doing.
+    public enum Mode: String, Sendable, Hashable, Codable {
+
+        /// Off.
+        case close
+
+        /// Infrared.
+        case irLight
+
+        /// White light, on the ColorVu range.
+        case whiteLight
+
+        /// Both, chosen by the camera.
+        case mixed
+
+        /// The exact wire spelling.
+        public var wireValue: String {
+            switch self {
+            case .close: "close"
+            case .irLight: "irLight"
+            case .whiteLight: "colorVuWhiteLight"
+            case .mixed: "mixedLight"
+            }
+        }
+
+        init(raw: String?) {
+            switch ISAPIVocabulary.normalize(raw ?? "") {
+            case "irlight", "open", "on": self = .irLight
+            case "colorvuwhitelight", "whitelight": self = .whiteLight
+            case "mixedlight", "mixed": self = .mixed
+            default: self = .close
+            }
+        }
+    }
+
+    /// How the brightness is chosen.
+    public enum Regulation: String, Sendable, Hashable, Codable {
+        case auto, manual
+
+        init(raw: String?) {
+            self = ISAPIVocabulary.normalize(raw ?? "") == "manual" ? .manual : .auto
+        }
+    }
+
+    /// The lamp's mode.
+    public var mode: Mode
+
+    /// Automatic or manual brightness. `nil` when the device does not offer the choice.
+    public var regulation: Regulation?
+
+    /// 0…100 brightness, meaningful under manual regulation.
+    public var brightness: Int?
+
+    public init(mode: Mode, regulation: Regulation?, brightness: Int?) {
+        self.mode = mode
+        self.regulation = regulation
+        self.brightness = brightness
+    }
+
+    /// Decodes a `<SupplementLight>` document.
+    public init(document: ISAPIDocument) {
+        self.init(mode: Mode(raw: document["supplementLightMode|SupplementLightMode"].string),
+                  regulation: document["mixedLightBrightnessRegulatMode|irLightBrightnessRegulatMode"]
+                      .string.map(Regulation.init(raw:)),
+                  brightness: document["irLightBrightness|whiteLightBrightness|brightness"].int)
     }
 }
 
@@ -168,8 +311,10 @@ public struct ImageSettings: Sendable, Hashable, Codable {
     /// 0…100 general-mode noise reduction level.
     public var noiseReduction: Int?
     public var whiteBalanceStyle: String?
-    /// `CENTER`, `LEFTRIGHT`, `UPDOWN`.
-    public var flip: String?
+    /// Whether the picture is flipped, and about which axis.
+    public var flip: FlipSetting?
+    /// The infrared / white supplement lamp. Not the IR-cut filter — see ``irCut``.
+    public var supplementLight: SupplementLightSetting?
     /// `50hz` or `60hz`.
     public var powerLineFrequency: String?
     /// Which sub-resources actually answered. Drives which controls the UI shows at all.
@@ -178,7 +323,8 @@ public struct ImageSettings: Sendable, Hashable, Codable {
     public init(brightness: Int? = nil, contrast: Int? = nil, saturation: Int? = nil,
                 sharpness: Int? = nil, wdr: WDRSetting? = nil, irCut: IRCutSetting? = nil,
                 noiseReduction: Int? = nil, whiteBalanceStyle: String? = nil,
-                flip: String? = nil, powerLineFrequency: String? = nil,
+                flip: FlipSetting? = nil, supplementLight: SupplementLightSetting? = nil,
+                powerLineFrequency: String? = nil,
                 available: Set<ImageControl> = []) {
         self.brightness = brightness
         self.contrast = contrast
@@ -189,6 +335,7 @@ public struct ImageSettings: Sendable, Hashable, Codable {
         self.noiseReduction = noiseReduction
         self.whiteBalanceStyle = whiteBalanceStyle
         self.flip = flip
+        self.supplementLight = supplementLight
         self.powerLineFrequency = powerLineFrequency
         self.available = available
     }
@@ -218,7 +365,9 @@ public struct ImageSettings: Sendable, Hashable, Codable {
         case .whiteBalance:
             whiteBalanceStyle = document["whiteBalanceStyle"].string ?? whiteBalanceStyle
         case .flip:
-            flip = document["ImageFlipStyle|imageFlipStyle"].string ?? flip
+            flip = FlipSetting(document: document)
+        case .supplementLight:
+            supplementLight = SupplementLightSetting(document: document)
         case .powerLine:
             powerLineFrequency =
                 document["powerLineFrequencyMode|powerLineFrequency"].string ?? powerLineFrequency
@@ -282,6 +431,37 @@ public enum ImageWrite {
         }
         if let seconds = setting.nightToDaySeconds {
             result = result.setting("nightToDayFilterTime", to: String(min(10, max(3, seconds))))
+        }
+        return result
+    }
+
+    /// Flip on/off and its axis.
+    ///
+    /// The style is written even when flipping is being switched off, so the camera keeps the axis
+    /// the user last chose and switching back on restores it rather than reverting to `CENTER`.
+    public static func flip(_ node: XMLNode, _ setting: FlipSetting) -> XMLNode {
+        var result = node.setting("enabled", to: setting.isEnabled ? "true" : "false")
+        if let style = setting.style {
+            result = result.setting("ImageFlipStyle|imageFlipStyle", to: style.wireValue)
+        }
+        return result
+    }
+
+    /// The supplement lamp's mode and, under manual regulation, its brightness.
+    ///
+    /// Brightness is omitted when the regulation is automatic: writing a level the camera is about
+    /// to recompute would make the slider jump back on the confirming read for no reason.
+    public static func supplementLight(_ node: XMLNode,
+                                       _ setting: SupplementLightSetting) -> XMLNode {
+        var result = node.setting("supplementLightMode|SupplementLightMode",
+                                  to: setting.mode.wireValue)
+        if let regulation = setting.regulation {
+            result = result.setting("mixedLightBrightnessRegulatMode|irLightBrightnessRegulatMode",
+                                    to: regulation.rawValue)
+        }
+        if setting.regulation != .auto, let brightness = setting.brightness {
+            let level = String(min(100, max(0, brightness)))
+            result = result.setting("irLightBrightness|whiteLightBrightness|brightness", to: level)
         }
         return result
     }

@@ -428,12 +428,24 @@ final class DeviceInfoService {
     /// that clamps or refuses still wins.
     ///
     /// Only the nodes that actually differ are sent. The panel hands over the entire set on every
-    /// change, and writing all four ISAPI nodes for one slider would be three needless round trips
-    /// and three more chances to leave the camera half-adjusted.
+    /// change, and writing all six ISAPI nodes for one slider would be five needless round trips and
+    /// five more chances to leave the camera half-adjusted.
+    ///
+    /// **Everything here is the camera's own setting.** There is no local image processing anywhere
+    /// in Vigil — the decode path is passthrough, straight from the network into
+    /// `AVSampleBufferDisplayLayer` — so every control on this tab is an ISAPI write to
+    /// `/Image/channels/{ch}/…` and the picture changes at the sensor, for everyone watching.
+    /// ⚠️ That is also why "Adjust my view only" only *withholds* the write: honouring it properly
+    /// needs a render-path adjustment stage that does not exist. Reported in ЧТО-НЕ-СДЕЛАНО.md.
     func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) async {
         guard let session else { return }
         let previous = image ?? InspectorImageSettings()
         image = wanted
+
+        guard !wanted.isLocalPreviewOnly else {
+            logger.info(.isapi, "image write withheld: adjust-my-view-only is on")
+            return
+        }
 
         if wanted.brightness != previous.brightness || wanted.contrast != previous.contrast
             || wanted.saturation != previous.saturation {
@@ -442,6 +454,11 @@ final class DeviceInfoService {
                                                 brightness: wanted.brightness,
                                                 contrast: wanted.contrast,
                                                 saturation: wanted.saturation)
+            }
+        }
+        if wanted.sharpness != previous.sharpness {
+            await apply(channel: channel) {
+                try await session.setSharpness(channel: channel, wanted.sharpness)
             }
         }
         if wanted.wdrMode != previous.wdrMode || wanted.wdrLevel != previous.wdrLevel {
@@ -455,15 +472,51 @@ final class DeviceInfoService {
                                          WDRSetting(mode: mode, level: wanted.wdrLevel))
             }
         }
-        if wanted.dayNightMode != previous.dayNightMode {
+        // `schedule` is deliberately not sent. `ISAPIDeviceSession.setIRCut` refuses it, because the
+        // mode carries a switching schedule Vigil does not model and writing the mode alone would
+        // discard the user's own times. The segment stays selectable so a camera already in that
+        // mode reports it honestly; choosing it here simply changes nothing on the device.
+        if wanted.dayNightMode != previous.dayNightMode, wanted.dayNightMode != .schedule {
             let mode: IRCutSetting.Mode = switch wanted.dayNightMode {
             case .day:      .day
             case .night:    .night
             case .auto:     .auto
-            case .schedule: .schedule
+            case .schedule: .auto       // unreachable: excluded by the guard above
             }
             await apply(channel: channel) {
-                try await session.setIRCut(channel: channel, IRCutSetting(mode: mode))
+                // The two thresholds are `nil` on purpose. Every image write is a read-modify-write,
+                // so an omitted element keeps whatever the device already had — passing a guess here
+                // would overwrite the user's own night-to-day tuning with one.
+                try await session.setIRCut(channel: channel,
+                                           IRCutSetting(mode: mode,
+                                                        nightToDayLevel: nil,
+                                                        nightToDaySeconds: nil))
+            }
+        }
+        if wanted.irMode != previous.irMode || wanted.irLevel != previous.irLevel {
+            // The panel's tri-state is two device fields. `off` closes the lamp; `auto` and `on`
+            // both leave it emitting and differ only in who picks the brightness — which is exactly
+            // what `mixedLightBrightnessRegulatMode` says.
+            let lamp = SupplementLightSetting(
+                mode: wanted.irMode == .off ? .close : .irLight,
+                regulation: wanted.irMode == .on ? .manual : .auto,
+                brightness: wanted.irLevel)
+            await apply(channel: channel) {
+                try await session.setSupplementLight(channel: channel, lamp)
+            }
+        }
+        if wanted.flip != previous.flip {
+            let style: FlipSetting.Style? = switch wanted.flip {
+            case .off:        nil
+            case .centre:     .centre
+            case .horizontal: .horizontal
+            case .vertical:   .vertical
+            }
+            await apply(channel: channel) {
+                // Switching off keeps the previous axis rather than clearing it, so turning the
+                // flip back on restores what the user chose instead of reverting to `CENTER`.
+                try await session.setFlip(channel: channel,
+                                          FlipSetting(isEnabled: style != nil, style: style))
             }
         }
     }
@@ -513,10 +566,25 @@ final class DeviceInfoService {
         }
         if let ir = settings.irCut {
             switch ir.mode {
-            case .day:   out.dayNightMode = .day
-            case .night: out.dayNightMode = .night
-            case .auto:  out.dayNightMode = .auto
-            default:     break
+            case .day:      out.dayNightMode = .day
+            case .night:    out.dayNightMode = .night
+            case .auto:     out.dayNightMode = .auto
+            case .schedule: out.dayNightMode = .schedule
+            default:        break
+            }
+        }
+        if let lamp = settings.supplementLight {
+            // `on` means the user is choosing the brightness, `auto` means the camera is. A device
+            // that reports no regulation element at all is choosing it itself, so it reads as auto.
+            out.irMode = lamp.mode == .close ? .off : (lamp.regulation == .manual ? .on : .auto)
+            if let brightness = lamp.brightness { out.irLevel = brightness }
+        }
+        if let flip = settings.flip {
+            switch flip.style {
+            case .centre?:     out.flip = flip.isEnabled ? .centre : .off
+            case .horizontal?: out.flip = flip.isEnabled ? .horizontal : .off
+            case .vertical?:   out.flip = flip.isEnabled ? .vertical : .off
+            case nil:          out.flip = .off
             }
         }
         return out
