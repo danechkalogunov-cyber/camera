@@ -127,7 +127,20 @@ final class RecordingCoordinator {
         let info = RecordingCameraInfo(id: camera.id,
                                        slug: Self.slug(for: camera),
                                        name: camera.displayName)
-        let destination = RecordingDestination(kind: .clips)
+        // `RecordingDestination` is the *resolved* location — its initialiser is internal on
+        // purpose. The public path is a request through the resolver, which is also what checks the
+        // folder exists, that the sandbox will allow a write there, and that the volume is not
+        // already below its reserve. Every one of those is a named `RecordingError`, so a refusal
+        // says which of the three it was instead of failing later with an empty file.
+        let request = RecordingDestinationRequest(kind: .clips)
+        let destination: RecordingDestination
+        do {
+            destination = try RecordingDestinationResolver.resolve(request, fileSystem: fileSystem)
+        } catch {
+            lastFailure = String(describing: error)
+            logger.error(.storage, "recording destination unusable: \(String(describing: error))")
+            return
+        }
         let recorder = ClipRecorder(camera: info,
                                     destination: destination,
                                     fileSystem: fileSystem,
