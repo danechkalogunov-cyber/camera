@@ -133,6 +133,11 @@ struct MainWindowView: View {
             }
         }
         .background(VTheme.Color.Layer.canvas)
+        // The toolbar *is* the title bar. `WindowChrome` sets `.fullSizeContentView` and nudges the
+        // traffic lights down 10 pt so they centre in a 52 pt bar, but SwiftUI still insets content
+        // by the title bar's safe area — which left the lights stranded in an empty strip above the
+        // toolbar instead of sitting in it. `VToolbarView` already reserves the 79 pt they need.
+        .ignoresSafeArea(.container, edges: .top)
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay(alignment: .topTrailing) { overflowMenu }
         .overlay { paletteOverlay }
