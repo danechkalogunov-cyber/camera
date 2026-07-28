@@ -224,7 +224,7 @@ struct MainWindowView: View {
         .task(id: deviceInfoReady) { followPTZ() }
         // The index is only worth reading when the Recordings screen is actually on the stage:
         // it is a paged search at the device and a camera with a full card answers slowly.
-        .task(id: archiveTrigger) { loadArchive() }
+        .task(id: archiveTrigger) { await loadArchive() }
     }
 
     // MARK: - Sheets
@@ -751,8 +751,14 @@ struct MainWindowView: View {
             + "/\(deviceInfo.session == nil ? 0 : 1)"
     }
 
-    /// Reads the camera's index for the day the timeline is showing.
-    private func loadArchive() {
+    /// Reads the camera's index for the day the timeline is showing, and says why when there is
+    /// nothing to read.
+    ///
+    /// The scrubber is absent for three different reasons and they are not interchangeable: the
+    /// camera records nothing, the camera refused to say, or Vigil has not asked yet. Only the
+    /// first two are worth a sentence, and only once — a toast every time the Recordings screen
+    /// opens would be nagging about a fact that has not changed.
+    private func loadArchive() async {
         archive.follow(session: deviceInfo.session, channel: session.camera?.channel)
         guard VLibrarySection(window.sidebarSelection.focus) == .recordings else { return }
         let clock = libraryClock
@@ -761,6 +767,37 @@ struct MainWindowView: View {
                      clock: clock,
                      localClips: timelineLocalClips,
                      markers: timelineMarkers)
+        await reportArchiveAvailability()
+    }
+
+    /// Waits for the index read to settle and explains an absent scrubber, at most once per camera.
+    private func reportArchiveAvailability() async {
+        // The read is a paged search at the device; a second is generous for a LAN and short enough
+        // that the explanation still feels like a response to opening the screen.
+        for _ in 0..<20 {
+            if archive.tracks != .unknown { break }
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return }
+        }
+        guard !window.hasExplainedArchive else { return }
+        switch archive.tracks {
+        case .unknown, .present:
+            return
+        case .none:
+            window.hasExplainedArchive = true
+            window.toast = MainWindowToast(
+                kind: .info,
+                message: Self.localized("This camera records nothing itself — no memory card and "
+                                        + "no recorder behind it. Vigil's own clips are listed "
+                                        + "below."))
+        case .refused(let reason):
+            window.hasExplainedArchive = true
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: String(format: Self.localized("The camera would not list its recordings: "
+                                                       + "%@"),
+                                reason))
+        }
     }
 
     /// Vigil's own clips as timeline blocks, so the scrubber shows them against the device's.

@@ -46,12 +46,30 @@ final class ArchiveCoordinator {
     /// Why the last load failed, or `nil`.
     private(set) var lastFailure: String?
 
-    /// Whether the device has any recording tracks at all.
+    /// What the device said when asked whether it records anything.
+    private(set) var tracks: TrackAvailability = .unknown
+
+    // MARK: - TrackAvailability
+
+    /// Whether this camera records at all, as far as Vigil has been able to find out.
     ///
-    /// `false` on a camera with no card and no NVR behind it, which is the common case for a bare
-    /// IP camera. The screen shows its own empty state rather than an empty scrubber, because an
-    /// empty scrubber reads as "nothing recorded today" — a different and wrong claim.
-    private(set) var hasTracks = false
+    /// Three states and not a `Bool`, because "we have not asked yet" and "we asked and it has
+    /// none" must not look the same: the first is a reason to say nothing, the second is a reason
+    /// to explain why there is no scrubber.
+    enum TrackAvailability: Sendable, Hashable {
+
+        /// Not asked yet, or the camera changed.
+        case unknown
+
+        /// The device answered and has at least one enabled track on this channel.
+        case present
+
+        /// The device answered and records nothing here. A bare IP camera with no card, usually.
+        case none
+
+        /// The device would not say, with its own reason.
+        case refused(String)
+    }
 
     // MARK: - Stored Properties
 
@@ -85,7 +103,7 @@ final class ArchiveCoordinator {
         self.channel = channel
         archive = nil
         loadedDay = nil
-        hasTracks = false
+        tracks = .unknown
         lastFailure = nil
     }
 
@@ -104,10 +122,15 @@ final class ArchiveCoordinator {
         guard loadedDay != day || archive == nil else { return }
         loadedDay = day
         task?.cancel()
-        // `isLoading` on the previous archive rather than clearing it: replacing the whole value
-        // would blank the scrubber for the length of a network round trip, and a timeline that
-        // empties itself every time you step a day looks broken rather than busy.
-        archive = Self.loading(archive, day: day, localClips: localClips, markers: markers)
+        // ⛔ Nothing is published here on the first load, and that is the whole point. Showing an
+        // empty scrubber while the device is being asked meant a camera with no SD card drew a
+        // timeline for a moment and then had it vanish — which reads as a bug in the app rather
+        // than as a fact about the camera. A scrubber appears only once there is an index behind
+        // it. On a *subsequent* day, the one already drawn stays and only raises `isLoading`, so
+        // stepping a day does not blank a timeline that is genuinely there.
+        if archive != nil {
+            archive = Self.loading(archive, day: day)
+        }
         task = Task { [weak self] in
             await self?.read(session: session,
                              channel: channel,
@@ -151,27 +174,28 @@ final class ArchiveCoordinator {
                       clock: TimelineClock,
                       localClips: [VTimelineLocalClip],
                       markers: [TimelineMarker]) async {
-        let tracks: [RecordTrack]
+        let found: [RecordTrack]
         do {
-            tracks = try await session.recordTracks()
+            found = try await session.recordTracks()
         } catch {
             let reason = String(describing: error)
             logger.info(.isapi, "no recording tracks: \(reason)")
             lastFailure = reason
-            hasTracks = false
+            tracks = .refused(reason)
             archive = nil
             return
         }
 
         // Only this channel's tracks, and only the enabled ones. An NVR answers for every input,
         // and drawing sixteen lanes for a window showing one camera is not a timeline.
-        let mine = tracks.filter { $0.channel == channel && $0.enabled }
-        hasTracks = !mine.isEmpty
+        let mine = found.filter { $0.channel == channel && $0.enabled }
         guard !mine.isEmpty else {
             logger.info(.isapi, "channel \(channel.value) has no enabled recording track")
+            tracks = .none
             archive = nil
             return
         }
+        tracks = .present
 
         var built: [VTimelineTrack] = []
         for (position, track) in mine.enumerated() {
@@ -196,7 +220,9 @@ final class ArchiveCoordinator {
         }
         guard !Task.isCancelled else { return }
         guard !built.isEmpty else {
-            lastFailure = "the device would not return an index for this day"
+            let reason = "the device would not return a recording index for this day"
+            lastFailure = reason
+            tracks = .refused(reason)
             archive = nil
             return
         }
@@ -219,18 +245,10 @@ final class ArchiveCoordinator {
     /// Keeps whatever was already drawn and only raises `isLoading`, so stepping a day does not
     /// blank the scrubber for the length of a round trip.
     private static func loading(_ current: VLibraryArchive?,
-                                day: TimelineDay,
-                                localClips: [VTimelineLocalClip],
-                                markers: [TimelineMarker]) -> VLibraryArchive {
-        guard var existing = current else {
-            return VLibraryArchive(tracks: [],
-                                   day: day,
-                                   window: TimelineWindow(start: day.start, zoom: .day),
-                                   zoom: .day,
-                                   playhead: day.start,
-                                   isLoading: true)
-        }
+                                day: TimelineDay) -> VLibraryArchive? {
+        guard var existing = current else { return nil }
         existing.isLoading = true
+        existing.day = day
         return existing
     }
 

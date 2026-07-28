@@ -502,3 +502,7 @@
 "Diagnostics copied" = "Диагностика скопирована";
 "Switching to the sub-stream — the picture will reconnect" = "Переключаюсь на дополнительный поток — картинка переподключится";
 "Switching to the main stream — the picture will reconnect" = "Переключаюсь на основной поток — картинка переподключится";
+
+/* ARCHIVE AVAILABILITY */
+"This camera records nothing itself — no memory card and no recorder behind it. Vigil's own clips are listed below." = "Эта камера сама ничего не пишет — нет карты памяти и нет регистратора за ней. Ролики, записанные Vigil, перечислены ниже.";
+"The camera would not list its recordings: %@" = "Камера не отдала список своих записей: %@";

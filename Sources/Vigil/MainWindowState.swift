@@ -111,6 +111,12 @@ final class MainWindowState {
     /// sheets at once" unrepresentable instead of merely unlikely.
     var sheet: MainWindowSheet?
 
+    /// Whether the user has already been told why there is no archive scrubber.
+    ///
+    /// One explanation per window, not one per visit to the Recordings screen: the answer is a fact
+    /// about the camera and does not change between two clicks.
+    var hasExplainedArchive = false
+
     // MARK: - Transient
 
     /// The most recent advisory to show over the stage, or `nil` when there is nothing to say.

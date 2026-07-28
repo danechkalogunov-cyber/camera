@@ -522,3 +522,7 @@
 "Diagnostics copied" = "Diagnostics copied";
 "Switching to the sub-stream — the picture will reconnect" = "Switching to the sub-stream — the picture will reconnect";
 "Switching to the main stream — the picture will reconnect" = "Switching to the main stream — the picture will reconnect";
+
+/* ARCHIVE AVAILABILITY */
+"This camera records nothing itself — no memory card and no recorder behind it. Vigil's own clips are listed below." = "This camera records nothing itself — no memory card and no recorder behind it. Vigil's own clips are listed below.";
+"The camera would not list its recordings: %@" = "The camera would not list its recordings: %@";
