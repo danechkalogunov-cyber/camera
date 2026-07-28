@@ -28,121 +28,6 @@ import VigilBitstream
 import VigilProtocols
 import VigilVideo
 
-// MARK: - RecordingEndReason
-
-/// Why a recording stopped. Reaches the clip record and the log line.
-public enum RecordingEndReason: String, Sendable, Hashable, Codable {
-    case userStopped
-    case durationLimit
-    case sizeLimit
-    case diskFull
-    case formatChanged
-    case timestampDiscontinuity
-    case streamLost
-    case appQuitting
-    case noKeyframe
-    case writeError
-}
-
-// MARK: - RecordingCameraInfo
-
-/// The little the recorder needs to know about the camera: enough to name a file and a log line.
-///
-/// Deliberately not `Camera`. The recorder has no business with hosts, ports or credentials, and
-/// taking the full record would make every recorder test construct one.
-public struct RecordingCameraInfo: Sendable, Hashable {
-
-    /// Identity, for log lines and for the clip record.
-    public var id: CameraID
-
-    /// Slug for `{camera}`.
-    public var slug: String
-
-    /// Display name for `{cameraName}`.
-    public var name: String
-
-    /// The zone file names are rendered in — the user's, so `..._231500` is the time on the clock in
-    /// the room rather than in UTC.
-    public var timeZone: TimeZone
-
-    public init(id: CameraID, slug: String, name: String, timeZone: TimeZone = .current) {
-        self.id = id
-        self.slug = slug
-        self.name = name
-        self.timeZone = timeZone
-    }
-}
-
-// MARK: - RecordingSegmentRecord
-
-/// One finished file.
-public struct RecordingSegmentRecord: Sendable, Hashable {
-
-    /// Zero-based index within the recording. Rendered one-based as `{seq}`.
-    public var index: Int
-
-    /// Where the file ended up. For an interrupted recording this still carries the `.partial`
-    /// suffix, and `isPartial` is true.
-    public var url: URL
-
-    /// Wall-clock time of the first written sample.
-    public var startedAt: Date
-
-    /// Wall-clock time of the last written sample.
-    public var endedAt: Date
-
-    /// Media seconds in the file — the number `AVAsset.duration` will report, not wall-clock elapsed.
-    public var mediaSeconds: Double
-
-    /// Size on disk after the finish, from the file system rather than from a sum of sample sizes, so
-    /// container overhead is included.
-    public var byteCount: Int64
-
-    public var samplesWritten: Int
-    public var samplesDropped: Int
-
-    /// True when `finishWriting` did not complete, so the `moov` atom was never written. The file is
-    /// still playable up to its last completed fragment and is kept, named `.partial`, for the
-    /// recovery scan to adopt.
-    public var isPartial: Bool
-
-    public var endReason: RecordingEndReason
-}
-
-// MARK: - RecordingProgress
-
-/// What the tile's REC badge shows.
-public struct RecordingProgress: Sendable, Hashable {
-
-    /// Media seconds in the current file.
-    public var currentSegmentSeconds: Double
-
-    /// Media seconds across every file of this recording, finished ones included.
-    public var totalSeconds: Double
-
-    /// Bytes appended to the current file, as a payload estimate.
-    public var currentSegmentBytes: Int64
-
-    public var samplesWritten: Int
-    public var samplesDropped: Int
-
-    /// Frames discarded because the clip has not opened yet. A non-zero value with a zero
-    /// `samplesWritten` is the honest description of "recording, waiting for a keyframe".
-    public var heldAwaitingKeyframe: Int
-
-    /// True while the gate is shut.
-    public var isAwaitingFirstKeyframe: Bool
-
-    /// True when a limit has been reached and the recorder is waiting for a keyframe to roll over.
-    public var isAwaitingKeyframeToRotate: Bool
-
-    /// Files already closed.
-    public var completedSegments: Int
-
-    /// Free bytes at the last check.
-    public var freeBytes: Int64
-}
-
 // MARK: - ClipRecorder
 
 /// Records one camera's live stream to disk without re-encoding it.
@@ -209,13 +94,13 @@ public actor ClipRecorder {
 
     // MARK: - Dependencies
 
-    private let camera: RecordingCameraInfo
-    private let options: Options
-    private let destination: RecordingDestination
-    private let fileSystem: any RecordingFileSystem
-    private let clock: any MonotonicClock
-    private let wallClock: any WallClock
-    private let logger: any LoggerProtocol
+    let camera: RecordingCameraInfo
+    let options: Options
+    let destination: RecordingDestination
+    let fileSystem: any RecordingFileSystem
+    let clock: any MonotonicClock
+    let wallClock: any WallClock
+    let logger: any LoggerProtocol
 
     /// Asks the camera for an IDR. Rate limiting is the supplier's job — this type knows about one
     /// stream and cannot see the per-device budget.
@@ -224,7 +109,7 @@ public actor ClipRecorder {
     // MARK: - State
 
     /// Parameter sets, so an in-band change can be classified rather than guessed at.
-    private var store = ParameterSetStore()
+    var store = ParameterSetStore()
 
     /// The format description every sample and the writer's `sourceFormatHint` are built from.
     /// Not `Sendable`, and never leaves this actor.
@@ -237,36 +122,36 @@ public actor ClipRecorder {
     private var resolution: Resolution?
 
     private var writer: RecordingClipWriter?
-    private var timeline = RecordingTimeline()
-    private var planner: RecordingSegmentPlanner
-    private var gate: RecordingKeyframeGate
+    var timeline = RecordingTimeline()
+    var planner: RecordingSegmentPlanner
+    var gate: RecordingKeyframeGate
 
     /// Files already closed.
-    private var completed: [RecordingSegmentRecord] = []
+    var completed: [RecordingSegmentRecord] = []
 
     /// Wall-clock time of the current file's first sample, for the clip record.
-    private var currentSegmentStartedAt: Date?
+    var currentSegmentStartedAt: Date?
 
     /// Final URL the current `.partial` file is renamed to on a clean finish.
-    private var currentFinalURL: URL?
+    var currentFinalURL: URL?
 
     /// Media seconds across finished files, so `totalSeconds` survives a rotation.
-    private var finishedMediaSeconds: Double = 0
+    var finishedMediaSeconds: Double = 0
 
     private var samplesDropped = 0
-    private var freeBytes: Int64
-    private var bytesSinceFreeSpaceCheck: Int64 = 0
+    var freeBytes: Int64
+    var bytesSinceFreeSpaceCheck: Int64 = 0
 
     /// True between `start()` and `finish()`.
-    private var isRunning = false
+    var isRunning = false
 
     /// True while a rotation is in flight. `append` is an `async` actor method, so another frame can
     /// arrive during the `await` on `finishWriting`; without this flag it would be appended to a
     /// writer that has already been closed.
-    private var isRotating = false
+    var isRotating = false
 
     /// Set once, so `finish()` is idempotent and a second call returns the same records.
-    private var finishedReason: RecordingEndReason?
+    var finishedReason: RecordingEndReason?
 
     // MARK: - Initialisation
 
@@ -492,356 +377,6 @@ public actor ClipRecorder {
 
     /// The records for the files finished so far.
     public func segments() -> [RecordingSegmentRecord] { completed }
-
-    // MARK: - Private: the planner's verdict
-
-    /// Carries out one planner decision.
-    ///
-    /// - Parameter timing: The rebased timing for `frame`, or `nil` when the caller has already
-    ///   decided the frame is not going into the current file.
-    private func performPlannerDecision(_ decision: RecordingSegmentPlanner.Decision,
-                                        frame: EncodedFrame,
-                                        format: CMVideoFormatDescription,
-                                        timing: RecordingSampleTiming?) async {
-        switch decision {
-        case .write:
-            guard let timing else { return }
-            await write(frame, format: format, timing: timing)
-
-        case .rotate(let reason):
-            await rotate(reason: reason)
-            // The keyframe that triggered the rotation is the new file's first sample. Its timing is
-            // re-derived, because the new file's timeline starts again at its own zero.
-            await appendAsFirstSampleOfNewSegment(frame, format: format)
-
-        case .closeBeforeWriting(let reason):
-            await rotate(reason: reason)
-            // A format change means `formatDescription` has already been replaced, so the new
-            // segment's writer is built from the new hint and this frame — if it is a keyframe — opens
-            // it. If it is not, the gate holds until one arrives.
-            if let current = formatDescription {
-                await appendAsFirstSampleOfNewSegment(frame, format: current)
-            }
-
-        case .stop(let reason):
-            await stop(reason: reason == .diskPressure ? .diskFull : .userStopped)
-        }
-    }
-
-    /// Opens a segment if needed and writes one sample into it.
-    private func write(_ frame: EncodedFrame, format: CMVideoFormatDescription,
-                       timing: RecordingSampleTiming) async {
-        if writer == nil {
-            guard await openSegment(format: format) else { return }
-            currentSegmentStartedAt = wallClock.now
-        }
-        guard let writer else { return }
-
-        do {
-            let sample = try RecordingSampleFactory.make(frame, format: format, timing: timing)
-            let outcome = try writer.append(sample, presentation: timing.presentation,
-                                            duration: timing.duration,
-                                            isKeyframe: frame.isKeyframe)
-            if outcome == .droppedInputNotReady {
-                // Not fatal and not silent: a run of these is a disk that cannot keep up, and the
-                // count is what tells the difference between that and a camera that stopped sending.
-                logger.debug(.core, "recording dropped a sample: input not ready",
-                             ["camera": camera.id.short])
-            }
-            bytesSinceFreeSpaceCheck += Int64(frame.byteCount)
-            if bytesSinceFreeSpaceCheck >= options.freeSpaceCheckEveryBytes {
-                bytesSinceFreeSpaceCheck = 0
-                checkFreeSpace()
-            }
-        } catch let error as RecordingError {
-            logger.error(.core, "recording write failed", metadataFor(error))
-            await stop(reason: error == .firstSampleNotKeyframe ? .noKeyframe : .writeError)
-        } catch {
-            // `RecordingSampleFactory` throws `DecodeError`. A frame CoreMedia refuses is dropped;
-            // it is not a reason to end a recording that is otherwise healthy.
-            samplesDropped += 1
-            logger.warning(.core, "recording could not build a sample buffer",
-                           ["camera": camera.id.short, "detail": String(describing: error)])
-        }
-    }
-
-    /// Writes `frame` as the first sample of a freshly opened segment.
-    private func appendAsFirstSampleOfNewSegment(_ frame: EncodedFrame,
-                                                 format: CMVideoFormatDescription) async {
-        switch gate.admit(isKeyframe: frame.isKeyframe, now: clock.now()) {
-        case .write:
-            break
-        case .holdAwaitingKeyframe, .holdAndRequestKeyframe:
-            return
-        case .giveUp:
-            await stop(reason: .noKeyframe)
-            return
-        }
-        switch timeline.admit(presentation: TimestampConversion.cmTime(frame.pts),
-                              decode: frame.dts.map(TimestampConversion.cmTime) ?? CMTime.invalid,
-                              duration: frame.duration.map(TimestampConversion.cmTime)
-                                  ?? CMTime.invalid) {
-        case .write(let timing, _):
-            await write(frame, format: format, timing: timing)
-        case .rejectInvalidTimestamp, .requiresNewSegment:
-            samplesDropped += 1
-        }
-    }
-
-    // MARK: - Private: segments
-
-    /// Creates the writer for the next file. Returns false when it could not be created, in which
-    /// case the recording has already been stopped with a named reason.
-    private func openSegment(format: CMVideoFormatDescription) async -> Bool {
-        let context = RecordingNameContext(cameraSlug: camera.slug,
-                                           cameraName: camera.name,
-                                           date: wallClock.now,
-                                           timeZone: camera.timeZone,
-                                           segmentIndex: planner.segmentIndex,
-                                           resolution: resolution,
-                                           codec: codec,
-                                           trigger: options.trigger)
-        let relative = RecordingNaming.render(options.nameTemplate, context: context)
-        let fileExtension = options.container.fileExtension
-        let partialExtension = fileExtension + ".partial"
-
-        // Split by hand rather than through `NSString.lastPathComponent`: `render` already guarantees
-        // a `/`-separated relative path with no empty components, and staying in Swift keeps this
-        // testable in the shadow harness, where the Objective-C bridge is not what the customer will
-        // run.
-        let parts = relative.split(separator: "/").map(String.init)
-        let baseName = parts.last ?? "clip"
-        let parentComponents = parts.dropLast()
-        let parent = parentComponents.reduce(destination.directory) { url, component in
-            url.appendingPathComponent(component, isDirectory: true)
-        }
-
-        do {
-            try fileSystem.createDirectory(at: parent)
-        } catch {
-            await stop(reason: .writeError, error: error)
-            return false
-        }
-
-        // A name is only free when neither the final nor the `.partial` spelling is taken, so a
-        // recorder cannot claim the name another recorder is still writing.
-        let unique = RecordingNaming.uniqueBaseName(
-            baseName,
-            extensions: [fileExtension, partialExtension],
-            uniqueSuffix: camera.id.short) { candidate, suffix in
-                fileSystem.itemExists(at: parent.appendingPathComponent("\(candidate).\(suffix)"))
-            }
-
-        let partialURL = parent.appendingPathComponent("\(unique).\(partialExtension)")
-        currentFinalURL = parent.appendingPathComponent("\(unique).\(fileExtension)")
-
-        let configuration = RecordingClipWriter.Configuration(
-            container: options.container,
-            fragmentIntervalSeconds: options.fragmentIntervalSeconds,
-            expectsMediaDataInRealTime: true)
-        do {
-            writer = try RecordingClipWriter(outputURL: partialURL, formatDescription: format,
-                                            configuration: configuration)
-        } catch {
-            await stop(reason: .writeError, error: error)
-            return false
-        }
-        logger.info(.core, "recording segment opened",
-                    ["camera": camera.id.short,
-                     "segment": String(planner.segmentIndex),
-                     "path": Redact.path(partialURL.path)])
-        return true
-    }
-
-    /// Closes the current file and prepares the next one.
-    private func rotate(reason: RecordingSegmentReason) async {
-        isRotating = true
-        await closeCurrentSegment(reason: endReason(for: reason))
-        timeline.reset()
-        gate.reset(now: clock.now())
-        currentSegmentStartedAt = nil
-        isRotating = false
-    }
-
-    /// Finishes the current writer and records the result.
-    private func closeCurrentSegment(reason: RecordingEndReason) async {
-        guard let writer else { return }
-        self.writer = nil
-
-        let startedAt = currentSegmentStartedAt ?? wallClock.now
-        let mediaSeconds = timeline.writtenSeconds
-
-        // **This is the await that must not be skipped.** Until `finishWriting`'s handler runs, the
-        // `moov` atom is not on disk and the file is unusable; skipping it is `abandon()`, which is a
-        // deliberate, named, logged fallback rather than something to do by accident.
-        let outcome = await withCheckedContinuation {
-            (continuation: CheckedContinuation<RecordingClipWriter.FinishOutcome, Never>) in
-            writer.finish { outcome in
-                continuation.resume(returning: outcome)
-            }
-        }
-
-        switch outcome {
-        case .completed:
-            var finalURL = writer.outputURL
-            if let intended = currentFinalURL {
-                do {
-                    try fileSystem.moveItem(at: writer.outputURL, to: intended)
-                    finalURL = intended
-                } catch {
-                    // The media is safe; only the name is wrong. Keeping the `.partial` name and
-                    // saying so is better than pretending the rename happened.
-                    logger.error(.core, "recording finished but could not be renamed",
-                                 metadataFor(error))
-                }
-            }
-            let isPartial = finalURL == writer.outputURL
-            completed.append(record(for: writer, startedAt: startedAt, url: finalURL,
-                                    isPartial: isPartial, reason: reason,
-                                    mediaSeconds: mediaSeconds))
-            finishedMediaSeconds += mediaSeconds
-            logger.info(.core, "recording segment finished",
-                        ["camera": camera.id.short,
-                         "path": Redact.path(finalURL.path),
-                         "seconds": String(format: "%.2f", mediaSeconds),
-                         "samples": String(writer.samplesWritten)])
-
-        case .failed(let error):
-            logger.error(.core, "recording segment failed to finish", metadataFor(error))
-            completed.append(record(for: writer, startedAt: startedAt, url: writer.outputURL,
-                                    isPartial: true, reason: .writeError,
-                                    mediaSeconds: mediaSeconds))
-            finishedMediaSeconds += mediaSeconds
-
-        case .nothingWritten:
-            // `cancelWriting` already removed the empty output, so there is nothing to record and
-            // nothing to clean up.
-            logger.notice(.core, "recording segment closed with no samples",
-                          ["camera": camera.id.short])
-        }
-        currentFinalURL = nil
-    }
-
-    /// Stops the recording for good.
-    private func stop(reason: RecordingEndReason, error: (any Error)? = nil) async {
-        guard finishedReason == nil else { return }
-        finishedReason = reason
-        isRunning = false
-        if let error {
-            logger.error(.core, "recording stopping after a failure", metadataFor(error))
-        }
-        await closeCurrentSegment(reason: reason)
-    }
-
-    // MARK: - Private: format
-
-    /// Adopts parameter sets, rebuilding the format description when they actually changed.
-    ///
-    /// Only an **incompatible** change forces a new file. A compatible one — a new PPS id, a
-    /// different SAR or crop — leaves the current file alone on purpose: Hikvision sends the
-    /// parameter sets *in band, inside the access units*, so a decoder reading the file gets them
-    /// from the bitstream whatever the container's `avcC`/`hvcC` says. Splitting on every PPS tweak
-    /// would shred a recording into dozens of files for no gain.
-    private func adopt(_ sets: ParameterSets, codec frameCodec: VideoCodec) {
-        let change = store.ingest(sets)
-        switch change {
-        case .unchanged:
-            return
-        case .firstSet, .compatible:
-            rebuildFormatDescription(codec: frameCodec, forcesNewSegment: false)
-        case .incompatible:
-            rebuildFormatDescription(codec: frameCodec, forcesNewSegment: writer != nil)
-        }
-    }
-
-    /// Builds the format description from the stored sets.
-    private func rebuildFormatDescription(codec frameCodec: VideoCodec, forcesNewSegment: Bool) {
-        guard let sets = store.sets else { return }
-        do {
-            formatDescription = try FormatDescriptionFactory.make(codec: frameCodec,
-                                                                  parameterSets: sets,
-                                                                  info: store.format)
-            codec = frameCodec
-            if let parsed = store.format {
-                resolution = Resolution(width: parsed.displayWidth, height: parsed.displayHeight)
-            }
-            if forcesNewSegment {
-                planner.requireImmediateClose(.formatChanged)
-            }
-        } catch {
-            // Discard the sets so the next in-band copy is treated as new rather than as an
-            // `.unchanged` re-send; otherwise one bad SPS wedges the recording forever.
-            store.reset()
-            logger.error(.core, "recording could not build a format description",
-                         metadataFor(error))
-        }
-    }
-
-    // MARK: - Private: disk
-
-    /// Re-reads free space and stops cleanly if the reserve is gone.
-    private func checkFreeSpace() {
-        guard let measured = fileSystem.availableCapacity(at: destination.directory) else { return }
-        freeBytes = measured
-        guard measured < options.stopBelowFreeBytes else { return }
-        logger.warning(.core, "recording stopping: free space below the reserve",
-                       ["camera": camera.id.short, "freeBytes": String(measured)])
-        planner.requireImmediateClose(.diskPressure)
-    }
-
-    // MARK: - Private: helpers
-
-    /// Bytes in the current file, from the file system when it can answer and from the appended
-    /// payload otherwise. The file system's number includes container overhead, which is what the
-    /// size limit is actually about.
-    private func currentSegmentBytes() -> Int64 {
-        guard let writer else { return 0 }
-        return fileSystem.fileSize(at: writer.outputURL) ?? writer.appendedByteCount
-    }
-
-    /// Builds the record for a finished file.
-    private func record(for writer: RecordingClipWriter, startedAt: Date, url: URL,
-                        isPartial: Bool, reason: RecordingEndReason,
-                        mediaSeconds: Double? = nil) -> RecordingSegmentRecord {
-        RecordingSegmentRecord(
-            index: completed.count,
-            url: url,
-            startedAt: startedAt,
-            endedAt: wallClock.now,
-            mediaSeconds: mediaSeconds ?? timeline.writtenSeconds,
-            byteCount: fileSystem.fileSize(at: url) ?? writer.appendedByteCount,
-            samplesWritten: writer.samplesWritten,
-            samplesDropped: writer.samplesDropped,
-            isPartial: isPartial,
-            endReason: reason)
-    }
-
-    /// The end reason a segment reason implies.
-    private func endReason(for reason: RecordingSegmentReason) -> RecordingEndReason {
-        switch reason {
-        case .durationLimit: .durationLimit
-        case .sizeLimit: .sizeLimit
-        case .formatChanged: .formatChanged
-        case .timestampDiscontinuity: .timestampDiscontinuity
-        case .diskPressure: .diskFull
-        case .requestedByOwner: .userStopped
-        }
-    }
-
-    /// Log metadata for an error, redacted, with the camera on it.
-    ///
-    /// A `VigilFailure` contributes its own already-redacted metadata; anything else contributes its
-    /// description through `Redact.secrets`, because a framework message can carry a path.
-    private func metadataFor(_ error: any Error) -> [String: String] {
-        var metadata = ["camera": camera.id.short]
-        if let failure = error as? any VigilFailure {
-            metadata["code"] = failure.diagnosticCode
-            for (key, value) in failure.logMetadata { metadata[key] = value }
-        } else {
-            metadata["detail"] = Redact.secrets(in: String(describing: error))
-        }
-        return metadata
-    }
 }
 
 #endif
