@@ -103,6 +103,9 @@ struct CameraSettingsSheet: View {
     /// The group it is in, or `nil` for none.
     @State private var groupID: GroupID?
 
+    /// Whether the chrome drawn over this camera's picture is shown.
+    @State private var showsOverlay: Bool
+
     /// Address, port and model, for the read-only rows.
     let host: String
     let httpPort: Int
@@ -111,8 +114,8 @@ struct CameraSettingsSheet: View {
     /// The groups it could be put in.
     let groups: [CameraGroupRecord]
 
-    /// Applies the edits. Called with the trimmed name and the chosen group.
-    let onSave: (String, GroupID?) -> Void
+    /// Applies the edits. Called with the trimmed name, the chosen group and the overlay switch.
+    let onSave: (String, GroupID?, Bool) -> Void
 
     /// Dismisses without applying.
     let onCancel: () -> Void
@@ -120,14 +123,16 @@ struct CameraSettingsSheet: View {
     /// Creates the sheet over a camera's current values.
     init(name: String,
          groupID: GroupID?,
+         showsOverlay: Bool,
          host: String,
          httpPort: Int,
          model: String,
          groups: [CameraGroupRecord],
-         onSave: @escaping (String, GroupID?) -> Void,
+         onSave: @escaping (String, GroupID?, Bool) -> Void,
          onCancel: @escaping () -> Void) {
         _name = State(initialValue: name)
         _groupID = State(initialValue: groupID)
+        _showsOverlay = State(initialValue: showsOverlay)
         self.host = host
         self.httpPort = httpPort
         self.model = model
@@ -143,7 +148,7 @@ struct CameraSettingsSheet: View {
                    // which replaces one with "Camera <host>" — better to say so than to silently
                    // rename the camera to something the user did not type.
                    isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
-                   onConfirm: { onSave(name, groupID) },
+                   onConfirm: { onSave(name, groupID, showsOverlay) },
                    onCancel: onCancel) {
             VStack(alignment: .leading, spacing: VTheme.Space.md) {
                 field("Name") {
@@ -160,6 +165,15 @@ struct CameraSettingsSheet: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                 }
+                Divider()
+                VInspectorToggleRow("Show overlay on video", isOn: $showsOverlay)
+                Text("""
+                    The camera's name, the connection chip and the statistics readout. \
+                    Warnings about a stream that is failing are always shown.
+                    """, bundle: .vigilUI)
+                    .vType(VTheme.Typography.caption1)
+                    .foregroundStyle(VTheme.Color.Text.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Divider()
                 fact("Address", "\(host):\(httpPort)")
                 fact("Model", model.isEmpty ? "—" : model)

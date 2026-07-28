@@ -140,6 +140,10 @@ struct MainWindowView: View {
 
                 stageRoute
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // One place, and it reaches both the tile stage and the focused camera —
+                    // which is the whole reason this is an environment value rather than an
+                    // argument threaded through three initialisers.
+                    .vShowsVideoOverlay(window.showsVideoOverlay)
 
                 if window.isInspectorVisible {
                     VInspectorView(tab: $window.inspectorTab,
@@ -198,6 +202,7 @@ struct MainWindowView: View {
                 .hidden()
         }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
+        .task { window.showsVideoOverlay = session.remembersVideoOverlay }
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
@@ -240,13 +245,16 @@ struct MainWindowView: View {
         case .cameraSettings:
             CameraSettingsSheet(name: identity.name,
                                 groupID: groups.group(for: cameraID),
+                                showsOverlay: window.showsVideoOverlay,
                                 host: identity.host,
                                 httpPort: session.camera?.httpPort ?? 80,
                                 model: deviceInfo.identity.model,
                                 groups: groups.groups,
-                                onSave: { name, group in
+                                onSave: { name, group, overlay in
                                     renameCamera(to: name)
                                     groups.setGroup(group, for: cameraID)
+                                    window.showsVideoOverlay = overlay
+                                    session.rememberVideoOverlay(overlay)
                                     window.sheet = nil
                                 },
                                 onCancel: { window.sheet = nil })

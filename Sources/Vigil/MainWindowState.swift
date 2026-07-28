@@ -117,6 +117,13 @@ final class MainWindowState {
     /// the main window that puts the picture and the timeline where §7.1 draws them.
     var focusedCamera: CameraID?
 
+    /// Whether the chrome drawn over the picture is shown.
+    ///
+    /// Mirrored here from the stored preference rather than read from `UserDefaults` in a body: the
+    /// stage re-evaluates on every state change the stream produces, and a synchronous defaults
+    /// lookup on that path is file-backed work nobody asked for.
+    var showsVideoOverlay = true
+
     /// Whether the user has already been told why there is no archive scrubber.
     ///
     /// One explanation per window, not one per visit to the Recordings screen: the answer is a fact

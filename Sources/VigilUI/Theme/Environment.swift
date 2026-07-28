@@ -36,6 +36,10 @@ private struct VMotionEnabledKey: EnvironmentKey {
     static let defaultValue: Bool = true
 }
 
+private struct VVideoOverlayKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
 private struct VTextScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = VTheme.Typography.Scale.standard
 }
@@ -76,6 +80,23 @@ extension EnvironmentValues {
     public var vMotionEnabled: Bool {
         get { self[VMotionEnabledKey.self] }
         set { self[VMotionEnabledKey.self] = newValue }
+    }
+
+    /// Whether the chrome drawn *on top of* the picture is shown at all.
+    ///
+    /// The camera name chip, the connection chip, the stats readout and the recording timecode —
+    /// everything that sits over the frame rather than around it. `false` leaves the picture and
+    /// the tile's border, and nothing else.
+    ///
+    /// An environment value and not an initialiser parameter on purpose. The flag has to reach
+    /// `LiveVideoView` and `GridTileView` through `VGridStageView`, and threading a `Bool` through
+    /// three initialisers means three call sites whose argument order must all stay right — for a
+    /// value none of them makes a decision about. The overlays that *explain* a problem are
+    /// deliberately outside this: an offline card or a degraded banner is not decoration, and
+    /// hiding it would leave a black rectangle with no account of itself.
+    public var vShowsVideoOverlay: Bool {
+        get { self[VVideoOverlayKey.self] }
+        set { self[VVideoOverlayKey.self] = newValue }
     }
 
     /// The user's Settings ▸ General ▸ Interface text size factor: 0.92, 1.00 or 1.15 (§4.5).
@@ -125,6 +146,15 @@ extension View {
     @MainActor
     package func vMotionEnabled(_ enabled: Bool) -> some View {
         environment(\.vMotionEnabled, enabled)
+    }
+
+    /// Shows or hides the chrome drawn over the picture for a subtree.
+    ///
+    /// - Parameter shows: `false` hides the name chip, the status chip, the stats readout and the
+    ///   recording timecode. Never hides an overlay that explains a failure.
+    @MainActor
+    package func vShowsVideoOverlay(_ shows: Bool) -> some View {
+        environment(\.vShowsVideoOverlay, shows)
     }
 }
 

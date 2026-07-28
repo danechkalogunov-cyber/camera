@@ -151,13 +151,20 @@ package struct VGridTileView<Video: View>: View {
 
     // MARK: - Chrome
 
+    /// Whether chrome over the picture is drawn at all.
+    ///
+    /// ⛔ Only decoration answers to this. The recording border stays: it reports that this camera
+    /// is being written to disk, which is a fact about the system rather than a label on the
+    /// picture, and a user who hid the chrome has not asked to stop being told that.
+    @Environment(\.vShowsVideoOverlay) private var showsOverlay
+
     /// The top-trailing telemetry, on a `scrim.base` pill and never on a material.
     ///
     /// Hidden until hover unless the tile is focused, because P2 asks that chrome dissolve when it is
     /// not needed and the stats are the least urgent thing on a tile.
     @ViewBuilder
     private var statsReadout: some View {
-        if let stats, isHovering || isFocused {
+        if showsOverlay, let stats, isHovering || isFocused {
             VTileStatsView(stats: stats, isRecording: isRecording)
                 .padding(VTheme.Metrics.tileChromeInset)
                 .transition(.opacity)
@@ -167,7 +174,7 @@ package struct VGridTileView<Video: View>: View {
     /// The bottom-leading readout. At most one at a time, recording first (UX.md §5.3).
     @ViewBuilder
     private var elapsedReadout: some View {
-        if isRecording, let recordingElapsed {
+        if showsOverlay, isRecording, let recordingElapsed {
             Text(verbatim: VTileStats.timecode(recordingElapsed))
                 .vType(VTheme.Typography.monoLarge.numeric)
                 .foregroundStyle(VTheme.Color.Text.onVideo)

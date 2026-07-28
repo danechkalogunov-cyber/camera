@@ -274,6 +274,8 @@ PENDING_OK = {
     "Snapshot saved",
     "The snapshot could not be taken: %@",
     "Diagnostics copied",
+    "Show overlay on video",
+    "The camera's name, the connection chip and the statistics readout. Warnings about a stream that is failing are always shown.",
     "Close",
     "Previous day",
     "Next day",

@@ -55,6 +55,10 @@ package struct LiveVideoView<Video: View>: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Whether the name and status chips are drawn. Set by the app from the camera's own
+    /// settings; the failure overlays deliberately ignore it.
+    @Environment(\.vShowsVideoOverlay) private var showsOverlay
+
     @State private var showsNarration = false
     @State private var showsElapsed = false
     @State private var isSlow = false
@@ -158,12 +162,17 @@ package struct LiveVideoView<Video: View>: View {
 
     private var chrome: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // ⛔ Outside the overlay switch. The degraded banner is the app telling the user *why*
+            // a flowing picture looks wrong, and someone who hid the name chip has not asked to
+            // stop being told that — hiding it would leave a bad picture with no account of itself.
             degradedBanner
             Spacer(minLength: 0)
-            HStack(alignment: .bottom, spacing: VTheme.Space.xs) {
-                CameraNameChip(camera: camera, isHovered: isHovering)
-                ConnectionStatusChip(state: state)
-                Spacer(minLength: 0)
+            if showsOverlay {
+                HStack(alignment: .bottom, spacing: VTheme.Space.xs) {
+                    CameraNameChip(camera: camera, isHovered: isHovering)
+                    ConnectionStatusChip(state: state)
+                    Spacer(minLength: 0)
+                }
             }
         }
         .padding(VTheme.Metrics.tileChromeInset)

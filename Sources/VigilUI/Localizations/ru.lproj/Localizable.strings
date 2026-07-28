@@ -511,3 +511,7 @@
 "Close" = "Закрыть";
 "Previous day" = "Предыдущий день";
 "Next day" = "Следующий день";
+
+/* CAMERA SETTINGS — video overlay */
+"Show overlay on video" = "Показывать наложение поверх видео";
+"The camera's name, the connection chip and the statistics readout. Warnings about a stream that is failing are always shown." = "Название камеры, чип подключения и сводка статистики. Предупреждения о сбоях потока показываются всегда.";

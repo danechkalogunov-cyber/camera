@@ -436,6 +436,18 @@ extension AppSessionModel {
         remembered.save(to: defaults)
     }
 
+    /// Stores whether this camera's picture carries chrome on top of it.
+    func rememberVideoOverlay(_ shows: Bool) {
+        guard var remembered = LastConnection.load(from: defaults) else { return }
+        remembered.showsVideoOverlay = shows
+        remembered.save(to: defaults)
+    }
+
+    /// What was stored last time, or `true` before anything has been.
+    var remembersVideoOverlay: Bool {
+        LastConnection.load(from: defaults)?.showsVideoOverlay ?? true
+    }
+
     /// A failure before the controller existed: a bad address, or a Keychain that would not answer.
     func fail(with error: any Error, host: String) {
         present(Self.diagnosis(for: error, host: host))

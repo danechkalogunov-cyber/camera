@@ -187,6 +187,14 @@ struct LastConnection: Sendable, Hashable {
     /// call sites still compile unchanged.
     var name: String?
 
+    /// Whether the chrome drawn over this camera's picture is shown.
+    ///
+    /// Defaults to `true` on a first launch and on a record written before this field existed —
+    /// `UserDefaults.bool(forKey:)` answers `false` for a missing key, which would silently hide
+    /// the chrome for every existing user, so the presence of the key is checked rather than its
+    /// value.
+    var showsVideoOverlay: Bool = true
+
     // MARK: Private Helpers
 
     private static let hostKey = "vigil.lastConnection.host"
@@ -194,6 +202,7 @@ struct LastConnection: Sendable, Hashable {
     private static let refKey = "vigil.lastConnection.credentialRef"
     private static let pathKey = "vigil.lastConnection.rtspPath"
     private static let nameKey = "vigil.lastConnection.name"
+    private static let overlayKey = "vigil.lastConnection.showsVideoOverlay"
 
     // MARK: API
 
@@ -217,7 +226,10 @@ struct LastConnection: Sendable, Hashable {
                               account: account,
                               credentialRef: CredentialRef(uuid),
                               rtspPath: path?.isEmpty == false ? path : nil,
-                              name: name?.isEmpty == false ? name : nil)
+                              name: name?.isEmpty == false ? name : nil,
+                              showsVideoOverlay: defaults.object(forKey: overlayKey) == nil
+                                  ? true
+                                  : defaults.bool(forKey: overlayKey))
     }
 
     /// Stores this connection as the one to resume on the next launch.
@@ -235,6 +247,7 @@ struct LastConnection: Sendable, Hashable {
         } else {
             defaults.removeObject(forKey: Self.nameKey)
         }
+        defaults.set(showsVideoOverlay, forKey: Self.overlayKey)
     }
 
     /// Forgets the remembered connection. Called when its credential no longer opens the camera, so
@@ -245,6 +258,7 @@ struct LastConnection: Sendable, Hashable {
         defaults.removeObject(forKey: refKey)
         defaults.removeObject(forKey: pathKey)
         defaults.removeObject(forKey: nameKey)
+        defaults.removeObject(forKey: overlayKey)
     }
 }
 

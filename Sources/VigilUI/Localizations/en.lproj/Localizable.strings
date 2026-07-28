@@ -531,3 +531,7 @@
 "Close" = "Close";
 "Previous day" = "Previous day";
 "Next day" = "Next day";
+
+/* CAMERA SETTINGS — video overlay */
+"Show overlay on video" = "Show overlay on video";
+"The camera's name, the connection chip and the statistics readout. Warnings about a stream that is failing are always shown." = "The camera's name, the connection chip and the statistics readout. Warnings about a stream that is failing are always shown.";
