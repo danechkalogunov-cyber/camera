@@ -57,6 +57,9 @@ struct MainWindowView: View {
     /// Which files in the recordings folder Vigil actually wrote.
     @State private var manifest: ClipManifest
 
+    /// The camera's alert stream, which fills the Events screen and the sidebar's badge.
+    @State private var eventFeed: EventCoordinator
+
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
@@ -87,6 +90,8 @@ struct MainWindowView: View {
                                                               logger: session.dependencies.logger,
                                                               clock: session.dependencies.clock))
         _manifest = State(initialValue: ClipManifest(logger: session.dependencies.logger))
+        _eventFeed = State(initialValue: EventCoordinator(dependencies: session.dependencies,
+                                                          credentials: session.credentials))
     }
 
     // MARK: - Body
@@ -168,6 +173,7 @@ struct MainWindowView: View {
         }
         .task { await pollTelemetry() }
         .task(id: session.camera?.id) { await pollPoster() }
+        .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
     }
 
     // MARK: - Overlays
@@ -431,6 +437,7 @@ struct MainWindowView: View {
     private var libraryState: VLibraryState {
         VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()),
                       clips: window.clips,
+                      events: eventFeed.events,
                       recordingsFolder: recordingsFolderLabel)
     }
 
@@ -715,6 +722,8 @@ struct MainWindowView: View {
     /// The library as the sidebar sees it: one camera, no groups.
     private var sidebarTree: VSidebarTree {
         VSidebarTree(cameras: [sidebarCamera],
+                     eventBadge: eventFeed.unreadCount > 0 ? eventFeed.unreadCount : nil,
+                     recordingCount: window.clips.isEmpty ? nil : window.clips.count,
                      search: VSidebarSearch(query: window.searchText),
                      collapsed: window.collapsedRows,
                      now: Date())
