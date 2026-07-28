@@ -373,6 +373,64 @@ enum SearchFixtures {
         #expect(secondBody.contains("<searchResultPostion>2</searchResultPostion>"))
     }
 
+    @Test func searchResultReadsTheDevicesMisspellingOfTheStatusStrip() throws {
+        // The schema — and docs/spec-isapi.md §15.2 — say `responseStatusStrip`. A great many
+        // shipping firmwares emit `responseStatusStrp`, without the second `i`. Reading only the
+        // documented spelling yields nil, which resolves to `.ok`, which ends paging after page
+        // one: a whole day of footage collapses to the first forty segments.
+        let misspelled = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <CMSearchResult version="1.0" xmlns="http://www.hikvision.com/ver10/XMLSchema">
+              <searchID>\(SearchFixtures.searchID)</searchID>
+              <responseStatusStrp>MORE</responseStatusStrp>
+              <numOfMatches>2</numOfMatches>
+              <matchList/>
+            </CMSearchResult>
+            """
+        let page = CMSearchResult(document: try SearchFixtures.document(misspelled),
+                                  track: TrackID(101))
+        #expect(page.strip == .more, "the device's own spelling must be read")
+
+        // The documented spelling still works, and wins when a device somehow sends both.
+        let correct = CMSearchResult(document: try SearchFixtures.document(SearchFixtures.pageOne),
+                                     track: TrackID(101))
+        #expect(correct.strip == .more)
+    }
+
+    @Test func searchPagerKeepsGoingWhenAFullPageClaimsToBeTheLast() throws {
+        // The failure this pins: a firmware that answers `OK` on every page. Trusting it alone
+        // produced a one-page day — forty segments and nothing else, on every day, which reads as
+        // a camera that hardly records rather than as a search that stopped asking.
+        var pager = RecordSearchPager(query: SearchFixtures.query(pageSize: 2),
+                                      searchID: SearchFixtures.searchID)
+        let full = CMSearchResult(searchID: SearchFixtures.searchID, strip: .ok,
+                                  numberOfMatches: 2, segments: [])
+        pager.accept(full)
+        #expect(!pager.isFinished, "a full page is not to be trusted as the last one")
+        #expect(pager.position == 2)
+
+        // A short page genuinely is the last one, and still stops.
+        let short = CMSearchResult(searchID: SearchFixtures.searchID, strip: .ok,
+                                   numberOfMatches: 1, segments: [])
+        pager.accept(short)
+        #expect(pager.isFinished)
+        #expect(pager.pageCount == 2)
+
+        // The same applies to a status value we do not recognise at all.
+        var other = RecordSearchPager(query: SearchFixtures.query(pageSize: 2),
+                                      searchID: SearchFixtures.searchID)
+        other.accept(CMSearchResult(searchID: nil, strip: .unknown("WHATEVER"),
+                                    numberOfMatches: 2, segments: []))
+        #expect(!other.isFinished)
+
+        // ⛔ And it must still terminate. A page of zero matches ends it whatever the strip says,
+        // because advancing the cursor by zero asks the same question for ever.
+        var zero = RecordSearchPager(query: SearchFixtures.query(pageSize: 2),
+                                     searchID: SearchFixtures.searchID)
+        zero.accept(CMSearchResult(searchID: nil, strip: .ok, numberOfMatches: 0, segments: []))
+        #expect(zero.isFinished)
+    }
+
     @Test func searchPagerStopsOnNoMatches() throws {
         var pager = RecordSearchPager(query: SearchFixtures.query(),
                                       searchID: SearchFixtures.searchID)

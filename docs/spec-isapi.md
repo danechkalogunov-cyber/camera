@@ -2861,7 +2861,7 @@ Response:
 | Field | Notes |
 | --- | --- |
 | `responseStatus` | `true` even when there are zero matches |
-| `responseStatusStrip` | **the paging signal**: `OK` = this is the last page; `MORE` = call again with `searchResultPostion += numOfMatches`; `NO MATCHES` = empty result set |
+| `responseStatusStrip` | **the paging signal**: `OK` = this is the last page; `MORE` = call again with `searchResultPostion += numOfMatches`; `NO MATCHES` = empty result set. ⚠️ **Many firmwares spell this element `responseStatusStrp`**, without the second `i` — the same family of typo as the request's `searchResultPostion`. Read both spellings: a reader that accepts only the schema's spelling gets `nil` from those devices, resolves it to `OK`, and stops after page one, which presents a whole day of footage as its first forty segments. Do not rely on this element alone either — treat a page holding exactly `maxResults` items as "there is more", whatever it says. |
 | `numOfMatches` | number of `searchMatchItem`s in *this* page |
 | `codecType` | `H.264-BP`, `H.264-MP`, `H.264-HP`, `H.265`, `MJPEG`, `MPEG4`, `SVAC`. Parsed with the same prefix logic as `videoCodecType`. |
 | `playbackURI` | the RTSP URL to play this segment — see §15.3 |

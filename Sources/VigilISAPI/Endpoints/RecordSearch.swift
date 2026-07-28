@@ -266,8 +266,15 @@ public struct CMSearchResult: Sendable, Hashable {
                                  recordType: recordType,
                                  locator: locator)
         }
+        // ⛔ BOTH spellings. Hikvision's own schema says `responseStatusStrip`, and that is what
+        // docs/spec-isapi.md §15.2 documents — but a great many shipping firmwares emit
+        // `responseStatusStrp`, without the second `i`. Reading only the documented spelling gets
+        // `nil` from those devices, which `Strip(raw:)` resolves to `.ok`, which ends paging after
+        // the very first page. The result is a timeline holding one page of segments and nothing
+        // else, on every day, which is indistinguishable from a camera that barely records.
+        let strip = document["responseStatusStrip"].string ?? document["responseStatusStrp"].string
         self.init(searchID: document["searchID"].string,
-                  strip: Strip(raw: document["responseStatusStrip"].string),
+                  strip: Strip(raw: strip),
                   // `numOfMatches` is the count in this page and is what the cursor advances by.
                   // Falling back to the decoded count would silently stall paging on a firmware
                   // that omits it, so the *item* count is used, not the segment count.
@@ -303,9 +310,20 @@ public struct RecordSearchPager: Sendable {
 
     /// Absorbs one page and decides whether to ask for another.
     ///
-    /// Paging continues only while `responseStatusStrip == MORE`; `OK` and `NO MATCHES` both end
-    /// it. A `MORE` page that reported no matches also ends it, because advancing the cursor by
-    /// zero would ask the same question forever.
+    /// `MORE` continues, `NO MATCHES` stops, and a page reporting zero matches always stops —
+    /// advancing the cursor by zero would ask the same question for ever.
+    ///
+    /// ⛔ **A full page continues too, whatever the status element said.** This is the belt to the
+    /// spelling fix's braces in ``CMSearchResult/init(document:track:)``, and it is what makes the
+    /// pager robust rather than merely fixed for one typo: a device that returns exactly
+    /// `maxResults` items has, in every firmware anyone has observed, got more to give. Trusting
+    /// the status element alone meant that any device which omitted it, misspelled it, or wrote a
+    /// value we do not recognise silently produced a one-page day — a timeline holding forty
+    /// segments and nothing else, which reads as a camera that hardly records rather than as a
+    /// search that stopped asking.
+    ///
+    /// It cannot spin: `position` only ever advances by a positive count, and the page and segment
+    /// caps bound the loop from above regardless.
     public mutating func accept(_ page: CMSearchResult) {
         pageCount += 1
         segments.append(contentsOf: page.segments)
@@ -315,10 +333,21 @@ public struct RecordSearchPager: Sendable {
             isFinished = true
             return
         }
+        guard page.numberOfMatches > 0 else {
+            isFinished = true
+            return
+        }
         switch page.strip {
-        case .more where page.numberOfMatches > 0:
+        case .more:
             position += page.numberOfMatches
-        case .more, .ok, .noMatches, .unknown:
+        case .ok, .unknown:
+            // A short page is genuinely the last one; a full one is not to be trusted as such.
+            if page.numberOfMatches >= query.pageSize {
+                position += page.numberOfMatches
+            } else {
+                isFinished = true
+            }
+        case .noMatches:
             isFinished = true
         }
     }
