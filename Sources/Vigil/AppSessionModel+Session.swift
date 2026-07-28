@@ -142,7 +142,8 @@ extension AppSessionModel {
             }
             let camera = try makeCamera(host: remembered.host,
                                         ref: remembered.credentialRef,
-                                        rtspPath: remembered.rtspPath)
+                                        rtspPath: remembered.rtspPath,
+                                        name: remembered.name)
             resolvedPath = remembered.rtspPath
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
@@ -160,9 +161,13 @@ extension AppSessionModel {
     /// probe happens exactly once per device, ever" holds across launches — `StreamController`
     /// reads it as a resolved candidate and skips the ladder. In W4 this is
     /// `capabilities.resolvedRTSPPath` read back from `library.json`.
-    func makeCamera(host: String, ref: CredentialRef, rtspPath: String? = nil) throws
-        -> Camera {
-        try Camera(host: host,
+    /// - Parameter name: the name the user gave this camera on a previous launch, or `nil` to let
+    ///   `validated()` derive one from the host. Passing it back in is what makes a rename survive
+    ///   a relaunch — the record itself is rebuilt from scratch every time, so nothing else could.
+    func makeCamera(host: String, ref: CredentialRef, rtspPath: String? = nil,
+                    name: String? = nil) throws -> Camera {
+        try Camera(name: name ?? "",
+                   host: host,
                    rtspPort: rtspPort,
                    credentialRef: ref,
                    rtspPathOverride: rtspPath).validated()
@@ -412,7 +417,23 @@ extension AppSessionModel {
         LastConnection(host: camera.host,
                        account: form.request.username,
                        credentialRef: activeRef,
-                       rtspPath: resolvedPath).save(to: defaults)
+                       rtspPath: resolvedPath,
+                       // The name the user gave it, not the fallback `Camera.validated()` invents
+                       // from the host — storing that one would make "Camera 192.168.1.64" look
+                       // like a deliberate choice on the next launch.
+                       name: camera.name).save(to: defaults)
+    }
+
+    /// Stores a renamed camera, so the name outlives the window.
+    ///
+    /// Separate from ``rememberThisCamera()`` because it must work before a frame has arrived: that
+    /// one is called once video is flowing and requires `activeRef`, while a rename can happen the
+    /// moment the sidebar row exists. Everything but the name is read back from what is already
+    /// stored, so renaming cannot disturb the remembered account or the learned RTSP path.
+    func rememberCameraName(_ name: String) {
+        guard var remembered = LastConnection.load(from: defaults) else { return }
+        remembered.name = name
+        remembered.save(to: defaults)
     }
 
     /// A failure before the controller existed: a bad address, or a Keychain that would not answer.

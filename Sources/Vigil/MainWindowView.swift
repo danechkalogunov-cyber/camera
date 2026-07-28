@@ -60,6 +60,12 @@ struct MainWindowView: View {
     /// The camera's alert stream, which fills the Events screen and the sidebar's badge.
     @State private var eventFeed: EventCoordinator
 
+    /// The user's groups, and which camera is in which.
+    @State private var groups: CameraGroupStore
+
+    /// The moments the user has marked.
+    @State private var bookmarks: BookmarkStore
+
     /// Advances once a second while recording, purely to redraw the elapsed counter.
     ///
     /// `RecordingCoordinator.elapsed()` is a function over `startedAt`, not an observable property,
@@ -92,6 +98,8 @@ struct MainWindowView: View {
         _manifest = State(initialValue: ClipManifest(logger: session.dependencies.logger))
         _eventFeed = State(initialValue: EventCoordinator(dependencies: session.dependencies,
                                                           credentials: session.credentials))
+        _groups = State(initialValue: CameraGroupStore(logger: session.dependencies.logger))
+        _bookmarks = State(initialValue: BookmarkStore(logger: session.dependencies.logger))
     }
 
     // MARK: - Body
@@ -155,7 +163,11 @@ struct MainWindowView: View {
             Button("", action: { toggleRecording() })
                 .keyboardShortcut("r", modifiers: .command)
                 .hidden()
+            Button("", action: { window.sheet = .newBookmark })
+                .keyboardShortcut("d", modifiers: .command)
+                .hidden()
         }
+        .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
@@ -176,6 +188,86 @@ struct MainWindowView: View {
         .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
         // Only when the Image tab is actually looked at: these are four HTTP reads per channel.
         .task(id: window.inspectorTab) { await loadImageIfShown() }
+    }
+
+    // MARK: - Sheets
+
+    /// The form behind whichever sheet is up.
+    ///
+    /// One `switch` rather than five `.sheet(isPresented:)` modifiers stacked on the same view:
+    /// SwiftUI presents only one of those and drops the rest silently, so two that could both be
+    /// true is a bug waiting for a fast double-click. `MainWindowSheet` makes that unrepresentable.
+    @ViewBuilder
+    private func sheetBody(_ sheet: MainWindowSheet) -> some View {
+        switch sheet {
+        case .cameraSettings:
+            CameraSettingsSheet(name: identity.name,
+                                groupID: groups.group(for: cameraID),
+                                host: identity.host,
+                                httpPort: session.camera?.httpPort ?? 80,
+                                model: deviceInfo.identity.model,
+                                groups: groups.groups,
+                                onSave: { name, group in
+                                    renameCamera(to: name)
+                                    groups.setGroup(group, for: cameraID)
+                                    window.sheet = nil
+                                },
+                                onCancel: { window.sheet = nil })
+        case .newGroup:
+            GroupNameSheet(isNew: true,
+                           onSave: { name in
+                               // The camera goes in as the group is created. A user who makes a
+                               // group while looking at a camera means that camera to be in it.
+                               groups.create(named: name, cameras: [cameraID])
+                               window.sheet = nil
+                           },
+                           onCancel: { window.sheet = nil })
+        case .renameGroup(let id):
+            GroupNameSheet(name: groups.groups.first { $0.id == id }?.name ?? "",
+                           isNew: false,
+                           onSave: { name in
+                               groups.rename(id, to: name)
+                               window.sheet = nil
+                           },
+                           onCancel: { window.sheet = nil })
+        case .newBookmark:
+            // `Date()` and not the stream's own clock: the archive scrubber that would give a
+            // playback position is not wired, so "now" is the only instant this build can honestly
+            // mark. A bookmark made while reviewing a recording will need the scrubber's instant.
+            BookmarkSheet(instant: Date(),
+                          isNew: true,
+                          onSave: { title, note in
+                              bookmarks.add(cameraID: cameraID,
+                                            instant: Date(),
+                                            title: title,
+                                            note: note)
+                              window.sheet = nil
+                          },
+                          onCancel: { window.sheet = nil })
+        case .editBookmark(let id):
+            let record = bookmarks.bookmarks.first { $0.id == id }
+            BookmarkSheet(title: record?.title ?? "",
+                          note: record?.note ?? "",
+                          instant: record?.instant ?? Date(),
+                          isNew: false,
+                          onSave: { title, note in
+                              bookmarks.update(id, title: title, note: note)
+                              window.sheet = nil
+                          },
+                          onCancel: { window.sheet = nil })
+        }
+    }
+
+    /// Renames the camera and remembers the new name for the next launch.
+    ///
+    /// Two writes, and both are needed. `session.camera` is what every panel reads right now;
+    /// `LastConnection` is what the next launch rebuilds the camera from, and without it the rename
+    /// would survive exactly until the window closed.
+    private func renameCamera(to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, session.camera != nil else { return }
+        session.camera?.name = trimmed
+        session.rememberCameraName(trimmed)
     }
 
     // MARK: - Overlays
@@ -399,8 +491,121 @@ struct MainWindowView: View {
                              window.collapsedRows.insert(rowID)
                          }
                      },
+                     onAddGroup: { window.sheet = .newGroup },
                      onClearSearch: { window.searchText = "" },
+                     cameraMenu: { camera in cameraMenu(camera) },
+                     groupMenu: { group in groupMenu(group) },
                      thumbnail: { _ in cameraThumbnail })
+    }
+
+    /// The right-click menu on the camera row.
+    ///
+    /// Only actions this build can honour. *Remove Camera* is absent on purpose: the session resumes
+    /// exactly one remembered connection, so removing it would leave the window with nothing and no
+    /// way back except retyping the address — a destructive action with no undo is not worth a menu
+    /// row it would be easy to hit by accident.
+    private func cameraMenu(_ camera: VSidebarCamera) -> [VSidebarMenuItem] {
+        var items: [VSidebarMenuItem] = [
+            VSidebarMenuItem(id: "camera.rename",
+                             title: Self.localized("Rename…"),
+                             symbol: .rename,
+                             action: { window.sheet = .cameraSettings }),
+            .submenu(id: "camera.group",
+                     title: Self.localized("Add to Group"),
+                     symbol: .group,
+                     groupMembershipItems(for: camera.id)),
+            VSidebarMenuItem(id: "camera.bookmark",
+                             title: Self.localized("Bookmark This Moment…"),
+                             symbol: .bookmark,
+                             action: { window.sheet = .newBookmark }),
+            .separator(id: "camera.rule1"),
+            VSidebarMenuItem(id: "camera.copyAddress",
+                             title: Self.localized("Copy Address"),
+                             symbol: .copy,
+                             action: { copyToPasteboard(camera.host) }),
+        ]
+        let serial = deviceInfo.identity.serialNumber
+        items.append(VSidebarMenuItem(id: "camera.copySerial",
+                                      title: Self.localized("Copy Serial Number"),
+                                      symbol: .copy,
+                                      isEnabled: !serial.isEmpty,
+                                      action: { copySerial() }))
+        items.append(VSidebarMenuItem(id: "camera.web",
+                                      title: Self.localized("Open in Browser"),
+                                      symbol: .info,
+                                      isEnabled: !camera.host.isEmpty,
+                                      action: { openDeviceWebPage() }))
+        items.append(.separator(id: "camera.rule2"))
+        items.append(VSidebarMenuItem(id: "camera.settings",
+                                      title: Self.localized("Camera Settings…"),
+                                      symbol: .settings,
+                                      action: { window.sheet = .cameraSettings }))
+        return items
+    }
+
+    /// The *Add to Group ▸* submenu: every group, with a tick beside the one this camera is in, and
+    /// a way out at the bottom.
+    ///
+    /// `New Group…` is listed even when there are groups, because the moment a user wants a group is
+    /// usually the moment they are looking at the camera that needs one.
+    private func groupMembershipItems(for camera: CameraID) -> [VSidebarMenuItem] {
+        let current = groups.group(for: camera)
+        var items = groups.groups.map { group in
+            VSidebarMenuItem(id: "camera.group.\(group.id)",
+                             title: group.name,
+                             isOn: group.id == current,
+                             action: {
+                                 // Choosing the group a camera is already in takes it out again,
+                                 // which is what a ticked menu item means everywhere else.
+                                 groups.setGroup(group.id == current ? nil : group.id, for: camera)
+                             })
+        }
+        if !items.isEmpty {
+            items.append(.separator(id: "camera.group.rule"))
+            items.append(VSidebarMenuItem(id: "camera.group.none",
+                                          title: Self.localized("None"),
+                                          isEnabled: current != nil,
+                                          action: { groups.setGroup(nil, for: camera) }))
+        }
+        items.append(VSidebarMenuItem(id: "camera.group.new",
+                                      title: Self.localized("New Group…"),
+                                      symbol: .newGroup,
+                                      action: { window.sheet = .newGroup }))
+        return items
+    }
+
+    /// The right-click menu on a group row.
+    private func groupMenu(_ group: VSidebarGroup) -> [VSidebarMenuItem] {
+        [
+            VSidebarMenuItem(id: "group.rename",
+                             title: Self.localized("Rename…"),
+                             symbol: .rename,
+                             action: { window.sheet = .renameGroup(group.id) }),
+            .separator(id: "group.rule"),
+            VSidebarMenuItem(id: "group.delete",
+                             title: Self.localized("Delete Group"),
+                             symbol: .delete,
+                             role: .destructive,
+                             action: { deleteGroup(group.id) }),
+        ]
+    }
+
+    /// Removes a group and steps the selection off it.
+    ///
+    /// Without the second half the sidebar would keep a selection pointing at a row that no longer
+    /// exists, and the stage would show an empty grid with no way to explain itself.
+    private func deleteGroup(_ id: GroupID) {
+        if window.sidebarSelection.focus == .group(id) {
+            window.sidebarSelection.select(.live)
+        }
+        groups.delete(id)
+    }
+
+    /// Puts a string on the pasteboard.
+    private func copyToPasteboard(_ value: String) {
+        guard !value.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     /// The sidebar row's miniature of what the camera sees.
@@ -446,7 +651,23 @@ struct MainWindowView: View {
         VLibraryState(clock: TimelineClock(calendar: .autoupdatingCurrent, now: Date()),
                       clips: window.clips,
                       events: eventFeed.events,
+                      bookmarks: libraryBookmarks,
                       recordingsFolder: recordingsFolderLabel)
+    }
+
+    /// The stored bookmarks in the shape the screen reads.
+    ///
+    /// The camera name is resolved here rather than stored on the record: a bookmark made before the
+    /// camera was renamed should show the name it has now, not the one it had then.
+    private var libraryBookmarks: [VLibraryBookmark] {
+        let source = VLibraryCamera(id: cameraID, name: identity.name)
+        return bookmarks.bookmarks.map { record in
+            VLibraryBookmark(id: record.id,
+                             camera: source,
+                             instant: record.instant,
+                             title: record.title,
+                             note: record.note)
+        }
     }
 
     /// The recordings folder as a user would recognise it, for the empty state's "where would a clip
@@ -622,6 +843,8 @@ struct MainWindowView: View {
         actions.onRevealClip = { clip in revealClip(clip) }
         actions.onDeleteClip = { clip in deleteClip(clip) }
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
+        actions.onOpenBookmark = { bookmark in window.sheet = .editBookmark(bookmark.id) }
+        actions.onDeleteBookmark = { bookmark in bookmarks.delete(bookmark.id) }
         return actions
     }
 
@@ -727,13 +950,17 @@ struct MainWindowView: View {
 
     // MARK: - Session → panel adapters
 
-    /// The library as the sidebar sees it: one camera, no groups.
+    /// The library as the sidebar sees it: one camera, and whatever groups the user has made.
     private var sidebarTree: VSidebarTree {
         VSidebarTree(cameras: [sidebarCamera],
+                     groups: groups.groups.map {
+                         VSidebarGroup(id: $0.id, name: $0.name, identityIndex: $0.identityIndex)
+                     },
                      search: VSidebarSearch(query: window.searchText),
                      collapsed: window.collapsedRows,
                      eventBadge: eventFeed.unreadCount > 0 ? eventFeed.unreadCount : nil,
                      recordingCount: window.clips.isEmpty ? nil : window.clips.count,
+                     bookmarkCount: bookmarks.bookmarks.isEmpty ? nil : bookmarks.bookmarks.count,
                      now: Date())
     }
 
@@ -742,12 +969,26 @@ struct MainWindowView: View {
         VSidebarCamera(id: cameraID,
                        name: identity.name,
                        host: identity.host,
-                       status: Self.sidebarStatus(for: session.liveState))
+                       // Derived from the group store rather than stored on the camera: `Camera` is
+                       // rebuilt from the remembered host on every launch, so a `groupID` on it
+                       // would be gone by the next start.
+                       groupID: groups.group(for: cameraID),
+                       status: Self.sidebarStatus(for: session.liveState),
+                       serial: deviceInfo.identity.serialNumber)
     }
 
-    /// One cell, holding the one camera.
+    /// One cell, holding the one camera — unless a group is selected that it is not in.
+    ///
+    /// Selecting a group opens it into the stage (UX.md §1.3), and this build has one camera, so
+    /// there are exactly two honest outcomes: the camera is in the group and the stage shows it, or
+    /// it is not and the stage shows an empty cell. Showing the camera regardless would make the
+    /// GROUPS section decorative.
     private var stageAssignment: VStageAssignment {
-        VStageAssignment(layout: window.layout, cameras: [cameraID])
+        if case .group(let group) = window.sidebarSelection.focus,
+           groups.group(for: cameraID) != group {
+            return VStageAssignment(layout: window.layout, cameras: [])
+        }
+        return VStageAssignment(layout: window.layout, cameras: [cameraID])
     }
 
     /// The session camera as a stage tile.

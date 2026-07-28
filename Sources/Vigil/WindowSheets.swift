@@ -1,0 +1,314 @@
+//
+//  WindowSheets.swift
+//  Vigil
+//
+//  The small modal forms the main window puts up: camera settings, a group's name, a bookmark.
+//  macOS-only. See docs/UX.md §4.3 (row actions) and docs/DESIGN.md §9.3 (form controls).
+//
+
+#if os(macOS)
+
+import Foundation
+import SwiftUI
+
+import VigilProtocols
+import VigilUI
+
+// MARK: - SheetFrame
+
+/// The chrome every sheet in this file shares: a title, a body, Cancel and a confirm button.
+///
+/// Written once because three nearly-identical sheets that each drew their own buttons would drift —
+/// one gets ⌘⏎ on the confirm button and the others do not, and the user learns that Return works
+/// "sometimes". Here the key equivalents are part of the frame.
+@MainActor
+private struct SheetFrame<Content: View>: View {
+
+    /// What the sheet is for, shown at the top.
+    let title: LocalizedStringKey
+
+    /// The confirm button's label.
+    let confirmTitle: LocalizedStringKey
+
+    /// Whether the confirm button can be pressed. A form with nothing in it disables it rather than
+    /// accepting the press and failing quietly.
+    let isConfirmEnabled: Bool
+
+    /// Performed on confirm. The caller dismisses.
+    let onConfirm: () -> Void
+
+    /// Performed on cancel.
+    let onCancel: () -> Void
+
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: VTheme.Space.md) {
+            Text(title, bundle: .vigilUI)
+                .vType(VTheme.Typography.headline)
+                .foregroundStyle(VTheme.Color.Text.primary)
+
+            content()
+
+            HStack(spacing: VTheme.Space.sm) {
+                Spacer(minLength: 0)
+                VButton("Cancel", style: .secondary, size: .sm, action: onCancel)
+                VButton(confirmTitle, style: .primary, size: .sm, action: onConfirm)
+                    .disabled(!isConfirmEnabled)
+            }
+        }
+        .padding(VTheme.Space.lg)
+        .frame(width: SheetMetrics.width)
+        .background(VTheme.Color.Layer.surface)
+        // Escape cancels, Return confirms. Both are zero-sized buttons because that is how a
+        // key equivalent is declared in pure SwiftUI without an AppKit responder.
+        .background {
+            Button("", action: onCancel)
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+            Button("", action: { if isConfirmEnabled { onConfirm() } })
+                .keyboardShortcut(.defaultAction)
+                .hidden()
+        }
+    }
+}
+
+// MARK: - SheetMetrics
+
+/// Sizes shared by the sheets.
+private enum SheetMetrics {
+
+    /// Wide enough for a 64-character name at the body size without wrapping mid-word, and narrow
+    /// enough that it still reads as a dialogue rather than as a second window.
+    static let width: CGFloat = 380
+
+    /// The note field's height: four lines, which is as much as a note wants to be.
+    static let noteHeight: CGFloat = 76
+}
+
+// MARK: - CameraSettingsSheet
+
+/// Basic settings for one camera: what it is called, and which group it is in.
+///
+/// **Only what the app can actually honour.** The address, the port and the transport are shown as
+/// facts rather than as fields, because changing any of them means tearing down the session and
+/// reconnecting, and this build resumes exactly one remembered connection. Offering an editable
+/// address here would be offering a control that reconnects to nowhere.
+@MainActor
+struct CameraSettingsSheet: View {
+
+    /// The camera's current name, edited in place.
+    @State private var name: String
+
+    /// The group it is in, or `nil` for none.
+    @State private var groupID: GroupID?
+
+    /// Address, port and model, for the read-only rows.
+    let host: String
+    let httpPort: Int
+    let model: String
+
+    /// The groups it could be put in.
+    let groups: [CameraGroupRecord]
+
+    /// Applies the edits. Called with the trimmed name and the chosen group.
+    let onSave: (String, GroupID?) -> Void
+
+    /// Dismisses without applying.
+    let onCancel: () -> Void
+
+    /// Creates the sheet over a camera's current values.
+    init(name: String,
+         groupID: GroupID?,
+         host: String,
+         httpPort: Int,
+         model: String,
+         groups: [CameraGroupRecord],
+         onSave: @escaping (String, GroupID?) -> Void,
+         onCancel: @escaping () -> Void) {
+        _name = State(initialValue: name)
+        _groupID = State(initialValue: groupID)
+        self.host = host
+        self.httpPort = httpPort
+        self.model = model
+        self.groups = groups
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        SheetFrame(title: "Camera Settings",
+                   confirmTitle: "Save",
+                   // An empty name is refused rather than stored, matching `Camera.validated()`,
+                   // which replaces one with "Camera <host>" — better to say so than to silently
+                   // rename the camera to something the user did not type.
+                   isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
+                   onConfirm: { onSave(name, groupID) },
+                   onCancel: onCancel) {
+            VStack(alignment: .leading, spacing: VTheme.Space.md) {
+                field("Name") {
+                    TextField("", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                }
+                field("Group") {
+                    Picker("", selection: $groupID) {
+                        Text("None", bundle: .vigilUI).tag(GroupID?.none)
+                        ForEach(groups) { group in
+                            Text(verbatim: group.name).tag(GroupID?.some(group.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
+                Divider()
+                fact("Address", "\(host):\(httpPort)")
+                fact("Model", model.isEmpty ? "—" : model)
+            }
+        }
+    }
+
+    /// A caption over a control.
+    private func field<Control: View>(_ label: LocalizedStringKey,
+                                      @ViewBuilder control: () -> Control) -> some View {
+        VStack(alignment: .leading, spacing: VTheme.Space.xxs) {
+            Text(label, bundle: .vigilUI)
+                .vType(VTheme.Typography.callout)
+                .foregroundStyle(VTheme.Color.Text.tertiary)
+            control()
+        }
+    }
+
+    /// A read-only row: something true about the device that this sheet cannot change.
+    private func fact(_ label: LocalizedStringKey, _ value: String) -> some View {
+        HStack(spacing: VTheme.Space.sm) {
+            Text(label, bundle: .vigilUI)
+                .vType(VTheme.Typography.callout)
+                .foregroundStyle(VTheme.Color.Text.tertiary)
+            Spacer(minLength: VTheme.Space.sm)
+            Text(verbatim: value)
+                .vType(VTheme.Typography.mono)
+                .foregroundStyle(VTheme.Color.Text.secondary)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+// MARK: - GroupNameSheet
+
+/// Names a group, new or existing.
+///
+/// One sheet for both because the two forms are identical apart from their titles, and a second
+/// near-copy would be a second place for the empty-name rule to be got wrong.
+@MainActor
+struct GroupNameSheet: View {
+
+    @State private var name: String
+
+    /// Whether this is a new group, which decides the wording.
+    let isNew: Bool
+
+    /// Applies the name.
+    let onSave: (String) -> Void
+
+    /// Dismisses without applying.
+    let onCancel: () -> Void
+
+    /// Creates the sheet.
+    init(name: String = "",
+         isNew: Bool,
+         onSave: @escaping (String) -> Void,
+         onCancel: @escaping () -> Void) {
+        _name = State(initialValue: name)
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        SheetFrame(title: isNew ? "New Group" : "Rename Group",
+                   confirmTitle: isNew ? "Create" : "Rename",
+                   isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
+                   onConfirm: { onSave(name) },
+                   onCancel: onCancel) {
+            TextField("", text: $name)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+// MARK: - BookmarkSheet
+
+/// Marks a moment, or edits a mark that already exists.
+///
+/// The title may be left empty on purpose — `VBookmarksView` renders the timestamp in its place,
+/// because requiring a title at the moment of marking is what stops people marking anything. So the
+/// confirm button is never disabled here, unlike the two sheets above.
+@MainActor
+struct BookmarkSheet: View {
+
+    @State private var title: String
+    @State private var note: String
+
+    /// The moment being marked, shown so the user can see what they are labelling.
+    let instant: Date
+
+    /// Whether this is a new mark, which decides the wording.
+    let isNew: Bool
+
+    /// Applies the title and note.
+    let onSave: (String, String) -> Void
+
+    /// Dismisses without applying.
+    let onCancel: () -> Void
+
+    /// Creates the sheet.
+    init(title: String = "",
+         note: String = "",
+         instant: Date,
+         isNew: Bool,
+         onSave: @escaping (String, String) -> Void,
+         onCancel: @escaping () -> Void) {
+        _title = State(initialValue: title)
+        _note = State(initialValue: note)
+        self.instant = instant
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        SheetFrame(title: isNew ? "Bookmark This Moment" : "Edit Bookmark",
+                   confirmTitle: isNew ? "Add" : "Save",
+                   isConfirmEnabled: true,
+                   onConfirm: { onSave(title, note) },
+                   onCancel: onCancel) {
+            VStack(alignment: .leading, spacing: VTheme.Space.md) {
+                Text(verbatim: Self.stamp.string(from: instant))
+                    .vType(VTheme.Typography.mono.numeric)
+                    .foregroundStyle(VTheme.Color.Text.secondary)
+                TextField("", text: $title, prompt: Text("Title (optional)", bundle: .vigilUI))
+                    .textFieldStyle(.roundedBorder)
+                TextEditor(text: $note)
+                    .font(.body)
+                    .frame(height: SheetMetrics.noteHeight)
+                    .overlay {
+                        VTheme.Radius.shape(VTheme.Radius.sm)
+                            .strokeBorder(VTheme.Color.Stroke.default)
+                    }
+            }
+        }
+    }
+
+    /// The moment, in the user's own calendar and zone.
+    ///
+    /// A `DateFormatter` rather than `TimelineClock`: that type belongs to `VigilUI`'s timeline and
+    /// is built for decomposing an instant into a day's coordinates, not for one line of prose.
+    private static let stamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        return formatter
+    }()
+}
+
+#endif  // os(macOS)

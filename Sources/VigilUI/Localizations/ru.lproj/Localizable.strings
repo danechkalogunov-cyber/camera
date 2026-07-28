@@ -469,3 +469,29 @@
 "The camera refused to reset its picture settings: %@" = "Камера отказалась сбросить настройки изображения: %@";
 "Connect a camera first" = "Сначала подключите камеру";
 "This camera has no reset command, so Vigil wrote the standard picture values instead." = "У этой камеры нет команды сброса, поэтому Vigil записал стандартные значения изображения.";
+
+/* WINDOW SHEETS — camera settings, groups, bookmarks */
+"Camera Settings" = "Настройки камеры";
+"Save" = "Сохранить";
+"Cancel" = "Отмена";
+"Name" = "Название";
+"Group" = "Группа";
+"None" = "Без группы";
+"Rename Group" = "Переименовать группу";
+"Create" = "Создать";
+"Rename" = "Переименовать";
+"Bookmark This Moment" = "Отметить этот момент";
+"Edit Bookmark" = "Изменить заметку";
+"Add" = "Добавить";
+"Title (optional)" = "Название (необязательно)";
+
+/* SIDEBAR ROW CONTEXT MENUS */
+"Rename…" = "Переименовать…";
+"Add to Group" = "Добавить в группу";
+"Bookmark This Moment…" = "Отметить этот момент…";
+"Copy Address" = "Скопировать адрес";
+"Copy Serial Number" = "Скопировать серийный номер";
+"Open in Browser" = "Открыть в браузере";
+"Camera Settings…" = "Настройки камеры…";
+"New Group…" = "Новая группа…";
+"Delete Group" = "Удалить группу";

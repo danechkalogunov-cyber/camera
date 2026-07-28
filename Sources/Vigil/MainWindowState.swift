@@ -102,6 +102,15 @@ final class MainWindowState {
     /// Clip durations already read, by file URL. Same reason.
     var durations: [URL: Double] = [:]
 
+    // MARK: - Sheets
+
+    /// Which modal sheet is up, or `nil` for none.
+    ///
+    /// One property rather than a `Bool` per sheet: two `Bool`s can both be true, and SwiftUI's
+    /// answer to that is to present one and silently drop the other. An enumeration makes "two
+    /// sheets at once" unrepresentable instead of merely unlikely.
+    var sheet: MainWindowSheet?
+
     // MARK: - Transient
 
     /// The most recent advisory to show over the stage, or `nil` when there is nothing to say.
@@ -115,6 +124,42 @@ final class MainWindowState {
 
     /// Builds the default window state: both panels shown, one tile, nothing searched.
     init() {}
+}
+
+// MARK: - MainWindowSheet
+
+/// The modal sheets the main window can put up.
+///
+/// Carries the subject with the case, so a sheet cannot be presented for a camera that has since
+/// been deselected — the alternative is a second `@State` holding the subject, which goes stale
+/// exactly when the sheet is dismissed and re-presented quickly.
+enum MainWindowSheet: Identifiable, Hashable {
+
+    /// Basic settings for one camera: its name, and what it belongs to.
+    case cameraSettings
+
+    /// Naming a new group.
+    case newGroup
+
+    /// Renaming an existing one.
+    case renameGroup(GroupID)
+
+    /// Marking the current moment, with a title and a note.
+    case newBookmark
+
+    /// Editing a bookmark that already exists.
+    case editBookmark(UUID)
+
+    /// Distinguishes one presentation from the next, which is what `sheet(item:)` keys on.
+    var id: String {
+        switch self {
+        case .cameraSettings:           return "cameraSettings"
+        case .newGroup:                 return "newGroup"
+        case .renameGroup(let group):   return "renameGroup.\(group)"
+        case .newBookmark:              return "newBookmark"
+        case .editBookmark(let mark):   return "editBookmark.\(mark)"
+        }
+    }
 }
 
 // MARK: - MainWindowToast

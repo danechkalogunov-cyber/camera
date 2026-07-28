@@ -100,6 +100,16 @@ package struct VSidebarView<Thumbnail: View>: View {
     /// *Clear Filters* in the no-results empty state.
     package let onClearSearch: () -> Void
 
+    /// The right-click menu for one camera row, or an empty array for no menu.
+    ///
+    /// Data rather than a view builder — see ``VSidebarMenuItem``. An empty array attaches **no**
+    /// context menu at all: an empty grey rectangle on right-click is worse than the system's own
+    /// default, because it looks like the app tried and failed.
+    package let cameraMenu: (VSidebarCamera) -> [VSidebarMenuItem]
+
+    /// The right-click menu for one group row. Same contract.
+    package let groupMenu: (VSidebarGroup) -> [VSidebarMenuItem]
+
     private let motionSamples: (CameraID) -> [Double]
     private let thumbnail: (VSidebarCamera) -> Thumbnail
 
@@ -113,6 +123,8 @@ package struct VSidebarView<Thumbnail: View>: View {
     /// - Parameters:
     ///   - motionSamples: motion intensity per 15 s bucket for a camera, oldest first, `0…1`.
     ///     Defaults to silence, which draws the 1 pt baseline UX.md §4.2 requires rather than a gap.
+    ///   - cameraMenu: the right-click menu for a camera row. Empty for none.
+    ///   - groupMenu: the right-click menu for a group row. Empty for none.
     ///   - thumbnail: the micro-thumbnail's picture for one camera. Mounted in every state,
     ///     including offline, so the last known frame is there to dim (DESIGN.md §3.6 clause 6).
     package init(tree: VSidebarTree,
@@ -129,6 +141,8 @@ package struct VSidebarView<Thumbnail: View>: View {
                  onAddCamera: @escaping () -> Void = {},
                  onOpenSettings: @escaping () -> Void = {},
                  onClearSearch: @escaping () -> Void = {},
+                 cameraMenu: @escaping (VSidebarCamera) -> [VSidebarMenuItem] = { _ in [] },
+                 groupMenu: @escaping (VSidebarGroup) -> [VSidebarMenuItem] = { _ in [] },
                  motionSamples: @escaping (CameraID) -> [Double] = { _ in [] },
                  @ViewBuilder thumbnail: @escaping (VSidebarCamera) -> Thumbnail) {
         self.tree = tree
@@ -145,6 +159,8 @@ package struct VSidebarView<Thumbnail: View>: View {
         self.onAddCamera = onAddCamera
         self.onOpenSettings = onOpenSettings
         self.onClearSearch = onClearSearch
+        self.cameraMenu = cameraMenu
+        self.groupMenu = groupMenu
         self.motionSamples = motionSamples
         self.thumbnail = thumbnail
     }
@@ -300,6 +316,7 @@ package struct VSidebarView<Thumbnail: View>: View {
                                                                ordinal: ordinal),
                         onSelect: { click in onSelect(.group(group.id), click) },
                         onActivate: { onActivate(.group(group.id)) })
+            .modifier(VSidebarRowMenu(items: groupMenu(group)))
     }
 
     // MARK: CAMERAS
@@ -335,6 +352,7 @@ package struct VSidebarView<Thumbnail: View>: View {
             .overlay(alignment: .bottom) {
                 insertionLine(visible: dropEdge(camera) == .below)
             }
+            .modifier(VSidebarRowMenu(items: cameraMenu(camera)))
     }
 
     // MARK: LIBRARY
@@ -504,6 +522,42 @@ private func vSidebarPreviewGroups() -> [VSidebarGroup] {
     ]
 }
 
+/// The shape of a camera row's menu, so right-clicking one in a preview shows the real thing.
+///
+/// Every action is a no-op here: the panel reports gestures and owns none of them, and a preview
+/// that renamed something would need a store the module deliberately does not have.
+private func vSidebarPreviewCameraMenu(_ camera: VSidebarCamera,
+                                       groups: [VSidebarGroup]) -> [VSidebarMenuItem] {
+    var memberships = groups.map { group in
+        VSidebarMenuItem(id: "group.\(group.id)",
+                         title: group.name,
+                         isOn: camera.groupID == group.id,
+                         action: {})
+    }
+    memberships.append(.separator(id: "group.rule"))
+    memberships.append(VSidebarMenuItem(id: "group.none", title: "None", action: {}))
+    return [
+        VSidebarMenuItem(id: "rename", title: "Rename…", symbol: .rename, action: {}),
+        .submenu(id: "assign", title: "Add to Group", symbol: .group, memberships),
+        VSidebarMenuItem(id: "bookmark", title: "Bookmark This Moment…",
+                         symbol: .bookmark, action: {}),
+        .separator(id: "rule"),
+        VSidebarMenuItem(id: "copy", title: "Copy Address", symbol: .copy, action: {}),
+        VSidebarMenuItem(id: "remove", title: "Remove Camera",
+                         symbol: .delete, role: .destructive, action: {}),
+    ]
+}
+
+/// The shape of a group row's menu.
+private func vSidebarPreviewGroupMenu(_ group: VSidebarGroup) -> [VSidebarMenuItem] {
+    [
+        VSidebarMenuItem(id: "rename", title: "Rename…", symbol: .rename, action: {}),
+        .separator(id: "rule"),
+        VSidebarMenuItem(id: "delete", title: "Delete “\(group.name)”",
+                         symbol: .delete, role: .destructive, action: {}),
+    ]
+}
+
 /// A host for the previews.
 ///
 /// It exists so each `#Preview` body stays a **single expression**: the macro's closure is a
@@ -547,6 +601,8 @@ private struct VSidebarPreviewHost: View {
                          layout: layout,
                          aggregateBitsPerSecond: bitrate,
                          dropPosition: drop,
+                         cameraMenu: { camera in vSidebarPreviewCameraMenu(camera, groups: groups) },
+                         groupMenu: { group in vSidebarPreviewGroupMenu(group) },
                          motionSamples: { id in
                              vSidebarPreviewMotion(id, buckets: VSidebarMetrics.sparkBuckets)
                          },

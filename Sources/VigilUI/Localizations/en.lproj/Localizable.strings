@@ -489,3 +489,29 @@
 "The camera refused to reset its picture settings: %@" = "The camera refused to reset its picture settings: %@";
 "Connect a camera first" = "Connect a camera first";
 "This camera has no reset command, so Vigil wrote the standard picture values instead." = "This camera has no reset command, so Vigil wrote the standard picture values instead.";
+
+/* WINDOW SHEETS — camera settings, groups, bookmarks */
+"Camera Settings" = "Camera Settings";
+"Save" = "Save";
+"Cancel" = "Cancel";
+"Name" = "Name";
+"Group" = "Group";
+"None" = "None";
+"Rename Group" = "Rename Group";
+"Create" = "Create";
+"Rename" = "Rename";
+"Bookmark This Moment" = "Bookmark This Moment";
+"Edit Bookmark" = "Edit Bookmark";
+"Add" = "Add";
+"Title (optional)" = "Title (optional)";
+
+/* SIDEBAR ROW CONTEXT MENUS */
+"Rename…" = "Rename…";
+"Add to Group" = "Add to Group";
+"Bookmark This Moment…" = "Bookmark This Moment…";
+"Copy Address" = "Copy Address";
+"Copy Serial Number" = "Copy Serial Number";
+"Open in Browser" = "Open in Browser";
+"Camera Settings…" = "Camera Settings…";
+"New Group…" = "New Group…";
+"Delete Group" = "Delete Group";

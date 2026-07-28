@@ -175,12 +175,25 @@ struct LastConnection: Sendable, Hashable {
     /// `Camera.capabilities.resolvedRTSPPath` in `library.json`; here it rides along.
     var rtspPath: String?
 
+    /// The name the user gave this camera, or `nil` if they never renamed it.
+    ///
+    /// **Keyed by nothing, on purpose.** `Camera.id` is minted fresh on every launch — `makeCamera`
+    /// builds the record from the remembered host, not from a stored document — so a per-`CameraID`
+    /// name store would forget the name on the next launch and be silently useless. The host is the
+    /// only identity that survives a relaunch today, and this record is already the thing keyed by
+    /// it. `ConfigStore` in W4 replaces the arrangement wholesale.
+    ///
+    /// Last in the declaration order and defaulted, so the memberwise initialiser's existing four
+    /// call sites still compile unchanged.
+    var name: String?
+
     // MARK: Private Helpers
 
     private static let hostKey = "vigil.lastConnection.host"
     private static let accountKey = "vigil.lastConnection.account"
     private static let refKey = "vigil.lastConnection.credentialRef"
     private static let pathKey = "vigil.lastConnection.rtspPath"
+    private static let nameKey = "vigil.lastConnection.name"
 
     // MARK: API
 
@@ -199,10 +212,12 @@ struct LastConnection: Sendable, Hashable {
             return nil
         }
         let path = defaults.string(forKey: pathKey)
+        let name = defaults.string(forKey: nameKey)
         return LastConnection(host: host,
                               account: account,
                               credentialRef: CredentialRef(uuid),
-                              rtspPath: path?.isEmpty == false ? path : nil)
+                              rtspPath: path?.isEmpty == false ? path : nil,
+                              name: name?.isEmpty == false ? name : nil)
     }
 
     /// Stores this connection as the one to resume on the next launch.
@@ -215,6 +230,11 @@ struct LastConnection: Sendable, Hashable {
         } else {
             defaults.removeObject(forKey: Self.pathKey)
         }
+        if let name, !name.isEmpty {
+            defaults.set(name, forKey: Self.nameKey)
+        } else {
+            defaults.removeObject(forKey: Self.nameKey)
+        }
     }
 
     /// Forgets the remembered connection. Called when its credential no longer opens the camera, so
@@ -224,6 +244,7 @@ struct LastConnection: Sendable, Hashable {
         defaults.removeObject(forKey: accountKey)
         defaults.removeObject(forKey: refKey)
         defaults.removeObject(forKey: pathKey)
+        defaults.removeObject(forKey: nameKey)
     }
 }
 
