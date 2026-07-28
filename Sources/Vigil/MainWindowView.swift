@@ -722,10 +722,10 @@ struct MainWindowView: View {
     /// The library as the sidebar sees it: one camera, no groups.
     private var sidebarTree: VSidebarTree {
         VSidebarTree(cameras: [sidebarCamera],
-                     eventBadge: eventFeed.unreadCount > 0 ? eventFeed.unreadCount : nil,
-                     recordingCount: window.clips.isEmpty ? nil : window.clips.count,
                      search: VSidebarSearch(query: window.searchText),
                      collapsed: window.collapsedRows,
+                     eventBadge: eventFeed.unreadCount > 0 ? eventFeed.unreadCount : nil,
+                     recordingCount: window.clips.isEmpty ? nil : window.clips.count,
                      now: Date())
     }
 

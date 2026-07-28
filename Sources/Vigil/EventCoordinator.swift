@@ -84,7 +84,7 @@ final class EventCoordinator {
             makeMonitor: { [credentials, followed] key in
                 guard let camera = followed.withLock({ $0 }),
                       EventDeviceKey(camera: camera) == key,
-                      let credential = try? credentials.credential(for: camera) else {
+                      let credential = try? await credentials.credential(for: camera) else {
                     // No password yet, or the key is for a camera we are no longer following.
                     // `EventMonitorService` reads `nil` as "not buildable yet" and retries.
                     return nil
