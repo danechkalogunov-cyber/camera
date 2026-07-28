@@ -535,3 +535,9 @@
 /* CAMERA SETTINGS — video overlay */
 "Show overlay on video" = "Show overlay on video";
 "The camera's name, the connection chip and the statistics readout. Warnings about a stream that is failing are always shown." = "The camera's name, the connection chip and the statistics readout. Warnings about a stream that is failing are always shown.";
+
+/* TILE ACTION BAR (UX.md 5.3) */
+"Mute" = "Mute";
+"Record" = "Record";
+"Stream quality" = "Stream quality";
+"Fit or fill" = "Fit or fill";

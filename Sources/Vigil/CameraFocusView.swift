@@ -17,7 +17,7 @@ import VigilUI
 
 // MARK: - CameraFocusView
 
-/// The playback surface: video filling the stage, chrome over it.
+/// The playback surface: the camera filling the stage, the scrubber at its bottom edge.
 ///
 /// **Why the timeline lives here and not in Recordings.** UX.md §7 gives the timeline its own
 /// surface — a canvas with the scrubber beneath it — and §1.2 lists `playback` as a scene of its
@@ -34,13 +34,16 @@ import VigilUI
 /// **The chrome hides.** §6.6: the transport and the timeline "return on pointer-near-bottom or any
 /// key". So the stage is a picture until the pointer approaches the bottom edge, which is the
 /// difference between a viewer and a control panel with a video in it.
+///
+/// ⛔ **No chrome of its own beyond that.** An earlier version carried a title bar with the camera's
+/// name, a day stepper and a close button across the top, and it read as a second window opening —
+/// which is not what "open this camera" should feel like. The tile already names the camera and
+/// carries its own buttons; opening one collapses the side panel and lets the picture have the
+/// width. Escape goes back.
 @MainActor
 struct CameraFocusView<Video: View>: View {
 
     // MARK: - Stored Properties
-
-    /// The camera's name, shown in the top-left over the picture.
-    let name: String
 
     /// The archive to scrub, or `nil` when the camera has no index to show.
     let archive: VLibraryArchive?
@@ -51,7 +54,7 @@ struct CameraFocusView<Video: View>: View {
     /// The picture. Built by the caller so `VigilRender` stays out of this file.
     let video: () -> Video
 
-    /// Steps the day the timeline is showing.
+    /// Steps the day the timeline is showing. Called by the scrubber's own chrome.
     let onSelectDay: (TimelineDay) -> Void
 
     /// Forwarded to `VTimelineView`.
@@ -70,9 +73,6 @@ struct CameraFocusView<Video: View>: View {
     @State private var isNearBottom = false
     @State private var isOverChrome = false
 
-    /// Raised by any key press, so the chrome answers the keyboard as well (§6.6).
-    @State private var wokenByKey = false
-
     @Environment(\.vMotionEnabled) private var motionEnabled
 
     // MARK: - View
@@ -81,11 +81,6 @@ struct CameraFocusView<Video: View>: View {
         ZStack(alignment: .bottom) {
             video()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(VTheme.Color.Layer.videoWell)
-
-            header
-                .frame(maxHeight: .infinity, alignment: .top)
-
             approachStrip
             chrome
         }
@@ -97,62 +92,6 @@ struct CameraFocusView<Video: View>: View {
             Button("", action: onClose)
                 .keyboardShortcut(.cancelAction)
                 .hidden()
-        }
-    }
-
-    // MARK: - Header
-
-    /// The camera's name and the way out, over the picture.
-    ///
-    /// Always visible, unlike the bottom chrome: knowing which camera you are looking at is not an
-    /// occasional need, and a full-bleed picture with no way back is a trap.
-    private var header: some View {
-        HStack(spacing: VTheme.Space.sm) {
-            Text(verbatim: name)
-                .vType(VTheme.Typography.headline)
-                .foregroundStyle(VTheme.Color.Text.inverse)
-            Spacer(minLength: VTheme.Space.sm)
-            if let archive {
-                dayStepper(archive.day)
-            }
-            VButton(symbol: VTheme.Symbol.close,
-                    style: .icon,
-                    size: .sm,
-                    accessibilityLabel: "Close",
-                    action: onClose)
-        }
-        .padding(.horizontal, VTheme.Space.lg)
-        .padding(.vertical, VTheme.Space.md)
-        .background {
-            // A gradient rather than a bar: §7.1 puts the label over the picture, and a solid strip
-            // across the top would crop the very thing being watched.
-            LinearGradient(colors: [VTheme.Color.Layer.scrim.opacity(0.55), .clear],
-                           startPoint: .top,
-                           endPoint: .bottom)
-                .allowsHitTesting(false)
-        }
-    }
-
-    /// `‹ 26 Jul 2026 ›`, the day stepper UX.md §7.2 puts in the playback toolbar.
-    private func dayStepper(_ day: TimelineDay) -> some View {
-        HStack(spacing: VTheme.Space.xs) {
-            VButton(symbol: VTheme.Symbol.back10,
-                    style: .icon,
-                    size: .sm,
-                    accessibilityLabel: "Previous day",
-                    action: { onSelectDay(clock.day(day, offsetByDays: -1)) })
-            Text(verbatim: VFocusChrome.dayLabel.string(from: day.start))
-                .vType(VTheme.Typography.mono.numeric)
-                .foregroundStyle(VTheme.Color.Text.inverse)
-                .frame(minWidth: VFocusMetrics.dayLabelWidth)
-            VButton(symbol: VTheme.Symbol.forward10,
-                    style: .icon,
-                    size: .sm,
-                    accessibilityLabel: "Next day",
-                    action: { onSelectDay(clock.day(day, offsetByDays: 1)) })
-                // Never past today: the camera cannot have recorded tomorrow, and a stepper that
-                // walks into an empty future is a control that only produces empty screens.
-                .disabled(clock.day(containing: clock.now).start <= day.start)
         }
     }
 
@@ -174,7 +113,8 @@ struct CameraFocusView<Video: View>: View {
     @ViewBuilder
     private var chrome: some View {
         if isChromeVisible, let archive {
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: VTheme.Space.xs) {
+                dayStepper(archive.day)
                 VTimelineView(tracks: archive.tracks,
                               day: archive.day,
                               window: archive.window,
@@ -207,9 +147,42 @@ struct CameraFocusView<Video: View>: View {
         }
     }
 
+    /// `‹ 28 Jul 2026 ›`, the day stepper UX.md §7.2 puts in the playback toolbar.
+    ///
+    /// Inside the bottom chrome rather than in a bar of its own: it belongs to the timeline, it
+    /// appears and leaves with it, and a strip across the top of the picture is what made this look
+    /// like a separate window.
+    private func dayStepper(_ day: TimelineDay) -> some View {
+        HStack(spacing: VTheme.Space.xs) {
+            VButton(symbol: VTheme.Symbol.back10,
+                    style: .icon,
+                    size: .sm,
+                    accessibilityLabel: "Previous day",
+                    action: { onSelectDay(clock.day(day, offsetByDays: -1)) })
+            Text(verbatim: VFocusChrome.dayLabel.string(from: day.start))
+                .vType(VTheme.Typography.mono.numeric)
+                .foregroundStyle(VTheme.Color.Text.onVideo)
+                .frame(minWidth: VFocusMetrics.dayLabelWidth, alignment: .leading)
+            VButton(symbol: VTheme.Symbol.forward10,
+                    style: .icon,
+                    size: .sm,
+                    accessibilityLabel: "Next day",
+                    action: { onSelectDay(clock.day(day, offsetByDays: 1)) })
+                // Never past today: the camera cannot have recorded tomorrow, and a stepper that
+                // walks into an empty future is a control that only produces empty screens.
+                .disabled(clock.day(containing: clock.now).start <= day.start)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, VTheme.Space.sm)
+    }
+
     /// Whether the bottom chrome is up.
+    ///
+    /// ⚠️ §6.6 also brings it back on "any key", which this does not do: SwiftUI has no
+    /// key-press-anywhere hook without an AppKit responder, and a first responder that swallowed
+    /// keys would take ⌘R and Escape with it. Pointer approach only, and reported as such.
     private var isChromeVisible: Bool {
-        isNearBottom || isOverChrome || wokenByKey
+        isNearBottom || isOverChrome
     }
 
 }

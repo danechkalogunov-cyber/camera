@@ -135,6 +135,8 @@ package struct VGridTileView<Video: View>: View {
             // direct composition (see the header of VigilRender/Interop/VideoTile.swift).
             .overlay(alignment: .topTrailing) { statsReadout }
             .overlay(alignment: .bottomLeading) { elapsedReadout }
+            .overlay(alignment: .bottomTrailing) { actionBar }
+            .overlay { cornerCover }
             .overlay { borders }
             .onHover { hovering in
                 withAnimation(VTheme.Motion.resolved(VTheme.Motion.micro, reduced: !motionEnabled)) {
@@ -157,6 +159,9 @@ package struct VGridTileView<Video: View>: View {
     /// is being written to disk, which is a fact about the system rather than a label on the
     /// picture, and a user who hid the chrome has not asked to stop being told that.
     @Environment(\.vShowsVideoOverlay) private var showsOverlay
+
+    /// What the hover buttons do. Supplied by the app through the environment.
+    @Environment(\.vTileActions) private var tileActions
 
     /// The top-trailing telemetry, on a `scrim.base` pill and never on a material.
     ///
@@ -185,6 +190,52 @@ package struct VGridTileView<Video: View>: View {
                             in: VTheme.Radius.shape(VTheme.Radius.sm))
                 .padding(VTheme.Metrics.tileChromeInset)
         }
+    }
+
+    /// The seven buttons of §5.3, bottom-trailing.
+    ///
+    /// On hover or focus, like the stats readout: chrome dissolves when it is not needed, and a
+    /// wall of tiles each wearing seven buttons is not a wall of pictures.
+    @ViewBuilder
+    private var actionBar: some View {
+        if showsOverlay, isHovering || isFocused {
+            VTileActionBar(isRecording: isRecording, actions: tileActions)
+                .padding(VTheme.Metrics.tileChromeInset)
+                .transition(.opacity)
+        }
+    }
+
+    // MARK: - Corners
+
+    /// Paints the canvas back over the four corners the picture would otherwise square off.
+    ///
+    /// ⛔ **Not** a `clipShape`, and not `masksToBounds` on the layer either. The file's own rule
+    /// stands — a SwiftUI clip over this subtree breaks the display layer's direct composition —
+    /// and the layer route was tried and does not work: `AVSampleBufferDisplayLayer` composites its
+    /// video through a path `masksToBounds` does not reach, so setting `cornerRadius` on it rounds
+    /// the layer's background and leaves the picture square. The corners stuck out of the 20 pt
+    /// border exactly as before.
+    ///
+    /// So the corners are covered rather than cut. This is sound because the tile sits on
+    /// `Layer.canvas` — the stage's own background — so the cover is the colour that would be
+    /// showing anyway. It costs one masked shape and no compositor blend over the picture.
+    ///
+    /// ⚠️ It assumes the stage's default canvas. `VGridStageView` lets a caller substitute one
+    /// (the video wall passes black), and a tile on a substituted canvas would show four corners of
+    /// `Layer.canvas` against it. Nothing does that today; when the wall lands, the colour needs to
+    /// reach here rather than being read from the token.
+    private var cornerCover: some View {
+        let shape = VTheme.Radius.shape(VTheme.Radius.xl)
+        return Rectangle()
+            .fill(VTheme.Color.Layer.canvas)
+            .mask {
+                // Everything outside the rounded rect: the full rectangle with the rounded shape
+                // punched out of it.
+                Rectangle()
+                    .overlay { shape.blendMode(.destinationOut) }
+                    .compositingGroup()
+            }
+            .allowsHitTesting(false)
     }
 
     // MARK: - Borders
@@ -349,11 +400,11 @@ package struct VTileStatsView: View {
                     Text(verbatim: stats.codec)
                     if let dimensions = stats.dimensions {
                         Text(verbatim: "·")
-                            .foregroundStyle(VTheme.Color.Text.tertiary)
+                            .foregroundStyle(VTheme.Color.Text.onVideoDim)
                         Text(verbatim: dimensions.label)
                     }
                     Text(verbatim: "·")
-                        .foregroundStyle(VTheme.Color.Text.tertiary)
+                        .foregroundStyle(VTheme.Color.Text.onVideoDim)
                     Text(verbatim: frameRateLabel)
                         .vReserved(VTheme.Typography.Reserved.fps)
                     if stats.isHardwareDecode {
@@ -362,7 +413,7 @@ package struct VTileStatsView: View {
                     }
                 }
                 .vType(VTheme.Typography.monoSmall.numeric)
-                .foregroundStyle(VTheme.Color.Text.secondary)
+                .foregroundStyle(VTheme.Color.Text.onVideoSecondary)
             }
             if isRecording {
                 recordingBadge

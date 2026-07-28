@@ -117,6 +117,20 @@ final class MainWindowState {
     /// the main window that puts the picture and the timeline where §7.1 draws them.
     var focusedCamera: CameraID?
 
+    /// What the sidebar was doing before a camera was opened full-bleed.
+    ///
+    /// Opening a camera collapses the panel; closing restores this rather than simply showing it,
+    /// so a user who had hidden the panel themselves does not find it back for no reason.
+    var sidebarWasVisible = true
+
+    /// Whether the picture fills its tile rather than fitting inside it.
+    ///
+    /// Fitting is the default and stays it: surveillance video is evidence, and cropping the top
+    /// and bottom of a 16:9 frame to fill a 4:3 cell throws away the part of the scene that is
+    /// usually the reason the camera is pointed there. Filling is offered because a user watching
+    /// one camera on one screen often prefers no letterbox.
+    var fillsTile = false
+
     /// Whether the chrome drawn over the picture is shown.
     ///
     /// Mirrored here from the stored preference rather than read from `UserDefaults` in a body: the

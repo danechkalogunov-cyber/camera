@@ -144,6 +144,7 @@ struct MainWindowView: View {
                     // which is the whole reason this is an environment value rather than an
                     // argument threaded through three initialisers.
                     .vShowsVideoOverlay(window.showsVideoOverlay)
+                    .vTileActions(tileActions)
 
                 if window.isInspectorVisible {
                     VInspectorView(tab: $window.inspectorTab,
@@ -576,7 +577,25 @@ struct MainWindowView: View {
     private func activateInSidebar(_ selection: VSidebarSelection) {
         window.sidebarSelection.select(selection)
         guard case .camera(let id) = selection else { return }
+        openCamera(id)
+    }
+
+    /// Opens one camera across the stage, and gives it the sidebar's width.
+    ///
+    /// Collapsing the panel is the point of the gesture: "open this camera" means *show me more of
+    /// it*, and a full-bleed picture next to an unchanged list is barely different from the tile it
+    /// replaced. What the panel was doing is remembered so closing puts it back — a user who had
+    /// hidden it themselves must not find it restored by an unrelated action.
+    private func openCamera(_ id: CameraID) {
+        window.sidebarWasVisible = window.isSidebarVisible
+        window.isSidebarVisible = false
         window.focusedCamera = id
+    }
+
+    /// Returns to the tile stage and restores the panel to whatever it was.
+    private func closeFocusedCamera() {
+        window.focusedCamera = nil
+        window.isSidebarVisible = window.sidebarWasVisible
     }
 
     /// Moves the focused camera one row up or down the *visible* list.
@@ -593,6 +612,33 @@ struct MainWindowView: View {
         let next = delta < 0 ? tree.camera(before: current) : tree.camera(after: current)
         guard let next else { return }
         window.sidebarSelection.select(.camera(next))
+    }
+
+    /// What the tile's seven hover buttons do (UX.md §5.3).
+    ///
+    /// Only the five this build can honour are enabled. Mute has no audio path — `VigilVideo`'s
+    /// whole `Audio/` directory is unwritten — and Close would leave the window with nothing and no
+    /// way back but retyping the address, since the session resumes exactly one camera. Both stay
+    /// in the row, dimmed, because §5.3 fixes the order and a row that changes shape between
+    /// cameras is a row nobody can learn.
+    private var tileActions: VTileActions {
+        var actions = VTileActions()
+        actions.enabled = [.snapshot, .record, .ptz, .quality, .fit]
+        actions.isFilled = window.fillsTile
+        actions.perform = { action in
+            switch action {
+            case .snapshot: takeSnapshot()
+            case .record:   toggleRecording()
+            case .ptz:
+                window.isInspectorVisible = true
+                window.inspectorTab = .ptz
+            case .quality:  cycleStreamQuality()
+            case .fit:      window.fillsTile.toggle()
+            case .mute, .close:
+                break
+            }
+        }
+        return actions
     }
 
     /// The right-click menu on the camera row.
@@ -747,8 +793,7 @@ struct MainWindowView: View {
     /// selected. That is UX.md §4.3's "open the row", and it is the gesture that means *look at this
     /// one* rather than *select this one*.
     private var focusedCamera: some View {
-        CameraFocusView(name: identity.name,
-                        archive: archive.archive,
+        CameraFocusView(archive: archive.archive,
                         clock: libraryClock,
                         video: {
                             VideoTile(cameraID: cameraID,
@@ -769,7 +814,7 @@ struct MainWindowView: View {
                             guard let first = cluster.markers.first else { return }
                             archive.movePlayhead(to: first.instant, isScrubbing: false)
                         },
-                        onClose: { window.focusedCamera = nil })
+                        onClose: { closeFocusedCamera() })
     }
 
     /// Loads a different day into the timeline.
@@ -1181,15 +1226,11 @@ struct MainWindowView: View {
                        video: { _ in
                            VideoTile(cameraID: cameraID,
                                      frames: session.frames,
-                                     // The picture rounds itself. `GridTileView` draws its border
-                                     // as a 20 pt rounded stroke but deliberately does not
-                                     // `clipShape` the video — a SwiftUI clip over that subtree
-                                     // would break the display layer's direct composition — so the
-                                     // radius has to reach the layer, and this is the only way it
-                                     // does. Left at the default 0, the video's square corners
-                                     // simply overhang the frame.
+                                     // `updateNSView` retargets the layer's gravity in place, so
+                                     // toggling this does not rebuild the view or interrupt the
+                                     // picture — it is the one tile option that is free to change.
                                      options: TileRenderOptions(
-                                         cornerRadiusPt: VTheme.Radius.xl),
+                                         gravity: window.fillsTile ? .fill : .fit),
                                      logger: session.dependencies.logger,
                                      onKeyframeNeeded: { session.recoverStalledPicture() },
                                      onDecodeFailure: { session.handleDecodeFailure($0) },

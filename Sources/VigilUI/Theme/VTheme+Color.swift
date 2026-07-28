@@ -196,6 +196,22 @@ extension VTheme.Color.Text {
     /// the scrim composites to `#616161`, giving 5.3:1, and over black it is white on black.
     /// Appearance must not enter into it — the surface underneath is the video, not the app.
     public static let onVideo = SwiftUI.Color(light: 0xF2F4F8, dark: 0xF2F4F8)
+
+    /// The disabled form of ``onVideo``. Fixed in both appearances for the same reason.
+    ///
+    /// A tile button this build cannot honour is dimmed rather than removed (UX.md §5.3): the row
+    /// keeps its shape between cameras, so a user who learnt where Record sits still finds it there.
+    public static let onVideoDim = SwiftUI.Color(lightHex: 0xF2F4F8, lightAlpha: 0.35,
+                                                 darkHex: 0xF2F4F8, darkAlpha: 0.35)
+
+    /// The supporting rank of ``onVideo``: the stats readout's values, a chip's second line.
+    ///
+    /// ⛔ Do not reach for ``secondary`` on a scrim over video. It is `#4E5765` in the light
+    /// appearance — dark ink — and the chrome over a picture must not change with the app's
+    /// appearance, because the surface underneath is the video. That mismatch is what left the
+    /// tile's *top* readout unreadable after the bottom one had been fixed.
+    public static let onVideoSecondary = SwiftUI.Color(lightHex: 0xF2F4F8, lightAlpha: 0.72,
+                                                       darkHex: 0xF2F4F8, darkAlpha: 0.72)
 }
 
 // MARK: - Stroke
