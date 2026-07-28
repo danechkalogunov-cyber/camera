@@ -111,6 +111,12 @@ final class MainWindowState {
     /// sheets at once" unrepresentable instead of merely unlikely.
     var sheet: MainWindowSheet?
 
+    /// The camera opened full-bleed for review, or `nil` when the stage is showing tiles.
+    ///
+    /// UX.md §1.2 gives playback its own scene; until that window exists this is the route inside
+    /// the main window that puts the picture and the timeline where §7.1 draws them.
+    var focusedCamera: CameraID?
+
     /// Whether the user has already been told why there is no archive scrubber.
     ///
     /// One explanation per window, not one per visit to the Recordings screen: the answer is a fact

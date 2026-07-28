@@ -524,5 +524,10 @@
 "Switching to the main stream — the picture will reconnect" = "Switching to the main stream — the picture will reconnect";
 
 /* ARCHIVE AVAILABILITY */
-"The camera did not list any recordings it can play back. Vigil's own clips are below." = "The camera did not list any recordings it can play back. Vigil's own clips are below.";
+"The camera did not list any recordings it can play back, so there is no timeline to scrub." = "The camera did not list any recordings it can play back, so there is no timeline to scrub.";
 "The camera would not list its recordings: %@" = "The camera would not list its recordings: %@";
+
+/* FOCUSED CAMERA (playback surface) */
+"Close" = "Close";
+"Previous day" = "Previous day";
+"Next day" = "Next day";

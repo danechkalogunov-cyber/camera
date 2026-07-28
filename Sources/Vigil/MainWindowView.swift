@@ -527,7 +527,7 @@ struct MainWindowView: View {
                      layout: window.layout,
                      aggregateBitsPerSecond: telemetry.bitsPerSecond,
                      onSelect: { selection, click in selectInSidebar(selection, click) },
-                     onActivate: { selection in window.sidebarSelection.select(selection) },
+                     onActivate: { selection in activateInSidebar(selection) },
                      onToggleCollapse: { rowID in
                          if window.collapsedRows.contains(rowID) {
                              window.collapsedRows.remove(rowID)
@@ -558,6 +558,17 @@ struct MainWindowView: View {
         default:
             window.sidebarSelection.select(selection)
         }
+    }
+
+    /// Opens a row: a double-click, or a click on the row that is already selected.
+    ///
+    /// For a camera that means the review surface — UX.md §4.3 calls it "open the row", and it is
+    /// the gesture that means *look at this one* rather than *select this one*. Everything else
+    /// simply selects, which is what activating a library link or a group already did.
+    private func activateInSidebar(_ selection: VSidebarSelection) {
+        window.sidebarSelection.select(selection)
+        guard case .camera(let id) = selection else { return }
+        window.focusedCamera = id
     }
 
     /// Moves the focused camera one row up or down the *visible* list.
@@ -715,9 +726,50 @@ struct MainWindowView: View {
     private var stageRoute: some View {
         if let section = VLibrarySection(window.sidebarSelection.focus) {
             VLibraryScreen(section: section, state: libraryState, actions: libraryActions)
+        } else if window.focusedCamera != nil {
+            focusedCamera
         } else {
             stage
         }
+    }
+
+    /// One camera, full bleed, with the archive timeline at the bottom edge.
+    ///
+    /// Opened by activating a camera row — a double-click, or a click on the row that is already
+    /// selected. That is UX.md §4.3's "open the row", and it is the gesture that means *look at this
+    /// one* rather than *select this one*.
+    private var focusedCamera: some View {
+        CameraFocusView(name: identity.name,
+                        archive: archive.archive,
+                        clock: libraryClock,
+                        video: {
+                            VideoTile(cameraID: cameraID,
+                                      frames: session.frames,
+                                      logger: session.dependencies.logger,
+                                      onKeyframeNeeded: { session.recoverStalledPicture() },
+                                      onDecodeFailure: { session.handleDecodeFailure($0) },
+                                      onFramesDropped: {
+                                          session.handleFramesDropped($0, reason: $1)
+                                      })
+                        },
+                        onSelectDay: { day in loadArchiveDay(day) },
+                        onScrub: { phase, instant in
+                            archive.movePlayhead(to: instant, isScrubbing: phase != .ended)
+                        },
+                        onZoom: { stop in archive.zoom(stop) },
+                        onActivateMarker: { cluster in
+                            guard let first = cluster.markers.first else { return }
+                            archive.movePlayhead(to: first.instant, isScrubbing: false)
+                        },
+                        onClose: { window.focusedCamera = nil })
+    }
+
+    /// Loads a different day into the timeline.
+    private func loadArchiveDay(_ day: TimelineDay) {
+        archive.load(day: day,
+                     clock: libraryClock,
+                     localClips: timelineLocalClips,
+                     markers: timelineMarkers)
     }
 
     /// What the three library screens read.
@@ -732,7 +784,12 @@ struct MainWindowView: View {
                       clips: window.clips,
                       events: eventFeed.events,
                       bookmarks: libraryBookmarks,
-                      archive: archive.archive,
+                      // ⛔ Deliberately not `archive.archive`. UX.md §7 gives the timeline its own
+                      // surface — a video canvas with the scrubber beneath it — and putting it in
+                      // this *list* screen sat a scrubber on a light canvas between a row of legend
+                      // chips and a table of files. Recordings lists what is on this Mac; reviewing
+                      // footage happens on the focused camera, where `CameraFocusView` mounts it.
+                      archive: nil,
                       recordingsFolder: recordingsFolderLabel)
     }
 
@@ -746,7 +803,7 @@ struct MainWindowView: View {
 
     /// What decides the archive is worth reading: the screen being open, and for which camera.
     private var archiveTrigger: String {
-        let isOpen = VLibrarySection(window.sidebarSelection.focus) == .recordings
+        let isOpen = window.focusedCamera != nil
         return "\(isOpen)/\(session.camera?.id.rawValue.uuidString ?? "-")"
             + "/\(deviceInfo.session == nil ? 0 : 1)"
     }
@@ -760,7 +817,7 @@ struct MainWindowView: View {
     /// opens would be nagging about a fact that has not changed.
     private func loadArchive() async {
         archive.follow(session: deviceInfo.session, channel: session.camera?.channel)
-        guard VLibrarySection(window.sidebarSelection.focus) == .recordings else { return }
+        guard window.focusedCamera != nil else { return }
         let clock = libraryClock
         let day = archive.archive?.day ?? clock.day(containing: clock.now)
         archive.load(day: day,
@@ -791,8 +848,8 @@ struct MainWindowView: View {
             // nothing, and firmware that simply does not implement it looks identical from here.
             window.toast = MainWindowToast(
                 kind: .info,
-                message: Self.localized("The camera did not list any recordings it can play back. "
-                                        + "Vigil's own clips are below."))
+                message: Self.localized("The camera did not list any recordings it can play "
+                                        + "back, so there is no timeline to scrub."))
         case .refused(let reason):
             window.hasExplainedArchive = true
             window.toast = MainWindowToast(

@@ -504,5 +504,10 @@
 "Switching to the main stream — the picture will reconnect" = "Переключаюсь на основной поток — картинка переподключится";
 
 /* ARCHIVE AVAILABILITY */
-"The camera did not list any recordings it can play back. Vigil's own clips are below." = "Камера не отдала список записей, которые умеет воспроизводить. Ролики, записанные Vigil, ниже.";
+"The camera did not list any recordings it can play back, so there is no timeline to scrub." = "Камера не отдала список записей, которые умеет воспроизводить, — шкалы времени не будет.";
 "The camera would not list its recordings: %@" = "Камера не отдала список своих записей: %@";
+
+/* FOCUSED CAMERA (playback surface) */
+"Close" = "Закрыть";
+"Previous day" = "Предыдущий день";
+"Next day" = "Следующий день";
