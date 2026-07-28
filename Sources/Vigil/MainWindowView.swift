@@ -425,6 +425,12 @@ struct MainWindowView: View {
     /// file still being written is listed with `isRecording` true rather than hidden, because hiding
     /// it would make pressing Record look like it did nothing for as long as the clip ran.
     private func reloadClips() {
+        // Two passes on the first run only: the first adopts whatever predates the manifest, the
+        // second lists against it. Without this, introducing the manifest would hide every clip the
+        // user had already recorded.
+        if !manifest.existedOnDisk {
+            adoptExistingClips()
+        }
         let logger = session.dependencies.logger
         guard let folder = recording.clipsDirectory() else {
             logger.error(.storage, "clip listing: no usable destination")
@@ -484,7 +490,11 @@ struct MainWindowView: View {
             found.append(VLibraryClip(id: Self.stableID(for: url),
                                       camera: camera,
                                       startedAt: values?.contentModificationDate ?? Date(),
-                                      durationSeconds: manifest.entry(for: relative)?.mediaSeconds,
+                                      // Zero means "adopted, never measured" — the enrichment pass
+                                      // reads the real length from the file rather than the row
+                                      // showing a confident 0:00.
+                                      durationSeconds: manifest.entry(for: relative)
+                                          .map(\.mediaSeconds).flatMap { $0 > 0 ? $0 : nil },
                                       byteCount: values?.fileSize.map(Int64.init),
                                       fileName: relative,
                                       url: url,
@@ -589,6 +599,29 @@ struct MainWindowView: View {
     /// `RecordingDestination` owns where clips go; until the app drives it, the folder may not exist
     /// yet, and `activateFileViewerSelecting` on a missing path silently does nothing rather than
     /// failing — which is the right outcome for a button whose whole job is "show me where".
+    /// One-time migration: takes responsibility for clips recorded before the manifest existed.
+    private func adoptExistingClips() {
+        guard let folder = recording.clipsDirectory() else { return }
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        guard let walker = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return }
+
+        var adoptable: [(relativePath: String, cameraID: CameraID, modifiedAt: Date, bytes: Int64)] = []
+        for case let url as URL in walker {
+            let name = url.lastPathComponent
+            guard !name.hasSuffix(".partial") else { continue }
+            guard ["mp4", "mov"].contains(url.pathExtension.lowercased()) else { continue }
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            guard values?.isRegularFile != false else { continue }
+            adoptable.append((Self.relativePath(of: url, under: folder),
+                              cameraID,
+                              values?.contentModificationDate ?? Date(),
+                              Int64(values?.fileSize ?? 0)))
+        }
+        manifest.adopt(adoptable)
+    }
+
     /// Adds the clips the last recording produced to the manifest.
     private func vouchForFinishedClips() {
         let finished = recording.lastFinished

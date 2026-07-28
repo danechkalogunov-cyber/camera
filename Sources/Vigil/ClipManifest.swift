@@ -71,6 +71,14 @@ final class ClipManifest {
     /// Entries by relative path.
     private(set) var entries: [String: ClipManifestEntry] = [:]
 
+    /// Whether a manifest file existed when this was created.
+    ///
+    /// `false` on the very first run after the manifest was introduced — and on that run every clip
+    /// already on disk predates the record, so refusing to list them would hide the user's own
+    /// recordings behind a bookkeeping change they never made. ``adopt(_:)`` is the one-time
+    /// migration that closes that gap.
+    private(set) var existedOnDisk = false
+
     private let logger: any LoggerProtocol
 
     // MARK: - Initialisation
@@ -84,6 +92,7 @@ final class ClipManifest {
         self.logger = logger
         guard let url = Self.storeURL else { return }
         guard let data = try? Data(contentsOf: url) else { return }
+        existedOnDisk = true
         do {
             let decoded = try JSONDecoder().decode([ClipManifestEntry].self, from: data)
             entries = Dictionary(decoded.map { ($0.relativePath, $0) },
@@ -112,6 +121,29 @@ final class ClipManifest {
                                               mediaSeconds: segment.mediaSeconds,
                                               byteCount: segment.byteCount)
         }
+        save()
+    }
+
+    /// Takes responsibility for clips that were on disk before the manifest existed.
+    ///
+    /// Called once, on the first run after this file was introduced. Everything in the recordings
+    /// folder at that moment is treated as genuine, because it is: those files were written by Vigil
+    /// under a build that kept no record. From the next clip onwards the manifest is authoritative,
+    /// and a file that appears without one is not listed.
+    ///
+    /// Does nothing once a manifest exists, so it cannot be used to launder a file dropped in later.
+    func adopt(_ found: [(relativePath: String, cameraID: CameraID, modifiedAt: Date, bytes: Int64)]) {
+        guard !existedOnDisk else { return }
+        for item in found where entries[item.relativePath] == nil {
+            entries[item.relativePath] = ClipManifestEntry(relativePath: item.relativePath,
+                                                           cameraID: item.cameraID.rawValue,
+                                                           startedAt: item.modifiedAt,
+                                                           endedAt: item.modifiedAt,
+                                                           mediaSeconds: 0,
+                                                           byteCount: item.bytes)
+        }
+        existedOnDisk = true
+        logger.info(.storage, "clip manifest: adopted \(entries.count) pre-existing clips")
         save()
     }
 
