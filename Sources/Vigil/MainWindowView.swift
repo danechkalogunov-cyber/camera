@@ -1216,9 +1216,9 @@ struct MainWindowView: View {
         VGridStageView(assignment: stageAssignment,
                        cameras: stageCameras,
                        selection: cameraID,
+                       onToggleFullscreen: { id in focusCamera(id) },
                        onRetry: { _ in session.perform(.retry) },
                        onRemedy: { _, remedy in session.perform(remedy) },
-                       onToggleFullscreen: { id in focusCamera(id) },
                        video: { _ in
                            VideoTile(cameraID: cameraID,
                                      frames: session.frames,
