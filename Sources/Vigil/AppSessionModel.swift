@@ -132,6 +132,13 @@ final class AppSessionModel {
     ///
     /// Owned here because the decode loop is created here, and handed to `RecordingCoordinator`,
     /// which decides when it holds a recorder. Empty means nothing is being written.
+    /// Counts what the stream is doing, for the inspector and the status bar.
+    ///
+    /// `Sendable` and lock-guarded, so the detached frame loop and the event loop can both fold into
+    /// it without hopping to the main actor. Nothing reads it on the media path — the window pulls a
+    /// snapshot once a second.
+    let telemetry = StreamStatisticsCollector()
+
     let recordingTap = RecordingTap()
 
     let credentials: CredentialStore

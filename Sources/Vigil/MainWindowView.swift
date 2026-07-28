@@ -59,6 +59,13 @@ struct MainWindowView: View {
     /// sit frozen. Ticking only while recording keeps the window idle the rest of the time.
     @State private var recordingTick = Date()
 
+    /// The last telemetry snapshot, refreshed once a second while the window is up.
+    ///
+    /// Pulled rather than pushed: the collector is lock-guarded and lives off the main actor, and a
+    /// per-frame push would put the media path on the UI thread — the exact thing DESIGN.md §7.9
+    /// forbids. One read per second is what the Stream tab's `LAST 60 S` sparkline needs and no more.
+    @State private var telemetry = StreamTelemetrySnapshot.unmeasured
+
     // MARK: - Initialisation
 
     /// Builds the window over a session.
@@ -140,6 +147,7 @@ struct MainWindowView: View {
         // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
         .task(id: recording.completed.count) { reloadClips() }
         .task(id: recording.isRecording) { await tickWhileRecording() }
+        .task { await pollTelemetry() }
     }
 
     // MARK: - Overlays
@@ -342,7 +350,7 @@ struct MainWindowView: View {
                      search: VSidebarSearch(query: window.searchText),
                      collapsed: window.collapsedRows,
                      layout: window.layout,
-                     aggregateBitsPerSecond: nil,
+                     aggregateBitsPerSecond: telemetry.bitsPerSecond,
                      onSelect: { selection, _ in window.sidebarSelection.select(selection) },
                      onToggleCollapse: { rowID in
                          if window.collapsedRows.contains(rowID) {
@@ -541,6 +549,30 @@ struct MainWindowView: View {
                       stats: tileStats)]
     }
 
+    /// What the Stream tab's header describes.
+    private var streamDescription: InspectorStreamDescription {
+        guard let format = session.format else { return InspectorStreamDescription() }
+        return InspectorStreamDescription(
+            codec: format.videoCodec.rawValue.uppercased(),
+            pixelWidth: format.resolution?.width ?? 0,
+            pixelHeight: format.resolution?.height ?? 0,
+            streamInUse: Self.qualityLabel(format.quality),
+            transport: format.transport.rawValue,
+            targetFramesPerSecond: format.declaredFPS ?? 0)
+    }
+
+    /// The stream's name as the panel shows it.
+    ///
+    /// `StreamQuality` is `Int`-backed — `main = 1` — so its raw value is a channel-arithmetic
+    /// number, not a label. Spelling it out here keeps the panel from printing "1".
+    private static func qualityLabel(_ quality: StreamQuality) -> String {
+        switch quality {
+        case .main:  return "Main"
+        case .sub:   return "Sub"
+        case .third: return "Third"
+        }
+    }
+
     /// The tile's telemetry pill.
     ///
     /// Only the codec and the geometry, which the negotiated format already answers — bitrate and
@@ -552,10 +584,27 @@ struct MainWindowView: View {
         let dimensions = format.resolution.map {
             FrameDimensions(width: $0.width, height: $0.height)
         }
+        // Measured values win where they exist; the negotiated format fills the rest. A declared
+        // frame rate is what the camera promised, a measured one is what arrived, and the tile
+        // should show the second whenever it has been observed.
         return VTileStats(codec: format.videoCodec.rawValue.uppercased(),
-                          dimensions: dimensions,
-                          framesPerSecond: format.declaredFPS,
+                          dimensions: telemetry.resolution ?? dimensions,
+                          framesPerSecond: telemetry.framesPerSecond ?? format.declaredFPS,
                           isHardwareDecode: true)
+    }
+
+    /// Reads the collector once a second for as long as the window is on screen.
+    private func pollTelemetry() async {
+        while !Task.isCancelled {
+            let now = session.dependencies.clock.now()
+            session.telemetry.tick(at: now)
+            telemetry = session.telemetry.telemetry(at: now)
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch {
+                return
+            }
+        }
     }
 
     /// Redraws once a second for as long as a clip is being written.
@@ -583,6 +632,9 @@ struct MainWindowView: View {
                         storage: deviceInfo.storage,
                         isDeviceLoading: deviceInfo.isLoading,
                         isDeviceUnavailable: deviceInfo.isUnavailable,
+                        stream: streamDescription,
+                        statistics: telemetry.statistics,
+                        recentStatistics: telemetry.recentStatistics,
                         recording: recordingState)
     }
 
@@ -647,7 +699,7 @@ struct MainWindowView: View {
     private var chromeStatus: VChromeStatus {
         VChromeStatus(liveCount: session.liveState.isShowingVideo ? 1 : 0,
                       degradedCount: Self.isDegraded(session.liveState) ? 1 : 0,
-                      throughput: .unmeasured)
+                      throughput: telemetry.throughput)
     }
 
     // MARK: - Identity

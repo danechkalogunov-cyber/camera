@@ -217,8 +217,16 @@ extension AppSessionModel {
         // not capture `self`, which is `@MainActor`. Reading it costs one uncontended lock per frame,
         // and answers `nil` whenever nothing is being written.
         let recordingTap = self.recordingTap
+        let telemetry = self.telemetry
+        let mediaClock = dependencies.clock
         decodeTask = Task.detached {
             for await frame in frameStream {
+                // Counted before the hop into the pipeline, so the measurement is of what arrived
+                // rather than of what the decoder got round to. Two integer additions under one
+                // uncontended lock; nothing here allocates.
+                telemetry.noteFrame(byteCount: frame.byteCount,
+                                    isKeyframe: frame.isKeyframe,
+                                    at: mediaClock.now())
                 await pipeline.submit(frame)
                 if let recorder = recordingTap.recorder() {
                     await recorder.append(frame)
@@ -237,6 +245,7 @@ extension AppSessionModel {
         eventTask = Task { [weak self] in
             for await event in controller.events() {
                 guard let self else { return }
+                self.telemetry.ingest(event, at: self.dependencies.clock.now())
                 self.apply(event)
             }
         }
