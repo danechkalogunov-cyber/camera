@@ -72,6 +72,16 @@
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
 
+    <!-- The default clip and snapshot destination, ~/Movies/Vigil.
+         Without this, `.moviesDirectory` resolves to `Data/Movies` inside the container, which is a
+         symlink to the real folder — so `createDirectory` fails with NSCocoaErrorDomain 513
+         (NSFileWriteNoPermissionError) and recording refuses to start. Observed on the first real
+         recording attempt; the path in the error is what named the cause.
+         `files.user-selected.read-write` below does NOT cover this: it grants only what the user
+         picks in a panel, and the default destination is never picked. -->
+    <key>com.apple.security.assets.movies.read-write</key>
+    <true/>
+
     <key>com.apple.security.device.audio-input</key>
     <true/>
 
