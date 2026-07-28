@@ -139,6 +139,9 @@ final class AppSessionModel {
     /// snapshot once a second.
     let telemetry = StreamStatisticsCollector()
 
+    /// Frames waiting between the network and the decoder. Feeds the inspector's decode queue.
+    let backlog = FrameBacklog()
+
     let recordingTap = RecordingTap()
 
     let credentials: CredentialStore

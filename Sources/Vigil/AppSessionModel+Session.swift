@@ -218,7 +218,9 @@ extension AppSessionModel {
         // and answers `nil` whenever nothing is being written.
         let recordingTap = self.recordingTap
         let telemetry = self.telemetry
+        let backlog = self.backlog
         let mediaClock = dependencies.clock
+        backlog.reset()
         decodeTask = Task.detached {
             for await frame in frameStream {
                 // Counted before the hop into the pipeline, so the measurement is of what arrived
@@ -228,6 +230,11 @@ extension AppSessionModel {
                                     isKeyframe: frame.isKeyframe,
                                     at: mediaClock.now())
                 await pipeline.submit(frame)
+                // Counted after the submit returns, so the depth reflects what is still waiting
+                // rather than what is being worked on. Reported here rather than polled, because
+                // this is the only place that knows a frame has left the stream.
+                backlog.departed()
+                telemetry.noteDecodeQueueDepth(backlog.depth())
                 if let recorder = recordingTap.recorder() {
                     await recorder.append(frame)
                 }
@@ -238,7 +245,10 @@ extension AppSessionModel {
                                           initialQuality: .main,
                                           initialPriority: .focused,
                                           dependencies: dependencies,
-                                          frameSink: { continuation.yield($0) })
+                                          frameSink: { frame in
+                                              backlog.arrived()
+                                              continuation.yield(frame)
+                                          })
         self.controller = controller
         // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so the
         // subscription is established before `start()` and cannot miss the first transition.
