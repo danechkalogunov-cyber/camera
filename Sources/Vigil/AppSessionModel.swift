@@ -146,7 +146,12 @@ final class AppSessionModel {
 
     let credentials: CredentialStore
     let defaults: UserDefaults
-    let tileSink = TileVideoSink()
+    /// The sidebar thumbnail's source: the live picture, downscaled, refreshed every couple of
+    /// seconds. Not a second video view — `FrameStreamHandle` holds one sink, and a second tile
+    /// would displace the first.
+    let livePreview = LivePreviewSource()
+
+    let tileSink: TileVideoSink
     var sessionTask: Task<Void, Never>?
     var eventTask: Task<Void, Never>?
     var decodeTask: Task<Void, Never>?
@@ -260,6 +265,7 @@ final class AppSessionModel {
         self.defaults = defaults
         self.credentials = CredentialStore(keychain: dependencies.keychain,
                                            logger: dependencies.logger)
+        self.tileSink = TileVideoSink(preview: livePreview, previewClock: dependencies.clock)
         // The sink follows the handle for the life of the process, so a tile that SwiftUI rebuilds
         // mid-stream starts receiving again without the decode pipeline knowing anything happened.
         // The same attach notification carries the tile's render state up, so `liveState` can say

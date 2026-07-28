@@ -53,7 +53,15 @@ final class TileVideoSink: VideoSink {
     // MARK: - Initialisation
 
     /// Creates an unattached sink.
-    init() {}
+    /// Creates a sink.
+    ///
+    /// - Parameters:
+    ///   - preview: where the odd frame goes for the sidebar thumbnail.
+    ///   - previewClock: the monotonic source that throttling measures against.
+    init(preview: LivePreviewSource, previewClock: any MonotonicClock) {
+        self.preview = preview
+        self.previewClock = previewClock
+    }
 
     // MARK: - Public API
 
@@ -105,12 +113,25 @@ final class TileVideoSink: VideoSink {
         attached.withLock { $0 = nil }
     }
 
+    /// Samples the odd frame for the sidebar's thumbnail.
+    ///
+    /// Immutable and injected: a settable property here would be written from the main actor and
+    /// read from the decode path, which is a data race the compiler would have to be silenced to
+    /// accept. `LivePreviewSource` is `Sendable` and owns its own synchronisation.
+    private let preview: LivePreviewSource
+
+    /// The clock the preview throttles against — the app's, so every duration agrees.
+    private let previewClock: any MonotonicClock
+
     // MARK: - VideoSink
 
     nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
                              generation: UInt32) {
         // The sample buffer is neither boxed nor stored: both sides are `nonisolated` and the call
         // is synchronous, so no isolation boundary is crossed (R-51).
+        // Offered before the hop into the view, so the thumbnail sees the same frame the screen
+        // does. Declined 49 times out of 50 — see `LivePreviewSource` for why it must be.
+        preview.offer(sampleBuffer, now: previewClock.now().seconds)
         let view = attached.withLock { $0 }
         view?.enqueue(sampleBuffer, format: format, generation: generation)
     }

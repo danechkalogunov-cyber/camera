@@ -380,7 +380,24 @@ struct MainWindowView: View {
                          }
                      },
                      onClearSearch: { window.searchText = "" },
-                     thumbnail: { _ in Color.clear })
+                     thumbnail: { _ in cameraThumbnail })
+    }
+
+    /// The sidebar row's live miniature.
+    ///
+    /// A still refreshed every couple of seconds, not a second video surface: `FrameStreamHandle`
+    /// holds one sink, so a second tile attached to the same stream would displace the picture it is
+    /// meant to preview. Falls back to the camera's identity colour before the first frame, which is
+    /// also what an offline camera keeps showing.
+    @ViewBuilder
+    private var cameraThumbnail: some View {
+        if let poster = session.livePreview.image {
+            Image(decorative: poster, scale: 1)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            VTheme.Color.Layer.videoWell
+        }
     }
 
     /// What the centre of the window shows.
