@@ -561,6 +561,25 @@ import VigilProtocols
     #expect(TimelineMarkerLayout.previous(before: markers[0].instant, in: markers) == nil)
 }
 
+@Test func timelineClockCarriesTheTimeOfDayAcrossADayChange() throws {
+    let clock = TimelineFixture.clock(zone: TimelineTZ.utc, year: 2026, month: 7, day: 26)
+    let today = clock.today
+    let yesterday = clock.day(today, offsetByDays: -1)
+
+    // UX.md §7.4: 10:14 on the 26th becomes 10:14 on the 25th, not midnight.
+    let at1014 = today.start.addingTimeInterval(10 * 3600 + 14 * 60)
+    let carried = clock.sameTimeOfDay(as: at1014, on: yesterday)
+    #expect(clock.wallClock(carried).hour == 10)
+    #expect(clock.wallClock(carried).minute == 14)
+    #expect(yesterday.contains(carried))
+
+    // Midnight and the last second of the day both stay inside the target day rather than
+    // rounding into a neighbour.
+    #expect(clock.sameTimeOfDay(as: today.start, on: yesterday) == yesterday.start)
+    let lastSecond = today.start.addingTimeInterval(23 * 3600 + 59 * 60 + 59)
+    #expect(yesterday.contains(clock.sameTimeOfDay(as: lastSecond, on: yesterday)))
+}
+
 @Test func timelineMarkerSteppingAdvancesWhenRepeatedFromWhereItLanded() throws {
     let index = TimelineFixture.mockupIndex()
     let day = index.day

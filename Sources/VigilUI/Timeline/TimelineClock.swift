@@ -253,6 +253,29 @@ package struct TimelineClock: Sendable {
         return self.day(containing: noon)
     }
 
+    /// The same wall-clock time as `instant`, but on `day`.
+    ///
+    /// UX.md §7.4: "Changing the day keeps the wall-clock time-of-day position (10:14 on the 26th →
+    /// 10:14 on the 25th), which is what reviewers expect." Someone comparing what happened at ten
+    /// past ten across three days should not have to re-scrub to ten past ten twice.
+    ///
+    /// Built by adding the elapsed *hours, minutes and seconds* to the target day's own start
+    /// rather than by constructing a date from components: on a spring-forward day 02:30 does not
+    /// exist, and `date(from:)` would answer `nil` for it — which would drop the user back to
+    /// midnight on exactly the day where the hour they were looking at matters most. Adding an
+    /// offset always lands somewhere real, and the clamp keeps a 23-hour day from overflowing into
+    /// the next.
+    ///
+    /// - Parameters:
+    ///   - instant: the position to carry over. Its own day is irrelevant.
+    ///   - day: the day to land in.
+    /// - Returns: an instant inside `day`.
+    package func sameTimeOfDay(as instant: Date, on day: TimelineDay) -> Date {
+        let parts = wallClock(instant)
+        let offset = Double(parts.hour * 3600 + parts.minute * 60 + parts.second)
+        return day.clamp(day.start.addingTimeInterval(offset))
+    }
+
     /// The day containing ``now``.
     package var today: TimelineDay { day(containing: now) }
 

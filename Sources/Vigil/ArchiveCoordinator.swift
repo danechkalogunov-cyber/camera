@@ -350,6 +350,11 @@ final class ArchiveCoordinator {
                       clock: TimelineClock,
                       localClips: [VTimelineLocalClip],
                       markers: [TimelineMarker]) async {
+        // Captured before the first `await`: `load` has already replaced `archive` with its loading
+        // form, which keeps the outgoing playhead, and this is the last point at which it is still
+        // the *previous* day's position rather than the new day's.
+        let carried = archive?.playhead
+
         let found: [RecordTrack]
         do {
             found = try await session.recordTracks()
@@ -430,10 +435,9 @@ final class ArchiveCoordinator {
                                   day: day,
                                   window: TimelineWindow(start: day.start, zoom: .day),
                                   zoom: .day,
-                                  // Today opens at the current instant, an older day at its start.
-                                  // Opening a past day "now" would put the playhead in empty space
-                                  // past the end of everything recorded.
-                                  playhead: Self.openingInstant(for: day, clock: clock),
+                                  playhead: Self.openingInstant(for: day,
+                                                                carrying: carried,
+                                                                clock: clock),
                                   isLoading: false,
                                   preview: nil)
         logger.info(.isapi, "archive: \(built.count) track(s) for the selected day")
@@ -490,9 +494,23 @@ final class ArchiveCoordinator {
     }
 
     /// Where the playhead sits when a day is opened.
-    private static func openingInstant(for day: TimelineDay, clock: TimelineClock) -> Date {
+    ///
+    /// Three cases, in order:
+    ///
+    /// 1. **Today** opens at the current instant — the live edge is where the picture is.
+    /// 2. **A day stepped to from another** keeps the wall-clock position (UX.md §7.4: "10:14 on
+    ///    the 26th → 10:14 on the 25th"). Someone comparing ten past ten across three days should
+    ///    not have to re-scrub to ten past ten twice.
+    /// 3. **The first day opened** that is not today starts at midnight, there being nothing to
+    ///    carry over. Opening it at "now" would put the playhead in empty space past the end of
+    ///    everything the camera recorded that day.
+    private static func openingInstant(for day: TimelineDay,
+                                       carrying previous: Date?,
+                                       clock: TimelineClock) -> Date {
         let now = clock.now
-        return (now >= day.start && now <= day.end) ? now : day.start
+        if now >= day.start, now <= day.end { return now }
+        guard let previous else { return day.start }
+        return clock.sameTimeOfDay(as: previous, on: day)
     }
 
     /// A stable `UUID` for a track, so a lane keeps its identity across a reload.
