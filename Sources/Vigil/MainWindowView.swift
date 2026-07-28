@@ -929,10 +929,41 @@ struct MainWindowView: View {
         }
     }
 
-    /// Puts the camera's picture back to its factory settings.
+    /// Puts the camera's picture back to its factory settings, and says what happened.
+    ///
+    /// The reset is a `PUT` to the camera, so it can be refused — by a firmware without the
+    /// endpoint, by an account without the permission, or by a device that is simply not reachable
+    /// at that moment. Every one of those used to be a log line and nothing else, which is why the
+    /// button read as broken: the press produced no picture change and no explanation.
     private func resetImage() {
-        guard let channel = session.camera?.channel else { return }
-        Task { await deviceInfo.resetImage(channel: channel) }
+        guard let channel = session.camera?.channel else {
+            window.toast = MainWindowToast(kind: .warning,
+                                           message: Self.localized("Connect a camera first"))
+            return
+        }
+        Task {
+            switch await deviceInfo.resetImage(channel: channel) {
+            case .reset:
+                window.toast = MainWindowToast(
+                    kind: .success,
+                    message: Self.localized("Picture settings reset"))
+            case .unchanged:
+                window.toast = MainWindowToast(
+                    kind: .info,
+                    message: Self.localized("The camera accepted the reset and reported the same "
+                                            + "settings — its picture was already at the defaults."))
+            case .refused(let reason):
+                window.toast = MainWindowToast(
+                    kind: .error,
+                    message: String(format: Self.localized("The camera refused to reset its "
+                                                           + "picture settings: %@"),
+                                    reason))
+            case .unavailable:
+                window.toast = MainWindowToast(
+                    kind: .warning,
+                    message: Self.localized("Connect a camera first"))
+            }
+        }
     }
 
     /// Opens the camera's own web interface in the default browser.

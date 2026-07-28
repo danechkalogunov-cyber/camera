@@ -195,6 +195,29 @@ struct DeviceInfoReading: Sendable {
     var outcome: DeviceInfoOutcome
 }
 
+// MARK: - ImageResetOutcome
+
+/// What pressing *Reset to Defaults* achieved.
+///
+/// Four answers rather than a `Bool`, because the three failures are not the same failure and a
+/// user who is told only "it didn't work" cannot tell a camera that refuses the endpoint from one
+/// that was already at its defaults.
+enum ImageResetOutcome: Sendable, Hashable {
+
+    /// The camera accepted it and its picture settings changed.
+    case reset
+
+    /// The camera accepted it and reported the same settings afterwards — which is the honest
+    /// answer for a camera that was already sitting at its factory values.
+    case unchanged
+
+    /// The device refused, with its own named reason.
+    case refused(String)
+
+    /// There was no ISAPI session to ask. Before a camera is connected, or after it dropped.
+    case unavailable
+}
+
 // MARK: - DeviceInfoService
 
 /// Fetches and publishes one camera's identity, firmware, uptime and storage.
@@ -522,14 +545,43 @@ final class DeviceInfoService {
     }
 
     /// Restores the camera's factory picture settings and re-reads them.
-    func resetImage(channel: ChannelID) async {
-        guard let session else { return }
+    ///
+    /// **Reports what happened, and never nothing.** This used to swallow every outcome into a log
+    /// line, so a device that refused the endpoint outright and a device that reset perfectly looked
+    /// identical from the panel: the button appeared to do nothing either way. The three answers are
+    /// now distinguishable by the caller, which is what lets the window say which one it was.
+    ///
+    /// The second read is not belt-and-braces. `PUT …/defaultConfiguration` returns as soon as the
+    /// camera has accepted it, and several firmwares apply the values a moment later — so a single
+    /// confirming read can legitimately still hold the old panel and make a successful reset look
+    /// like a no-op.
+    @discardableResult
+    func resetImage(channel: ChannelID) async -> ImageResetOutcome {
+        guard let session else {
+            logger.error(.isapi, "image reset ignored: no ISAPI session for this camera")
+            return .unavailable
+        }
+        let before = image
         do {
             try await session.resetImageDefaults(channel: channel)
-            await loadImageSettings(channel: channel, force: true)
         } catch {
-            logger.error(.isapi, "image reset refused: \(String(describing: error))")
+            let reason = String(describing: error)
+            logger.error(.isapi, "image reset refused: \(reason)")
+            return .refused(reason)
         }
+        await loadImageSettings(channel: channel, force: true)
+        if image != before {
+            logger.info(.isapi, "image reset applied")
+            return .reset
+        }
+        try? await Task.sleep(for: .milliseconds(900))
+        await loadImageSettings(channel: channel, force: true)
+        if image != before {
+            logger.info(.isapi, "image reset applied after a settling delay")
+            return .reset
+        }
+        logger.info(.isapi, "image reset accepted but nothing changed")
+        return .unchanged
     }
 
     /// Runs one image write and republishes whatever the device answers.

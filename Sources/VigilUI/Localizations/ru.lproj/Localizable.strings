@@ -462,3 +462,9 @@
 "Close player" = "Закрыть плеер";
 "Still recording" = "Ещё записывается";
 "This clip is not available" = "Этот ролик недоступен";
+
+/* IMAGE TAB — outcomes reported by the app target */
+"Picture settings reset" = "Настройки изображения сброшены";
+"The camera accepted the reset and reported the same settings — its picture was already at the defaults." = "Камера приняла сброс и вернула те же значения — изображение уже было на заводских настройках.";
+"The camera refused to reset its picture settings: %@" = "Камера отказалась сбросить настройки изображения: %@";
+"Connect a camera first" = "Сначала подключите камеру";

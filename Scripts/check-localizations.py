@@ -236,10 +236,18 @@ if en_keys != ru_keys:
     problems.append(f"en-only keys: {sorted(en_keys - ru_keys)}")
     problems.append(f"ru-only keys: {sorted(ru_keys - en_keys)}")
 
+# Keys the app target owns. `source_keys` only scans `Sources/VigilUI`, so a string the window
+# raises — a toast naming the outcome of an ISAPI write, say — has no literal in this module and
+# would otherwise be reported as unused. They are still required to exist in both languages.
 PENDING_OK = {
     "Waiting before trying again",
     "Vigil stopped signing in to %@ so the camera's account cannot be locked out. "
     "It will try again in about %lld minutes. Nothing is wrong with the camera.",
+    "Picture settings reset",
+    "The camera accepted the reset and reported the same settings — its picture was already "
+    "at the defaults.",
+    "The camera refused to reset its picture settings: %@",
+    "Connect a camera first",
 }
 for key in sorted(en_keys):
     if key not in source_keys and key not in PENDING_OK:
