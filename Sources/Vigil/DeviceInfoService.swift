@@ -419,23 +419,77 @@ final class DeviceInfoService {
         }
     }
 
-    /// Writes brightness, contrast, saturation and sharpness back to the camera.
+    /// Applies the panel's whole picture set to the camera.
     ///
-    /// Republishes whatever the device answers rather than the value that was sent: a camera is free
-    /// to clamp or ignore, and showing the requested number would make a slider lie about the
-    /// picture.
-    func writeImageColor(channel: ChannelID,
-                         brightness: Int?, contrast: Int?,
-                         saturation: Int?) async {
+    /// **Published first, written second.** The panel's sliders are computed `Binding`s whose getter
+    /// reads this property, so until it changes the control snaps back to where it was — which is
+    /// what made a drag look like it did nothing. Showing the requested value immediately is what
+    /// lets a slider move at all; the device's own answer replaces it a moment later, so a camera
+    /// that clamps or refuses still wins.
+    ///
+    /// Only the nodes that actually differ are sent. The panel hands over the entire set on every
+    /// change, and writing all four ISAPI nodes for one slider would be three needless round trips
+    /// and three more chances to leave the camera half-adjusted.
+    func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) async {
+        guard let session else { return }
+        let previous = image ?? InspectorImageSettings()
+        image = wanted
+
+        if wanted.brightness != previous.brightness || wanted.contrast != previous.contrast
+            || wanted.saturation != previous.saturation {
+            await apply(channel: channel) {
+                try await session.setImageColor(channel: channel,
+                                                brightness: wanted.brightness,
+                                                contrast: wanted.contrast,
+                                                saturation: wanted.saturation)
+            }
+        }
+        if wanted.wdrMode != previous.wdrMode || wanted.wdrLevel != previous.wdrLevel {
+            let mode: WDRSetting.Mode = switch wanted.wdrMode {
+            case .on:   .open
+            case .off:  .close
+            case .auto: .auto
+            }
+            await apply(channel: channel) {
+                try await session.setWDR(channel: channel,
+                                         WDRSetting(mode: mode, level: wanted.wdrLevel))
+            }
+        }
+        if wanted.dayNightMode != previous.dayNightMode {
+            let mode: IRCutSetting.Mode = switch wanted.dayNightMode {
+            case .day:      .day
+            case .night:    .night
+            case .auto:     .auto
+            case .schedule: .schedule
+            }
+            await apply(channel: channel) {
+                try await session.setIRCut(channel: channel, IRCutSetting(mode: mode))
+            }
+        }
+    }
+
+    /// Restores the camera's factory picture settings and re-reads them.
+    func resetImage(channel: ChannelID) async {
         guard let session else { return }
         do {
-            let settings = try await session.setImageColor(channel: channel,
-                                                           brightness: brightness,
-                                                           contrast: contrast,
-                                                           saturation: saturation)
-            image = Self.inspectorImage(from: settings)
+            try await session.resetImageDefaults(channel: channel)
+            await loadImageSettings(channel: channel, force: true)
+        } catch {
+            logger.error(.isapi, "image reset refused: \(String(describing: error))")
+        }
+    }
+
+    /// Runs one image write and republishes whatever the device answers.
+    ///
+    /// On refusal the panel is put back to what the camera last reported, so a control cannot be
+    /// left showing a value the device never accepted.
+    private func apply(channel: ChannelID,
+                       _ write: () async throws -> ImageSettings) async {
+        do {
+            image = Self.inspectorImage(from: try await write())
         } catch {
             logger.error(.isapi, "image write refused: \(String(describing: error))")
+            await loadImageSettings(channel: channel, force: true)
         }
     }
 

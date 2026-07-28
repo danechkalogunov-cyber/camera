@@ -899,6 +899,7 @@ struct MainWindowView: View {
         actions.onToggleRecording = { toggleRecording() }
         actions.onCopySerial = { copySerial() }
         actions.onImageSettings = { settings in writeImage(settings) }
+        actions.onResetImage = { resetImage() }
         return actions
     }
 
@@ -924,11 +925,14 @@ struct MainWindowView: View {
     private func writeImage(_ settings: InspectorImageSettings) {
         guard let channel = session.camera?.channel else { return }
         Task {
-            await deviceInfo.writeImageColor(channel: channel,
-                                             brightness: settings.brightness,
-                                             contrast: settings.contrast,
-                                             saturation: settings.saturation)
+            await deviceInfo.writeImage(channel: channel, settings)
         }
+    }
+
+    /// Puts the camera's picture back to its factory settings.
+    private func resetImage() {
+        guard let channel = session.camera?.channel else { return }
+        Task { await deviceInfo.resetImage(channel: channel) }
     }
 
     /// Opens the camera's own web interface in the default browser.
