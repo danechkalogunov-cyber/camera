@@ -286,6 +286,24 @@ final class DeviceInfoService {
     /// there is no reason to spend them on a panel nobody has looked at.
     private(set) var image: InspectorImageSettings?
 
+    // MARK: - Image write state
+
+    /// The picture set the user has asked for and that has not been written yet, or `nil` when the
+    /// panel and the camera are in step.
+    ///
+    /// Also the "the user is mid-gesture" flag: while it is non-`nil`, a device answer is recorded
+    /// as the baseline but not shown, because it describes a moment the pointer has already left.
+    private var pendingImage: InspectorImageSettings?
+
+    /// The picture set the device last confirmed. **The diff baseline**, and deliberately not
+    /// ``image``: that one moves with the pointer, so diffing against it compared each drag position
+    /// with the one before and made every control look changed on every tick.
+    private var confirmedImage: InspectorImageSettings?
+
+    /// The single writer. One at a time, so two read-modify-write cycles cannot overlap on the same
+    /// sub-resource — the loser's `GET` would read the winner's half-applied element.
+    private var imageWriter: Task<Void, Never>?
+
     // MARK: - Dependencies
     //
     // Internal rather than private: `DeviceInfoService+Fetch.swift` reads all four, and Swift's
@@ -444,24 +462,29 @@ final class DeviceInfoService {
     func loadImageSettings(channel: ChannelID, force: Bool = false) async {
         guard let session else { return }
         do {
-            let settings = try await session.imageSettings(channel: channel, force: force)
-            image = Self.inspectorImage(from: settings)
+            var settings = Self.inspectorImage(
+                from: try await session.imageSettings(channel: channel, force: force))
+            settings.isLocalPreviewOnly = image?.isLocalPreviewOnly ?? false
+            confirmedImage = settings
+            // A read that lands while the user is dragging must not move the control under their
+            // pointer. The baseline is still updated, so the write that follows diffs correctly.
+            if pendingImage == nil { image = settings }
         } catch {
             logger.debug(.isapi, "image settings unavailable: \(String(describing: error))")
         }
     }
 
-    /// Applies the panel's whole picture set to the camera.
+    /// Takes the panel's whole picture set as the value the user wants, and schedules the write.
     ///
-    /// **Published first, written second.** The panel's sliders are computed `Binding`s whose getter
-    /// reads this property, so until it changes the control snaps back to where it was — which is
-    /// what made a drag look like it did nothing. Showing the requested value immediately is what
-    /// lets a slider move at all; the device's own answer replaces it a moment later, so a camera
-    /// that clamps or refuses still wins.
+    /// **Published first, written later.** The panel's sliders are computed `Binding`s whose getter
+    /// reads ``image``, so until it changes the control snaps back to where it was. Publishing the
+    /// requested value here, synchronously, is what lets the knob follow the pointer at all.
     ///
-    /// Only the nodes that actually differ are sent. The panel hands over the entire set on every
-    /// change, and writing all six ISAPI nodes for one slider would be five needless round trips and
-    /// five more chances to leave the camera half-adjusted.
+    /// **Nothing is sent while the control is still moving** (UX.md §15.4). A drag emits a change
+    /// per pixel and each one is a read-modify-write — `GET`, `PUT`, `GET` — so writing them all
+    /// meant roughly a hundred and fifty round trips for one gesture, at a device that answers a
+    /// handful per second. ``drainImageWrites(channel:)`` waits for the value to hold still for
+    /// ``imageSettleTime`` and then writes only what it has settled on.
     ///
     /// **Everything here is the camera's own setting.** There is no local image processing anywhere
     /// in Vigil — the decode path is passthrough, straight from the network into
@@ -469,20 +492,63 @@ final class DeviceInfoService {
     /// `/Image/channels/{ch}/…` and the picture changes at the sensor, for everyone watching.
     /// ⚠️ That is also why "Adjust my view only" only *withholds* the write: honouring it properly
     /// needs a render-path adjustment stage that does not exist. Reported in ЧТО-НЕ-СДЕЛАНО.md.
-    ///
-    /// - Returns: `false` when the device refused at least one of the nodes that changed. The panel
-    ///   ignores it — a refused write has already put the control back — but the reset fallback
-    ///   needs to know whether writing the standard values actually reached the camera.
-    @discardableResult
-    func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) async -> Bool {
-        guard let session else { return false }
-        let previous = image ?? InspectorImageSettings()
+    func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) {
         image = wanted
+        pendingImage = wanted
+        // One writer, ever. Starting a second would put two read-modify-write cycles on the same
+        // sub-resource at once, and the loser's `GET` would read the winner's half-applied state.
+        guard imageWriter == nil else { return }
+        imageWriter = Task { [weak self] in
+            await self?.drainImageWrites(channel: channel)
+        }
+    }
 
+    /// How long a control has to hold still before its value is sent. UX.md §15.4.
+    ///
+    /// Trailing rather than leading: the interesting value is the one the user let go on, not the
+    /// one they passed through on the way. 250 ms is short enough that releasing the mouse and
+    /// seeing the picture change reads as immediate.
+    static let imageSettleTime = Duration.milliseconds(250)
+
+    /// Writes settled values until there are none left, one at a time.
+    ///
+    /// The loop is what coalesces a drag: it waits out a settle window, and if the wanted value
+    /// moved during that window it waits again rather than writing an intermediate position. So a
+    /// two-second drag across the whole track is one write, not two hundred.
+    ///
+    /// ⛔ Never cancelled. Cancelling would abort whatever HTTP request is in flight, and a `PUT`
+    /// cut off half-way is exactly how a camera is left with a partly-applied `<Color>` element.
+    /// Newer intent arrives through ``pendingImage`` instead, which this loop re-reads every pass.
+    private func drainImageWrites(channel: ChannelID) async {
+        defer { imageWriter = nil }
+        while let wanted = pendingImage {
+            try? await Task.sleep(for: Self.imageSettleTime)
+            guard let latest = pendingImage else { return }
+            // Still moving. Wait for the next lull rather than writing a position the user has
+            // already dragged past — this is the whole point of the loop.
+            guard latest == wanted else { continue }
+            pendingImage = nil
+            await flushImage(channel: channel, wanted: latest)
+        }
+    }
+
+    /// Sends the nodes that differ from what the device last confirmed.
+    ///
+    /// Diffed against ``confirmedImage``, never against ``image``. `image` is the *user's* value and
+    /// moves with the pointer, so diffing against it compared each drag position with the previous
+    /// one — which made every control look changed on every tick, and wrote all six sub-resources
+    /// for a gesture that touched one.
+    ///
+    /// - Returns: `false` when the device refused at least one node.
+    @discardableResult
+    private func flushImage(channel: ChannelID,
+                            wanted: InspectorImageSettings) async -> Bool {
+        guard let session else { return false }
         guard !wanted.isLocalPreviewOnly else {
             logger.info(.isapi, "image write withheld: adjust-my-view-only is on")
             return true
         }
+        let previous = confirmedImage ?? InspectorImageSettings()
         var accepted = true
 
         if wanted.brightness != previous.brightness || wanted.contrast != previous.contrast
@@ -590,6 +656,9 @@ final class DeviceInfoService {
             logger.error(.isapi, "image reset ignored: no ISAPI session for this camera")
             return .unavailable
         }
+        // A slider let go of a moment before the button was pressed still has a write queued, and
+        // letting it land after the reset would put that one value straight back.
+        pendingImage = nil
         let before = image
         do {
             try await session.resetImageDefaults(channel: channel)
@@ -617,27 +686,46 @@ final class DeviceInfoService {
     ///
     /// The set is `InspectorImageSettings()`'s own defaults, which are the documented ones:
     /// brightness, contrast, saturation and sharpness at 50 (spec-isapi.md §17.2), WDR closed,
-    /// day/night automatic, the supplement lamp on automatic and no flip. `writeImage` already
-    /// sends only the nodes that differ and reconciles each with the device's answer, so a camera
-    /// that clamps a value still ends up showing what it actually kept.
+    /// day/night automatic, the supplement lamp on automatic and no flip. `flushImage` sends only
+    /// the nodes that differ and reconciles each with the device's answer, so a camera that clamps
+    /// a value still ends up showing what it actually kept.
+    ///
+    /// Goes straight to the writer rather than through ``writeImage(channel:_:)``: a button press is
+    /// already a settled intent, and putting it through the 250 ms coalescer would make the reset
+    /// feel late for no benefit.
     private func applyDocumentedDefaults(channel: ChannelID,
                                          after reason: String) async -> ImageResetOutcome {
         let before = image
         logger.info(.isapi, "writing the documented image defaults instead")
-        guard await writeImage(channel: channel, InspectorImageSettings()) else {
+        let defaults = InspectorImageSettings()
+        image = defaults
+        guard await flushImage(channel: channel, wanted: defaults) else {
             return .refused(reason)
         }
         return image == before ? .unchanged : .documentedDefaults(reason)
     }
 
-    /// Runs one image write and republishes whatever the device answers.
+    /// Runs one image write and takes the device's answer as the new baseline.
+    ///
+    /// **The answer only reaches the panel when the user is not mid-gesture.** Each write is three
+    /// round trips, so its reply describes a moment that has already passed; publishing it while a
+    /// slider is still being dragged is what yanked the knob back to a stale position. A pending
+    /// edit means the user has moved on and their value wins until it is written in turn.
+    ///
+    /// ``confirmedImage`` is updated either way — it is the diff baseline, and it has to hold what
+    /// the device actually kept even when the panel is showing something newer.
     ///
     /// On refusal the panel is put back to what the camera last reported, so a control cannot be
     /// left showing a value the device never accepted.
     private func apply(channel: ChannelID,
                        _ write: () async throws -> ImageSettings) async -> Bool {
         do {
-            image = Self.inspectorImage(from: try await write())
+            var answered = Self.inspectorImage(from: try await write())
+            // The device has no opinion about this one — it is Vigil's own switch, and rebuilding
+            // the panel from the device's answer would silently turn it off after every write.
+            answered.isLocalPreviewOnly = image?.isLocalPreviewOnly ?? false
+            confirmedImage = answered
+            if pendingImage == nil { image = answered }
             return true
         } catch {
             logger.error(.isapi, "image write refused: \(String(describing: error))")
@@ -718,6 +806,12 @@ final class DeviceInfoService {
         isUnavailable = false
         outcome = nil
         updatedAt = nil
+        // Dropped, not cancelled: `imageWriter` may be inside a `PUT`, and aborting one half-way is
+        // how a camera ends up with a partly-applied element. Clearing the intent lets the loop
+        // finish what it is doing and then exit on its own.
+        image = nil
+        pendingImage = nil
+        confirmedImage = nil
         let outgoing = session
         session = nil
         client = nil

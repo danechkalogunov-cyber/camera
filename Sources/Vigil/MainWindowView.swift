@@ -914,19 +914,14 @@ struct MainWindowView: View {
         NSPasteboard.general.setString(serial, forType: .string)
     }
 
-    /// Writes the picture controls back to the camera.
+    /// Hands the panel's picture controls to the writer.
     ///
-    /// The panel hands over the whole set, so all three colour values go in one request rather than
-    /// three — `/Image/channels/N/color` is a single node and writing it once is both fewer round
-    /// trips and fewer chances for the camera to be left half-adjusted.
-    ///
-    /// Sharpness, WDR and the IR cut filter are separate ISAPI nodes with their own write paths and
-    /// are not sent yet; the panel shows them read-only until they are.
+    /// Deliberately not a `Task`. `DeviceInfoService.writeImage` returns immediately — it publishes
+    /// the value so the control follows the pointer, and schedules the write for once the control
+    /// has stopped moving. Wrapping it here would only add a hop before that.
     private func writeImage(_ settings: InspectorImageSettings) {
         guard let channel = session.camera?.channel else { return }
-        Task {
-            await deviceInfo.writeImage(channel: channel, settings)
-        }
+        deviceInfo.writeImage(channel: channel, settings)
     }
 
     /// Puts the camera's picture back to its factory settings, and says what happened.
