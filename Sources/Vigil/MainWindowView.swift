@@ -162,6 +162,7 @@ struct MainWindowView: View {
             await tickWhileRecording()
         }
         .task { await pollTelemetry() }
+        .task(id: session.camera?.id) { await pollPoster() }
     }
 
     // MARK: - Overlays
@@ -383,15 +384,14 @@ struct MainWindowView: View {
                      thumbnail: { _ in cameraThumbnail })
     }
 
-    /// The sidebar row's live miniature.
+    /// The sidebar row's miniature of what the camera sees.
     ///
-    /// A still refreshed every couple of seconds, not a second video surface: `FrameStreamHandle`
-    /// holds one sink, so a second tile attached to the same stream would displace the picture it is
-    /// meant to preview. Falls back to the camera's identity colour before the first frame, which is
-    /// also what an offline camera keeps showing.
+    /// The camera's own JPEG, not a scaled-down video frame: this app's decode path is passthrough
+    /// and never produces a pixel buffer to scale — see `DeviceInfoService.poster`. Falls back to
+    /// the video-well colour before the first snapshot lands and while a camera is offline.
     @ViewBuilder
     private var cameraThumbnail: some View {
-        if let poster = session.livePreview.image {
+        if let poster = deviceInfo.poster {
             Image(decorative: poster, scale: 1)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -793,6 +793,22 @@ struct MainWindowView: View {
             telemetry = session.telemetry.telemetry(at: now)
             do {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch {
+                return
+            }
+        }
+    }
+
+    /// Refreshes the sidebar's thumbnail from the camera every few seconds.
+    ///
+    /// Five seconds, not one: this is an HTTP round trip to the device for a picture 40 pt wide, and
+    /// asking faster would put load on the camera in exchange for nothing a viewer would notice.
+    private func pollPoster() async {
+        guard let channel = session.camera?.channel else { return }
+        while !Task.isCancelled {
+            await deviceInfo.refreshPoster(channel: channel)
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
             } catch {
                 return
             }

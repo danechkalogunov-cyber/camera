@@ -26,7 +26,9 @@
 
 #if os(macOS)
 
+import CoreGraphics
 import Foundation
+import ImageIO
 import Observation
 
 import VigilCore
@@ -359,6 +361,31 @@ final class DeviceInfoService {
         }
     }
 
+    /// Fetches one JPEG snapshot from the device and publishes it as ``poster``.
+    ///
+    /// Silent when there is no session yet, and silent on failure: a camera that refuses the picture
+    /// endpoint — some firmwares gate it behind a separate permission — should cost a missing
+    /// thumbnail and a debug line, not an error the user has to dismiss. The main picture is
+    /// unaffected either way.
+    func refreshPoster(channel: ChannelID) async {
+        guard let client else { return }
+        let route = SnapshotDeviceRoute(requester: client, clock: clock)
+        do {
+            let jpeg = try await route.fetchJPEG(channel: channel)
+            guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 192
+                  ] as CFDictionary) else {
+                logger.debug(.isapi, "device snapshot: not a decodable JPEG")
+                return
+            }
+            poster = image
+        } catch {
+            logger.debug(.isapi, "device snapshot unavailable: \(String(describing: error))")
+        }
+    }
+
     /// Repeats the last load, bypassing every cache. Wired to `VInspectorActions.onRetryDevice`.
     ///
     /// Does nothing when no camera has been loaded yet, rather than guessing one.
@@ -382,6 +409,7 @@ final class DeviceInfoService {
         lastRequest = nil
         identity = InspectorDeviceIdentity()
         storage = nil
+        poster = nil
         isLoading = false
         isUnavailable = false
         outcome = nil
