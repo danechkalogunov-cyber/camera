@@ -373,6 +373,34 @@ import VigilProtocols
     #expect(group.id == midnight)
 }
 
+@Test func inspectorClockAgreementSeparatesUnknownFromInStep() {
+    // ⛔ The distinction the row exists for. "Not read yet" must not draw as "in step": one is an
+    // absence of information and the other is a claim about the camera, and drawing the first as
+    // the second tells the user their clock is fine when nobody has looked.
+    var identity = InspectorDeviceIdentity()
+    #expect(identity.clockAgreement == .unknown)
+
+    identity.clockSkewSeconds = 0
+    #expect(identity.clockAgreement == .inStep(seconds: 0))
+
+    // The ±60 s threshold of docs/spec-isapi.md §7.5, checked on both sides of the boundary.
+    identity.clockSkewSeconds = 60
+    #expect(identity.clockAgreement == .inStep(seconds: 60))
+    identity.clockSkewSeconds = -60
+    #expect(identity.clockAgreement == .inStep(seconds: -60))
+    identity.clockSkewSeconds = 61
+    #expect(identity.clockAgreement == .out(seconds: 61))
+    identity.clockSkewSeconds = -61
+    #expect(identity.clockAgreement == .out(seconds: -61))
+
+    // A device-local-stamping camera reads as hours out, which is true of the number and not of
+    // the clock — the row says so in words rather than hiding the figure.
+    identity.clockSkewSeconds = 10_800
+    identity.stampsLocalTimeAsUTC = true
+    #expect(identity.clockAgreement == .out(seconds: 10_800))
+    #expect(identity.stampsLocalTimeAsUTC)
+}
+
 // MARK: - Helpers
 
 /// A synthesised volume. ⚠️ Not captured from hardware — the figures are chosen to make the

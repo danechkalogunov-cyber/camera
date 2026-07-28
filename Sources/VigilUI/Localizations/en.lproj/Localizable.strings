@@ -566,3 +566,11 @@
    morning and nothing after it. Says which it is, because a timeline that simply ends
    looks exactly like a camera that stopped recording. */
 "This day holds more recordings than Vigil could read. The timeline is complete up to %@ and unknown after it." = "This day holds more recordings than Vigil could read. The timeline is complete up to %@ and unknown after it.";
+
+/* THE CLOCK ROW — Info tab. A camera whose clock is wrong puts events at the wrong minute,
+   searches the archive for the wrong day and leaves bookmarks pointing at nothing, and every
+   one of those reads as a bug in Vigil until you can see the clock. "zone corrected" marks a
+   firmware that labels local time as UTC: the skew shown IS the zone offset and the camera's
+   clock is in fact correct, so without this the user would go and reset a clock that is fine. */
+"Clock" = "Clock";
+"zone corrected" = "zone corrected";

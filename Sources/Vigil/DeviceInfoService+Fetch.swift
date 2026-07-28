@@ -104,6 +104,7 @@ extension DeviceInfoService {
         if identity.macAddress.isEmpty {
             identity.macAddress = await macAddress(from: session, missing: &missing)
         }
+        await readClock(from: session, into: &identity)
         let volumes = await storageInfo(from: session, missing: &missing)
 
         if Task.isCancelled {
@@ -117,6 +118,35 @@ extension DeviceInfoService {
     //
     // Each of the four returns a usable value and appends to `missing` rather than throwing. That
     // is the whole difference between "the device has no disk" and "the panel is broken".
+
+    /// `GET /System/time` for the clock row.
+    ///
+    /// ⛔ Deliberately **not** added to `missing`. Every other optional section here answers "is
+    /// this row available"; this one answers "is the camera's clock trustworthy", and a device that
+    /// will not say is not a partially-loaded panel — it is a camera whose clock we cannot check.
+    /// The row simply does not appear, which `ClockAgreement.unknown` draws as nothing at all.
+    ///
+    /// The session has already read this endpoint on the connect path and caches it for five
+    /// minutes, so this is normally free, and it is the same read that sets the device-local
+    /// playback quirk — which is why the two are reported together.
+    private func readClock(from session: ISAPIDeviceSession,
+                           into identity: inout InspectorDeviceIdentity) async {
+        do {
+            let time = try await session.time()
+            let now = Date()
+            identity.clockSkewSeconds = time.skew(against: now)
+            identity.stampsLocalTimeAsUTC = time.stampsLocalTimeAsUTC(reference: now)
+            if let skew = identity.clockSkewSeconds,
+               abs(skew) > InspectorDeviceIdentity.clockToleranceSeconds,
+               !identity.stampsLocalTimeAsUTC {
+                logger.notice(.isapi, "the camera's clock is out",
+                              ["seconds": String(Int(skew))])
+            }
+        } catch {
+            logger.debug(.isapi, "device time unavailable",
+                         ["reason": String(describing: error)])
+        }
+    }
 
     /// `GET /System/status` for the uptime row, or `0` and a named missing section.
     private func uptimeSeconds(from session: ISAPIDeviceSession,

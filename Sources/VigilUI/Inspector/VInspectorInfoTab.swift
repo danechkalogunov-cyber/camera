@@ -72,7 +72,59 @@ package struct VInspectorInfoTab: View {
                 VInspectorMonoValue(VInspectorFormat.uptime(seconds: identity.uptimeSeconds),
                                     isLive: true)
             }
+            clockRow
         }
+    }
+
+    /// How far the camera's clock is from this Mac's — and, when it applies, that Vigil is already
+    /// correcting for a firmware that labels local time as UTC.
+    ///
+    /// ⛔ This row earns its place by explaining *other* symptoms. A camera an hour out puts events
+    /// at the wrong minute, sends an archive search for the wrong day, and leaves a bookmark
+    /// pointing at footage that is not there — and every one of those looks like a bug in Vigil
+    /// until you know the clock is wrong. `DeviceTime.skew(against:)` has computed this since it
+    /// was written and its own documentation says "beyond ±60 s the UI warns"; nothing warned.
+    @ViewBuilder
+    private var clockRow: some View {
+        switch state.identity.clockAgreement {
+        case .unknown:
+            // Nothing read yet is not the same as "in step", and must not be drawn as it.
+            EmptyView()
+        case .inStep(let seconds):
+            VInspectorRow("Clock") { clockValue(seconds, isOut: false) }
+        case .out(let seconds):
+            VInspectorRow("Clock") { clockValue(seconds, isOut: true) }
+        }
+    }
+
+    /// The signed figure, warned about when it is out, and annotated when Vigil is compensating.
+    private func clockValue(_ seconds: Double, isOut: Bool) -> some View {
+        HStack(spacing: VTheme.Space.xxs) {
+            if isOut {
+                VTheme.Symbol.warning.image()
+                    .vIcon(size: VTheme.Icon.xs, weight: VTheme.Icon.Weight.xs)
+                    .foregroundStyle(VTheme.Color.Semantic.warn)
+            }
+            VInspectorMonoValue(Self.skewLabel(seconds))
+            // Said in words, not folded into the number: the figure is what the clock reads, and
+            // this is what Vigil is doing about it. On such a camera the skew is the zone offset
+            // and the clock is in fact correct, so an unexplained "+3:00:00" would send the user
+            // to reset a clock that is fine.
+            if state.identity.stampsLocalTimeAsUTC {
+                Text("zone corrected", bundle: .vigilUI)
+                    .vType(VTheme.Typography.caption2)
+                    .foregroundStyle(VTheme.Color.Text.tertiary)
+            }
+        }
+    }
+
+    /// `"+0:04"` / `"−2:11"`, always signed.
+    ///
+    /// The sign is the whole point: an unsigned figure leaves the user unable to tell a camera
+    /// running fast from one running slow, and those have different causes. A true minus sign
+    /// rather than a hyphen, so it lines up with the digits in the monospaced face.
+    private static func skewLabel(_ seconds: Double) -> String {
+        (seconds < 0 ? "\u{2212}" : "+") + VInspectorFormat.duration(seconds: abs(seconds))
     }
 
     /// Firmware version and, when the device reported one, its release date.

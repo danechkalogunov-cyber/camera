@@ -571,6 +571,8 @@ final class DeviceInfoService {
         if !identity.macAddress.isEmpty { out.macAddress = identity.macAddress }
         if identity.totalChannels > 1 { out.totalChannels = identity.totalChannels }
         if identity.uptimeSeconds > 0 { out.uptimeSeconds = identity.uptimeSeconds }
+        out.clockSkewSeconds = identity.clockSkewSeconds
+        out.stampsLocalTimeAsUTC = identity.stampsLocalTimeAsUTC
         return out
     }
 

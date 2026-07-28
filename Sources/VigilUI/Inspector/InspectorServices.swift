@@ -63,11 +63,26 @@ package struct InspectorDeviceIdentity: Sendable, Hashable {
     /// Seconds since the device booted, for the `"6 d 4 h 12 m"` row.
     package var uptimeSeconds: Double
 
+    /// Signed seconds the camera's clock leads this Mac's, or `nil` when it has not been read.
+    ///
+    /// Worth a row of its own because a camera whose clock is wrong makes *everything else* wrong
+    /// in a way the user blames on Vigil: events land at the wrong minute, an archive search for
+    /// "today" asks for the wrong day, and a bookmark points at footage that is not there.
+    package var clockSkewSeconds: Double?
+
+    /// Whether this firmware writes local wall-clock time with a UTC marker, which Vigil corrects
+    /// for (`DeviceQuirks.playbackTimesAreDeviceLocal`).
+    ///
+    /// Shown because the alternative is a support conversation: on such a device the clock row
+    /// would otherwise read as hours of skew on a camera whose time is perfectly correct.
+    package var stampsLocalTimeAsUTC: Bool
+
     package init(model: String = "", deviceName: String = "", firmwareVersion: String = "",
                  firmwareReleased: String? = nil, serialNumber: String = "",
                  macAddress: String = "", channel: ChannelID = .first, totalChannels: Int = 1,
                  host: String = "", rtspPort: Int = 554, httpPort: Int = 80,
-                 usesTLS: Bool = false, uptimeSeconds: Double = 0) {
+                 usesTLS: Bool = false, uptimeSeconds: Double = 0,
+                 clockSkewSeconds: Double? = nil, stampsLocalTimeAsUTC: Bool = false) {
         self.model = model
         self.deviceName = deviceName
         self.firmwareVersion = firmwareVersion
@@ -81,6 +96,36 @@ package struct InspectorDeviceIdentity: Sendable, Hashable {
         self.httpPort = httpPort
         self.usesTLS = usesTLS
         self.uptimeSeconds = uptimeSeconds
+        self.clockSkewSeconds = clockSkewSeconds
+        self.stampsLocalTimeAsUTC = stampsLocalTimeAsUTC
+    }
+
+    /// How far out the camera's clock is, and whether that is worth saying.
+    ///
+    /// Three states, because they call for three different treatments and a `Bool` would collapse
+    /// two of them: nothing read yet (say nothing), in step (say so, quietly), and out (say so
+    /// loudly, because it explains symptoms the user is already seeing elsewhere).
+    package enum ClockAgreement: Sendable, Hashable {
+
+        /// `/System/time` has not answered yet.
+        case unknown
+
+        /// Within tolerance. The seconds are carried so the row can still show them.
+        case inStep(seconds: Double)
+
+        /// Beyond tolerance: everything time-stamped by this camera is off by roughly this much.
+        case out(seconds: Double)
+    }
+
+    /// What ±60 s means: docs/spec-isapi.md §7.5's own threshold for warning.
+    package static let clockToleranceSeconds: Double = 60
+
+    /// The clock row's state.
+    package var clockAgreement: ClockAgreement {
+        guard let clockSkewSeconds else { return .unknown }
+        return abs(clockSkewSeconds) <= Self.clockToleranceSeconds
+            ? .inStep(seconds: clockSkewSeconds)
+            : .out(seconds: clockSkewSeconds)
     }
 
     /// The serial masked to its ends — `"DS-2CD…4821"`.
