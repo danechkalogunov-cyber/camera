@@ -852,6 +852,52 @@ def check_expect_key_path(path: pathlib.Path, lines: list[str]) -> list[Violatio
     return out
 
 
+def check_scaffold_tests() -> list[Violation]:
+    """A `@Test` that records an issue *unconditionally*, and so fails by construction.
+
+    `ZZDebugClock.swift` held one test whose entire body was `Issue.record("reason=… adv=…")` — a
+    diagnostic someone left in to print the virtual clock's schedule while chasing a bug. It asserts
+    nothing and always fails, so it was the single red mark in a run of 2 700 tests, and it survived
+    in the tree for weeks because nothing had ever executed the suite. What it printed is asserted
+    by `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable`, which passes.
+
+    ⚠️ The test is the *indentation*, not the presence of `Issue.record`. Recording inside a branch
+    is this codebase's normal way to assert a pattern match —
+
+        guard case .notSOAP = decode(datagram) else {
+            Issue.record("a SADP ProbeMatch is not a SOAP envelope")
+            return
+        }
+
+    — and a first version of this rule that fired on "records an issue and has no `#expect`"
+    reported two of those. Only a call at the body's own indent level runs every time.
+    """
+    out: list[Violation] = []
+    for path in swift_files("Tests"):
+        lines = path.read_text().splitlines()
+        for n, raw in enumerate(lines, 1):
+            m = re.match(r"(\s*)@Test\b", raw)
+            if not m:
+                continue
+            body_indent = len(m.group(1)) + 4
+            depth, started = 0, False
+            for line in lines[n - 1:]:
+                depth += line.count("{") - line.count("}")
+                if "{" in line:
+                    started = True
+                stripped = line.lstrip()
+                if (started and stripped.startswith("Issue.record(")
+                        and len(line) - len(stripped) == body_indent):
+                    out.append((str(path.relative_to(ROOT)), n, "scaffold-test",
+                                "this @Test records an issue unconditionally, so it fails every "
+                                "run whatever the code does — it is a diagnostic someone left "
+                                "behind. Delete it, or turn what it prints into an #expect"))
+                    break
+                if started and depth <= 0:
+                    break
+    return out
+
+
 def check_file_header(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     if not lines or not lines[0].startswith("//"):
         return [(str(path.relative_to(ROOT)), 1, "header",
@@ -935,6 +981,7 @@ def main() -> int:
     violations += check_duplicate_test_names()
     violations += check_split_file_access()
     violations += check_undeclared_v_types()
+    violations += check_scaffold_tests()
     violations += check_plists()
 
     if not violations:
