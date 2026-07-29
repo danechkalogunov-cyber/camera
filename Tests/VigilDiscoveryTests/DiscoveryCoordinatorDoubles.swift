@@ -111,16 +111,41 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     }
 
     /// Suspends until the pump advances time by `duration`, or the task is cancelled.
+    ///
+    /// ⛔ THE DEADLINE IS FIXED HERE, NOT WHERE THE SLEEPER REGISTERS. `register` used to compute
+    /// `state.current + duration`, and between this call and that line there is a suspension —
+    /// `withCheckedThrowingContinuation` — across which the pump can advance. Every nanosecond it
+    /// advanced in that window was then added *on top of* the requested duration, because the
+    /// caller had already measured `duration` against the older reading.
+    ///
+    /// That is not a rounding error, it is the whole failure of
+    /// `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` on a loaded runner: the multicast
+    /// phase asks to pause until 10 ms, the pump sees only the scripted datagram's 40 ms sleeper
+    /// because this one has not registered yet, jumps to 40 ms, and the sleeper then lands at
+    /// 50 ms. The probes came out at exactly [50, 550, 1050] against a schedule of [10, 510, 1010]
+    /// — one uniform 40 ms shift, which is the script's own answer delay and the clue that named
+    /// the mechanism.
+    ///
+    /// Nothing about this is a production concern: a real monotonic clock does not jump, so `now()`
+    /// and a registration a moment later agree. It is only reachable on a clock something else can
+    /// wind forward.
     func sleep(for duration: Duration) async throws {
         try Task.checkCancellation()
         guard duration > .zero else { return }
+        // Counts as activity on purpose. A task that has read the clock in order to sleep is a task
+        // the pump should not conclude has gone quiet, and that shortens the one window this fix
+        // cannot close: the async call boundary between the caller's `now()` and this line.
+        let deadline = state.withLock { state -> MediaInstant in
+            state.activity += 1
+            return state.current + duration
+        }
         let id = reserveID()
         // Runs whether the sleep completed or threw: either way this task is running again, and the
         // pump is free to consider advancing.
         defer { clearWake(id) }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                register(id: id, duration: duration, continuation: continuation)
+                register(id: id, deadline: deadline, continuation: continuation)
             }
         } onCancel: {
             cancelSleeper(id)
@@ -220,13 +245,17 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
         }
     }
 
-    private func register(id: Int, duration: Duration,
+    /// Files an already-computed deadline. See `sleep(for:)` for why it is not computed here.
+    ///
+    /// A deadline that is already in the past is filed as-is rather than clamped: the next
+    /// `advanceToEarliestDeadline` sees `deadline <= current` and wakes it immediately, which is the
+    /// correct meaning of "this sleep was due before it was registered".
+    private func register(id: Int, deadline: MediaInstant,
                           continuation: CheckedContinuation<Void, any Error>) {
         let wasCancelled = state.withLock { state -> Bool in
             state.activity += 1
             if state.cancelledEarly.remove(id) != nil { return true }
-            state.sleepers[id] = Sleeper(deadline: state.current + duration,
-                                         continuation: continuation)
+            state.sleepers[id] = Sleeper(deadline: deadline, continuation: continuation)
             return false
         }
         if wasCancelled { continuation.resume(throwing: CancellationError()) }
