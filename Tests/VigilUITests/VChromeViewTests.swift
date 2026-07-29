@@ -247,7 +247,12 @@ import Testing
     let options = VChromeLayoutSwitcher.options
     #expect(Set(options).count == options.count)
     #expect(options.allSatisfy { VGridLayout.allCases.contains($0) })
-    #expect(options.allSatisfy(\.isWellFormed))
+    // ⚠️ A closure, not `\.isWellFormed`. `#expect` decomposes a bare call into
+    // `__checkFunctionCall(_:calling:)` so it can print each argument on failure, and that hands
+    // the key path to `allSatisfy` as an *argument function* — which `rethrows` then treats as
+    // possibly throwing, so the macro expansion needs a `try` the macro did not write. The closure
+    // form is the same assertion and expands cleanly; it is also what the line above already does.
+    #expect(options.allSatisfy { $0.isWellFormed })
 }
 
 /// Each segment reports its own index, and nothing else's.

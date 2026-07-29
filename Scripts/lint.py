@@ -795,6 +795,63 @@ def check_undeclared_v_types() -> list[Violation]:
     return out
 
 
+def check_expect_key_path(path: pathlib.Path, lines: list[str]) -> list[Violation]:
+    """A key path handed to a `rethrows` method as the *whole* of an `#expect(...)`.
+
+    `#expect(options.allSatisfy(\\.isWellFormed))` does not compile. The macro decomposes a bare
+    call into `__checkFunctionCall(_:calling:)` so it can print each argument when the assertion
+    fails, and that passes the key path to `allSatisfy` as an *argument function* — which `rethrows`
+    then treats as possibly throwing, so the expansion needs a `try` the macro never writes. The
+    error is reported against the expansion rather than the source line, once per test target that
+    happens to be compiling at the time, so the copies in the log name a file that is not the one to
+    edit.
+
+    ⚠️ Only a *bare* call is affected, and the difference is the whole rule. `#expect(Set(xs.map(
+    \\.id)).count == xs.count)` decomposes as a comparison, leaves the `map` alone and compiles —
+    eleven of those are in this tree, and a first version of this check that matched on the text
+    `.map(\\.` alone reported every one of them. So the `#expect` argument is extracted by
+    balancing parentheses and the call has to be the entire expression.
+    """
+    rethrowing = ("allSatisfy", "contains", "first", "firstIndex", "filter", "map", "compactMap",
+                  "flatMap", "drop", "dropFirst", "dropLast", "prefix", "reduce", "sorted",
+                  "min", "max", "partition", "forEach")
+    whole_call = re.compile(r"^[\w.\[\]]+\.(" + "|".join(rethrowing)
+                            + r")\(\s*\\\.\w+\s*\)$")
+
+    def argument(text: str, opening: int) -> str | None:
+        """The text between `#expect(` and its matching `)`, or None when it is not closed here."""
+        depth = 0
+        for i in range(opening, len(text)):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[opening + 1:i]
+        return None
+
+    out: list[Violation] = []
+    rel = str(path.relative_to(ROOT))
+    for n, raw in enumerate(lines, 1):
+        for m in re.finditer(r"#expect(?:\(|\s)", raw):
+            opening = raw.find("(", m.start())
+            if opening < 0:
+                continue
+            inner = argument(raw, opening)
+            if inner is None:
+                continue
+            call = whole_call.match(inner.strip())
+            if not call:
+                continue
+            out.append((rel, n, "expect-key-path",
+                        f"#expect over a bare `.{call.group(1)}(\\.keyPath)` call does not "
+                        f"compile: the macro hands the key path to a rethrows method as an "
+                        f"argument function, and its expansion then needs a `try` it does not "
+                        f"write. Use a closure — `{{ $0.someProperty }}` — or compare the result "
+                        f"to something, which decomposes differently and is fine"))
+    return out
+
+
 def check_file_header(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     if not lines or not lines[0].startswith("//"):
         return [(str(path.relative_to(ROOT)), 1, "header",
@@ -869,6 +926,7 @@ def main() -> int:
     for path in swift_files("Tests"):
         lines = path.read_text().splitlines()
         violations += check_line_length(path, lines)
+        violations += check_expect_key_path(path, lines)
         violations += check_trailing_whitespace(path, lines)
         violations += check_static_stored_in_generic(path, lines)
         violations += check_environment_key_isolation(path, lines)
