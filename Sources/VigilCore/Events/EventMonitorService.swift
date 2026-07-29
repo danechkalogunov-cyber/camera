@@ -478,6 +478,15 @@ public actor EventMonitorService {
             publish(.unattributed(key, channel: alert.channel))
             return
         }
+        // ⚠️ `alertsForwarded` counts alerts this service *accepted and sent on*, and it is
+        // deliberately incremented before the `await` rather than after it. It is bookkeeping, not
+        // a synchronisation point: nothing in the app gates on it, and `publish(.ingested)` below —
+        // the signal the UI actually consumes — is correctly ordered after the store write.
+        //
+        // Do not "fix" this by moving it below the ingest to make some test's wait work. That
+        // trades one race for the opposite one: four tests in EventMonitorServiceTests wait for the
+        // *store* to reach N and then assert the counter, and the counter would then be a hop
+        // behind them. A test that needs to read the store must wait on the store.
         totals.alertsForwarded += 1
         let outcome = await store.ingest(alert, from: cameraID)
         publish(.ingested(cameraID, outcome))

@@ -377,11 +377,18 @@ struct EventMonitorServiceTests {
         let service = h.service(policy: EventServiceHarness.fastPolicy()) { _ in monitor }
 
         await service.reconcile(cameras: [camera])
-        #expect(await eventWaitUntil { await service.counters().alertsForwarded == 30 })
+        // ⚠️ Waits on the ROW, not on `alertsForwarded`. The counter is incremented before the
+        // store write — deliberately, see the note in `EventMonitorService.handle(_:key:generation:)`
+        // — so "30 forwarded" is true while the last few are still going in. This test used to gate
+        // on the counter and then read the store, and on a loaded CI runner it read a store five
+        // ingests behind: `recordCount` was still 0 and the row's count was 25. Every other test in
+        // this file already waits on the store; this one is now consistent with them.
+        #expect(await eventWaitUntil { await h.store.recent(cameraID: camera.id).first?.count == 30 })
         #expect(await h.store.recordCount(cameraID: camera.id) == 1)
         let record = await h.store.recent(cameraID: camera.id).first
         #expect(record?.count == 30)
         #expect(record?.isActive == true)
+        #expect(await eventWaitUntil { await service.counters().alertsForwarded == 30 })
         await service.stopAll()
     }
 
