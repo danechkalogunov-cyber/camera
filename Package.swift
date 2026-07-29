@@ -210,6 +210,11 @@ let package = Package(
                 "VigilProtocols",
                 "VigilRender",
                 "VigilVideo",
+                // `DiscoveryScanModel` imports both: the engine for its coordinator and events, and
+                // the transport for `LiveDiscoveryEnvironment`, which is the only supplier of the
+                // eleven real sockets the engine takes as protocol members.
+                "VigilDiscovery",
+                "VigilTransport",
             ],
             path: "Sources/Vigil",
             swiftSettings: apple

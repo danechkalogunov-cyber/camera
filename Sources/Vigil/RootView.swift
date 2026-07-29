@@ -43,6 +43,13 @@ struct RootView: View {
     /// would be worse than not having one.
     @State private var window = MainWindowState()
 
+    /// The network scan, created only when the user asks for one.
+    ///
+    /// `nil` until then, and set back to `nil` on dismissal, so the sockets and the coordinator are
+    /// released with the sheet rather than living for the window's lifetime. A scan is a burst of
+    /// several hundred connect attempts; nothing about it should outlive its own sheet.
+    @State private var scan: DiscoveryScanModel?
+
     // MARK: - Body
 
     var body: some View {
@@ -70,7 +77,11 @@ struct RootView: View {
         case .connect:
             ConnectFormView(state: $session.form,
                             onConnect: { session.connect($0) },
-                            onRemedy: { session.perform($0) })
+                            onRemedy: { session.perform($0) },
+                            onScan: { beginScan() })
+                .sheet(item: $scan) { model in
+                    discoverySheet(model)
+                }
         case .live:
             // The full window — toolbar, camera list, stage, inspector, status bar — around the
             // same tile `liveVideo` mounts. To fall back to the bare picture, substitute
@@ -78,6 +89,52 @@ struct RootView: View {
             // still the honest minimum if the chrome turns out to cost frames.
             MainWindowView(session: session, window: window)
         }
+    }
+
+    // MARK: - Discovery
+
+    /// Opens the scan sheet and starts a run.
+    ///
+    /// The model is built here rather than held for the window's lifetime, so a user who never
+    /// presses *Find Cameras* never constructs a coordinator, never reads the code signature and
+    /// never opens a socket.
+    private func beginScan() {
+        // The one camera this slice holds, so its row says "Added" instead of offering a duplicate.
+        // A multi-camera library will pass its whole address set here; the sheet already takes one.
+        let known = Set([session.camera?.host].compactMap { $0 }.filter { !$0.isEmpty })
+        let model = DiscoveryScanModel(logger: session.dependencies.logger, knownAddresses: known)
+        scan = model
+        model.start()
+    }
+
+    /// The scan sheet, bound to one run.
+    private func discoverySheet(_ model: DiscoveryScanModel) -> some View {
+        VDiscoverySheet(cameras: model.cameras,
+                        progress: model.progress,
+                        phase: model.phase,
+                        isScanning: model.isScanning,
+                        notice: model.notice,
+                        onChoose: { chose($0, from: model) },
+                        onToggleScan: { model.toggle() },
+                        onClose: { endScan(model) })
+    }
+
+    /// A device was picked: put its address in the form and leave the password to the user.
+    ///
+    /// ⛔ It does **not** connect. Discovery never authenticates — that rule is the whole shape of
+    /// `VigilDiscovery`, which has no credential parameter anywhere in it — and a scan result is a
+    /// suggestion about an address, not a claim that Vigil may log in. The user still types the
+    /// password, which is also the only way they learn that this camera needs one.
+    private func chose(_ camera: VDiscoveredCamera, from model: DiscoveryScanModel) {
+        session.form.host = camera.address
+        session.form.validate(.host)
+        endScan(model)
+    }
+
+    /// Dismisses the sheet and releases the run.
+    private func endScan(_ model: DiscoveryScanModel) {
+        model.stop()
+        scan = nil
     }
 
     /// The video screen, with the renderer injected.

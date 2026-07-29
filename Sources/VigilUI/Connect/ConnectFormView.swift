@@ -46,6 +46,14 @@ package struct ConnectFormView: View {
     /// handled here and are **also** forwarded, so the app can log or extend them.
     package let onRemedy: (ConnectRemedy) -> Void
 
+    /// Called when the user asks to look for cameras on this network, or `nil` to offer no such
+    /// affordance.
+    ///
+    /// Optional because it decides whether the button exists at all, and the button should not
+    /// exist where nothing can answer it. `VigilUI` does not depend on `VigilDiscovery` — a scan is
+    /// sockets, and this layer holds none — so the app target supplies this and owns the run.
+    package let onScan: (() -> Void)?
+
     @FocusState private var focus: ConnectField?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -57,10 +65,12 @@ package struct ConnectFormView: View {
     /// Creates the form.
     package init(state: Binding<ConnectFormState>,
                  onConnect: @escaping (ConnectRequest) -> Void,
-                 onRemedy: @escaping (ConnectRemedy) -> Void = { _ in }) {
+                 onRemedy: @escaping (ConnectRemedy) -> Void = { _ in },
+                 onScan: (() -> Void)? = nil) {
         self._state = state
         self.onConnect = onConnect
         self.onRemedy = onRemedy
+        self.onScan = onScan
     }
 
     // MARK: - View
@@ -203,6 +213,13 @@ package struct ConnectFormView: View {
 
     private var actions: some View {
         HStack(spacing: VTheme.Space.sm) {
+            if let onScan {
+                // Leading, and secondary: typing a known address is the primary path and stays the
+                // default action. Scanning is for the case UX.md §8.3 calls the harder one — the
+                // user knows a camera is on this network and does not know its address.
+                VButton("Find Cameras…", style: .secondary, size: .lg, action: onScan)
+                    .disabled(state.isConnecting)
+            }
             Spacer(minLength: 0)
             connectButton
         }
