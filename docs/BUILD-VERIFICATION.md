@@ -314,24 +314,55 @@ of these was visible to a compiler, and none was found by reading.
 | 11 | twenty `LocalizedStringKey`s were in no `.strings` table | the key IS the English text, so it renders correctly for anyone reading in English |
 | 12 | `Scripts/check-localizations.py` scanned only `Sources/VigilUI` | the app target speaks these keys too, through `vigilUIString(_:)` |
 
-### The class that is still open: virtual-clock tests under `--parallel`
+### Defect 13 — a virtual clock's sleep deadline depended on when it registered
 
-`DiscoveryCoordinatorOrchestration` and `EventMonitorService` hold tests that assert on a **virtual**
-clock whose pump infers quiescence from the tasks in flight. `@Suite(.serialized)` makes those tests
-run one at a time *within* the suite; it does nothing about `swift test --parallel` running every
-other suite alongside them. On a loaded runner the inference is wrong and a probe scheduled for
-510 ms is observed at 550 ms.
+Found by chasing the failure the section below calls "genuine load sensitivity", which turned out to
+be a plain bug with an exact mechanism.
 
-Two of these were **not** flakes and were fixed properly — the test was asserting something the code
-did not guarantee (`alertsForwarded` is incremented before the store write, so gating on it and then
-reading the store reads a store several ingests behind). One is genuine load sensitivity and is still
-open: `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` compares exact nanoseconds.
+`VirtualDiscoveryClock` computed a sleeper's deadline as `current + duration` inside `register`,
+which runs *after* `withCheckedThrowingContinuation` — a real suspension the pump can advance
+across. The caller had already measured `duration` against the earlier reading, so anything the pump
+moved in that window was added on top of the requested duration.
 
-⚠️ Do not make that assertion tolerant. On a virtual clock exact is the *correct* expectation, and
-loosening it would hide the real answer, which is that the clock advances on inferred quiescence
-rather than deterministically. The fix is either a deterministic scheduler or running those suites
-in their own non-parallel invocation — and the second is more dangerous than it looks, because a
-`--filter` typo silently runs nothing at all and reports success.
+The arithmetic named it. Probes came out at `[50, 550, 1050]` ms against a schedule of
+`[10, 510, 1010]`: one uniform 40 ms shift, and 40 ms is `cameraScript()`'s scripted answer delay.
+The multicast phase asked to pause until 10 ms; the pump saw only the datagram's 40 ms sleeper,
+because this one had not registered yet; it jumped to 40 ms; the sleeper then filed at 50 ms.
+
+⚠️ It is *only* a test-double defect. A real monotonic clock does not jump, so `now()` and a
+registration a moment later agree. The deadline is now captured at the top of `sleep(for:)`, before
+any suspension.
+
+It is also not airtight, and the remaining gap is stated rather than papered over: the async call
+boundary between a caller's `now()` and that capture no longer contains a *guaranteed* suspension,
+but is not provably free of one. Closing it needs an absolute `sleep(until:)` on the `DiscoveryClock`
+protocol — production surface changed to suit a test double, which is not worth it until the
+evidence says the residual window actually fires.
+
+### What `--parallel` actually did: it made three real bugs visible
+
+`DiscoveryCoordinatorOrchestration` and `EventMonitorService` assert against a **virtual** clock
+whose pump infers quiescence from the tasks in flight. `@Suite(.serialized)` runs those tests one at
+a time *within* the suite; it does nothing about `swift test --parallel` running every other suite
+alongside them, so on a busy runner tasks get starved and the inference is wrong.
+
+The tempting conclusion was "flaky tests, re-run them". It was wrong all three times:
+
+* `.finished` before the sockets closed — a **production** bug (defect 9).
+* the event-monitor gate — a **test** bug: `alertsForwarded` is incremented before the store write,
+  so waiting on it and then reading the store reads a store several ingests behind.
+* the probe timetable — a **test-double** bug (defect 13), and the one that looked most like noise.
+
+So load did not *cause* any of them. It removed the slack that had been hiding all three, which is
+the argument for keeping `--parallel` rather than reaching for `--num-workers 1` to quiet CI down.
+
+⚠️ Do not make the nanosecond assertion tolerant. On a virtual clock exact *is* the correct
+expectation, and every time it was loosened-by-instinct the underlying bug would have survived —
+three for three. If it fires again, the residual window named in defect 13 is the first suspect, and
+the fix for that is an absolute `sleep(until:)` rather than a wider tolerance.
+
+Splitting these suites into their own non-parallel invocation is also worse than it looks: a
+`--filter` typo runs nothing at all and reports success, which is a green CI that tests nothing.
 
 ### One that was mine, and worth the warning it left behind
 
