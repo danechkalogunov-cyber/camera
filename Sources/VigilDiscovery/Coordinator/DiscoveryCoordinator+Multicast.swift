@@ -78,7 +78,7 @@ extension DiscoveryCoordinator {
                                       localAddress: interface.address,
                                       interfaceName: interface.name)
         guard let channel = await openMulticastChannel(spec, phase: phase) else { return }
-        await register(channel)
+        register(channel)
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.listen(phase, on: channel) }
             group.addTask {

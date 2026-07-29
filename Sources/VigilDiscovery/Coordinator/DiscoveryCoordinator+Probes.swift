@@ -37,7 +37,7 @@ extension DiscoveryCoordinator {
         // there for why task-group cancellation does not cover it.
         guard !stopping, !isFinished else { return }
         guard let channel = await openUnicastChannel() else { return }
-        await register(channel)
+        register(channel)
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.listenUnicast(on: channel) }
             group.addTask {
@@ -260,9 +260,19 @@ extension DiscoveryCoordinator {
     /// This is what `discoveryCoordinatorCancelBeforeTheFirstProbeStillFinishes` was reporting. It
     /// had passed for weeks and started failing on a CI runner, which is exactly how a race
     /// presents — the assertion was right the whole time and the timing finally exposed it.
-    func register(_ channel: any DatagramChannel) async {
+    ///
+    /// ⚠️ SYNCHRONOUS, AND THE CLOSE IS SPAWNED RATHER THAN AWAITED. The obvious spelling is
+    /// `async` with `await channel.close()`, and it was written that way first. But both callers
+    /// sit on the multicast probe path, where `DiscoveryCoordinatorTests` asserts probe times to
+    /// the millisecond against a *virtual* clock whose pump infers quiescence from the tasks in
+    /// flight. Making this `async` put a suspension point between opening a channel and scheduling
+    /// its probes, which is precisely the kind of extra hop that inference is sensitive to. The
+    /// guarantee does not need it: the late path is not the hot path — it runs only for a channel
+    /// that finished opening after the run ended — so a spawned close costs nothing real and keeps
+    /// the ordinary path exactly as timed as it was.
+    func register(_ channel: any DatagramChannel) {
         guard !isTerminating, !isFinished else {
-            await channel.close()
+            Task { await channel.close() }
             return
         }
         openChannels.append(channel)

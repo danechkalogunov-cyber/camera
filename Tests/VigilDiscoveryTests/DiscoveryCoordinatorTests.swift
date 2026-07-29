@@ -406,7 +406,16 @@ import VigilProtocols
         for channel in bed.unicastChannels {
             #expect(!channel.isClosed, "precondition: a channel is open when its factory returns it")
             await coordinator.register(channel)
-            #expect(channel.isClosed, "a channel that opened after the end must be closed, not kept")
+            // `register` is synchronous and spawns the close — see the note on it for why it must
+            // not be `async`. So this waits rather than asserting straight away.
+            var closed = channel.isClosed
+            var attempts = 0
+            while !closed, attempts < 400 {
+                try? await Task.sleep(for: .microseconds(250))
+                closed = channel.isClosed
+                attempts += 1
+            }
+            #expect(closed, "a channel that opened after the end must be closed, not kept")
         }
         let stillHeld = await coordinator.openChannels
         #expect(stillHeld.isEmpty, "and it must not be added to a list nothing will drain again")
