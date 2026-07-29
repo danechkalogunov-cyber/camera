@@ -296,3 +296,47 @@ recording, because the project's whole verification effort went into the Swift a
 scripts, on the assumption that a shell script is easy to get right. `Scripts/build-app.sh` still
 carries the header "THIS SCRIPT HAS NEVER BEEN EXECUTED", and that line predicted the distribution of
 failures better than any of the code review did.
+
+---
+
+## The first weeks of running the tests, not just compiling them
+
+`macos.yml` began running `swift test --parallel` on a real macOS runner, and the first days of it
+found more than the preceding weeks of review. Recorded because the distribution is the point: none
+of these was visible to a compiler, and none was found by reading.
+
+| # | Defect | How it hid |
+|---|---|---|
+| 7 | `#Preview`s referenced `VLibrarySample`, which did not exist | `#if DEBUG` is stripped from the release build, and Linux skips macOS files — nothing compiled it |
+| 8 | `InspectorDeviceIdentity.previewIdentity` exceeded the type-checker's budget | same; and the first fix, a typed local, did not work either |
+| 9 | `.finished` was yielded before the discovery sockets closed | a consumer acting on it — which is the point of the event — did so while the run still held sockets |
+| 10 | a channel finishing its open after a run ended was stored, never closed | needed a cancel to land inside the factory call, so it appeared roughly once a week |
+| 11 | twenty `LocalizedStringKey`s were in no `.strings` table | the key IS the English text, so it renders correctly for anyone reading in English |
+| 12 | `Scripts/check-localizations.py` scanned only `Sources/VigilUI` | the app target speaks these keys too, through `vigilUIString(_:)` |
+
+### The class that is still open: virtual-clock tests under `--parallel`
+
+`DiscoveryCoordinatorOrchestration` and `EventMonitorService` hold tests that assert on a **virtual**
+clock whose pump infers quiescence from the tasks in flight. `@Suite(.serialized)` makes those tests
+run one at a time *within* the suite; it does nothing about `swift test --parallel` running every
+other suite alongside them. On a loaded runner the inference is wrong and a probe scheduled for
+510 ms is observed at 550 ms.
+
+Two of these were **not** flakes and were fixed properly — the test was asserting something the code
+did not guarantee (`alertsForwarded` is incremented before the store write, so gating on it and then
+reading the store reads a store several ingests behind). One is genuine load sensitivity and is still
+open: `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` compares exact nanoseconds.
+
+⚠️ Do not make that assertion tolerant. On a virtual clock exact is the *correct* expectation, and
+loosening it would hide the real answer, which is that the clock advances on inferred quiescence
+rather than deterministically. The fix is either a deterministic scheduler or running those suites
+in their own non-parallel invocation — and the second is more dangerous than it looks, because a
+`--filter` typo silently runs nothing at all and reports success.
+
+### One that was mine, and worth the warning it left behind
+
+Fixing defect 10 the obvious way — making `register(_:)` `async` so it could `await channel.close()`
+— put a suspension point between opening a multicast channel and scheduling its probes, on the exact
+path defect-class above measures to the millisecond. The guarantee never needed it: the late path is
+not the hot path, so the close is spawned and the ordinary path keeps its timing. The note on
+`register` says so, because the `async` spelling will look tidier to the next person too.
