@@ -17,6 +17,11 @@ design/shots/_smoke.png
 .build-*/
 
 
+# Python bytecode. Scripts/ holds two checkers; importing one from a REPL or from the
+# other leaves a __pycache__ beside them, and it is not ours to commit.
+__pycache__/
+*.pyc
+
 # agent scratch logs
 .rtpb-logs/
 .*-logs/

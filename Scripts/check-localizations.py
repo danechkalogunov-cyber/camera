@@ -8,7 +8,8 @@ Checks, in order of how expensively they fail on a real Mac:
      same type at each position, positional-or-sequential but never mixed;
   4. no key appears in both the .strings and the .stringsdict of one locale;
   5. en and ru cover exactly the same key set;
-  6. every key resolves to a real LocalizedStringKey literal in Sources/VigilUI;
+  6. every key resolves to a real literal in Sources/VigilUI or Sources/Vigil — the app
+     target speaks these keys too, through vigilUIString(_:);
   7. every plural entry has the categories its language needs and a value type that agrees
      with the specifier in the key.
 """
@@ -18,7 +19,12 @@ import plistlib, pathlib, re, sys
 # lived in a scratch directory.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASE = ROOT / "Sources/VigilUI/Localizations"
-SRC = ROOT / "Sources/VigilUI"
+# Both modules, because a VigilUI key is not only spoken from VigilUI. `vigilUIString(_:)` looks up
+# this table from the app target — the command palette needs a `String` rather than a
+# `LocalizedStringKey` so its ranker can score characters, and `DiscoveryScanModel` *computes* the
+# scan's phase line and hands it down as a value. Scanning only VigilUI reported thirteen live keys
+# as orphans, which is the failure mode this check is supposed to prevent, pointing the wrong way.
+SRC_ROOTS = [ROOT / "Sources/VigilUI", ROOT / "Sources/Vigil"]
 problems = []
 notes = []
 
@@ -202,7 +208,7 @@ def join_multiline(lines):
     return "".join(out).rstrip("\n")
 
 
-for path in sorted(SRC.rglob("*.swift")):
+for path in sorted(q for root in SRC_ROOTS for q in root.rglob("*.swift")):
     lines = path.read_text().split("\n")
     for n, line in enumerate(lines):
         if '"""' in line:
@@ -214,6 +220,13 @@ for path in sorted(SRC.rglob("*.swift")):
             continue
         for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', line):
             source_keys.add(m.group(1))
+    # `+`-joined literal runs, which are one key and not several. A LocalizedStringKey may never be
+    # built this way — it is looked up whole — but `vigilUIString(_:)` takes a String, where Swift
+    # folds adjacent literals at compile time. That is how a key longer than the 110-column limit
+    # gets written at all, and reading each half separately reports the real key as an orphan.
+    for m in re.finditer(r'"(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")+',
+                         path.read_text(), re.S):
+        source_keys.add("".join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(0))))
 source_keys = {re.sub(r"\\\((.*?)\)", lambda m: SPEC_MAP.get(m.group(1), "%?"), k)
                for k in source_keys}
 
@@ -291,7 +304,7 @@ PENDING_OK = {
 }
 for key in sorted(en_keys):
     if key not in source_keys and key not in PENDING_OK:
-        problems.append(f"key not found in Sources/VigilUI: {key!r}")
+        problems.append(f"key not found in Sources/VigilUI or Sources/Vigil: {key!r}")
 
 # Untranslated identical pairs are legitimate for values, not prose — report, do not fail.
 for key, value in tables["ru"][0].items():

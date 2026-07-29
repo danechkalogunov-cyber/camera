@@ -997,32 +997,26 @@ TEXT_KEY = re.compile(r'Text\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*bundle:\s*\.vigilUI\s
 STRING_LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
-def parse_strings_table(path: pathlib.Path) -> tuple[dict[str, int], list[Violation]]:
-    """Keys of a .strings file mapped to their line numbers, plus anything that would not parse."""
-    rel = str(path.relative_to(ROOT))
-    raw = path.read_text()
-    # Block comments are the documentation style this repo uses in .strings files, and they run to
-    # many lines. Blanked rather than deleted so line numbers survive.
-    body = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+def parse_strings_table(path: pathlib.Path) -> set[str]:
+    """The keys defined in a .strings file.
 
-    keys: dict[str, int] = {}
-    problems: list[Violation] = []
-    for n, line in enumerate(body.splitlines(), 1):
-        if not line.strip():
-            continue
-        match = STRINGS_ENTRY.match(line)
-        if not match:
-            problems.append((rel, n, "strings",
-                             'not a "key" = "value"; entry, and NSBundle stops reading the table '
-                             "at the first bad line — everything after this renders untranslated"))
-            continue
-        key = match.group(1)
-        if key in keys:
-            problems.append((rel, n, "strings",
-                             f'duplicate key, first defined at line {keys[key]}'))
-            continue
-        keys[key] = n
-    return keys, problems
+    ⚠️ Deliberately forgiving, and deliberately silent. A line this cannot parse is skipped rather
+    than reported, because `Scripts/check-localizations.py` owns the *shape* of these files — it has
+    a real character-level parser where this has a line regex, and it already checks malformed
+    entries, duplicate keys, en/ru parity, format specifiers and plural categories. Two
+    implementations of the same rule is one more than can be kept in agreement, and the weaker one
+    would be the one to disagree.
+
+    What this reads the table for is the one direction that script cannot check: it scans *every*
+    literal in the source, which is the right over-approximation for finding orphaned keys and the
+    wrong one for finding missing ones. Deciding which literals are keys is what `check_localization_
+    tables` does, and it needs the key set to compare against.
+    """
+    # Block comments are the documentation style this repo uses in .strings files, and they run to
+    # many lines.
+    body = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.S)
+    return {match.group(1) for line in body.splitlines()
+            if (match := STRINGS_ENTRY.match(line))}
 
 
 def _segments_in_parens(text: str, open_index: int) -> list[str] | None:
@@ -1213,19 +1207,25 @@ def _keys_produced_by_declarations(text: str) -> list[str]:
 
 
 def check_localization_tables() -> list[Violation]:
-    """Every key the code looks up must exist, and en and ru must hold exactly the same set.
+    """Every key the code looks up must exist in a .strings table.
 
-    Three failures this catches, all of which had already happened and none of which anything else
-    in this repo could see — a missing key is not a compile error and not a test failure, it is a
-    line of English in the middle of a Russian window.
+    ⚠️ ONE DIRECTION ONLY, AND ON PURPOSE. `Scripts/check-localizations.py` checks the other —
+    every key in a table resolves to a literal in the source — plus malformed entries, duplicate
+    keys, en/ru parity, format specifiers and plural categories. It is the authority on all of
+    those; this rule does not repeat any of them, because two implementations of one rule is one
+    more than can be kept in agreement.
 
-    1. **A key the code uses and no table defines.** `LocalizedStringKey` falls back to the key
-       itself, which is English, so this is invisible to an English-speaking developer and invisible
-       to CI. The discovery sheet shipped eleven of these.
-    2. **A key en has and ru does not.** Same symptom, narrower: the interface is translated except
-       for the one sentence nobody added.
-    3. **A malformed or duplicated entry.** `NSBundle` stops reading a table at the first line it
-       cannot parse, so a single missing semicolon silently untranslates everything below it.
+    The split is not arbitrary. That script scans *every* string literal in the source, which is
+    the correct over-approximation for finding orphaned keys — a key is fine if any literal
+    anywhere matches it — and exactly the wrong one for finding missing keys, since most literals
+    in a Swift file are not keys at all. Answering "is this literal a key?" is the work below, and
+    it is why this lives here rather than there.
+
+    The failure it catches is invisible to everything else: `LocalizedStringKey` falls back to the
+    key itself, which in this module *is* the English text. So a missing key is not a compile
+    error, not a test failure, and renders perfectly for anyone reading in English. It is a line of
+    English in the middle of a Russian window, and nothing but this reports it. The discovery sheet
+    shipped eleven; the rule then found nine older ones.
 
     A key is *used* in three shapes, and all three are read, because the rule was worth only as much
     as its narrowest one. The first version knew only shape 1 and reported the tree clean while
@@ -1261,30 +1261,15 @@ def check_localization_tables() -> list[Violation]:
         return []
 
     out: list[Violation] = []
-    tables: dict[str, dict[str, int]] = {}
+    # Every language, not just en: a key present in *any* table is defined, and reporting a key as
+    # undefined because only the translation has it would be a lie in the other direction.
+    # `check-localizations.py` is what insists the tables agree with each other.
+    base: set[str] = set()
     for table in sorted(localizations.glob("*.lproj/Localizable.strings")):
-        language = table.parent.name.removesuffix(".lproj")
-        keys, problems = parse_strings_table(table)
-        tables[language] = keys
-        out += problems
-
-    base = tables.get("en")
-    if base is None:
+        base |= parse_strings_table(table)
+    if not base:
         return out
-
-    # The base localisation is the contract: every other language is it with the values replaced.
     base_rel = "Sources/VigilUI/Localizations/en.lproj/Localizable.strings"
-    for language, keys in sorted(tables.items()):
-        if language == "en":
-            continue
-        rel = f"Sources/VigilUI/Localizations/{language}.lproj/Localizable.strings"
-        for missing in sorted(set(base) - set(keys)):
-            out.append((rel, 1, "l10n",
-                        f'no {language} translation for "{missing}" — it will render in English'))
-        for extra in sorted(set(keys) - set(base)):
-            out.append((rel, keys[extra], "l10n",
-                        f'"{extra}" is not in the base localisation; either it is a typo of a real '
-                        "key, or it is dead and should go"))
 
     # Keys the code asks for, in all three spellings, across the UI module and the app target.
     parameters = localized_key_parameters()
