@@ -492,12 +492,13 @@ extension VInspectorState {
     }
 
     static var previewIdentity: InspectorDeviceIdentity {
-        // ⚠️ The uptime is a typed local rather than an inline sum. `uptimeSeconds` is a `Double`,
-        // so `6 * 86_400 + 4 * 3_600 + 12 * 60` written in place makes the solver consider every
-        // numeric type for five untyped literals *inside* a call whose fifteen parameters are all
-        // defaulted — and it gives up with "unable to type-check this expression in reasonable
-        // time". Naming the value with its type collapses that to one candidate.
-        let uptime: Double = 6 * 86_400 + 4 * 3_600 + 12 * 60
+        // ⚠️ One literal, not a sum. `6 * 86_400 + 4 * 3_600 + 12 * 60` is five untyped literals
+        // and four operators, and the solver has to try every numeric type for each: it gives up
+        // with "unable to type-check this expression in reasonable time". Annotating the result as
+        // `Double` is *not* enough — that was the first attempt at this fix and CI rejected it too,
+        // because the annotation constrains the sum's type without constraining the terms'.
+        // 533 520 s = 6 d 4 h 12 m.
+        let uptime: Double = 533_520
         var identity = InspectorDeviceIdentity()
         identity.model = "DS-2CD2385G1"
         identity.deviceName = "Front Door"

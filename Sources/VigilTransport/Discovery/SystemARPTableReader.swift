@@ -89,9 +89,10 @@ public struct SystemARPTableReader: ARPTableProviding {
 
     /// One routing message as an `ARPEntry`, or `nil` when it is not a usable ARP row.
     private static func read(_ message: UnsafeRawPointer, messageLength: Int) -> ARPEntry? {
+        // Only the header's *size* matters here: the caller has already read `rtm_msglen` to walk
+        // the stream, and every field this function needs lives in the two addresses after it.
         let headerSize = MemoryLayout<rt_msghdr>.size
         guard messageLength > headerSize else { return nil }
-        let header = message.assumingMemoryBound(to: rt_msghdr.self).pointee
 
         // The two addresses follow the header back to back: the destination (an IPv4 sockaddr_in)
         // and the gateway (a link-layer sockaddr_dl holding the MAC).

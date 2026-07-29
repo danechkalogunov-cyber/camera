@@ -138,9 +138,12 @@ public struct TCPConnectProber: TCPProbing {
             default:
                 return .unreachable(POSIXCode(rawValue: code.rawValue))
             }
-        case .dns, .tls:
-            return .timedOut
-        @unknown default:
+        // ⚠️ `default`, not `@unknown default`. `NWError` gains cases between SDKs — `.wifiAware`
+        // arrived in the one CI now builds against, and naming it here would stop this file
+        // compiling against any older SDK. Everything that is not a POSIX code means the same
+        // thing to a sweep anyway, so a total default is the honest spelling as well as the
+        // portable one.
+        default:
             return .timedOut
         }
     }
