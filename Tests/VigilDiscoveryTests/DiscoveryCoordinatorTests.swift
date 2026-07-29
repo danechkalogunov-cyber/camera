@@ -367,6 +367,51 @@ import VigilProtocols
         #expect(bed.channels.allSatisfy { $0.isClosed })
     }
 
+    /// A channel that finishes opening *after* the run has ended is closed, not stored.
+    ///
+    /// Every opener is `let channel = await open…(); await register(channel)`, and that `await` is a
+    /// suspension the run can end across. `cancel()` from a dismissed sheet is the ordinary way it
+    /// happens, and it lands there most easily on the very first probe, when the opener is the only
+    /// thing in flight. Appending then hands `closeChannels()` a list it has already drained, and
+    /// the socket stays open for the life of the process — a multicast join held by a scan the user
+    /// closed a second after opening.
+    ///
+    /// ⚠️ This asserts the *rule*, not the race. The test above reaches the same window by timing,
+    /// which is why it passed for weeks before failing on a CI runner: a race is only ever reported
+    /// intermittently. Driving `register` directly is the part that can be made deterministic, so
+    /// that is what is pinned here.
+    @Test func discoveryCoordinatorClosesAChannelThatOpenedAfterTheEnd() async {
+        let bed = DiscoveryTestBed(Self.cameraScript())
+        let environment = bed.environment(
+            entitlements: EntitlementStatus(multicastEntitlementPresent: true))
+        let coordinator = DiscoveryCoordinator(environment: environment,
+                                               configuration: Self.configuration(Self.smallRange))
+
+        // Ended before it ever began, which is exactly the state a late channel arrives into.
+        await coordinator.cancel()
+        var finished = await coordinator.isFinished
+        var spins = 0
+        while !finished, spins < 400 {
+            // `cancel()` returns as soon as the flag is set and finishes the ending in a task of its
+            // own, so the state this test needs lands a hop later. Real sleeps, not yields, for the
+            // reason the test bed gives: a yield loop starves what it is waiting for.
+            try? await Task.sleep(for: .microseconds(250))
+            finished = await coordinator.isFinished
+            spins += 1
+        }
+        #expect(finished, "cancel() must reach a finished state without a run")
+
+        _ = try? await environment.makeUnicastChannel("en0")
+        #expect(bed.unicastChannels.count == 1, "the factory made exactly one channel to hand over")
+        for channel in bed.unicastChannels {
+            #expect(!channel.isClosed, "precondition: a channel is open when its factory returns it")
+            await coordinator.register(channel)
+            #expect(channel.isClosed, "a channel that opened after the end must be closed, not kept")
+        }
+        let stillHeld = await coordinator.openChannels
+        #expect(stillHeld.isEmpty, "and it must not be added to a list nothing will drain again")
+    }
+
     // MARK: - 87. Budgets
 
     /// Test 87. A politeness budget that runs out stops the sending and keeps the results, with a

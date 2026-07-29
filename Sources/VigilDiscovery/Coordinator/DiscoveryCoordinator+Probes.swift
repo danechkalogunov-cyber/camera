@@ -34,7 +34,7 @@ extension DiscoveryCoordinator {
             for host in sweepHosts(plan) { enqueueUnicastTarget(host) }
         }
         guard let channel = await openUnicastChannel() else { return }
-        register(channel)
+        await register(channel)
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.listenUnicast(on: channel) }
             group.addTask {
@@ -217,11 +217,24 @@ extension DiscoveryCoordinator {
         environment.logger.info(.discovery, "discovery finished: \(reason.rawValue), "
                                     + "\(devices.count) device(s), \(datagramsSent) datagram(s) "
                                     + "sent, \(tcpConnects) connect(s)")
+
+        // ⛔ THE SOCKETS CLOSE BEFORE `.finished` IS SAID, NOT AFTER. This was the other way round,
+        // and it made the last event a lie: `.finished` means the run is over, a consumer is
+        // entitled to act on it — `DiscoveryScanModel` releases the coordinator, the sheet goes
+        // away — and every one of those actions happened while this run still owned open multicast
+        // sockets. Nothing leaked permanently, because the awaits below did complete; the window
+        // was just wide enough to be observed, which is precisely what
+        // `discoveryCoordinatorCancelBeforeTheFirstProbeStillFinishes` observed on CI after
+        // passing for weeks. A test that only fails when the consumer is faster than a socket close
+        // is not flaky — it is a race being reported intermittently, which is how races present.
+        //
+        // Ordering it this way costs the summary whatever a close takes. That is the right price:
+        // the whole claim `.finished` makes is that the network has gone quiet.
+        await closeChannels()
+
         continuation?.yield(.finished(summary))
         continuation?.finish()
         continuation = nil
-
-        await closeChannels()
         runTask?.cancel()
     }
 
@@ -231,7 +244,24 @@ extension DiscoveryCoordinator {
         for channel in channels { await channel.close() }
     }
 
-    func register(_ channel: any DatagramChannel) {
+    /// Takes ownership of an open channel so termination can close it.
+    ///
+    /// ⚠️ A CHANNEL THAT ARRIVES AFTER THE END IS CLOSED, NOT STORED. Every caller reaches this
+    /// line as `let channel = await openSomething(); register(channel)`, and that `await` is a
+    /// suspension point the run can end across — `cancel()` from a dismissed sheet is the ordinary
+    /// way it happens, and it happens *most* easily on the very first probe, when the opener is the
+    /// only thing in flight. Appending then would put a live socket on a list `closeChannels()` has
+    /// already drained and will never read again: a multicast socket held for the process's
+    /// lifetime by a scan the user closed a second after opening.
+    ///
+    /// This is what `discoveryCoordinatorCancelBeforeTheFirstProbeStillFinishes` was reporting. It
+    /// had passed for weeks and started failing on a CI runner, which is exactly how a race
+    /// presents — the assertion was right the whole time and the timing finally exposed it.
+    func register(_ channel: any DatagramChannel) async {
+        guard !isTerminating, !isFinished else {
+            await channel.close()
+            return
+        }
         openChannels.append(channel)
     }
 
