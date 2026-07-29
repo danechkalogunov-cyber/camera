@@ -33,6 +33,9 @@ extension DiscoveryCoordinator {
             // asked directly instead (§9.5).
             for host in sweepHosts(plan) { enqueueUnicastTarget(host) }
         }
+        // Same rule as the multicast opener: a run that is stopping opens nothing. See the note
+        // there for why task-group cancellation does not cover it.
+        guard !stopping, !isFinished else { return }
         guard let channel = await openUnicastChannel() else { return }
         await register(channel)
         await withTaskGroup(of: Void.self) { group in

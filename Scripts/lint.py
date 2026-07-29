@@ -987,6 +987,193 @@ def parse_strings_table(path: pathlib.Path) -> tuple[dict[str, int], list[Violat
     return keys, problems
 
 
+def _segments_in_parens(text: str, open_index: int) -> list[str] | None:
+    """The depth-1 comma-separated segments of the parenthesis starting at `open_index`.
+
+    `_labels_in_parens` above answers what the labels *are*; this answers what was written against
+    each of them, which is what a rule about literal values needs. `None` when the parenthesis does
+    not close, same contract as its sibling.
+    """
+    depth, i, n = 0, open_index, len(text)
+    out: list[str] = []
+    start = open_index + 1
+    in_string = False
+    while i < n:
+        c = text[i]
+        if in_string:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif c in "([{":
+            depth += 1
+            if depth == 1:
+                start = i + 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                out.append(text[start:i])
+                return out
+        elif c == "," and depth == 1:
+            out.append(text[start:i])
+            start = i + 1
+        i += 1
+    return None
+
+
+# A parameter declaration, split far enough to see its type: attributes, external label, optional
+# internal name, then everything up to a default value.
+PARAM_WITH_TYPE = re.compile(
+    r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(\w+)(?:\s+(\w+))?\s*:\s*([^=]+)")
+
+KEY_TYPE = re.compile(r"\bLocalizedStringKey\b")
+
+# `identifier(` inside an argument — the marker of a nested call, whose literals are its own
+# business and not keys of the parameter being checked.
+NESTED_CALL = re.compile(r"\w\s*\(")
+
+
+def strip_debug_only(text: str) -> str:
+    """Blanks every `#if DEBUG` region, keeping the line count so numbers still point at the source.
+
+    Previews are not the shipping interface. `VLibraryEmptyState(title: "No recordings yet.", …)` in
+    a `#Preview` is a fixture written to make a canvas look right, and the screen it stands in for
+    says "No recordings yet" without the full stop — a *different* key. Demanding a translation for
+    the fixture would put a string in the tables that no user will ever read and ask a translator to
+    render it.
+    """
+    out: list[str] = []
+    conditionals: list[bool] = []   # one entry per open #if; True when it is a DEBUG block
+    suppressing = 0
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("#if"):
+            is_debug = re.search(r"#if\s+DEBUG\b", stripped) is not None
+            conditionals.append(is_debug)
+            if is_debug:
+                suppressing += 1
+            out.append("")
+            continue
+        if stripped.startswith("#endif"):
+            if conditionals and conditionals.pop():
+                suppressing -= 1
+            out.append("")
+            continue
+        out.append("" if suppressing else line)
+    return "\n".join(out)
+
+
+def localized_key_parameters() -> dict[str, tuple[set[str], set[int]]]:
+    """Which initialiser parameters of our own types are `LocalizedStringKey`.
+
+    Returned per type as `(labels, positions)`: labels a caller writes by name, and the indices of
+    parameters declared `_ title:`, which a caller writes positionally. Both are needed — `VButton`
+    takes its title as the unlabelled first argument and `VLibraryEmptyState` takes three by name.
+    """
+    out: dict[str, tuple[set[str], set[int]]] = {}
+    for path in swift_files("Sources"):
+        text = path.read_text()
+        lines = text.split("\n")
+        stack: list[tuple[str, int]] = []
+        depth = 0
+        for n, raw in enumerate(lines):
+            code = strip_comments_and_strings(raw)
+            decl = TYPE_DECL.match(raw)
+            if decl and "{" in code:
+                stack.append((decl.group(1), depth))
+            if stack and INIT_DECL.match(raw):
+                offset = sum(len(l) + 1 for l in lines[:n]) + raw.index("(")
+                segments = _segments_in_parens(text, offset)
+                if segments is not None:
+                    labels, positions = out.setdefault(stack[-1][0], (set(), set()))
+                    for index, segment in enumerate(segments):
+                        match = PARAM_WITH_TYPE.match(segment)
+                        if not match or not KEY_TYPE.search(match.group(3)):
+                            continue
+                        if match.group(1) == "_":
+                            positions.add(index)
+                        else:
+                            labels.add(match.group(1))
+            depth += code.count("{") - code.count("}")
+            while stack and depth <= stack[-1][1]:
+                stack.pop()
+    return {name: value for name, value in out.items() if value[0] or value[1]}
+
+
+def _keys_written_at_call_sites(text: str,
+                                parameters: dict[str, tuple[set[str], set[int]]]) -> list[str]:
+    """Every string literal written against a `LocalizedStringKey` parameter of one of our types."""
+    found: list[str] = []
+    for match in CALL_START.finditer(text):
+        entry = parameters.get(match.group(1))
+        if entry is None:
+            continue
+        labels, positions = entry
+        segments = _segments_in_parens(text, match.end() - 1)
+        if segments is None:
+            continue
+        for index, segment in enumerate(segments):
+            label = ARG_LABEL.match(segment)
+            value = segment[label.end():] if label else segment
+            if label:
+                if label.group(1) not in labels:
+                    continue
+            elif index not in positions:
+                continue
+            literals = STRING_LITERAL.findall(value)
+            # Accept a bare literal and a ternary between two of them — `isScanning ? "Stop" :
+            # "Scan Again"` is two keys, and both must exist. Reject anything with a call in it: a
+            # literal inside `formatter("x")` is that call's argument, not a key.
+            remainder = STRING_LITERAL.sub("", value)
+            if literals and not NESTED_CALL.search(remainder):
+                found += literals
+    return found
+
+
+# A declaration that *produces* a key: `var title: LocalizedStringKey {` or
+# `func label(for: X) -> LocalizedStringKey {`. Every bare literal in its body is a key.
+KEY_PRODUCER = re.compile(
+    r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
+    r"(?:package |public |private |internal |fileprivate |nonisolated |static |var |let |func )*"
+    r"[\w.]+\s*(?:\([^)]*\))?\s*(?::|->)\s*LocalizedStringKey\??\s*\{",
+    re.M)   # ⚠️ Without this `^` anchors to the start of the *file* and the rule matches nothing.
+
+
+def _keys_produced_by_declarations(text: str) -> list[str]:
+    """Literals inside declarations whose type is `LocalizedStringKey`.
+
+    The third shape, and the one that hid `"Cameras appear here as they answer."`: the sheet passes
+    `message: emptyMessage` — a computed property, not a literal — so nothing at the call site names
+    the key. A `switch` returning one key per case is the same shape and by far the commonest.
+    """
+    found: list[str] = []
+    for match in KEY_PRODUCER.finditer(text):
+        depth, i, n = 0, match.end() - 1, len(text)
+        start = i
+        while i < n:
+            c = text[i]
+            if c == '"':
+                # Skip the literal wholesale so a brace inside a string cannot unbalance the body.
+                i += 1
+                while i < n and text[i] != '"':
+                    i += 2 if text[i] == "\\" else 1
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        body = text[start:i]
+        # The empty key is `return ""` — the calendar's blank cells, which deliberately have no
+        # label. There is nothing to translate and no entry to demand.
+        found += [key for key in STRING_LITERAL.findall(body) if key and "\\(" not in key]
+    return found
+
+
 def check_localization_tables() -> list[Violation]:
     """Every key the code looks up must exist, and en and ru must hold exactly the same set.
 
@@ -1002,14 +1189,34 @@ def check_localization_tables() -> list[Violation]:
     3. **A malformed or duplicated entry.** `NSBundle` stops reading a table at the first line it
        cannot parse, so a single missing semicolon silently untranslates everything below it.
 
-    Only *plain* literal keys are checked, and that leaves two gaps on purpose.
+    A key is *used* in three shapes, and all three are read, because the rule was worth only as much
+    as its narrowest one. The first version knew only shape 1 and reported the tree clean while
+    `VButton("Scan Again", …)` was missing from both tables:
 
-    A key held in a variable cannot be resolved by reading source. And an **interpolated** key —
-    `Text("Looking up \\(host)…")` — is not its own text: SwiftUI rewrites it into a key carrying
-    format specifiers, and which specifier depends on the interpolated value's *type*, `%@` for a
-    String and `%lld` for an Int. Deciding that needs the type checker, so a rule at this level
-    would have to guess, and a lint rule that guesses either misses real breakage or invents
-    violations for correct code. Both are worse than an honestly narrower rule.
+    1. `Text("…", bundle: .vigilUI)` — the explicit spelling.
+    2. A literal written against a parameter our own types declare `LocalizedStringKey`, by label
+       (`VLibraryEmptyState(message: "…")`) or by position (`VButton("…", style:)`). The declared
+       types are scanned to find which parameters those are, so the rule follows the code rather
+       than a hand-kept list. A ternary counts as two keys; a literal inside a nested call counts as
+       none, because it belongs to that call.
+    3. A declaration that *produces* one — `var title: LocalizedStringKey { … }`, usually a `switch`
+       returning a key per case. This is where the sheet's empty-state message hid: the call site
+       passes `message: emptyMessage` and names no key at all.
+
+    Plus `vigilUIString("…")`, whose key may be assembled from adjacent literals with `+`, and is
+    recovered whole.
+
+    Three things are deliberately out of reach. A key held in a variable cannot be resolved by
+    reading source. `#if DEBUG` is skipped, because a `#Preview` fixture is not the shipping
+    interface and translating it would put strings in the tables that no user reads. And an
+    **interpolated** key — `Text("Looking up \\(host)…")` — is not its own text: SwiftUI rewrites it
+    into a key carrying format specifiers, and which specifier depends on the interpolated value's
+    *type*, `%@` for a String and `%lld` for an Int. Deciding that needs the type checker, so a rule
+    at this level would have to guess, and a lint rule that guesses either misses real breakage or
+    invents violations for correct code. Both are worse than an honestly narrower rule.
+
+    What that leaves: roughly three quarters of the table is checked, and the quarter that is not is
+    almost entirely the interpolated keys.
     """
     localizations = ROOT / "Sources/VigilUI/Localizations"
     if not localizations.exists():
@@ -1041,11 +1248,13 @@ def check_localization_tables() -> list[Violation]:
                         f'"{extra}" is not in the base localisation; either it is a typo of a real '
                         "key, or it is dead and should go"))
 
-    # Keys the code asks for. Both spellings, across both the UI module and the app target.
+    # Keys the code asks for, in all three spellings, across the UI module and the app target.
+    parameters = localized_key_parameters()
     for path in swift_files("Sources"):
         rel = str(path.relative_to(ROOT))
-        text = path.read_text()
-        wanted: list[str] = []
+        text = strip_debug_only(path.read_text())
+        wanted: list[str] = _keys_written_at_call_sites(text, parameters)
+        wanted += _keys_produced_by_declarations(text)
         for call in LOOKUP_CALL.finditer(text):
             argument = call.group(1)
             pieces = STRING_LITERAL.findall(argument)

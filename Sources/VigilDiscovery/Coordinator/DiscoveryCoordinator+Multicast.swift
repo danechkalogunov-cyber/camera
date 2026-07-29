@@ -65,6 +65,13 @@ extension DiscoveryCoordinator {
     /// them (§4.1).
     private func runMulticastChannel(_ phase: DiscoveryPhase,
                                     interface: NetworkInterfaceInfo) async {
+        // ⛔ Checked before the socket is made, not after. `register` closes a channel that arrives
+        // too late, but a cancelled scan should not have *opened* one — a multicast join is a
+        // visible act on the segment, and doing it after the user closed the sheet is the kind of
+        // thing that gets an app noticed by a network administrator. The group's own cancellation
+        // does not cover this: `addTask` children always run their body, and neither the factory
+        // call nor the actor hop after it throws on cancellation.
+        guard !stopping, !isFinished else { return }
         let port = phase == .sadp ? SADPCodec.port : WSDiscoveryCodec.port
         let spec = MulticastGroupSpec(group: .discoveryMulticastGroup, port: port,
                                       preferredLocalPort: port,

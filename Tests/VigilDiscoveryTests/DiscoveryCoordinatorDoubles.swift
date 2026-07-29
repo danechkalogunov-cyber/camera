@@ -808,8 +808,17 @@ final class DiscoveryTestBed: @unchecked Sendable {
         }
         // A torn-down stream cancels the run asynchronously; give that a bounded number of yields to
         // land, so a test can assert on closed channels without waiting on the wall clock.
+        //
+        // ⚠️ THE FLOOR IS NOT PADDING. This loop used to exit the moment nothing was open, and on a
+        // cancel-at-`.started` run *nothing has been opened yet* — so it exited immediately, the
+        // test read `bed.channels` while a factory call was still in flight, and the channel that
+        // landed a microsecond later was open when it was counted. That is what made
+        // `discoveryCoordinatorCancelBeforeTheFirstProbeStillFinishes` fail on CI after passing for
+        // weeks: the assertion was racing the *opener*, not the closer, and an empty list is not
+        // evidence that the list will stay empty. Waiting a fixed minimum first gives an in-flight
+        // open time to appear and be closed.
         var spins = 0
-        while spins < 200, channels.contains(where: { !$0.isClosed }) {
+        while spins < 200, spins < 8 || channels.contains(where: { !$0.isClosed }) {
             // Real sleeps rather than yields, for the same reason the pump uses them: a yield loop
             // starves the cancellation it is waiting for.
             try? await Task.sleep(for: .microseconds(250))
