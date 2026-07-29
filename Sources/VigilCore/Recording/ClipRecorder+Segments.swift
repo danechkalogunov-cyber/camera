@@ -217,10 +217,29 @@ extension ClipRecorder {
                     try fileSystem.moveItem(at: writer.outputURL, to: intended)
                     finalURL = intended
                 } catch {
-                    // The media is safe; only the name is wrong. Keeping the `.partial` name and
-                    // saying so is better than pretending the rename happened.
-                    logger.error(.core, "recording finished but could not be renamed",
-                                 metadataFor(error))
+                    // ⚠️ Losing this race is not a failure, and reporting it as one is worse than
+                    // the race. `MainWindowView.recoverOrphanedClips` renames every `.partial` it
+                    // finds to the same name this recorder was about to use, and it can run while
+                    // this segment is still closing — `finishWriting` is asynchronous, so the file
+                    // is finished and still named `.partial` for as long as its handler takes. The
+                    // move then fails with NSFileNoSuchFileError because the file is *already where
+                    // it was going*. Reporting the `.partial` path in that case hands the manifest
+                    // a URL nothing occupies, which is the actual damage: the clip vanishes from
+                    // the library even though the recording is on disk and intact.
+                    let verdict = RecordingRenameVerdict.after(
+                        partialExists: fileSystem.itemExists(at: writer.outputURL),
+                        finalExists: fileSystem.itemExists(at: intended))
+                    if verdict == .alreadyThere {
+                        finalURL = intended
+                        logger.notice(.core, "recording was renamed by the recovery scan first",
+                                      ["camera": camera.id.short,
+                                       "path": Redact.path(intended.path)])
+                    } else {
+                        // The media is safe; only the name is wrong. Keeping the `.partial` name
+                        // and saying so is better than pretending the rename happened.
+                        logger.error(.core, "recording finished but could not be renamed",
+                                     metadataFor(error))
+                    }
                 }
             }
             let isPartial = finalURL == writer.outputURL
@@ -369,6 +388,44 @@ extension ClipRecorder {
             metadata["detail"] = Redact.secrets(in: String(describing: error))
         }
         return metadata
+    }
+}
+
+// MARK: - RecordingRenameVerdict
+
+/// What a failed `.partial` → final rename actually achieved, read from what is on disk afterwards.
+///
+/// A rename can fail for two reasons that look identical to `FileManager` and mean opposite things
+/// to the user. Either nothing moved — the file is still `.partial` and the recording is fine but
+/// misnamed — or the file is *already at its destination*, because
+/// `MainWindowView.recoverOrphanedClips` swept the folder while `finishWriting` was still running
+/// and renamed it first. Both throw; only one is a problem.
+///
+/// Extracted from the `catch` so the rule can be asserted. Getting it wrong is invisible at the
+/// call site — the recording plays either way — and shows up only as a clip missing from the
+/// library, because the segment record points at a `.partial` path nothing occupies.
+package enum RecordingRenameVerdict: Sendable, Hashable {
+
+    /// The `.partial` is gone and the final name exists: the move happened, by whichever hand.
+    case alreadyThere
+
+    /// The `.partial` is still there: nothing moved, and the clip keeps its provisional name.
+    case stillPartial
+
+    /// Neither exists. The file was deleted out from under the recorder, which no amount of
+    /// renaming will fix and which must never be reported as a successful clip.
+    case vanished
+
+    /// Reads the verdict from the two existence checks.
+    package static func after(partialExists: Bool, finalExists: Bool) -> RecordingRenameVerdict {
+        switch (partialExists, finalExists) {
+        // Both present is `stillPartial` on purpose: something else owns the final name and this
+        // recording is not it, so claiming that name would attribute another clip's file to this
+        // segment.
+        case (true, _): .stillPartial
+        case (false, true): .alreadyThere
+        case (false, false): .vanished
+        }
     }
 }
 

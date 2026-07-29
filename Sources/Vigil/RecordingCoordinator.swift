@@ -62,7 +62,26 @@ final class RecordingCoordinator {
     // MARK: - Observable State
 
     /// Whether a clip is being written right now.
+    ///
+    /// ⛔ Drives the UI, and **nothing else may use it to decide who owns a file on disk** — see
+    /// ``ownsClipFiles``, which is the flag for that and is deliberately wider.
     private(set) var isRecording = false
+
+    /// True from the first moment a clip's file could exist until the last moment it could still be
+    /// renamed.
+    ///
+    /// ⚠️ Wider than ``isRecording`` at both ends, and that gap is a real bug rather than a
+    /// hypothetical. `start()` opens the writer inside a `Task`, so a `.partial` file exists before
+    /// `isRecording` goes true; `stop()` sets `isRecording` false *synchronously* and only then
+    /// spawns the `Task` that awaits `finishWriting` and renames the file. Anything that sweeps the
+    /// clips folder while this is true is walking over a file the recorder still owns —
+    /// `MainWindowView.recoverOrphanedClips` did exactly that, renamed the live `.partial` out from
+    /// under the recorder, and left the finished clip recorded against a path nothing occupied.
+    var ownsClipFiles: Bool { isRecording || isSettlingClip }
+
+    /// True while a clip is opening or closing but not streaming — the half of ``ownsClipFiles``
+    /// that `isRecording` does not cover.
+    private var isSettlingClip = false
 
     /// When the current clip started, for the elapsed counter. `nil` when not recording.
     private(set) var startedAt: Date?
@@ -152,6 +171,9 @@ final class RecordingCoordinator {
                                     logger: logger,
                                     requestKeyframe: requestKeyframe)
         self.recorder = recorder
+        // Set before the `Task`, not inside it: `recorder.start` opens the writer, so the
+        // `.partial` file can exist before any state this method sets asynchronously is visible.
+        isSettlingClip = true
 
         Task {
             do {
@@ -165,8 +187,12 @@ final class RecordingCoordinator {
                 startedAt = Date()
                 lastFailure = nil
                 logger.info(.storage, "recording started")
+                // `isRecording` carries ownership from here; a clip that opened is no longer
+                // settling. On the failure path there is nothing left to own.
+                isSettlingClip = false
             } catch {
                 self.recorder = nil
+                isSettlingClip = false
                 lastFailure = String(describing: error)
                 logger.error(.storage, "recording refused to start: \(String(describing: error))")
             }
@@ -183,11 +209,17 @@ final class RecordingCoordinator {
         isRecording = false
         startedAt = nil
         self.recorder = nil
+        // The file outlives `isRecording` by the length of `finishWriting` plus a rename, and that
+        // is precisely the window the folder sweep used to walk into.
+        isSettlingClip = true
 
         Task {
             let finished = await recorder.finish(reason: .userStopped)
             completed.append(contentsOf: finished)
             lastFinished = finished
+            // Released only after the records are published, so a sweep that starts the instant
+            // this flips sees the finished names rather than the `.partial` ones.
+            isSettlingClip = false
             if finished.isEmpty {
                 lastFailure = "the clip closed without producing a file"
                 logger.error(.storage, "recording stopped but wrote no file")

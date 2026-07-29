@@ -261,7 +261,13 @@ extension MainWindowView {
     /// Silent about a file it cannot move: another process holding it open is the one case where
     /// leaving it alone is right, and it will be recovered on the next launch instead.
     func recoverOrphanedClips() {
-        guard !recording.isRecording, let folder = recording.clipsDirectory() else { return }
+        // ⛔ `ownsClipFiles`, never `isRecording`. `isRecording` goes false the moment Stop is
+        // pressed, while the writer is still inside `finishWriting` and the file is still called
+        // `.partial` — and this method is called from `reloadClips()`, which runs *when a recording
+        // finishes*. So the two used to meet exactly: the sweep renamed the live file, the
+        // recorder's own rename then failed with NSFileNoSuchFileError, and the clip was recorded
+        // against a path nothing occupied.
+        guard !recording.ownsClipFiles, let folder = recording.clipsDirectory() else { return }
         let logger = session.dependencies.logger
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
         guard let walker = FileManager.default.enumerator(
