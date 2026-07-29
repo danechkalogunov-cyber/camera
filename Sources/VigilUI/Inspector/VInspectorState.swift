@@ -492,15 +492,23 @@ extension VInspectorState {
     }
 
     static var previewIdentity: InspectorDeviceIdentity {
-        InspectorDeviceIdentity(model: "DS-2CD2385G1",
-                                deviceName: "Front Door",
-                                firmwareVersion: "V5.7.3 build 220315",
-                                firmwareReleased: "15 March 2022",
-                                serialNumber: "DS-2CD2385G120220315AAWR1234821",
-                                macAddress: "44:47:cc:1a:2b:3c",
-                                totalChannels: 1,
-                                host: "192.168.1.64",
-                                uptimeSeconds: 6 * 86_400 + 4 * 3_600 + 12 * 60)
+        // ⚠️ The uptime is a typed local rather than an inline sum. `uptimeSeconds` is a `Double`,
+        // so `6 * 86_400 + 4 * 3_600 + 12 * 60` written in place makes the solver consider every
+        // numeric type for five untyped literals *inside* a call whose fifteen parameters are all
+        // defaulted — and it gives up with "unable to type-check this expression in reasonable
+        // time". Naming the value with its type collapses that to one candidate.
+        let uptime: Double = 6 * 86_400 + 4 * 3_600 + 12 * 60
+        var identity = InspectorDeviceIdentity()
+        identity.model = "DS-2CD2385G1"
+        identity.deviceName = "Front Door"
+        identity.firmwareVersion = "V5.7.3 build 220315"
+        identity.firmwareReleased = "15 March 2022"
+        identity.serialNumber = "DS-2CD2385G120220315AAWR1234821"
+        identity.macAddress = "44:47:cc:1a:2b:3c"
+        identity.totalChannels = 1
+        identity.host = "192.168.1.64"
+        identity.uptimeSeconds = uptime
+        return identity
     }
 
     static var previewStream: InspectorStreamDescription {

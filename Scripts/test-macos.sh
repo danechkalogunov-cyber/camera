@@ -24,6 +24,34 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 2
 fi
 
+# Both of the things this script needs beyond a compiler — the `#Preview` macro plugin and the
+# `Testing` module — ship inside Xcode.app, not with the Command Line Tools. Without them the build
+# emits the same two errors once per preview and once per test file, which is thousands of lines
+# that all mean "wrong toolchain". Say it once, here, instead.
+#
+# `Scripts/build-app.sh` does not hit either: it builds `-c release`, where every `#if DEBUG` block —
+# and so every `#Preview` — is compiled out. That is why `Scripts/run.sh` can succeed on a Mac where
+# this script cannot, and why debug-only code reaches a compiler for the first time right here.
+DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || true)
+case "$DEVELOPER_DIR" in
+    *CommandLineTools*|"")
+        echo "test-macos.sh: this needs the full Xcode, not just the Command Line Tools." >&2
+        echo >&2
+        echo "  xcode-select -p  ->  ${DEVELOPER_DIR:-(nothing)}" >&2
+        echo >&2
+        echo "  The #Preview macro plugin (PreviewsMacros) and the swift-testing 'Testing' module" >&2
+        echo "  both live in Xcode.app. Without it every #Preview fails to expand and every test" >&2
+        echo "  file fails to import, neither of which says anything about this code." >&2
+        echo >&2
+        echo "  Install Xcode from the App Store, then point the toolchain at it:" >&2
+        echo "      sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+        echo >&2
+        echo "  To build and run the app without Xcode, use Scripts/run.sh — a release build" >&2
+        echo "  compiles no previews and needs no macro plugin." >&2
+        exit 2
+        ;;
+esac
+
 fail=0
 echo "== build =="
 swift build || fail=1

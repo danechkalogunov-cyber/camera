@@ -749,6 +749,52 @@ def check_split_file_access() -> list[Violation]:
     return out
 
 
+def check_undeclared_v_types() -> list[Violation]:
+    """A `V`-prefixed type that is used but declared nowhere in the tree.
+
+    `VLibraryScreen`'s three previews called `VLibrarySample.emptyState()` and
+    `VLibrarySample.populatedState()` for weeks. The type had never been written — it arrived with a
+    commit whose own message said it did not build — and nothing noticed, because a `#Preview` lives
+    inside `#if DEBUG` and **the app is built `-c release`**. `Scripts/build-app.sh` compiles the
+    release configuration, so every `#if DEBUG` block is stripped before the compiler sees it; the
+    Linux CI cannot help either, since these files are macOS-only. Debug-only code in a macOS-only
+    target is the one place in this repo where nothing is checked at all.
+
+    The rule is narrow on purpose: it looks only at the `V`-prefixed UI convention, which is this
+    project's own namespace, so a missing name is certainly a missing name rather than something
+    from a framework. `VStack` and `VSplitView` are SwiftUI's and are the whole exception list.
+    """
+    # `V[A-Z][a-z]`, not `V[A-Z]`: the third character being lowercase is what separates this
+    # project's `VTheme` and `VTimelineView` from Apple's screaming-case C symbols such as
+    # `VTCreateCGImageFromCVPixelBuffer`, which are declared in a framework rather than here.
+    swiftui = {"VStack", "VSplitView"}
+    declared: set[str] = set()
+    uses: dict[str, tuple[str, int]] = {}
+
+    for directory in ("Sources", "Tests"):
+        for path in swift_files(directory):
+            for n, raw in enumerate(path.read_text().splitlines(), 1):
+                if raw.lstrip().startswith("//"):
+                    continue
+                code = re.sub(r'"(?:[^"\\]|\\.)*"', '""', raw)
+                for name in re.findall(
+                        r"\b(?:struct|enum|class|actor|protocol|typealias)\s+(V[A-Z][a-z]\w*)", code):
+                    declared.add(name)
+                # A use is a member access or a construction, not a mention in prose.
+                for name in re.findall(r"(?<![\w.])(V[A-Z][a-z]\w*)\s*[.(]", code):
+                    uses.setdefault(name, (str(path.relative_to(ROOT)), n))
+
+    out: list[Violation] = []
+    for name, (where, line) in sorted(uses.items()):
+        if name in declared or name in swiftui:
+            continue
+        out.append((where, line, "undeclared-type",
+                    f"{name!r} is used here but declared nowhere in Sources or Tests — if it only "
+                    f"appears inside `#if DEBUG`, nothing compiles it: the app is built "
+                    f"`-c release` and the Linux CI skips macOS-only files"))
+    return out
+
+
 def check_file_header(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     if not lines or not lines[0].startswith("//"):
         return [(str(path.relative_to(ROOT)), 1, "header",
@@ -830,6 +876,7 @@ def main() -> int:
 
     violations += check_duplicate_test_names()
     violations += check_split_file_access()
+    violations += check_undeclared_v_types()
     violations += check_plists()
 
     if not violations:

@@ -370,6 +370,99 @@ package struct VLibraryRowSurface: ViewModifier {
 // MARK: - Previews
 
 #if DEBUG
+
+// MARK: VLibrarySample
+
+/// Deterministic fixtures for the three library previews.
+///
+/// ⚠️ Synthesised, not captured. The frozen "now" is 2026-07-26 10:14:38 UTC — the same instant
+/// `VTimelineSample` uses — so a preview never calls `Date()` and never moves between redraws.
+///
+/// This is the only place in the directory that fabricates a row: the file header's rule is that no
+/// *shipping* view invents one, and a `#Preview` is not a shipping view.
+@MainActor
+private enum VLibrarySample {
+
+    /// 2026-07-26 10:14:38 UTC.
+    static let now = Date(timeIntervalSince1970: 1_785_060_878)
+
+    static let clock = TimelineClock(timeZoneIdentifier: "UTC",
+                                     now: now,
+                                     locale: Locale(identifier: "en_GB"))
+
+    /// A stable UUID per fixture, so a redraw does not re-identify every row.
+    static func id(_ number: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012ld", number)) ?? UUID()
+    }
+
+    /// `now` minus a whole number of minutes, which is how every fixture below places itself.
+    static func minutesAgo(_ minutes: Int) -> Date {
+        let seconds: Double = Double(minutes) * 60
+        return now.addingTimeInterval(-seconds)
+    }
+
+    static let frontDoor = VLibraryCamera(id: CameraID(id(1)), name: "Front Door",
+                                          identityIndex: 0)
+    static let backYard = VLibraryCamera(id: CameraID(id(2)), name: "Back Yard",
+                                         identityIndex: 3)
+
+    /// Nothing recorded, nothing seen, nothing marked — the state every user is in today.
+    static func emptyState() -> VLibraryState {
+        VLibraryState(clock: clock, recordingsFolder: "~/Movies/Vigil")
+    }
+
+    /// Two days of rows, so the day headers and the "yesterday" boundary both appear.
+    static func populatedState() -> VLibraryState {
+        VLibraryState(clock: clock,
+                      clips: clips,
+                      events: events,
+                      bookmarks: bookmarks,
+                      recordingsFolder: "~/Movies/Vigil")
+    }
+
+    static var clips: [VLibraryClip] {
+        [
+            VLibraryClip(id: id(10), camera: frontDoor, startedAt: minutesAgo(4),
+                         durationSeconds: 96, byteCount: 41_238_016,
+                         fileName: "Front Door 2026-07-26 10-10-38.mp4"),
+            VLibraryClip(id: id(11), camera: backYard, startedAt: minutesAgo(52),
+                         durationSeconds: 1_284, byteCount: 512_884_736,
+                         fileName: "Back Yard 2026-07-26 09-22-38.mp4"),
+            // Still being written: the row prints a pulse rather than a duration.
+            VLibraryClip(id: id(12), camera: frontDoor, startedAt: minutesAgo(1),
+                         fileName: "Front Door 2026-07-26 10-13-38.mp4", isRecording: true),
+            VLibraryClip(id: id(13), camera: backYard, startedAt: minutesAgo(26 * 60),
+                         durationSeconds: 312, byteCount: 128_974_848,
+                         fileName: "Back Yard 2026-07-25 08-14-38.mp4"),
+        ]
+    }
+
+    static var events: [VLibraryEvent] {
+        [
+            VLibraryEvent(id: id(20), camera: frontDoor, occurredAt: minutesAgo(3),
+                          kind: TimelineMarkerKind.motion, label: "Motion",
+                          durationSeconds: 14, isUnread: true),
+            VLibraryEvent(id: id(21), camera: backYard, occurredAt: minutesAgo(38),
+                          kind: TimelineMarkerKind.lineCrossing, label: "Line crossing",
+                          durationSeconds: 6, isUnread: true),
+            VLibraryEvent(id: id(22), camera: frontDoor, occurredAt: minutesAgo(97),
+                          kind: TimelineMarkerKind.videoLoss, label: "Video loss",
+                          durationSeconds: 41),
+            VLibraryEvent(id: id(23), camera: backYard, occurredAt: minutesAgo(27 * 60),
+                          kind: TimelineMarkerKind.tamper, label: "Tamper"),
+        ]
+    }
+
+    static var bookmarks: [VLibraryBookmark] {
+        [
+            VLibraryBookmark(id: id(30), camera: frontDoor, instant: minutesAgo(41),
+                             title: "Delivery", note: "Parcel left by the porch."),
+            VLibraryBookmark(id: id(31), camera: backYard, instant: minutesAgo(29 * 60),
+                             title: "Gate left open"),
+        ]
+    }
+}
+
 #Preview("Library — recordings, empty") {
     VLibraryScreen(section: VLibrarySection.recordings,
                    state: VLibrarySample.emptyState())
