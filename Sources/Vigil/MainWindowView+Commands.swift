@@ -98,7 +98,7 @@ extension MainWindowView {
     /// against English text. The lookup therefore happens here, through the same bundle every other
     /// `VigilUI` string uses.
     static func localized(_ key: String) -> String {
-        Bundle.vigilUI.localizedString(forKey: key, value: key, table: nil)
+        vigilUIString(key)
     }
 
     /// The layout's name, sharing `VChromeLayoutSwitcher`'s wording so the palette and the toolbar's

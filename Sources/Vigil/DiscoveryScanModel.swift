@@ -45,8 +45,8 @@ final class DiscoveryScanModel: Identifiable {
     /// `0…1`, or `nil` before the plan exists.
     private(set) var progress: Double?
 
-    /// What the run is doing, for the sheet's subtitle.
-    private(set) var phase: String = "Preparing…"
+    /// What the run is doing, for the sheet's subtitle. Already translated.
+    private(set) var phase: String = vigilUIString("Preparing…")
 
     /// True while a run is in flight.
     private(set) var isScanning = false
@@ -87,14 +87,14 @@ final class DiscoveryScanModel: Identifiable {
             // mechanisms are skipped and the sweep still finds cameras — slower, and only on this
             // subnet — and a user who is told that up front reads a short list as expected rather
             // than as a failure (§9.5).
-            notice = "This build cannot use multicast, so only a direct sweep of this subnet runs. "
-                + "Cameras on other subnets will not answer."
+            notice = vigilUIString("This build cannot use multicast, so only a direct sweep of "
+                                   + "this subnet runs. Cameras on other subnets will not answer.")
         }
         let coordinator = DiscoveryCoordinator(environment: environment)
         self.coordinator = coordinator
         cameras = []
         progress = nil
-        phase = "Preparing…"
+        phase = vigilUIString("Preparing…")
         isScanning = true
 
         task = Task { [weak self] in
@@ -143,7 +143,7 @@ final class DiscoveryScanModel: Identifiable {
     private func absorb(_ event: DiscoveryEvent) async {
         switch event {
         case .started:
-            phase = "Looking for cameras…"
+            phase = vigilUIString("Looking for cameras…")
         case let .progress(value):
             progress = value.fraction
             phase = Self.sentence(for: value.phase)
@@ -209,25 +209,33 @@ final class DiscoveryScanModel: Identifiable {
     }
 
     /// What a phase is called in the sheet. Named, not numbered: "sweepB" means nothing to anyone.
+    ///
+    /// ⚠️ Not `DiscoveryPhase.label`. That property exists and is shorter, but it lives in
+    /// `VigilDiscovery`, which is Foundation-only and has no bundle of its own — its strings can
+    /// never be translated. The user-facing sentence therefore belongs on this side of the line,
+    /// where `VigilUI`'s `.strings` tables can reach it, and the engine's `label` stays what it
+    /// always was: a name for a log line.
     private static func sentence(for phase: DiscoveryPhase) -> String {
         switch phase {
-        case .planning: "Preparing…"
-        case .arpSnapshot: "Reading what this Mac has already spoken to…"
-        case .sadp: "Asking Hikvision cameras to announce themselves…"
-        case .onvif: "Asking ONVIF devices to announce themselves…"
-        case .bonjour: "Listening for Bonjour…"
-        case .sweepA, .sweepB: "Checking every address on this network…"
-        case .fingerprint: "Asking what answered…"
-        case .settling: "Finishing…"
-        case .finished: "Done."
+        case .planning: vigilUIString("Preparing…")
+        case .arpSnapshot: vigilUIString("Reading what this Mac has already spoken to…")
+        case .sadp: vigilUIString("Asking Hikvision cameras to announce themselves…")
+        case .onvif: vigilUIString("Asking ONVIF devices to announce themselves…")
+        case .bonjour: vigilUIString("Listening for Bonjour…")
+        case .sweepA, .sweepB: vigilUIString("Checking every address on this network…")
+        case .fingerprint: vigilUIString("Asking what answered…")
+        case .settling: vigilUIString("Finishing…")
+        case .finished: vigilUIString("Done.")
         }
     }
 
     /// How a finished run is summarised.
     private static func sentence(for summary: DiscoverySummary) -> String {
         switch summary.terminationReason {
-        case .cancelled: "Stopped."
-        default: summary.devices.isEmpty ? "Nothing answered." : "Done."
+        case .cancelled: vigilUIString("Stopped.")
+        default: summary.devices.isEmpty
+            ? vigilUIString("Nothing answered.")
+            : vigilUIString("Done.")
         }
     }
 }

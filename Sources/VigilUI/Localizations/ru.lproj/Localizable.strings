@@ -554,3 +554,59 @@
    clock is in fact correct, so without this the user would go and reset a clock that is fine. */
 "Clock" = "Часы";
 "zone corrected" = "пояс учтён";
+
+/* FINDING A CAMERA — UX.md §8.3, the harder of the two paths: the user knows a camera is on
+   this network and does not know its address. "possible" and "not ISAPI" are said in words
+   rather than by dimming a row, because a low-confidence answer is still worth trying and
+   grey reads as unavailable. */
+"Find Cameras…" = "Найти камеры…";
+"Cameras on This Network" = "Камеры в этой сети";
+"possible" = "возможно";
+"Added" = "Добавлена";
+"not ISAPI" = "не ISAPI";
+"Stop" = "Остановить";
+"Scan Again" = "Искать снова";
+"Looking…" = "Ищем…";
+"No cameras answered." = "Ни одна камера не ответила.";
+"Cameras appear here as they answer." = "Камеры появятся здесь, как только ответят.";
+"Some cameras do not announce themselves — type the address instead." = "Некоторые камеры себя не объявляют — тогда введите адрес вручную.";
+
+/* THE SCAN'S RUNNING COMMENTARY. One sentence per phase, in the vocabulary of what is
+   happening on the wire rather than the engine's phase names: "sweepB" means nothing to
+   anyone. Looked up as plain Strings through vigilUIString, because the app target computes
+   them and hands them down as values. */
+"Preparing…" = "Готовим…";
+"Looking for cameras…" = "Ищем камеры…";
+"Reading what this Mac has already spoken to…" = "Смотрим, с кем этот Mac уже говорил…";
+"Asking Hikvision cameras to announce themselves…" = "Просим камеры Hikvision отозваться…";
+"Asking ONVIF devices to announce themselves…" = "Просим ONVIF-устройства отозваться…";
+"Listening for Bonjour…" = "Слушаем Bonjour…";
+"Checking every address on this network…" = "Проверяем все адреса в этой сети…";
+"Asking what answered…" = "Выясняем, кто ответил…";
+"Finishing…" = "Завершаем…";
+"Done." = "Готово.";
+"Stopped." = "Остановлено.";
+"Nothing answered." = "Никто не ответил.";
+
+/* SAID BEFORE THE RUN, NOT AFTER IT. Without the multicast entitlement the two multicast
+   mechanisms are skipped and the sweep still finds cameras — slower, and only on this
+   subnet. A user told that up front reads a short list as expected rather than as a failure
+   (spec-discovery.md §9.5). */
+"This build cannot use multicast, so only a direct sweep of this subnet runs. Cameras on other subnets will not answer." = "Эта сборка не может использовать multicast, поэтому идёт только прямой обход этой подсети. Камеры в других подсетях не ответят.";
+
+/* KEYS THE TABLES HAD LOST. Every one of these is spoken by a `Text(_, bundle: .vigilUI)` that
+   has been in the tree for weeks; none was ever in a table, so each rendered as its own English
+   text inside an otherwise translated window. Nothing could see it — a missing key is not a
+   compile error and not a test failure — until Scripts/lint.py grew the l10n rule.
+
+   "REC" stays "REC": it is the badge every camera and every recorder in the world prints, and
+   translating it would make Vigil the odd one out rather than the clearer one. */
+"Live and recording" = "Прямой эфир, идёт запись";
+"Live but degraded" = "Прямой эфир, нестабильно";
+"No signal" = "Нет сигнала";
+"REC" = "REC";
+"Add camera" = "Добавить камеру";
+"Empty cell" = "Пустая ячейка";
+"Drop a camera here or press Return to choose one" = "Перетащите сюда камеру или нажмите Return, чтобы выбрать";
+"Today" = "Сегодня";
+"Yesterday" = "Вчера";

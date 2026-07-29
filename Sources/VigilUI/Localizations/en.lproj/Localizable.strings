@@ -574,3 +574,56 @@
    clock is in fact correct, so without this the user would go and reset a clock that is fine. */
 "Clock" = "Clock";
 "zone corrected" = "zone corrected";
+
+/* FINDING A CAMERA — UX.md §8.3, the harder of the two paths: the user knows a camera is on
+   this network and does not know its address. "possible" and "not ISAPI" are said in words
+   rather than by dimming a row, because a low-confidence answer is still worth trying and
+   grey reads as unavailable. */
+"Find Cameras…" = "Find Cameras…";
+"Cameras on This Network" = "Cameras on This Network";
+"possible" = "possible";
+"Added" = "Added";
+"not ISAPI" = "not ISAPI";
+"Stop" = "Stop";
+"Scan Again" = "Scan Again";
+"Looking…" = "Looking…";
+"No cameras answered." = "No cameras answered.";
+"Cameras appear here as they answer." = "Cameras appear here as they answer.";
+"Some cameras do not announce themselves — type the address instead." = "Some cameras do not announce themselves — type the address instead.";
+
+/* THE SCAN'S RUNNING COMMENTARY. One sentence per phase, in the vocabulary of what is
+   happening on the wire rather than the engine's phase names: "sweepB" means nothing to
+   anyone. Looked up as plain Strings through vigilUIString, because the app target computes
+   them and hands them down as values. */
+"Preparing…" = "Preparing…";
+"Looking for cameras…" = "Looking for cameras…";
+"Reading what this Mac has already spoken to…" = "Reading what this Mac has already spoken to…";
+"Asking Hikvision cameras to announce themselves…" = "Asking Hikvision cameras to announce themselves…";
+"Asking ONVIF devices to announce themselves…" = "Asking ONVIF devices to announce themselves…";
+"Listening for Bonjour…" = "Listening for Bonjour…";
+"Checking every address on this network…" = "Checking every address on this network…";
+"Asking what answered…" = "Asking what answered…";
+"Finishing…" = "Finishing…";
+"Done." = "Done.";
+"Stopped." = "Stopped.";
+"Nothing answered." = "Nothing answered.";
+
+/* SAID BEFORE THE RUN, NOT AFTER IT. Without the multicast entitlement the two multicast
+   mechanisms are skipped and the sweep still finds cameras — slower, and only on this
+   subnet. A user told that up front reads a short list as expected rather than as a failure
+   (spec-discovery.md §9.5). */
+"This build cannot use multicast, so only a direct sweep of this subnet runs. Cameras on other subnets will not answer." = "This build cannot use multicast, so only a direct sweep of this subnet runs. Cameras on other subnets will not answer.";
+
+/* KEYS THE TABLES HAD LOST. Every one of these is spoken by a `Text(_, bundle: .vigilUI)` that
+   has been in the tree for weeks; none was ever in a table, so each rendered as its own English
+   text inside an otherwise translated window. Nothing could see it — a missing key is not a
+   compile error and not a test failure — until Scripts/lint.py grew the l10n rule. */
+"Live and recording" = "Live and recording";
+"Live but degraded" = "Live but degraded";
+"No signal" = "No signal";
+"REC" = "REC";
+"Add camera" = "Add camera";
+"Empty cell" = "Empty cell";
+"Drop a camera here or press Return to choose one" = "Drop a camera here or press Return to choose one";
+"Today" = "Today";
+"Yesterday" = "Yesterday";

@@ -944,6 +944,130 @@ def check_plists() -> list[Violation]:
     return out
 
 
+STRINGS_ENTRY = re.compile(r'^\s*"((?:[^"\\]|\\.)*)"\s*=\s*"(?:[^"\\]|\\.)*"\s*;\s*$')
+
+# `vigilUIString("…")` / `Self.localized("…")`, capturing everything up to the closing paren so a
+# key assembled from adjacent literals with `+` is recovered whole.
+LOOKUP_CALL = re.compile(r"(?:vigilUIString|(?:Self\.)?localized)\(\s*((?:[^()]|\([^()]*\))*?)\)",
+                         re.S)
+
+# A `Text` whose key is a bare literal and whose bundle is ours. Only this shape is checked: a key
+# that arrives as a variable cannot be resolved by reading the file, and guessing would either miss
+# it or invent a violation.
+TEXT_KEY = re.compile(r'Text\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*bundle:\s*\.vigilUI\s*\)')
+
+STRING_LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def parse_strings_table(path: pathlib.Path) -> tuple[dict[str, int], list[Violation]]:
+    """Keys of a .strings file mapped to their line numbers, plus anything that would not parse."""
+    rel = str(path.relative_to(ROOT))
+    raw = path.read_text()
+    # Block comments are the documentation style this repo uses in .strings files, and they run to
+    # many lines. Blanked rather than deleted so line numbers survive.
+    body = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+
+    keys: dict[str, int] = {}
+    problems: list[Violation] = []
+    for n, line in enumerate(body.splitlines(), 1):
+        if not line.strip():
+            continue
+        match = STRINGS_ENTRY.match(line)
+        if not match:
+            problems.append((rel, n, "strings",
+                             'not a "key" = "value"; entry, and NSBundle stops reading the table '
+                             "at the first bad line — everything after this renders untranslated"))
+            continue
+        key = match.group(1)
+        if key in keys:
+            problems.append((rel, n, "strings",
+                             f'duplicate key, first defined at line {keys[key]}'))
+            continue
+        keys[key] = n
+    return keys, problems
+
+
+def check_localization_tables() -> list[Violation]:
+    """Every key the code looks up must exist, and en and ru must hold exactly the same set.
+
+    Three failures this catches, all of which had already happened and none of which anything else
+    in this repo could see — a missing key is not a compile error and not a test failure, it is a
+    line of English in the middle of a Russian window.
+
+    1. **A key the code uses and no table defines.** `LocalizedStringKey` falls back to the key
+       itself, which is English, so this is invisible to an English-speaking developer and invisible
+       to CI. The discovery sheet shipped eleven of these.
+    2. **A key en has and ru does not.** Same symptom, narrower: the interface is translated except
+       for the one sentence nobody added.
+    3. **A malformed or duplicated entry.** `NSBundle` stops reading a table at the first line it
+       cannot parse, so a single missing semicolon silently untranslates everything below it.
+
+    Only *plain* literal keys are checked, and that leaves two gaps on purpose.
+
+    A key held in a variable cannot be resolved by reading source. And an **interpolated** key —
+    `Text("Looking up \\(host)…")` — is not its own text: SwiftUI rewrites it into a key carrying
+    format specifiers, and which specifier depends on the interpolated value's *type*, `%@` for a
+    String and `%lld` for an Int. Deciding that needs the type checker, so a rule at this level
+    would have to guess, and a lint rule that guesses either misses real breakage or invents
+    violations for correct code. Both are worse than an honestly narrower rule.
+    """
+    localizations = ROOT / "Sources/VigilUI/Localizations"
+    if not localizations.exists():
+        return []
+
+    out: list[Violation] = []
+    tables: dict[str, dict[str, int]] = {}
+    for table in sorted(localizations.glob("*.lproj/Localizable.strings")):
+        language = table.parent.name.removesuffix(".lproj")
+        keys, problems = parse_strings_table(table)
+        tables[language] = keys
+        out += problems
+
+    base = tables.get("en")
+    if base is None:
+        return out
+
+    # The base localisation is the contract: every other language is it with the values replaced.
+    base_rel = "Sources/VigilUI/Localizations/en.lproj/Localizable.strings"
+    for language, keys in sorted(tables.items()):
+        if language == "en":
+            continue
+        rel = f"Sources/VigilUI/Localizations/{language}.lproj/Localizable.strings"
+        for missing in sorted(set(base) - set(keys)):
+            out.append((rel, 1, "l10n",
+                        f'no {language} translation for "{missing}" — it will render in English'))
+        for extra in sorted(set(keys) - set(base)):
+            out.append((rel, keys[extra], "l10n",
+                        f'"{extra}" is not in the base localisation; either it is a typo of a real '
+                        "key, or it is dead and should go"))
+
+    # Keys the code asks for. Both spellings, across both the UI module and the app target.
+    for path in swift_files("Sources"):
+        rel = str(path.relative_to(ROOT))
+        text = path.read_text()
+        wanted: list[str] = []
+        for call in LOOKUP_CALL.finditer(text):
+            argument = call.group(1)
+            pieces = STRING_LITERAL.findall(argument)
+            # Only when the argument is *entirely* literals joined by `+`. Anything else — an
+            # interpolation, a variable, a format call — is not a key this rule can resolve.
+            if pieces and not STRING_LITERAL.sub("", argument).strip(" +\n\t"):
+                wanted.append("".join(pieces))
+        wanted += TEXT_KEY.findall(text)
+
+        for key in wanted:
+            # See the docstring: an interpolated key is not its own text, and resolving it needs a
+            # type checker. Skipped rather than guessed at.
+            if "\\(" in key or key in base:
+                continue
+            line = next((n for n, raw in enumerate(text.splitlines(), 1)
+                         if key.split("\\n")[0][:40] in raw), 1)
+            out.append((rel, line, "l10n",
+                        f'"{key}" is looked up but is in no .strings table — add it to {base_rel} '
+                        "and to every translation"))
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--summary", action="store_true", help="print counts only")
@@ -983,6 +1107,7 @@ def main() -> int:
     violations += check_undeclared_v_types()
     violations += check_scaffold_tests()
     violations += check_plists()
+    violations += check_localization_tables()
 
     if not violations:
         n_src = len(swift_files("Sources"))

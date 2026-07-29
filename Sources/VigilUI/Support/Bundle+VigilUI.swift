@@ -81,4 +81,27 @@ extension Bundle {
     }()
 }
 
+// MARK: - Plain-String Lookup
+
+/// One `VigilUI` string, in the user's language, as a `String` rather than a `LocalizedStringKey`.
+///
+/// **Why a plain `String` is sometimes the right answer.** `LocalizedStringKey` is what a `Text`
+/// should almost always take, because SwiftUI then looks it up in the view's own environment. But
+/// two kinds of caller cannot use one: the command palette, whose ranker folds and scores
+/// individual characters and would otherwise rank against English inside an opaque key, and the
+/// app-layer models that *compute* a sentence — a scan's phase line, a toast — and hand the result
+/// down as a value.
+///
+/// ⚠️ THE KEY MAY BE ASSEMBLED WITH `+`, AND THAT IS THE POINT. A `LocalizedStringKey` built from
+/// two halves matches nothing in any `.strings` file, so a long key has to be one unbroken literal
+/// and long keys therefore break the 110-column limit. A `String` has no such problem: adjacent
+/// literals are folded at compile time and what arrives here is the whole key.
+///
+/// - Parameter key: the English text, which in this module *is* the key.
+/// - Returns: the translation, or `key` itself when there is none — never an empty string and never
+///   a crash, for the reasons `Bundle.vigilUI` spells out above.
+public func vigilUIString(_ key: String) -> String {
+    Bundle.vigilUI.localizedString(forKey: key, value: key, table: nil)
+}
+
 #endif  // os(macOS)
