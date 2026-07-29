@@ -24,33 +24,61 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 2
 fi
 
-# Both of the things this script needs beyond a compiler — the `#Preview` macro plugin and the
-# `Testing` module — ship inside Xcode.app, not with the Command Line Tools. Without them the build
-# emits the same two errors once per preview and once per test file, which is thousands of lines
-# that all mean "wrong toolchain". Say it once, here, instead.
+# MARK: - Preflight
 #
-# `Scripts/build-app.sh` does not hit either: it builds `-c release`, where every `#if DEBUG` block —
-# and so every `#Preview` — is compiled out. That is why `Scripts/run.sh` can succeed on a Mac where
-# this script cannot, and why debug-only code reaches a compiler for the first time right here.
-DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || true)
-case "$DEVELOPER_DIR" in
-    *CommandLineTools*|"")
-        echo "test-macos.sh: this needs the full Xcode, not just the Command Line Tools." >&2
+# Two things this script needs beyond a compiler — the `#Preview` macro plugin and the `Testing`
+# module — do not ship with every toolchain. When either is missing the build emits the same error
+# once per preview and once per test file: thousands of lines that all mean "wrong toolchain" and
+# none of which say anything about this code. So each is *probed* rather than inferred, because
+# where they live has moved between releases and `xcode-select -p` does not actually answer the
+# question. Two `swiftc -typecheck` runs on two-line files cost a second and cannot be wrong.
+#
+# `Scripts/build-app.sh` needs neither: it builds `-c release`, where every `#if DEBUG` block — and
+# so every `#Preview` — is compiled out before the compiler sees it. That is why `Scripts/run.sh`
+# succeeds on a Mac where this script cannot, and why debug-only code reaches a compiler for the
+# first time right here.
+
+probe_dir=$(mktemp -d)
+trap 'rm -rf "$probe_dir"' EXIT
+
+has_testing=yes
+printf 'import Testing\n@Test func probe() {}\n' > "$probe_dir/testing.swift"
+swiftc -typecheck "$probe_dir/testing.swift" >/dev/null 2>&1 || has_testing=no
+
+has_previews=yes
+printf '#if canImport(SwiftUI)\nimport SwiftUI\n#Preview { Text(verbatim: "probe") }\n#endif\n' \
+    > "$probe_dir/preview.swift"
+swiftc -typecheck "$probe_dir/preview.swift" >/dev/null 2>&1 || has_previews=no
+
+if [ "$has_testing" = no ] || [ "$has_previews" = no ]; then
+    echo "test-macos.sh: this toolchain cannot build the debug configuration." >&2
+    echo >&2
+    echo "  swift --version  ->  $(swift --version 2>&1 | head -1)" >&2
+    echo "  xcode-select -p  ->  $(xcode-select -p 2>/dev/null || echo '(nothing)')" >&2
+    [ "$has_testing"  = no ] && echo "  ✗ swift-testing: 'import Testing' does not resolve" >&2
+    [ "$has_previews" = no ] && echo "  ✗ #Preview: the PreviewsMacros plugin is not installed" >&2
+    [ "$has_testing"  = yes ] && echo "  ✓ swift-testing" >&2
+    [ "$has_previews" = yes ] && echo "  ✓ #Preview" >&2
+    echo >&2
+    echo "  Both ship inside Xcode.app rather than with the Command Line Tools." >&2
+    found=$(ls -d /Applications/Xcode*.app 2>/dev/null | head -5)
+    if [ -n "$found" ]; then
         echo >&2
-        echo "  xcode-select -p  ->  ${DEVELOPER_DIR:-(nothing)}" >&2
+        echo "  Xcode appears to be installed. Point the toolchain at it:" >&2
+        for app in $found; do
+            echo "      sudo xcode-select -s $app/Contents/Developer" >&2
+        done
+    else
         echo >&2
-        echo "  The #Preview macro plugin (PreviewsMacros) and the swift-testing 'Testing' module" >&2
-        echo "  both live in Xcode.app. Without it every #Preview fails to expand and every test" >&2
-        echo "  file fails to import, neither of which says anything about this code." >&2
-        echo >&2
-        echo "  Install Xcode from the App Store, then point the toolchain at it:" >&2
+        echo "  No Xcode.app was found in /Applications. Install it from the App Store, then:" >&2
         echo "      sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
-        echo >&2
-        echo "  To build and run the app without Xcode, use Scripts/run.sh — a release build" >&2
-        echo "  compiles no previews and needs no macro plugin." >&2
-        exit 2
-        ;;
-esac
+    fi
+    echo >&2
+    echo "  Meanwhile Scripts/run.sh still builds and launches the app: a release build compiles" >&2
+    echo "  no previews and imports no test module. What it cannot check is debug-only code —" >&2
+    echo "  the #if DEBUG fixtures behind every preview — which is exactly what this script is for." >&2
+    exit 2
+fi
 
 fail=0
 echo "== build =="
