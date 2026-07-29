@@ -78,10 +78,17 @@ public enum EntitlementInspector {
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
               let staticCode else { return [:] }
         var information: CFDictionary?
-        // `.signingInformation` is the flag that includes the entitlements dictionary; without it
-        // the call succeeds and the key is simply absent, which reads as "no entitlement" and is
+        // `kSecCSSigningInformation` is the flag that includes the entitlements dictionary; without
+        // it the call succeeds and the key is simply absent, which reads as "no entitlement" and is
         // the exact wrong answer for a build that has one.
-        guard SecCodeCopySigningInformation(staticCode, .signingInformation,
+        //
+        // ⚠️ Spelled the long way on purpose. `SecCSFlags` is a `CF_OPTIONS` type and carries no
+        // member for this constant — `.signingInformation` does not compile — because the
+        // information flags live in a *separate*, unnamed `CF_ENUM(uint32_t)` in CSCommon.h. The
+        // `UInt32(...)` conversion is there because an unnamed enum's import type is not something
+        // to bet the build on; it is a no-op when the constant is already `UInt32`.
+        let signingInformation = SecCSFlags(rawValue: UInt32(kSecCSSigningInformation))
+        guard SecCodeCopySigningInformation(staticCode, signingInformation,
                                             &information) == errSecSuccess,
               let dictionary = information as? [String: Any] else { return [:] }
         let key = kSecCodeInfoEntitlementsDict as String
