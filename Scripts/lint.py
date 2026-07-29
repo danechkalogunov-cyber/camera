@@ -944,6 +944,44 @@ def check_plists() -> list[Violation]:
     return out
 
 
+def check_bonjour_declarations() -> list[Violation]:
+    """Every Bonjour service type the code browses must be declared in Info.plist.
+
+    macOS enforces `NSBonjourServices` on `NWBrowser`, and it enforces it the worst possible way:
+    a browse for an undeclared type does not fail, does not warn and does not log. It returns
+    nothing, forever. On screen that is indistinguishable from a network with no cameras on it —
+    the "no video, no error" shape this project exists to refuse, applied to discovery.
+
+    Only that direction is checked. A declared type nobody browses costs nothing but a line in a
+    plist, and the list is deliberately a superset: `_onvif._tcp` is declared against the day the
+    browse list grows, which is a change in one file rather than two.
+    """
+    import plistlib
+
+    plist = ROOT / "Resources/Info.plist"
+    source = ROOT / "Sources/VigilDiscovery/Coordinator/DiscoveryCoordinator.swift"
+    if not plist.exists() or not source.exists():
+        return []
+
+    try:
+        declared = set(plistlib.loads(plist.read_bytes()).get("NSBonjourServices", []))
+    except Exception:
+        return []   # check_plists already reports a malformed plist; one complaint is enough.
+
+    text = source.read_text()
+    match = re.search(r"bonjourServiceTypes\s*(?::[^=]+)?=\s*\[([^\]]*)\]", text)
+    if not match:
+        return []
+
+    rel = str(source.relative_to(ROOT))
+    line = text[:match.start()].count("\n") + 1
+    return [(rel, line, "bonjour",
+             f'"{service}" is browsed but not in NSBonjourServices in Resources/Info.plist — '
+             "macOS answers an undeclared browse with silence, not an error, so this reads on "
+             "screen as a network with no cameras on it")
+            for service in sorted(set(STRING_LITERAL.findall(match.group(1))) - declared)]
+
+
 STRINGS_ENTRY = re.compile(r'^\s*"((?:[^"\\]|\\.)*)"\s*=\s*"(?:[^"\\]|\\.)*"\s*;\s*$')
 
 # `vigilUIString("…")` / `Self.localized("…")`, capturing everything up to the closing paren so a
@@ -1317,6 +1355,7 @@ def main() -> int:
     violations += check_scaffold_tests()
     violations += check_plists()
     violations += check_localization_tables()
+    violations += check_bonjour_declarations()
 
     if not violations:
         n_src = len(swift_files("Sources"))
