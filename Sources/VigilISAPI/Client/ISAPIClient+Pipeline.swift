@@ -104,7 +104,9 @@ extension ISAPIClient {
             if Task.isCancelled { throw ISAPIError.cancelled }
 
             var request = HTTPRequest(url: url, method: method, headers: baseHeaders(extra: .init()),
-                                      body: body, timeout: timeout(for: lane, resource: resource),
+                                      body: body,
+                                      timeout: timeout(for: lane, resource: resource,
+                                                       method: method),
                                       lane: lane)
             if let contentType { request.headers["Content-Type"] = contentType }
             // An empty-bodied PUT must still say so: URLSession omits `Content-Length` for a nil
@@ -238,14 +240,19 @@ extension ISAPIClient {
         return headers
     }
 
-    /// The budget for a request, by lane and by resource.
-    private func timeout(for lane: Lane, resource: String) -> Duration {
+    /// The budget for a request, by lane, by resource, and — for `/Image/` — by method.
+    private func timeout(for lane: Lane, resource: String, method: String) -> Duration {
         switch lane {
         case .snapshot: return configuration.snapshotTimeout
         case .stream, .audio: return configuration.streamIdleTimeout
         case .control:
             if resource.contains("/PTZCtrl/") { return configuration.ptzTimeout }
             if resource.contains("/ContentMgmt/search") { return configuration.searchTimeout }
+            // Reading a picture control is an ordinary configuration read and gets the ordinary
+            // budget; *writing* one moves hardware and is answered only once it has moved.
+            if resource.contains("/Image/"), method != "GET" {
+                return configuration.imageWriteTimeout
+            }
             return configuration.controlTimeout
         }
     }

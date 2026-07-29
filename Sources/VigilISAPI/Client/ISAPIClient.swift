@@ -69,6 +69,16 @@ public actor ISAPIClient {
         /// than useless, and the caller re-sends.
         public var ptzTimeout: Duration = .seconds(2)
 
+        /// Budget for an `/Image/` write, which moves hardware rather than a register.
+        ///
+        /// ⚠️ Longer than ``controlTimeout`` because the device answers a picture write only after
+        /// it has *applied* it, and some of these are mechanical: `PUT …/ircutFilter` swings the
+        /// infrared filter across the sensor and then waits out the auto-exposure settling that
+        /// follows a day↔night change. A field log showed one refused at the 8 s control budget.
+        /// Vigil's own ceiling is unchanged — `timeoutIntervalForResource` still caps the whole
+        /// task — so a camera that has genuinely stopped answering is still given up on.
+        public var imageWriteTimeout: Duration = .seconds(20)
+
         /// Default configuration.
         public init() {}
     }

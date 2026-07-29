@@ -266,7 +266,14 @@ actor URLSessionLanePool {
         case .cancelled:
             return .cancelled
         case .timedOut:
-            return .timedOut(resource: request.url.path, seconds: seconds(request.timeout))
+            // ⚠️ The method is part of the resource here, and it is the difference between a
+            // diagnosable report and a shrug. A write like `setIRCut` is a read-modify-write: GET,
+            // PUT, GET, and then a fourth read of the whole image block. All four name the same
+            // path, so `timedOut(resource: "/ISAPI/Image/channels/1/ircutFilter")` on its own does
+            // not say whether the camera was slow to *answer* or slow to *act* — and those call for
+            // opposite fixes.
+            return .timedOut(resource: "\(request.method) \(request.url.path)",
+                             seconds: seconds(request.timeout))
         case .dataLengthExceedsMaximum:
             return .responseTooLarge(bytes: 0)
         default:
