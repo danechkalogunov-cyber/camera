@@ -238,27 +238,28 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     ///   - checkInterval: real time between checks.
     ///   - maximumAdvances: a stuck run must not spin forever; the pump stops after this many steps,
     ///     and the test bed's event cap then ends the run.
-    /// ⚠️ `quietChecks` was 8 (2 ms). Raised because that is the only honest axis left on the
-    /// remaining failure, and the failure is worth understanding before touching this number again.
+    /// ⛔ `quietChecks` WAS RAISED TO 20 AND PUT BACK. Do not raise it again without reading this.
     ///
-    /// An absolute `sleep(until:)` stopped a filed deadline from *drifting*, and the probe timetable
-    /// went from three probes adrift to one. What it cannot stop is the clock overshooting **before**
-    /// the sleeper is filed: the pump advances to the earliest deadline it can see, and a task that
-    /// is about to sleep at 510 ms is, from here, indistinguishable from a task that has finished.
-    /// So the pump jumps to whatever *is* registered, the 510 ms sleeper files into a past instant,
-    /// and its probe is stamped late.
+    /// The reasoning looked sound: the residual timetable flake is the pump advancing before a task
+    /// that is about to sleep has filed its deadline, nothing observable distinguishes "about to
+    /// sleep" from "finished", so the only lever is waiting longer before believing the quiet.
     ///
-    /// Nothing observable distinguishes "about to sleep" from "done" — the runtime exposes no such
-    /// thing — so the only lever is how long this waits before believing the quiet. Longer is more
-    /// correct and slower: every advance costs at least `quietChecks × checkInterval` of real time,
-    /// and a coordinator test makes hundreds of advances. This is the knob if the discovery suite
-    /// becomes too slow, and it is a mitigation rather than a fix.
+    /// It made things worse, and measurably. Every advance costs at least
+    /// `quietChecks × checkInterval` of real time, so 8 → 20 took a step from 2 ms to 5 ms — while
+    /// `DiscoveryTestBed.run`'s settle loop stayed capped at 200 × 250 µs = 50 ms. Teardown stopped
+    /// fitting inside that budget, and `discoveryCoordinatorStreamTerminationCancelsTheRun` — which
+    /// had been passing — began failing on **both** macOS and Linux, on the same assertion. Two
+    /// platforms agreeing is not a flake; it was a regression, and it was mine.
     ///
-    /// ⛔ Do not "fix" the remaining flake by loosening the nanosecond assertion instead. On a
-    /// virtual clock, exact is the correct expectation; three times this session a timing failure
-    /// that looked like noise turned out to be a real defect, and a tolerance would have buried
-    /// every one of them.
-    func startPump(quietChecks: Int = 20, checkInterval: Duration = .microseconds(250),
+    /// The lesson worth more than the number: this pump and that settle loop are coupled through
+    /// real time, and tuning either alone moves the failure somewhere else rather than removing it.
+    /// The timetable flake is still open and is documented in docs/BUILD-VERIFICATION.md; the fix
+    /// for it is a deterministic scheduler, not a more patient one.
+    ///
+    /// ⛔ Nor should the nanosecond assertion be loosened instead. On a virtual clock exact is the
+    /// correct expectation; three separate times this session a timing failure that looked like
+    /// noise turned out to be a real defect, and a tolerance would have buried every one.
+    func startPump(quietChecks: Int = 8, checkInterval: Duration = .microseconds(250),
                    maximumAdvances: Int = 100_000) -> Task<Void, Never> {
         Task { [weak self] in
             var advances = 0
