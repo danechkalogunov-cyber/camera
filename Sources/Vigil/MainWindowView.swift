@@ -300,7 +300,18 @@ struct MainWindowView: View {
         // rather than being faked with a toast that refuses to dismiss.
         .onChange(of: library.notice) { _, notice in
             guard let notice else { return }
-            window.toast = MainWindowToast(kind: .warning, message: notice)
+            // The *Reveal in Finder* action FEATURES.md §F-INV-01 acceptance 3 names. Every notice
+            // this model raises is about `library.json`, so the folder is always the right
+            // destination; it is omitted only when the directory could not be resolved at all,
+            // which is the one case where there is nothing to reveal.
+            let folder = library.storeDirectory
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: notice,
+                actionTitle: folder == nil ? nil : "Reveal in Finder",
+                action: folder.map { url in
+                    { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                })
         }
         // ⛔ `RecordingCoordinator`'s own header says it: "Every failure becomes a logged, named
         // outcome in `lastFailure`. A Record button that does nothing and says nothing is the exact

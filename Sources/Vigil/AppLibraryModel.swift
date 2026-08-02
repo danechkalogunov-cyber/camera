@@ -56,6 +56,13 @@ final class AppLibraryModel {
     /// `nil` when the store could not be built at all — see the file header on why that is survivable.
     private let library: CameraLibrary?
 
+    /// Where `library.json` and its backup live, or `nil` when the directory could not be resolved.
+    ///
+    /// Exposed so the window's notice can carry a *Reveal in Finder* action, which FEATURES.md
+    /// §F-INV-01 acceptance 3 names by name. A sentence telling a user their camera list was damaged
+    /// and not showing them where it is asks them to go and find it.
+    private(set) var storeDirectory: URL?
+
     // MARK: - Initialisation
 
     /// Builds the model. Nothing is read from disk until ``load(importingLegacyFrom:)``.
@@ -63,10 +70,12 @@ final class AppLibraryModel {
         self.logger = logger
         do {
             let directory = try LibraryStore.applicationSupportDirectory()
+            self.storeDirectory = directory
             let store = LibraryStore(directory: directory, logger: logger)
             self.library = CameraLibrary(store: store, logger: logger)
         } catch {
             logger.error(.storage, "no camera library: \(error)")
+            self.storeDirectory = nil
             self.library = nil
         }
     }
