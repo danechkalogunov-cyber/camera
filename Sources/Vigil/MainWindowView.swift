@@ -69,6 +69,13 @@ struct MainWindowView: View {
     /// Pan, tilt, zoom, focus, iris, presets and patrols.
     @State var ptz: PTZCoordinator
 
+    /// What this process costs the Mac, sampled once a second.
+    ///
+    /// A reference type because the sampler has to remember the previous CPU reading to difference
+    /// against, and a `@State` struct mutated from an async loop would be differencing against a
+    /// copy.
+    @State var resources = ProcessResourceMonitor()
+
     /// Every camera the user has added.
     ///
     /// Separate from `session`, which owns exactly one live stream. The library is the *set*; the

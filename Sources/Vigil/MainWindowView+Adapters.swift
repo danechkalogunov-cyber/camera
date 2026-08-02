@@ -166,12 +166,30 @@ extension MainWindowView {
             session.telemetry.noteDecodeQueueDepth(session.backlog.takePeak())
             session.telemetry.tick(at: now)
             telemetry = session.telemetry.telemetry(at: now)
+            sampleProcessResources()
             do {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             } catch {
                 return
             }
         }
+    }
+
+    /// Reads this process's CPU and memory, and logs them once a minute.
+    ///
+    /// **Once a minute, not once a second.** The sample is taken every second because CPU is a
+    /// difference and needs a short interval to mean anything; the *log line* is rare because sixty
+    /// of them a minute would push everything else out of a field capture, and the whole reason
+    /// this exists is to be readable in a log somebody sends back.
+    ///
+    /// Logged at `.info` on the `perf` category so `Scripts/run.sh --category perf` shows the
+    /// resource trace and nothing else.
+    private func sampleProcessResources() {
+        guard let sample = resources.sampler.sample() else { return }
+        resources.latest = sample
+        resources.ticks &+= 1
+        guard resources.ticks % 60 == 0 else { return }
+        session.dependencies.logger.info(.perf, "process: \(sample.label)")
     }
 
     /// Refreshes the sidebar's thumbnail from the camera every few seconds.
