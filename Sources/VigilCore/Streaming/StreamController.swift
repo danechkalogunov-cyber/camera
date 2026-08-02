@@ -298,32 +298,6 @@ public actor StreamController: Identifiable {
         start()
     }
 
-    /// Repositions archive playback inside the session that is already open.
-    ///
-    /// **Why this exists, in measured numbers.** A seek used to be a whole new RTSP session —
-    /// connect, `OPTIONS`, `DESCRIBE`, the 401, `DESCRIBE` again, `SETUP`, `PLAY`. On a DS-I256 that
-    /// cost 1.9 s, and `docs/PLAYBACK-LATENCY.md` has the per-request split: the authenticated
-    /// `DESCRIBE` alone is ~580 ms, because the camera opens the recording in order to describe it,
-    /// and `SETUP` another ~55 ms. Sending `PLAY` with a new `Range:` on the open session skips all
-    /// of it and lands near 1.25 s.
-    ///
-    /// ⚠️ WHAT IT CANNOT SAVE, so nobody expects more of it than it can give: `PLAY` itself is
-    /// ~870 ms on that device and the first keyframe another ~350 ms. Those are the camera seeking
-    /// and then encoding, they are 64 % of the wait, and no client-side change touches either.
-    ///
-    /// - Returns: `false` when there is no session to reposition — no session at all, or one that
-    ///   is not playing — in which case the caller must fall back to rebuilding it. `true` means
-    ///   only that the command was handed over: RTSP answers on `events()`, so a camera that
-    ///   ignores `Range:` on a session opened with `?starttime=` shows up as no new frames rather
-    ///   than as an error here. The caller owns that timeout, because only the caller knows what it
-    ///   was expecting to see.
-    public func seekWithinSession(toRange rangeText: String) async -> Bool {
-        guard let session, currentState == .playing else { return false }
-        logger.info(.core, "seeking inside the open session", ["range": rangeText])
-        await session.perform(.play(rangeText: rangeText))
-        return true
-    }
-
     /// Stops handing frames to the sink without dropping the session: RTSP and its keepalives stay
     /// up, and frames are discarded rather than queued.
     ///
