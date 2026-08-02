@@ -126,28 +126,44 @@ def blank_comments_and_strings(text: str) -> str:
         if text[index:index + 3] == '"""':
             index += 3
             while index < count and text[index:index + 3] != '"""':
-                if text[index] != "\n":
-                    out[index] = " "
-                index += 1
+                index = _blank_string_byte(text, out, index)
             index += 3
             continue
         if char == '"':
             index += 1
             while index < count and text[index] != '"':
-                if text[index] == "\\":
-                    out[index] = " "
-                    index += 1
-                    if index < count and text[index] != "\n":
-                        out[index] = " "
-                        index += 1
-                    continue
-                if text[index] != "\n":
-                    out[index] = " "
-                index += 1
+                index = _blank_string_byte(text, out, index)
             index += 1
             continue
         index += 1
     return "".join(out)
+
+
+def _blank_string_byte(text: str, out: list[str], index: int) -> int:
+    """Blanks one byte of a string literal, and returns the next index to look at.
+
+    ⛔ An interpolation is left **intact**, contents and delimiters both. `"\\(Self.prefix)v"` is a
+    real use of `prefix`, and blanking it is what hid eleven of them from `check_split_file_access`
+    the first time that rule was written. Keeping the parentheses also keeps them balanced, so the
+    argument-order scanner's depth counting is unaffected — and a comma inside an interpolation sits
+    at least one level deeper than the call's own arguments, so it cannot split a segment either.
+    """
+    if text[index] == "\\" and text[index + 1:index + 2] == "(":
+        depth, i = 0, index + 1
+        while i < len(text):
+            depth += (text[i] == "(") - (text[i] == ")")
+            i += 1
+            if depth == 0:
+                return i
+        return i
+    if text[index] == "\\":
+        out[index] = " "
+        if index + 1 < len(text) and text[index + 1] != "\n":
+            out[index + 1] = " "
+        return index + 2
+    if text[index] != "\n":
+        out[index] = " "
+    return index + 1
 
 
 def check_imports(path: pathlib.Path, lines: list[str]) -> list[Violation]:
@@ -612,6 +628,25 @@ def check_split_file_access() -> list[Violation]:
     for path in swift_files("Sources"):
         groups[path.parent][path.stem.split("+")[0]].append(path)
 
+    # ⛔ The filename is not the only way a type gets split, and assuming it was is how this rule
+    # missed a real one. `sheetBody` moved from `MainWindowView.swift` into an
+    # `extension MainWindowView` inside `WindowSheets.swift` — a perfectly ordinary place to put it,
+    # and a different stem — so the two halves landed in different groups, `renameCamera` stayed
+    # `private`, and the Mac build failed on a file this check had just declared clean.
+    #
+    # Every file that *extends* a type now joins that type's group as well, whatever it is called.
+    # Grouping stays per-directory, matching the original: two same-named types in different
+    # modules are different types, and merging them would invent cross-module violations.
+    extension_decl = re.compile(r"^extension\s+([A-Z]\w*)")
+    for path in swift_files("Sources"):
+        extended = {m.group(1) for m in
+                    (extension_decl.match(raw) for raw in path.read_text().splitlines())
+                    if m is not None}
+        for name in extended:
+            bucket = groups[path.parent][name]
+            if path not in bucket:
+                bucket.append(path)
+
     # A type-level member: four spaces of indent, any attributes, any access level.
     ACCESS = r"(?:public\s+|package\s+|open\s+|internal\s+)?"
     MODIFIERS = (r"(?:static\s+|class\s+|final\s+|mutating\s+|nonmutating\s+|nonisolated\s+"
@@ -631,18 +666,21 @@ def check_split_file_access() -> list[Violation]:
         + MODIFIERS + r"(?:(" + KIND + r")|case)\s+(\w+)")
 
     def stripped(path: pathlib.Path) -> str:
-        """The file with comments gone and string *literals* blanked — but interpolations kept.
+        """The file with comments gone and string literals blanked — interpolations kept.
 
-        A literal with an interpolation in it contains real code: `"\(Self.premigrationPrefix)v"`
-        is a use of `premigrationPrefix`, and blanking the whole literal is what hid it. Those are
-        left intact — a stray word inside one can only ever cost a false alarm, and the balance
-        this rule needs is the other way round.
+        ⛔ This used to do it with one regex, `"(?:[^"\\\\]|\\\\.)*"`, and that regex cannot see a
+        multi-line literal. On `\"\"\"`, it matches the first two quotes as an empty string and then
+        opens a literal at the third that runs to the next quote **anywhere in the file** — which in
+        `WindowSheets.swift` swallowed several hundred lines including every reference inside
+        `sheetBody`. The rule then reported the file clean while the Mac build failed on
+        `'renameCamera' is inaccessible due to 'private' protection level`, which is the exact error
+        this check exists to prevent.
+
+        It now shares `blank_comments_and_strings` with the argument-order scanner, which handles
+        `//`, nested `/* */`, `\"\"\"` and `"` properly and preserves length — the same defect class,
+        found twice in one day in two rules that each rolled their own parser.
         """
-        body = "\n".join("" if l.lstrip().startswith("//") else l
-                         for l in path.read_text().splitlines())
-        return re.sub(r'"(?:[^"\\]|\\.)*"',
-                      lambda m: m.group(0) if r"\(" in m.group(0) else '""',
-                      body)
+        return blank_comments_and_strings(path.read_text())
 
     def key_of(kind: str, name: str, rest: str) -> str:
         """A member's identity for shadowing purposes.

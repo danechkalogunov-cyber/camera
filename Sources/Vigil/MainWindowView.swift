@@ -341,7 +341,12 @@ struct MainWindowView: View {
     /// and back brought the old name onto the live row too. That is the tail of the "renamed camera
     /// does not stick" report — `rememberThisCamera`'s merge fixed the half that `UserDefaults`
     /// owned, and this is the half the library owns.
-    private func renameCamera(to name: String) {
+    /// ⚠️ `internal`, not `private`, because `sheetBody` calls it from `WindowSheets.swift`. Swift
+    /// scopes `private` to a *file*, not to a type, so a member a sibling extension needs cannot be
+    /// private however local it looks. That is the same rule every `MainWindowView+…` file's header
+    /// states — and moving this function's one caller out of this file is exactly what turned the
+    /// rule from documentation into a build error.
+    func renameCamera(to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let id = session.camera?.id else { return }
         session.camera?.name = trimmed
