@@ -133,6 +133,40 @@ it.
 * Choosing a row must **only** fill in the address. If Vigil connects without you typing a password,
   that is a failure severe enough to stop the run.
 
+### 3.5 Zero egress — what it means now that a scan runs at launch
+
+`FEATURES.md` §20.3 says "no telemetry", and enforces it with "a test asserting **zero** network
+connections with no cameras configured". That sentence was written before Vigil scanned on launch,
+and taken literally it is now false: with no cameras configured, Vigil opens LAN sockets the moment
+the window appears. R1 requires exactly that.
+
+⚠️ Read as intent, not as wording, the requirement is unchanged and this build still meets it. The
+claim §20.3 exists to make is **no traffic to the internet, ever** — no analytics, no crash
+reporter, no usage ping, no update check. `HostPolicy` makes it a code property rather than a
+promise: `.publicInternet` and `.invalid` are refused before a socket is created, in
+`VigilTransport`, `VigilISAPI` and `VigilDiscovery` alike.
+
+So the check is not "zero packets", it is "zero packets that leave the LAN":
+
+```
+sudo tcpdump -i any -n 'not net 10.0.0.0/8 and not net 172.16.0.0/12 \
+    and not net 192.168.0.0/16 and not net 169.254.0.0/16 \
+    and not net 224.0.0.0/4 and not host 127.0.0.1'
+```
+
+Launch Vigil with no cameras configured, let the scan run to its deadline, and leave it sitting on
+the connect form for ten minutes.
+
+**Pass:** nothing from Vigil. DNS for something else on the Mac is not Vigil's traffic — check the
+process with `lsof -i` before recording a failure.
+
+**Fail:** any packet at all. That is a defect regardless of where it went or what it carried, and it
+is the one failure in this document that should stop a release rather than be filed.
+
+*Wording to fix in the specs, not in the code: §20.3 and API_CONTRACT §8.2 should say "zero egress
+beyond the local network" rather than "zero network connections". The code is right; the sentence
+predates the feature.*
+
 ---
 
 ## 4. Recording
