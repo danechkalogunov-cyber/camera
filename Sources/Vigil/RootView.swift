@@ -57,6 +57,13 @@ struct RootView: View {
     /// the moment it has an answer.
     @State private var autoScan: DiscoveryScanModel?
 
+    /// The system's *Reduce motion* switch.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The system's *Prefer cross-fade transitions* switch, which DESIGN.md §7.10 treats the same
+    /// way: it is the setting for people who want movement replaced rather than merely damped.
+    @Environment(\.accessibilityPrefersCrossFadeTransitions) private var prefersCrossFade
+
     // MARK: - Body
 
     var body: some View {
@@ -68,6 +75,18 @@ struct RootView: View {
 
             content
         }
+        // ⛔ Twenty-one views read `\.vMotionEnabled` and, until this line, exactly one published
+        // it — `VInspectorView`, for its own subtree. Everywhere else the key fell back to its
+        // default of `true`, so the stage's staggered entrance, the tile hover, the sidebar rows,
+        // the timeline and the skeleton shimmer all animated with *Reduce motion* switched on.
+        // Every one of those call sites was already written correctly, passing `!motionEnabled` to
+        // `VTheme.Motion.resolved`; the value they were reading was simply never connected to the
+        // system setting. Published at the root so the connect form is covered too.
+        //
+        // ⚠️ Not the whole of §7.10: the motion governor's T3 tier also has to be able to force
+        // this off under thermal or dropped-frame pressure, and `VMotionGovernor` is unwritten. When
+        // it lands it ANDs into this expression rather than replacing it.
+        .vMotionEnabled(!reduceMotion && !prefersCrossFade)
         .background(WindowChromeInstaller())
         .task {
             // One attempt, at window appearance: if a previous run reached a picture, this goes

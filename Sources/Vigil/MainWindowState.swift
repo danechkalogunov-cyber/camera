@@ -51,6 +51,27 @@ final class MainWindowState {
     /// is the cheapest way to exercise them against a real window.
     var layout: VGridLayout = .single
 
+    /// The stage cell keyboard focus is on, or `nil` before the stage has been used.
+    ///
+    /// ⛔ The stage has always *had* this — `VGridStageView.focusedIndex` and the whole ⌥-arrow
+    /// navigator in `GridNavigation.swift` were written and tested against it — and the window never
+    /// supplied one. Held at `nil` forever, the focus ring never drew, `⌫` and `⏎` acted on
+    /// `plan.firstIndex` whatever the user had arrowed to, and every ⌥-arrow took the "focus becomes
+    /// visible" branch and then had nowhere to put it. UX.md §5.7 is explicit that focus is always
+    /// visible once the stage has been used; this is the value that makes it so.
+    var stageFocusIndex: Int?
+
+    /// How far the stage is displaced by a bump, and in which direction.
+    ///
+    /// ⌥-arrow at the edge of the grid does not wrap (UX.md §5.7 gives the reason: an operator
+    /// scanning a row expects it to stop). What it does instead is a 3 pt nudge, and this is it.
+    ///
+    /// ⚠️ An **offset**, deliberately, and not a change to any tile's frame. DESIGN.md §7.9 forbids
+    /// animating a video well's geometry because a bounds change re-allocates the layer's IOSurface
+    /// every display frame; a translation is a compositor transform and does neither. It is also why
+    /// the nudge is applied to the stage as a whole rather than to the tile that could not move.
+    var stageBumpOffset: CGSize = .zero
+
     /// Free-text filter over the camera list, bound to the toolbar's search field.
     var searchText = ""
 

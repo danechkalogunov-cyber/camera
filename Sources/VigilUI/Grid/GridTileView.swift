@@ -215,10 +215,34 @@ package struct VGridTileView<Video: View>: View {
     @ViewBuilder
     private var actionBar: some View {
         if showsOverlay, hasRoomForActions, isHovering || isFocused {
-            VTileActionBar(isRecording: isRecording, actions: tileActions)
+            VTileActionBar(isRecording: isRecording, actions: barActions)
                 .padding(VTheme.Metrics.tileChromeInset)
                 .transition(.opacity)
         }
+    }
+
+    /// The environment's actions, with Close rebound to **this** tile.
+    ///
+    /// ⛔ Without this, ``onClose`` was a stored property nobody read. `VTileActions` is one bag
+    /// published for the whole stage, so its `perform` cannot know which cell was pressed — and the
+    /// cell index is the entire content of "close this one". `VGridStageView` already builds
+    /// `onClose` per slot; overriding the single case here is what connects the two. Every other
+    /// action stays stage-wide, because every other action is about the camera rather than the cell.
+    ///
+    /// The button is still drawn dimmed unless the app puts `.close` in `enabled`: rebinding what a
+    /// button does is not the same as claiming it can be pressed.
+    private var barActions: VTileActions {
+        var actions = tileActions
+        let stageWide = actions.perform
+        let close = onClose
+        actions.perform = { action in
+            guard action == .close else {
+                stageWide(action)
+                return
+            }
+            close()
+        }
+        return actions
     }
 
     /// Whether the tile is wide enough to carry the button row.

@@ -96,6 +96,13 @@ struct MainWindowView: View {
     /// sit frozen. Ticking only while recording keeps the window idle the rest of the time.
     @State var recordingTick = Date()
 
+    /// Whether decorative motion is allowed, which is `!reduceMotion` resolved by `VigilUI`.
+    ///
+    /// Read here rather than inside the stage because the one thing the window animates on its own
+    /// — the ⌥-arrow bump of §5.7 — is decided in `MainWindowView+Sidebar.swift`, outside any view
+    /// body that could read it for itself.
+    @Environment(\.vMotionEnabled) var motionEnabled
+
     /// The last telemetry snapshot, refreshed once a second while the window is up.
     ///
     /// Pulled rather than pushed: the collector is lock-guarded and lives off the main actor, and a

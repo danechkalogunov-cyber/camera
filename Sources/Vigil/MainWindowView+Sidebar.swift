@@ -122,6 +122,66 @@ extension MainWindowView {
         session.form.clearDiagnosis()
     }
 
+    /// Clears the stage's cell: the stream stops and the window goes back to the connect form.
+    ///
+    /// **Honest now, and it was not before.** Close has been drawn dimmed since the tile was
+    /// written, for the reason ``tileActions`` still records: the session resumed exactly one
+    /// remembered connection, so closing the only cell left the user with nothing on screen and no
+    /// way back but retyping the address. The library changed that fact — the camera is a row in the
+    /// list, and one click on it reconnects — so the button now does what its glyph says.
+    ///
+    /// Focus goes with the tile. Leaving `stageFocusIndex` pointing at a cell that no longer holds a
+    /// camera would draw the ring around an "Add camera" placeholder the user never navigated to.
+    func closeStageCell() {
+        window.stageFocusIndex = nil
+        session.disconnect()
+    }
+
+    /// Shows the cameras the current layout could not fit.
+    ///
+    /// ⚠️ The sidebar, not a popover, and UX.md §5.1 asks for the popover. The list is where every
+    /// camera is already named, addressed and clickable, and building a second surface that lists
+    /// the same rows would be a duplicate to keep in step for no gain until the stage runs more than
+    /// one stream. The search box is cleared on the way, because an overflow the user cannot see in
+    /// the list they were just sent to is not an answer.
+    ///
+    /// ⛔ Unreachable in this build, and wired anyway. `stageAssignment` puts exactly one camera on
+    /// the stage, so `VStagePlan.overflowCount` is always zero and the `+3` chip never draws. This
+    /// is the contract the chip will call when it does, and leaving it as the empty default is how
+    /// the other seventeen callbacks in this window came to be silently inert.
+    func showOverflowCameras() {
+        window.isSidebarVisible = true
+        window.searchText = ""
+    }
+
+    /// Plays the 3 pt nudge when an ⌥-arrow runs out of grid (UX.md §5.7).
+    ///
+    /// Movement does not wrap — `VGridNavigator` returns `nil` at the edge and deliberately leaves
+    /// the key event unconsumed, so focus can still travel on to the sidebar or the inspector. The
+    /// nudge is the only feedback that the *stage* saw the press and had nowhere to go, and without
+    /// it `⌥→` on the trailing column is indistinguishable from a key that did not register.
+    ///
+    /// Nothing at all when motion is reduced. §7.10 rule 2 replaces decorative motion with a
+    /// cross-fade, and there is nothing here to cross-fade: a displacement *is* the whole effect.
+    func bumpStage(_ direction: VGridDirection) {
+        guard motionEnabled else { return }
+        let distance = CGFloat(direction.sign) * Self.stageBumpDistance
+        let offset = direction.isHorizontal
+            ? CGSize(width: distance, height: 0)
+            : CGSize(width: 0, height: distance)
+        withAnimation(VTheme.Motion.micro) { window.stageBumpOffset = offset }
+        Task {
+            // The dwell at full displacement, not the animation's duration: `Motion.micro` is a
+            // spring and settles on its own. Sleeping for less would start the return before the
+            // stage had visibly moved, which reads as a flicker rather than as a bump.
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation(VTheme.Motion.micro) { window.stageBumpOffset = .zero }
+        }
+    }
+
+    /// How far the stage travels on a bump. UX.md §5.7 fixes it at 3 pt.
+    static let stageBumpDistance: CGFloat = 3
+
     /// Moves the focused camera one row up or down the *visible* list.
     ///
     /// Visible and not library order: a search or a collapsed device changes what ↓ should reach,
@@ -140,14 +200,17 @@ extension MainWindowView {
 
     /// What the tile's seven hover buttons do (UX.md §5.3).
     ///
-    /// Only the five this build can honour are enabled. Mute has no audio path — `VigilVideo`'s
-    /// whole `Audio/` directory is unwritten — and Close would leave the window with nothing and no
-    /// way back but retyping the address, since the session resumes exactly one camera. Both stay
-    /// in the row, dimmed, because §5.3 fixes the order and a row that changes shape between
-    /// cameras is a row nobody can learn.
+    /// Only the six this build can honour are enabled. Mute is the one that stays dimmed: there is
+    /// no audio path at all — `VigilVideo`'s whole `Audio/` directory is unwritten — so the button
+    /// would be lying about a stream that has no sound to mute. It stays in the row rather than
+    /// being removed, because §5.3 fixes the order and a row that changes shape between cameras is a
+    /// row nobody can learn.
+    ///
+    /// Close joined the enabled set once the camera library existed; ``closeStageCell()`` records
+    /// why it could not before.
     var tileActions: VTileActions {
         var actions = VTileActions()
-        actions.enabled = [.snapshot, .record, .ptz, .quality, .fit, .timeline]
+        actions.enabled = [.snapshot, .record, .ptz, .quality, .fit, .timeline, .close]
         actions.isFilled = window.fillsTile
         actions.perform = { action in
             switch action {
@@ -163,7 +226,14 @@ extension MainWindowView {
                 // grid would be a control for a camera the user has not said they are looking at.
                 focusCamera(cameraID)
                 window.showsTimeline = true
-            case .mute, .close:
+            case .close:
+                // ⚠️ Reached only if a tile is drawn without going through `VGridStageView` — the
+                // stage rebinds this case to its own per-cell `onClose` (see `GridTileView`'s
+                // `barActions`), because the stage-wide bag cannot say *which* cell was pressed.
+                // Same destination either way, and it will stop being the same one the moment a
+                // second stream exists.
+                closeStageCell()
+            case .mute:
                 break
             }
         }

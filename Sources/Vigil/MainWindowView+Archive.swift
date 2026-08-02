@@ -249,7 +249,13 @@ extension MainWindowView {
     /// every callback and the logger are named explicitly, because each one has a default that
     /// compiles and reports nothing, which is the "no video, no error" shape this project refuses.
     var stage: some View {
-        stageGrid.overlay(alignment: .bottom) { timelineOverlay }
+        stageGrid
+            // The bump of UX.md §5.7, applied to the whole grid rather than to the tile that could
+            // not move — see `MainWindowState.stageBumpOffset` for why it is a translation and not a
+            // frame change. The scrubber below is deliberately outside it: a control that slid 3 pt
+            // sideways because focus hit the edge of the grid would read as a glitch.
+            .offset(window.stageBumpOffset)
+            .overlay(alignment: .bottom) { timelineOverlay }
     }
 
     /// The scrubber over the bottom edge, once it has been asked for.
@@ -313,10 +319,12 @@ extension MainWindowView {
         VGridStageView(assignment: stageAssignment,
                        cameras: stageCameras,
                        selection: cameraID,
+                       focusedIndex: window.stageFocusIndex,
                        // Keyboard focus moving between cells binds the sidebar and the inspector
                        // to whatever it lands on, which is what makes ⌥-arrow useful rather than
                        // decorative. One cell today; the mapping is the same at sixteen.
                        onFocusCell: { index in
+                           window.stageFocusIndex = index
                            // `cells` is one optional per cell; an empty one selects nothing rather
                            // than clearing what is selected, because arrowing across a gap should
                            // not deselect the camera you came from.
@@ -324,13 +332,16 @@ extension MainWindowView {
                            guard cells.indices.contains(index), let id = cells[index] else { return }
                            window.sidebarSelection.select(.camera(id))
                        },
+                       onBump: { direction in bumpStage(direction) },
                        // Selecting a tile is selecting that camera everywhere else.
                        onSelectCamera: { id in window.sidebarSelection.select(.camera(id)) },
                        onToggleFullscreen: { id in focusCamera(id) },
                        // The empty cell's "+" is the same act as the sidebar's.
                        onAddCamera: { _ in addCamera() },
+                       onCloseCell: { _ in closeStageCell() },
                        onRetry: { _ in session.perform(.retry) },
                        onRemedy: { _, remedy in session.perform(remedy) },
+                       onShowOverflow: { showOverflowCameras() },
                        video: { _ in
                            VideoTile(cameraID: cameraID,
                                      frames: session.frames,
