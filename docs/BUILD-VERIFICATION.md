@@ -361,6 +361,42 @@ expectation, and every time it was loosened-by-instinct the underlying bug would
 three for three. If it fires again, the residual window named in defect 13 is the first suspect, and
 the fix for that is an absolute `sleep(until:)` rather than a wider tolerance.
 
+#### 2026-08-02: it fired again, and the diagnosis moved
+
+`sleep(until:)` exists now, and `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` failed on
+Linux anyway — on a commit whose whole diff was macOS-only files, so nothing in it can have caused
+this. The signature is **different from defect 13's and that difference is the finding**:
+
+```
+wsdProbes → [10 ms, 550 ms, 1010 ms]   expected [10, 510, 1010]
+```
+
+One probe adrift, on one of the two channels, by exactly the script's 40 ms answer delay — where
+defect 13 shifted *every* probe on *both* channels uniformly. A uniform shift is a deadline computed
+against a stale reading; a single displaced sample is not. The first and third probes landing exactly
+on their deadlines proves the registration window defect 13 named is closed.
+
+What is left is the window **after** the wake, not before the registration:
+
+1. The pump resumes the sleeper due at 510 ms and holds `pendingWakes` so it cannot advance.
+2. The woken task returns from `sleep(untilRegistered:)`, whose `defer` clears that wake at once.
+3. The task then has to reach `channel.send`, which is an actor hop, and the send is what stamps
+   `clock.now()`.
+4. In that hop the task touches no clock. Eight quiet checks — about 2 ms of real time — are enough
+   on a loaded runner, so the pump concludes quiescence and advances to the next deadline, 550 ms,
+   which is the scripted SADP answer at 510 + 40. The send is then stamped 550.
+
+⛔ The two obvious levers are both known-bad. Raising `quietChecks` is the change that was made and
+reverted — it broke `discoveryCoordinatorStreamTerminationCancelsTheRun` on *both* platforms, because
+the pump and `DiscoveryTestBed.run`'s settle loop are coupled through real time. Widening the
+assertion buries the next real defect, three for three.
+
+The fix remains a deterministic scheduler: a pump that knows whether a task is *runnable*, rather
+than one inferring it from a counter. Swift's runtime exposes no such signal, so this means driving
+the run through a custom executor and advancing only when that executor's queue is empty. Nothing
+smaller than that removes the class, and this entry exists so the next person does not spend the
+afternoon re-tuning two constants that cannot fix it.
+
 Splitting these suites into their own non-parallel invocation is also worse than it looks: a
 `--filter` typo runs nothing at all and reports success, which is a green CI that tests nothing.
 

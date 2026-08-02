@@ -256,6 +256,14 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     /// The timetable flake is still open and is documented in docs/BUILD-VERIFICATION.md; the fix
     /// for it is a deterministic scheduler, not a more patient one.
     ///
+    /// ⚠️ 2026-08-02: it fired again with `sleep(until:)` in place, and the *shape* changed — one
+    /// probe adrift on one channel, `[10, 550, 1010]`, where the old defect shifted every probe on
+    /// both channels uniformly. That rules out the pre-registration window and locates the remaining
+    /// one **after** the wake: `sleep(untilRegistered:)`'s `defer` clears the pending wake the
+    /// instant the task resumes, and the task then needs an actor hop to reach `channel.send` — the
+    /// call that stamps the time. It touches no clock in that hop, so eight quiet checks elapse and
+    /// this pump advances out from under it. See docs/BUILD-VERIFICATION.md for the full trace.
+    ///
     /// ⛔ Nor should the nanosecond assertion be loosened instead. On a virtual clock exact is the
     /// correct expectation; three separate times this session a timing failure that looked like
     /// noise turned out to be a real defect, and a tolerance would have buried every one.

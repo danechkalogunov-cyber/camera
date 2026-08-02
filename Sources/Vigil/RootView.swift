@@ -58,11 +58,14 @@ struct RootView: View {
     @State private var autoScan: DiscoveryScanModel?
 
     /// The system's *Reduce motion* switch.
+    ///
+    /// ⚠️ The only half of DESIGN.md §7.10's rule that macOS offers. `\.accessibilityPrefers`
+    /// `CrossFadeTransitions` is iOS, tvOS and watchOS only — SwiftUI does not declare it for macOS,
+    /// and asking for it does not fail to resolve, it fails to *compile*: the key path cannot be
+    /// typed, so `@Environment` falls through to its `Observable` object overload and the error
+    /// arrives as "no exact matches in call to initializer". Written here because the omission looks
+    /// like an oversight otherwise, and the next reader would add it back.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// The system's *Prefer cross-fade transitions* switch, which DESIGN.md §7.10 treats the same
-    /// way: it is the setting for people who want movement replaced rather than merely damped.
-    @Environment(\.accessibilityPrefersCrossFadeTransitions) private var prefersCrossFade
 
     // MARK: - Body
 
@@ -86,7 +89,7 @@ struct RootView: View {
         // ⚠️ Not the whole of §7.10: the motion governor's T3 tier also has to be able to force
         // this off under thermal or dropped-frame pressure, and `VMotionGovernor` is unwritten. When
         // it lands it ANDs into this expression rather than replacing it.
-        .vMotionEnabled(!reduceMotion && !prefersCrossFade)
+        .vMotionEnabled(!reduceMotion)
         .background(WindowChromeInstaller())
         .task {
             // One attempt, at window appearance: if a previous run reached a picture, this goes

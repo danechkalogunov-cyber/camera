@@ -446,9 +446,9 @@ struct MainWindowView: View {
                          }
                      },
                      onAddGroup: { window.sheet = .newGroup },
+                     onAddCamera: { addCamera() },
                      // The gear in the sidebar footer drew itself and answered to nothing.
                      onOpenSettings: { window.sheet = .cameraSettings },
-                     onAddCamera: { addCamera() },
                      onClearSearch: { window.searchText = "" },
                      cameraMenu: { camera in cameraMenu(camera) },
                      groupMenu: { group in groupMenu(group) },

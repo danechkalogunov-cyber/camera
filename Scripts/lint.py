@@ -67,6 +67,88 @@ def strip_comments_and_strings(line: str) -> str:
     return line[:idx] if idx >= 0 else line
 
 
+def blank_comments_and_strings(text: str) -> str:
+    """`text` with every comment and string-literal body replaced by spaces, **same length**.
+
+    ⛔ The length and the newlines are the point. Anything that scans by offset — the parenthesis
+    walker below, and the line number it reports — has to be able to run on the blanked copy and
+    still describe the original. Truncating, as ``strip_comments_and_strings`` does per line, would
+    make every offset past the first comment wrong.
+
+    Why it had to exist: ``check_argument_order`` split a call's parentheses on commas and matched
+    each segment against ``ARG_LABEL``, which anchors at `^\\s*`. A call site written like
+
+        onAddGroup: { … },
+        // The gear in the sidebar footer drew itself and answered to nothing.
+        onOpenSettings: { … },
+
+    puts a comment at the head of the `onOpenSettings` segment, the anchor fails on `/`, and the
+    label is dropped **in silence**. The remaining labels were still a subset of the declared order
+    and still in order, so the call passed — and the argument-order error it was written to catch
+    shipped and broke the Mac build for four commits. This project comments its call sites heavily,
+    so the check was blind precisely where it was needed.
+
+    Blanking string bodies fixes a second latent version of the same defect: a `(` or a `,` inside a
+    literal moved the walker's depth and split segments in the wrong places.
+    """
+    out = list(text)
+    index, count = 0, len(text)
+    while index < count:
+        char = text[index]
+        pair = text[index:index + 2]
+        if pair == "//":
+            while index < count and text[index] != "\n":
+                out[index] = " "
+                index += 1
+            continue
+        if pair == "/*":
+            # Swift nests block comments, so this counts rather than searching for the first `*/`.
+            depth = 0
+            while index < count:
+                here = text[index:index + 2]
+                if here == "/*":
+                    depth += 1
+                    out[index] = out[index + 1] = " "
+                    index += 2
+                    continue
+                if here == "*/":
+                    depth -= 1
+                    out[index] = out[index + 1] = " "
+                    index += 2
+                    if depth == 0:
+                        break
+                    continue
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            continue
+        if text[index:index + 3] == '"""':
+            index += 3
+            while index < count and text[index:index + 3] != '"""':
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            index += 3
+            continue
+        if char == '"':
+            index += 1
+            while index < count and text[index] != '"':
+                if text[index] == "\\":
+                    out[index] = " "
+                    index += 1
+                    if index < count and text[index] != "\n":
+                        out[index] = " "
+                        index += 1
+                    continue
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            index += 1
+            continue
+        index += 1
+    return "".join(out)
+
+
 def check_imports(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     out: list[Violation] = []
     target = target_of(path)
@@ -360,7 +442,9 @@ def declared_initialiser_labels() -> dict[str, list[list[str]]]:
     """
     out: dict[str, list[list[str]]] = {}
     for path in swift_files("Sources"):
-        text = path.read_text()
+        # Blanked, not raw: a doc comment between two parameters would otherwise swallow the one
+        # after it, and a declared order short of a label stops being a superset of the call's.
+        text = blank_comments_and_strings(path.read_text())
         lines = text.split("\n")
         stack: list[tuple[str, int]] = []
         depth = 0
@@ -397,6 +481,11 @@ def check_argument_order(path: pathlib.Path, text: str,
     """
     out: list[Violation] = []
     rel = str(path.relative_to(ROOT))
+    # ⛔ Blanked before scanning. See ``blank_comments_and_strings`` — a comment line in front of an
+    # argument used to make that argument invisible to this check, which is how the one build-breaker
+    # it exists to catch got past it. Blanking preserves length, so `match.start()` still counts the
+    # right number of newlines for the reported line number.
+    text = blank_comments_and_strings(text)
     for match in CALL_START.finditer(text):
         name = match.group(1)
         orders = declared.get(name)
