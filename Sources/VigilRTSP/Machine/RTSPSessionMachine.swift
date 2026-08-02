@@ -107,6 +107,11 @@ public struct RTSPSessionMachine: Sendable {
         self.decoder = RTSPWireDecoder(limits: config.decoderLimits)
         self.aggregateURI = config.url.requestLineForm
         self.sessionTimeout = config.defaultSessionTimeout
+        // Seeded, not defaulted: `sendPlay` reads these, and the handshake's own PLAY is the only
+        // one some firmware honours (see `RTSPSessionConfig.initialScale`). A later
+        // `.play(scale:)` still overrides them, so nothing here closes that door.
+        self.requestedScale = config.initialScale
+        self.requestedDisableRateControl = config.initialDisableRateControl
         _ = now
     }
 

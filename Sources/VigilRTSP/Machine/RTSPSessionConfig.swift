@@ -75,6 +75,27 @@ public struct RTSPSessionConfig: Sendable {
     /// Hard cap on tracks to negotiate, whatever the SDP offers.
     public var maxTracks = 4
 
+    // MARK: Initial PLAY
+
+    /// The `Scale:` the handshake's own `PLAY` carries, or `nil` for normal speed.
+    ///
+    /// ⚠️ SET HERE RATHER THAN SENT LATER, AND THAT IS A FINDING, NOT A PREFERENCE. A second `PLAY`
+    /// on an established session is the textbook way to change speed, and `perform(.play(scale:))`
+    /// can send one — but a DS-I256 on V5.5.6 refuses a second `PLAY` outright, which is what
+    /// `docs/PLAYBACK-LATENCY.md` records after in-session seeking was tried on hardware and
+    /// reverted. The handshake's `PLAY` is the one this firmware honours, so a speed change is a
+    /// reconnect carrying the new scale, and that costs a seek's worth of latency by design.
+    ///
+    /// Negative values mean reverse playback. `RTSPScale.serialized` writes the wire form.
+    public var initialScale: Double?
+
+    /// Whether the handshake's `PLAY` asks the device to stop pacing (`Rate-Control: no`).
+    ///
+    /// Wanted above 2×: a camera that keeps pacing at wall-clock speed delivers an 8× request as
+    /// eight seconds of video per eight seconds, which is not fast-forward. Off at normal speed,
+    /// where pacing is exactly what is wanted.
+    public var initialDisableRateControl = false
+
     // MARK: Timeouts
 
     /// How long a request may go unanswered.

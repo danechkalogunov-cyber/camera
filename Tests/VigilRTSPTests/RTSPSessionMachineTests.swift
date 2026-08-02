@@ -21,9 +21,12 @@ private struct Harness {
     var now = MediaInstant.zero
     private(set) var actions: [RTSPAction] = []
 
-    init(setupAudio: Bool = false, credential: Credential? = nil) {
+    init(setupAudio: Bool = false, credential: Credential? = nil,
+         initialScale: Double? = nil, initialDisableRateControl: Bool = false) {
         var config = RTSPSessionConfig(url: Harness.cameraURL)
         config.setupAudio = setupAudio
+        config.initialScale = initialScale
+        config.initialDisableRateControl = initialDisableRateControl
         machine = RTSPSessionMachine(config: config,
                                      credential: credential,
                                      random: SplitMix64RandomSource(seed: 0xC0FFEE),
@@ -245,6 +248,47 @@ private enum Server {
         #expect(harness.clientStream.contains("Accept: application/sdp"))
         #expect(harness.clientStream.contains("Range: npt=0.000-"))
         #expect(harness.clientStream.contains("Session: 1885573958"))
+        // Normal speed sends neither header. `Scale: 1.0` is legal and redundant, and firmware that
+        // treats its presence as "this is a trick-play session" exists.
+        #expect(!harness.clientStream.contains("Scale:"))
+        #expect(!harness.clientStream.contains("Rate-Control:"))
+    }
+
+    /// The handshake's own `PLAY` carries the speed, because on some firmware it is the only `PLAY`
+    /// that will be honoured.
+    ///
+    /// A second `PLAY` on an established session is the textbook way to change speed and this
+    /// machine can send one — but a DS-I256 on V5.5.6 refuses a second `PLAY` outright, which
+    /// docs/PLAYBACK-LATENCY.md records after in-session seeking was tried on hardware and
+    /// reverted. So a speed change is a reconnect that seeds the scale into the handshake, and this
+    /// is the test that the seeding reaches the wire.
+    @Test func sessionMachineCarriesTheConfiguredScaleOnTheHandshakePlay() throws {
+        var harness = Harness(initialScale: 8, initialDisableRateControl: true)
+
+        harness.send(.start)
+        harness.feed(Server.options(cseq: 1))
+        harness.feed(Server.describe(cseq: 2))
+        harness.feed(Server.setup(cseq: 3))
+
+        #expect(harness.clientStream.contains("Scale: 8"))
+        // Above 2x this is the difference between fast-forward and eight seconds of video per
+        // eight seconds: without it the camera keeps pacing at wall-clock speed.
+        #expect(harness.clientStream.contains("Rate-Control: no"))
+        #expect(harness.machine.state == .awaitingPlay)
+    }
+
+    /// Reverse playback is a negative scale, and nothing else changes.
+    @Test func sessionMachineSerialisesAReverseScale() throws {
+        var harness = Harness(initialScale: -2)
+
+        harness.send(.start)
+        harness.feed(Server.options(cseq: 1))
+        harness.feed(Server.describe(cseq: 2))
+        harness.feed(Server.setup(cseq: 3))
+
+        #expect(harness.clientStream.contains("Scale: -2"))
+        // Not requested, so not sent: reverse at 2x is still paced playback.
+        #expect(!harness.clientStream.contains("Rate-Control:"))
     }
 
     @Test func sessionMachineEmitsTrackTimingAndDescriptionFromTheSDP() throws {
