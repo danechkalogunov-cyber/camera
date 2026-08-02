@@ -54,6 +54,23 @@ final class DiscoveryScanModel: Identifiable {
     /// A sentence about a degraded run, or `nil` when there is nothing to say.
     private(set) var notice: String?
 
+    // MARK: - Callbacks
+
+    /// Called once, with the first camera confident enough to act on without asking.
+    ///
+    /// This is what makes R1 possible: "launch it, type the password, see a picture" has no room in
+    /// it for choosing an address from a list, so the first good answer is used and the rest of the
+    /// run is somebody else's business. `nil` for a scan the user opened deliberately — there the
+    /// whole point is the list.
+    ///
+    /// ⚠️ Fires for a **confident, ISAPI-speaking** row only. A `possible` row or something that
+    /// merely has a port open is worth showing a person who asked to see it, and is not worth
+    /// putting into a field on its own.
+    var onFirstConfidentCamera: ((VDiscoveredCamera) -> Void)?
+
+    /// Set once `onFirstConfidentCamera` has fired, so it fires exactly once per run.
+    private var hasReportedConfidentCamera = false
+
     // MARK: - Stored Properties
 
     private let logger: any LoggerProtocol
@@ -158,6 +175,10 @@ final class DiscoveryScanModel: Identifiable {
             isScanning = false
             progress = 1
             phase = Self.sentence(for: summary)
+            // Also here, not only on device events: a row can cross the confidence threshold on the
+            // last piece of evidence the run gathers, and a caller waiting for one good answer
+            // should get it rather than being told the scan ended empty-handed.
+            reportFirstConfidentCamera()
         case .addressChanged, .addressReused, .phaseCompleted:
             break
         }
@@ -166,6 +187,22 @@ final class DiscoveryScanModel: Identifiable {
     private func refreshCameras() async {
         guard let coordinator else { return }
         cameras = await coordinator.snapshot.map(row(for:))
+        reportFirstConfidentCamera()
+    }
+
+    /// Hands the first good answer to whoever is waiting for one, at most once.
+    ///
+    /// Reads from the rebuilt list rather than from the event, so it inherits §10.4's order for
+    /// free: the engine has already sorted by confidence, then ISAPI, then address, so "the first
+    /// row that qualifies" *is* the best answer and this file does not get a second opinion about
+    /// what best means.
+    private func reportFirstConfidentCamera() {
+        guard !hasReportedConfidentCamera, let report = onFirstConfidentCamera else { return }
+        guard let best = cameras.first(where: {
+            $0.isConfident && $0.supportsISAPI && !$0.isAlreadyAdded
+        }) else { return }
+        hasReportedConfidentCamera = true
+        report(best)
     }
 
     /// One device, in the sheet's vocabulary.

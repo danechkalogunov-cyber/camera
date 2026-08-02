@@ -50,6 +50,13 @@ struct RootView: View {
     /// several hundred connect attempts; nothing about it should outlive its own sheet.
     @State private var scan: DiscoveryScanModel?
 
+    /// The silent scan that runs when there is no address to start from.
+    ///
+    /// Separate from `scan` because it is a different thing with a different lifetime: no sheet, no
+    /// list, no choosing. It exists to answer one question — "what is the address?" — and it stops
+    /// the moment it has an answer.
+    @State private var autoScan: DiscoveryScanModel?
+
     // MARK: - Body
 
     var body: some View {
@@ -66,6 +73,7 @@ struct RootView: View {
             // One attempt, at window appearance: if a previous run reached a picture, this goes
             // straight back to video with nothing typed (R1.4).
             session.resumeOrPrompt()
+            beginAutoScanIfNoAddress()
         }
     }
 
@@ -93,12 +101,60 @@ struct RootView: View {
 
     // MARK: - Discovery
 
+    /// Looks for a camera when there is no address to start from — the whole of R1.
+    ///
+    /// **Why this runs without being asked.** R1 is "launch it, type the password, see a picture",
+    /// and there is no room in that sentence for choosing an address from a list. `resumeOrPrompt`
+    /// has just filled the host in if a previous run reached a picture, so an empty host here means
+    /// Vigil genuinely does not know where the camera is — and asking the user to tell it is the
+    /// one thing the requirement forbids.
+    ///
+    /// It is deliberately silent. No sheet, no list, no progress: on a first launch the user is
+    /// looking at a password field, and a modal appearing over it uninvited would be worse than the
+    /// click it saves. If the scan finds nothing, they type an address exactly as before and never
+    /// learn this happened.
+    ///
+    /// ⚠️ THIS IS WHAT TRIGGERS THE LOCAL NETWORK PERMISSION PROMPT, at first launch, before the
+    /// user has done anything. That is correct for this app and is why `Info.plist` carries
+    /// `NSLocalNetworkUsageDescription` — the sentence macOS shows in that alert is Vigil's only
+    /// chance to explain itself, and it is written for exactly this moment.
+    ///
+    /// The run stops itself: at the first confident answer, or when the scan reaches its own
+    /// deadline. Nothing here keeps a socket open waiting for a user who may never come back.
+    private func beginAutoScanIfNoAddress() {
+        guard session.form.host.isEmpty, autoScan == nil, scan == nil else { return }
+        let model = DiscoveryScanModel(logger: session.dependencies.logger)
+        model.onFirstConfidentCamera = { camera in
+            // ⛔ Checked again here, not only above. Seconds pass between starting the scan and an
+            // answer, and the user spends them typing. Overwriting an address somebody is halfway
+            // through entering would be the single most annoying thing this feature could do.
+            guard self.session.form.host.isEmpty else {
+                self.endAutoScan()
+                return
+            }
+            self.session.form.host = camera.address
+            self.session.form.validate(.host)
+            self.endAutoScan()
+        }
+        autoScan = model
+        model.start()
+    }
+
+    /// Releases the silent scan, closing its sockets with it.
+    private func endAutoScan() {
+        autoScan?.stop()
+        autoScan = nil
+    }
+
     /// Opens the scan sheet and starts a run.
     ///
     /// The model is built here rather than held for the window's lifetime, so a user who never
     /// presses *Find Cameras* never constructs a coordinator, never reads the code signature and
     /// never opens a socket.
     private func beginScan() {
+        // A silent scan may still be sweeping; two coordinators would mean two sets of sockets and
+        // two floods of the same subnet. The one the user asked for wins.
+        endAutoScan()
         // The one camera this slice holds, so its row says "Added" instead of offering a duplicate.
         // A multi-camera library will pass its whole address set here; the sheet already takes one.
         let known = Set([session.camera?.host].compactMap { $0 }.filter { !$0.isEmpty })

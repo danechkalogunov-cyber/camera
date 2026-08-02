@@ -54,11 +54,18 @@ half the requirement.
 **Record:** the elapsed time, the camera model, its firmware version, and whether the address was
 found by the scan or was already in the form.
 
-> **Honest note on the current build.** The address is *not* filled in automatically. `Find
-> Cameras…` puts it there in one click, which is one interaction more than R1 permits. Until the
-> connect form runs a scan of its own on first launch, treat §1 as a two-step measurement — §3 to
-> get the address, then §1 from that point — and record it as **R1-partial**, not as green. Claiming
-> otherwise is the exact failure `ЧТО-НЕ-СДЕЛАНО.md` was written to prevent.
+> **What happens between steps 1 and 3.** With no remembered camera and an empty address field,
+> Vigil starts a silent scan the moment the window appears — no sheet, no list — and fills the
+> address in as soon as one confident Hikvision camera answers. That is the mechanism R1 rests on,
+> and it is why the stopwatch starts at the window and not at the first keystroke: the search is
+> running while you are reading the password prompt.
+>
+> It never overwrites something you are typing. If you start entering an address and the scan
+> answers a second later, your text wins and the scan stops.
+>
+> ⚠️ **This is the step most likely to fail first, and it has never run against a camera.** If the
+> address does not appear within a few seconds, that is the finding — record it, then press
+> `Find Cameras…` and continue from §3, marking §1 as **R1-partial**.
 
 ---
 
