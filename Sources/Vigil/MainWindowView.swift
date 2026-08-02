@@ -241,42 +241,7 @@ struct MainWindowView: View {
         .overlay { paletteOverlay }
         // A zero-sized button is how a window-wide shortcut is declared in pure SwiftUI. It carries
         // no label and cannot be reached by the pointer or by focus; only ⌘K triggers it.
-        .background {
-            Button("", action: { openPalette() })
-                .keyboardShortcut("k", modifiers: .command)
-                .hidden()
-            Button("", action: { toggleRecording() })
-                .keyboardShortcut("r", modifiers: .command)
-                .hidden()
-            Button("", action: { window.sheet = .newBookmark(markableInstant) })
-                .keyboardShortcut("d", modifiers: .command)
-                .hidden()
-            Button("", action: { takeSnapshot() })
-                .keyboardShortcut("s", modifiers: [.command, .shift])
-                .hidden()
-            // ↑/↓ walk the list. Declared here rather than on the sidebar because the panel is a
-            // `ScrollView` over a `LazyVStack` — chosen so DESIGN.md §9.12's row surface could be
-            // drawn at all — and that gives up the system list's own keyboard handling.
-            Button("", action: { stepSidebar(-1) })
-                .keyboardShortcut(.upArrow, modifiers: [])
-                .hidden()
-            Button("", action: { stepSidebar(1) })
-                .keyboardShortcut(.downArrow, modifiers: [])
-                .hidden()
-            Button("", action: {
-                window.sidebarSelection.selectAll(in: sidebarTree.visibleCameras)
-            })
-                .keyboardShortcut("a", modifiers: .command)
-                .hidden()
-            // UX.md §4: `/` moves the cursor to the toolbar's search field. `VToolbarView` has taken
-            // a `focusSearchRequests` counter since it was written — the field's `@FocusState`
-            // cannot be lifted out without making the whole view generic — and nothing ever
-            // incremented it, so the `/` key cap drawn inside the field advertised a shortcut that
-            // did not exist.
-            Button("", action: { window.focusSearchRequests &+= 1 })
-                .keyboardShortcut("/", modifiers: [])
-                .hidden()
-        }
+        .background { windowShortcuts }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
         .task { window.showsVideoOverlay = session.remembersVideoOverlay }
         // ⚠️ The library is *not* loaded here any more — `RootView` does it at launch, so the

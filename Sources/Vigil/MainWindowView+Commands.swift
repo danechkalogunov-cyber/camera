@@ -161,6 +161,102 @@ extension MainWindowView {
                         })
     }
 
+    // MARK: - Keyboard
+
+    /// Every shortcut the main window owns, as zero-sized buttons behind it.
+    ///
+    /// A hidden `Button` carrying a `.keyboardShortcut` is how a window-wide shortcut is declared in
+    /// pure SwiftUI: it has no label, the pointer and focus cannot reach it, and only the key
+    /// combination fires it. The real menu bar (UX.md §11.2, `VigilCommands`) is W6 and will
+    /// eventually own these; until it does, this is where they live, and moving them will be a
+    /// deletion rather than a rewrite.
+    ///
+    /// ⛔ Gathered here rather than inline in `body`, which had grown past the 600-line ceiling
+    /// DESIGN.md §7.2 sets for a file. Twelve of these were specified in §11.1 and never bound —
+    /// every one of them naming a function this window already had and only a mouse could reach.
+    @ViewBuilder
+    var windowShortcuts: some View {
+        Group {
+            Button("", action: { openPalette() })
+                .keyboardShortcut("k", modifiers: .command)
+            Button("", action: { toggleRecording() })
+                .keyboardShortcut("r", modifiers: .command)
+            Button("", action: { window.sheet = .newBookmark(markableInstant) })
+                .keyboardShortcut("d", modifiers: .command)
+            Button("", action: { takeSnapshot() })
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            // ↑/↓ walk the list. Declared here rather than on the sidebar because the panel is a
+            // `ScrollView` over a `LazyVStack` — chosen so DESIGN.md §9.12's row surface could be
+            // drawn at all — and that gives up the system list's own keyboard handling.
+            Button("", action: { stepSidebar(-1) })
+                .keyboardShortcut(.upArrow, modifiers: [])
+            Button("", action: { stepSidebar(1) })
+                .keyboardShortcut(.downArrow, modifiers: [])
+            Button("", action: {
+                window.sidebarSelection.selectAll(in: sidebarTree.visibleCameras)
+            })
+                .keyboardShortcut("a", modifiers: .command)
+            // UX.md §4: `/` moves the cursor to the toolbar's search field. `VToolbarView` has taken
+            // a `focusSearchRequests` counter since it was written — the field's `@FocusState`
+            // cannot be lifted out without making the whole view generic — and nothing ever
+            // incremented it, so the `/` key cap drawn inside the field advertised a shortcut that
+            // did not exist.
+            Button("", action: { window.focusSearchRequests &+= 1 })
+                .keyboardShortcut("/", modifiers: [])
+        }
+        .hidden()
+        // A second `Group`: SwiftUI's `ViewBuilder` takes at most ten children, and §11.1 asks for
+        // more than ten. Splitting is the documented way and costs nothing at runtime.
+        Group {
+            Button("", action: { window.isSidebarVisible.toggle() })
+                .keyboardShortcut("l", modifiers: .command)
+            Button("", action: { window.isInspectorVisible.toggle() })
+                .keyboardShortcut("i", modifiers: [.command, .option])
+            Button("", action: { window.cycle = window.cycle.toggledRunning() })
+                .keyboardShortcut("y", modifiers: .command)
+            Button("", action: { addCamera() })
+                .keyboardShortcut("n", modifiers: .command)
+            Button("", action: { onFindCameras() })
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("", action: { openRecordingsFolder() })
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+        }
+        .hidden()
+        layoutShortcuts
+        inspectorTabShortcuts
+    }
+
+    /// ⌘1 … ⌘8 select a layout (UX.md §11.1).
+    ///
+    /// ⚠ The digit is not the tile count — `⌘2` is the four-tile grid and `⌘3` the six-tile hero —
+    /// and that mapping is `VGridLayout.shortcutDigit`'s, not restated here. Deriving the shortcut
+    /// from the layout rather than writing eight literals is what stops the two drifting apart.
+    @ViewBuilder
+    private var layoutShortcuts: some View {
+        ForEach(VGridLayout.allCases, id: \.self) { layout in
+            Button("", action: { selectLayout(layout) })
+                .keyboardShortcut(KeyEquivalent(layout.shortcutDigit), modifiers: .command)
+        }
+        .hidden()
+    }
+
+    /// ⌃1 … ⌃6 select an inspector tab (UX.md §11.1).
+    ///
+    /// The tab is also revealed by the shortcut: a key that changed a hidden panel's tab and left it
+    /// hidden would look broken, and the user pressing ⌃3 wants to see PTZ, not to arrange for it to
+    /// be there later.
+    @ViewBuilder
+    private var inspectorTabShortcuts: some View {
+        ForEach(Array(VInspectorTab.allCases.enumerated()), id: \.element) { index, tab in
+            Button("", action: {
+                window.inspectorTab = tab
+                window.isInspectorVisible = true
+            })
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
+        }
+        .hidden()
+    }
+
     /// Overflow entries with nothing behind them yet, dimmed rather than hidden.
     ///
     /// Removing them would make the menu's shape change as features land, and a user who learned
