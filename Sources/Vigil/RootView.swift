@@ -43,6 +43,15 @@ struct RootView: View {
     /// would be worse than not having one.
     @State private var window = MainWindowState()
 
+    /// Every camera the user has added.
+    ///
+    /// ⛔ Owned here and not by `MainWindowView`, which is where it started. The library is an
+    /// *app* fact, not a window fact, and two things outside the main window need it: the scan, so
+    /// a device already in the list is offered as "Added" rather than as a find, and the connect
+    /// form, which is on screen precisely when the window is not. Built here it also loads once at
+    /// launch instead of on the first frame of video.
+    @State private var library: AppLibraryModel
+
     /// The network scan, created only when the user asks for one.
     ///
     /// `nil` until then, and set back to `nil` on dismissal, so the sockets and the coordinator are
@@ -66,6 +75,18 @@ struct RootView: View {
     /// arrives as "no exact matches in call to initializer". Written here because the omission looks
     /// like an oversight otherwise, and the next reader would add it back.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // MARK: - Initialisation
+
+    /// Builds the root over the app's session.
+    ///
+    /// Explicit because ``library`` needs the session's logger, which a property initialiser cannot
+    /// reach: `@State private var library = AppLibraryModel(logger: session…)` would be reading one
+    /// stored property from another's default value, which Swift does not allow.
+    init(session: AppSessionModel) {
+        self.session = session
+        _library = State(initialValue: AppLibraryModel(logger: session.dependencies.logger))
+    }
 
     // MARK: - Body
 
@@ -98,6 +119,13 @@ struct RootView: View {
         .vMotionEnabled(!reduceMotion)
         .background(WindowChromeInstaller())
         .task {
+            // Opens `library.json` and, on a first run, adopts the camera the prototype remembered
+            // — carrying its `CredentialRef` through, which is the difference between "the camera
+            // still works" and "type your password again". Before the resume, so a scan started
+            // moments later already knows which addresses are not finds.
+            await library.load(importingLegacyFrom: session.defaults)
+        }
+        .task {
             // One attempt, at window appearance: if a previous run reached a picture, this goes
             // straight back to video with nothing typed (R1.4).
             session.resumeOrPrompt()
@@ -122,6 +150,7 @@ struct RootView: View {
             // still the honest minimum if the chrome turns out to cost frames.
             MainWindowView(session: session,
                            window: window,
+                           library: library,
                            onFindCameras: { beginScan() })
         }
     }
@@ -182,9 +211,13 @@ struct RootView: View {
         // A silent scan may still be sweeping; two coordinators would mean two sets of sockets and
         // two floods of the same subnet. The one the user asked for wins.
         endAutoScan()
-        // The one camera this slice holds, so its row says "Added" instead of offering a duplicate.
-        // A multi-camera library will pass its whole address set here; the sheet already takes one.
-        let known = Set([session.camera?.host].compactMap { $0 }.filter { !$0.isEmpty })
+        // Every address the user already has, so those rows say "Added" instead of being offered as
+        // finds. This used to be the single streaming camera, with a note that a multi-camera
+        // library would pass its whole set — the library exists now, so it does. The streaming
+        // camera is unioned in because it may not be filed yet: it is added on its first frame.
+        var known = Set(library.cameras.map { $0.host })
+        if let host = session.camera?.host { known.insert(host) }
+        known = known.filter { !$0.isEmpty }
         let model = DiscoveryScanModel(logger: session.dependencies.logger, knownAddresses: known)
         scan = model
         model.start()

@@ -88,7 +88,12 @@ struct MainWindowView: View {
     /// Separate from `session`, which owns exactly one live stream. The library is the *set*; the
     /// session is whichever member of it is on screen. Keeping them apart is what lets a second
     /// camera exist before a second stream does.
-    @State var library: AppLibraryModel
+    ///
+    /// ⚠️ Handed in rather than created here, and it used to be created here. The connect form and
+    /// the network scan both need it — the scan so an address already in the list is offered as
+    /// "Added" rather than as a find — and both are on screen precisely when this window is not.
+    /// `RootView` owns it and loads it at launch.
+    let library: AppLibraryModel
 
     /// Stills written to the user's Pictures folder.
     @State var snapshots: SnapshotCoordinator
@@ -124,16 +129,18 @@ struct MainWindowView: View {
     /// - Parameters:
     ///   - session: the streaming session.
     ///   - window: per-window view state.
+    ///   - library: every camera the user has added; owned and loaded by `RootView`.
     ///   - onFindCameras: opens the scan sheet, which `RootView` owns.
     init(session: AppSessionModel,
          window: MainWindowState,
+         library: AppLibraryModel,
          onFindCameras: @escaping () -> Void) {
         self.session = session
         self.window = window
+        self.library = library
         self.onFindCameras = onFindCameras
         _deviceInfo = State(initialValue: DeviceInfoService(logger: session.dependencies.logger,
                                                             clock: session.dependencies.clock))
-        _library = State(initialValue: AppLibraryModel(logger: session.dependencies.logger))
         _recording = State(initialValue: RecordingCoordinator(tap: session.recordingTap,
                                                               logger: session.dependencies.logger,
                                                               clock: session.dependencies.clock))
@@ -272,12 +279,9 @@ struct MainWindowView: View {
         }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
         .task { window.showsVideoOverlay = session.remembersVideoOverlay }
-        .task {
-            // Opens `library.json` and, on a first run, adopts the camera the prototype remembered
-            // — carrying its `CredentialRef` through, which is the difference between "the camera
-            // still works" and "type your password again".
-            await library.load(importingLegacyFrom: session.defaults)
-        }
+        // ⚠️ The library is *not* loaded here any more — `RootView` does it at launch, so the
+        // connect form and the scan see it too. Loading it again on this view's appearance would
+        // re-run the legacy import against a library that may have just been populated by it.
         // Filed once a picture exists, which is the only moment Vigil knows the record is good for
         // anything. Adding at connect time would fill the list with addresses that never answered.
         .onChange(of: session.isReceivingMedia) { _, isReceiving in
