@@ -367,8 +367,18 @@ final class EventScriptedRequests: ISAPIRequesting, @unchecked Sendable {
 /// So: yield for the first stretch, which is all a healthy machine ever needs and keeps the fast
 /// path fast, then sleep. A sleep suspends this task and hands the thread back, which is the only
 /// thing that actually helps when the pool is saturated.
+/// ⚠️ THE BOUND EXISTS TO STOP A HANG, NOT TO ASSERT A SPEED. Nothing here measures how fast the
+/// pipeline is; the assertions after it are about what the pipeline *did*. So the ceiling is set
+/// generously and the loop exits the instant the condition holds — on a healthy machine that is
+/// within a few hops and this costs nothing.
+///
+/// Getting that wrong is the second half of this function's history. The first version spun 20 000
+/// bare yields, which starved what it waited for. Replacing them with sleeps fixed the mechanism
+/// and, in the same edit, cut the ceiling to about 1.8 s — and a loaded runner then ingested 19 of
+/// 30 alerts inside it and failed. The mechanism was right and the budget was wrong, which reads
+/// exactly like the mechanism still being wrong.
 @discardableResult
-func eventWaitUntil(attempts: Int = 2_000,
+func eventWaitUntil(attempts: Int = 10_000,
                     _ condition: @Sendable () async -> Bool) async -> Bool {
     /// Yields before falling back to sleeping. Small: on an idle machine the work lands within a
     /// handful of hops, and past that the pool is busy and yielding is the wrong tool.
@@ -378,6 +388,8 @@ func eventWaitUntil(attempts: Int = 2_000,
         if attempt < yieldBudget {
             await Task.yield()
         } else {
+            // Sleeping hands the thread back, which is the only thing that helps a saturated pool.
+            // ~9.8 s of them, reached only when something is genuinely wrong.
             try? await Task.sleep(for: .milliseconds(1))
         }
     }
