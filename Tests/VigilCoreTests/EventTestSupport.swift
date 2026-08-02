@@ -350,17 +350,36 @@ final class EventScriptedRequests: ISAPIRequesting, @unchecked Sendable {
 
 // MARK: - Async waiting
 
-/// Spins the cooperative pool until `condition` holds, up to `attempts` yields.
+/// Waits until `condition` holds, giving the runtime real opportunities to make it true.
 ///
-/// Not a timeout: there is no clock here, so a slow machine cannot fail a test that a fast one
-/// passes. It bounds the number of scheduling opportunities, which is the only thing an async test
-/// actually needs to bound.
+/// The intent is still "bound the scheduling opportunities, not the wall clock", so that a slow
+/// machine cannot fail a test a fast one passes. What changed is how the opportunities are given.
+///
+/// ⛔ IT MUST NOT BE A BARE `Task.yield()` LOOP, AND THIS PROJECT HAS NOW LEARNED THAT TWICE.
+/// `VirtualDiscoveryClock.startPump` carries the same warning from the first time: a tight yield
+/// loop occupies a cooperative-pool thread and starves the very task it is waiting for, so "the
+/// work has not happened" becomes indistinguishable from "the work was never given a thread". Under
+/// `swift test --parallel` on a loaded runner, where every other suite is competing for the same
+/// pool, 20 000 yields could pass without the event pump running once — and
+/// `eventMonitorServiceIngestsAnAlertFromRealMultipartBytes` then failed with a store that was
+/// simply empty, five assertions deep, looking exactly like a broken ingest path.
+///
+/// So: yield for the first stretch, which is all a healthy machine ever needs and keeps the fast
+/// path fast, then sleep. A sleep suspends this task and hands the thread back, which is the only
+/// thing that actually helps when the pool is saturated.
 @discardableResult
-func eventWaitUntil(attempts: Int = 20_000,
+func eventWaitUntil(attempts: Int = 2_000,
                     _ condition: @Sendable () async -> Bool) async -> Bool {
-    for _ in 0..<attempts {
+    /// Yields before falling back to sleeping. Small: on an idle machine the work lands within a
+    /// handful of hops, and past that the pool is busy and yielding is the wrong tool.
+    let yieldBudget = 200
+    for attempt in 0..<attempts {
         if await condition() { return true }
-        await Task.yield()
+        if attempt < yieldBudget {
+            await Task.yield()
+        } else {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
     return await condition()
 }
