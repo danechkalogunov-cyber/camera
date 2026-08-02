@@ -408,11 +408,24 @@ struct MainWindowView: View {
     /// Two writes, and both are needed. `session.camera` is what every panel reads right now;
     /// `LastConnection` is what the next launch rebuilds the camera from, and without it the rename
     /// would survive exactly until the window closed.
+    /// Renames the camera everywhere it is stored.
+    ///
+    /// ⛔ THREE WRITES, AND THE THIRD WAS MISSING. `session.camera` is what every panel reads right
+    /// now; `LastConnection` is what the next launch rebuilds the camera from; and `library.json` is
+    /// what every *other* surface reads — `sidebarCameras` takes the name from the library for any
+    /// row that is not the live one, and so does the stage's idle cell.
+    ///
+    /// Without the third the rename was visibly half-applied: the live tile and its sidebar row
+    /// showed the new name while the same camera's idle cell showed the old one, and switching away
+    /// and back brought the old name onto the live row too. That is the tail of the "renamed camera
+    /// does not stick" report — `rememberThisCamera`'s merge fixed the half that `UserDefaults`
+    /// owned, and this is the half the library owns.
     private func renameCamera(to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, session.camera != nil else { return }
+        guard !trimmed.isEmpty, let id = session.camera?.id else { return }
         session.camera?.name = trimmed
         session.rememberCameraName(trimmed)
+        Task { await library.rename(id, to: trimmed) }
     }
 
     // MARK: - Overlays

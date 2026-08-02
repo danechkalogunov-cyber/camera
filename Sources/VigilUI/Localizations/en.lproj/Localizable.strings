@@ -517,6 +517,7 @@
 "Camera Settings…" = "Camera Settings…";
 "New Group…" = "New Group…";
 "Delete Group" = "Delete Group";
+"Remove Camera" = "Remove Camera";
 
 /* SNAPSHOT, DIAGNOSTICS, STREAM SWITCH */
 "Snapshot saved" = "Snapshot saved";
@@ -645,6 +646,7 @@
 "Your camera list was damaged and has been restored from a backup. Some recent changes may be missing." = "Your camera list was damaged and has been restored from a backup. Some recent changes may be missing.";
 "This camera list was written by a newer version of Vigil. It is being shown read-only so nothing is lost." = "This camera list was written by a newer version of Vigil. It is being shown read-only so nothing is lost.";
 "That camera could not be added." = "That camera could not be added.";
+"This camera list is read-only, so the camera was not saved. It will not be here next time Vigil starts." = "This camera list is read-only, so the camera was not saved. It will not be here next time Vigil starts.";
 
 /* TWO BUTTONS THAT ANSWER HONESTLY. Both features are absent rather than broken, and this
    project's rule is that a control answering to silence is worse than one not offered. */

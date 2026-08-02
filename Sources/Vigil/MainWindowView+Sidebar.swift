@@ -242,15 +242,18 @@ extension MainWindowView {
 
     /// The right-click menu on the camera row.
     ///
-    /// Only actions this build can honour. *Remove Camera* is absent on purpose: the session resumes
-    /// exactly one remembered connection, so removing it would leave the window with nothing and no
-    /// way back except retyping the address — a destructive action with no undo is not worth a menu
-    /// row it would be easy to hit by accident.
+    /// ⚠️ *Remove Camera* used to be absent, and the note said why: the session resumed exactly one
+    /// remembered connection, so removing it left the window with nothing and no way back but
+    /// retyping the address. The library ended that — the other cameras are still listed, and the
+    /// removed one's Keychain item is deliberately left alone, so re-adding it costs an address and
+    /// not a password. It is last, destructive, and disabled on a read-only library, where the store
+    /// would refuse the write in silence.
     func cameraMenu(_ camera: VSidebarCamera) -> [VSidebarMenuItem] {
         var items: [VSidebarMenuItem] = [
             VSidebarMenuItem(id: "camera.rename",
                              title: Self.localized("Rename…"),
                              symbol: .rename,
+                             isEnabled: !library.isReadOnly,
                              action: { window.sheet = .cameraSettings }),
             .submenu(id: "camera.group",
                      title: Self.localized("Add to Group"),
@@ -282,7 +285,38 @@ extension MainWindowView {
                                       title: Self.localized("Camera Settings…"),
                                       symbol: .settings,
                                       action: { window.sheet = .cameraSettings }))
+        items.append(.separator(id: "camera.rule3"))
+        items.append(VSidebarMenuItem(id: "camera.remove",
+                                      title: Self.localized("Remove Camera"),
+                                      symbol: .delete,
+                                      role: .destructive,
+                                      isEnabled: !library.isReadOnly,
+                                      action: { removeCamera(camera.id) }))
         return items
+    }
+
+    /// Takes a camera out of the library, and moves the window off it if it was the one playing.
+    ///
+    /// ⛔ The Keychain item stays. `AppLibraryModel.remove` says why and it is worth repeating here,
+    /// because this is the call site where it would be tempting to "tidy up": deleting a password
+    /// because a row disappeared costs the user access to a device they still own, and the two acts
+    /// are not the same act.
+    ///
+    /// Landing somewhere sensible afterwards is half the feature. Removing the camera that is
+    /// streaming leaves the stage pointing at a record the library no longer has, so the session
+    /// moves to the first camera that remains — and to the connect form when none do, which is the
+    /// honest end state rather than an empty grid with no way out.
+    func removeCamera(_ id: CameraID) {
+        Task {
+            await library.remove(id)
+            guard id == cameraID else { return }
+            guard let next = library.cameras.first else {
+                session.disconnect()
+                return
+            }
+            window.sidebarSelection.select(.camera(next.id))
+            await session.switchTo(next)
+        }
     }
 
     /// The *Add to Group ▸* submenu: every group, with a tick beside the one this camera is in, and

@@ -146,7 +146,17 @@ final class AppLibraryModel {
     /// Adds a camera and returns it as stored, or `nil` when the library refused it.
     @discardableResult
     func add(_ camera: Camera) async -> Camera? {
-        guard let library, !isReadOnly else { return nil }
+        guard let library else { return nil }
+        // ⛔ Said, not swallowed. A read-only library refuses every write, and this one is reached by
+        // an ordinary act — the first frame from a camera the user just connected to files it here.
+        // Returning `nil` in silence meant the camera streamed, worked, and then was not in the list
+        // next launch with nothing having mentioned it.
+        guard !isReadOnly else {
+            notice = vigilUIString("This camera list is read-only, so the camera was not saved. "
+                                   + "It will not be here next time Vigil starts.")
+            logger.error(.storage, "add refused: the library is read-only")
+            return nil
+        }
         do {
             let stored = try await library.add(camera)
             await refresh()
