@@ -14,6 +14,7 @@ import Foundation
 import VigilCore
 import VigilISAPI
 import VigilProtocols
+import VigilUI
 
 // MARK: - Remembering, and playing back
 
@@ -97,6 +98,30 @@ extension AppSessionModel {
         await stream(camera: target, ref: activeRef)
     }
 
+    /// Changes archive playback speed, which means rebuilding the session at the current position.
+    ///
+    /// ⚠️ A RECONNECT, NOT A COMMAND, AND THAT IS FORCED BY THE FIRMWARE. RTSP changes speed with a
+    /// second `PLAY` carrying `Scale:`, this machine can send one, and a DS-I256 on V5.5.6 refuses
+    /// it — established by trying in-session seeking on hardware and reverting it
+    /// (docs/PLAYBACK-LATENCY.md). The handshake's own `PLAY` is the one this firmware honours, so
+    /// the scale is seeded into a fresh session and a speed change costs what a seek costs.
+    ///
+    /// It reuses ``playArchive(_:)`` rather than duplicating the connect: the locator has not
+    /// changed, only the rate the next session will ask for, and `playArchive` already handles
+    /// supersession, the decode reset and the timing log.
+    func setPlaybackRate(_ rate: TimelinePlaybackRate) async {
+        guard rate != playbackRate else { return }
+        guard let locator = playback else {
+            // Live has no speed. Recorded rather than silently ignored: a control that appears to
+            // do nothing is worth a log line when someone reports exactly that.
+            dependencies.logger.info(.app, "playback speed ignored: not playing an archive")
+            return
+        }
+        playbackRate = rate
+        dependencies.logger.info(.app, "playback speed \(rate.label); reopening the session")
+        await playArchive(locator)
+    }
+
     /// Returns the picture to the live stream.
     ///
     /// Restores the override the camera had before playback rather than clearing it: a user who set
@@ -106,6 +131,9 @@ extension AppSessionModel {
         var target = camera
         target.rtspPathOverride = resolvedPath
         playback = nil
+        // Live has no speed, and leaving the rate set would make the next session ask a live
+        // channel for `Scale: 4` — the next four seconds, which do not exist yet.
+        playbackRate = .normal
         // Bumped so a seek still opening does not finish into a session that has gone back to live,
         // and cleared so the live stream's first frame is not reported as a seek that took as long
         // as the user spent deciding to leave.

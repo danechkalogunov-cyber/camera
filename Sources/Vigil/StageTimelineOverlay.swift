@@ -58,6 +58,11 @@ struct StageTimelineOverlay: View {
     let onScrub: (VTimelineScrubPhase, Date) -> Void
     let onHoverInstant: (Date?) -> Void
     let onZoom: (TimelineZoom) -> Void
+
+    /// The playback-speed stop in force, and whether one can be asked for at all.
+    var rate: TimelinePlaybackRate = .normal
+    var isRateAdjustable = false
+    var onRate: (TimelinePlaybackRate) -> Void = { _ in }
     let onActivateMarker: (TimelineMarkerCluster) -> Void
 
     /// Steps the playhead by a number of seconds, positive or negative.
@@ -239,7 +244,10 @@ struct StageTimelineOverlay: View {
                               onScrub: onScrub,
                               onHoverInstant: onHoverInstant,
                               onZoom: onZoom,
-                              onActivateMarker: onActivateMarker)
+                              onActivateMarker: onActivateMarker,
+                              rate: rate,
+                              isRateAdjustable: isRateAdjustable,
+                              onRate: onRate)
             }
             .padding(.horizontal, VTheme.Space.lg)
             .padding(.vertical, VTheme.Space.md)

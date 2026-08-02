@@ -280,6 +280,13 @@ extension MainWindowView {
                                  },
                                  onHoverInstant: { instant in archive.preview(at: instant) },
                                  onZoom: { stop in archive.zoom(stop) },
+                                 rate: session.playbackRate,
+                                 // Only while an archive is open. A live channel has no speed —
+                                 // `Scale: 4` on it asks for the next four seconds.
+                                 isRateAdjustable: session.playback != nil,
+                                 onRate: { stop in
+                                     Task { await session.setPlaybackRate(stop) }
+                                 },
                                  onActivateMarker: { cluster in
                                      // A cluster is one or more markers at the same x; the earliest
                                      // is what the badge is anchored on.

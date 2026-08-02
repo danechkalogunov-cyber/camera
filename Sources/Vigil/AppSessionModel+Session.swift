@@ -264,7 +264,13 @@ extension AppSessionModel {
                                           frameSink: { frame in
                                               backlog.arrived()
                                               continuation.yield(frame)
-                                          })
+                                          },
+                                          // Normal speed sends no `Scale:` at all, so a live
+                                          // stream is byte-identical to what it was before speed
+                                          // existed. Only archive playback ever sets one.
+                                          playbackScale: playback == nil || playbackRate == .normal
+                                              ? nil
+                                              : playbackRate.scale)
         self.controller = controller
         // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so the
         // subscription is established before `start()` and cannot miss the first transition.

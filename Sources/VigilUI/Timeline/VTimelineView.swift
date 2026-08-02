@@ -113,6 +113,15 @@ package struct VTimelineView: View {
     /// Called when a marker or a cluster badge is activated.
     package let onActivateMarker: (TimelineMarkerCluster) -> Void
 
+    /// The playback-speed stop currently in force.
+    package let rate: TimelinePlaybackRate
+
+    /// Whether a speed can be asked for at all — false on a live stream, which has no speed.
+    package let isRateAdjustable: Bool
+
+    /// Called with a requested speed stop. Costly on some firmware: see `VTimelineSpeedControl`.
+    package let onRate: (TimelinePlaybackRate) -> Void
+
     @Environment(\.vMotionEnabled) private var motionEnabled
 
     @State private var hoverX: CGFloat?
@@ -142,7 +151,10 @@ package struct VTimelineView: View {
                  onScrub: @escaping (VTimelineScrubPhase, Date) -> Void = { _, _ in },
                  onHoverInstant: @escaping (Date?) -> Void = { _ in },
                  onZoom: @escaping (TimelineZoom) -> Void = { _ in },
-                 onActivateMarker: @escaping (TimelineMarkerCluster) -> Void = { _ in }) {
+                 onActivateMarker: @escaping (TimelineMarkerCluster) -> Void = { _ in },
+                 rate: TimelinePlaybackRate = .normal,
+                 isRateAdjustable: Bool = false,
+                 onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.tracks = tracks
         self.day = day
         self.window = window
@@ -157,6 +169,9 @@ package struct VTimelineView: View {
         self.onHoverInstant = onHoverInstant
         self.onZoom = onZoom
         self.onActivateMarker = onActivateMarker
+        self.rate = rate
+        self.isRateAdjustable = isRateAdjustable
+        self.onRate = onRate
     }
 
     // MARK: - Geometry
@@ -218,6 +233,7 @@ package struct VTimelineView: View {
                 .lineLimit(1)
             Spacer(minLength: VTheme.Space.md)
             VTimelineLegend()
+            VTimelineSpeedControl(rate: rate, isEnabled: isRateAdjustable, onRate: onRate)
             VTimelineZoomControl(zoom: zoom, window: window, clock: clock, onZoom: onZoom)
         }
         .accessibilityHidden(true)

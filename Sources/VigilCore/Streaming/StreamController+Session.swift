@@ -93,6 +93,11 @@ extension StreamController {
         config.transport = .tcpInterleaved
         config.setupAudio = false
         config.setupMetadataTrack = false
+        config.initialScale = playbackScale
+        // Above 2x, pacing is the difference between fast-forward and eight seconds of video per
+        // eight seconds: the camera would otherwise keep sending at wall-clock rate. At or below
+        // 2x — and in reverse at 1x or 2x — pacing is exactly what is wanted, so it is left on.
+        config.initialDisableRateControl = (playbackScale.map { abs($0) > 2 }) ?? false
         let newSession = dependencies.makeRTSPSession(config, credential, id.short)
         session = newSession
         let stream = await newSession.events()

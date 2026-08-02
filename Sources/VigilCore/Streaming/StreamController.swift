@@ -86,6 +86,14 @@ public actor StreamController: Identifiable {
     // MARK: Configuration
 
     let policy: ReconnectPolicy
+
+    /// The `Scale:` this session's handshake asks for, or `nil` for normal speed.
+    ///
+    /// Fixed for the controller's life on purpose. Changing playback speed means a new session —
+    /// this firmware refuses a second `PLAY` (docs/PLAYBACK-LATENCY.md) — so the app layer builds a
+    /// new controller rather than mutating this one, and a value that cannot change mid-session
+    /// cannot disagree with what the camera is actually sending.
+    let playbackScale: Double?
     var random: any RandomSource
     var camera: Camera
     var quality: StreamQuality
@@ -191,7 +199,8 @@ public actor StreamController: Identifiable {
                 initialPriority: StreamPriority = .focused,
                 dependencies: CoreDependencies,
                 frameSink: (@Sendable (EncodedFrame) -> Void)? = nil,
-                policy: ReconnectPolicy = .default) {
+                policy: ReconnectPolicy = .default,
+                playbackScale: Double? = nil) {
         self.id = camera.id
         self.cameraName = camera.displayName
         self.camera = camera
@@ -205,6 +214,7 @@ public actor StreamController: Identifiable {
         self.frameSink = frameSink
         self.governor = dependencies.governor
         self.policy = policy
+        self.playbackScale = playbackScale
         self.resolvedCandidate = camera.capabilities.flatMap { capabilities in
             capabilities.resolvedRTSPPath.map { path in
                 RTSPPathCandidate(template: capabilities.rtspPathTemplate, path: path, order: 0)

@@ -206,6 +206,13 @@ final class AppSessionModel {
     /// neither would the user.
     var playback: PlaybackLocator?
 
+    /// How fast the archive is playing, and in which direction.
+    ///
+    /// Meaningless while `playback` is `nil` — a live stream arrives at the rate the camera sends
+    /// it, and asking a live channel for `Scale: 4` is asking for the next four seconds, which do
+    /// not exist yet. Reset to `.normal` by ``returnToLive()`` for that reason.
+    var playbackRate: TimelinePlaybackRate = .normal
+
     /// Whether the launch-time resume has already been attempted.
     var hasResumed = false
 

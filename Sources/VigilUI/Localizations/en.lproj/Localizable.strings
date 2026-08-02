@@ -627,3 +627,11 @@
 "Drop a camera here or press Return to choose one" = "Drop a camera here or press Return to choose one";
 "Today" = "Today";
 "Yesterday" = "Yesterday";
+
+/* THE PLAYBACK-SPEED STEPPER — UX.md §7.4. A stepper rather than a slider because on the
+   firmware this was built against a speed change costs a whole RTSP session, so each press
+   has to be a decision the user meant. The ladder's own labels ("¼×", "−8×") are glyphs
+   assembled in TimelinePlaybackRate and are deliberately not keys. */
+"Play slower" = "Play slower";
+"Play faster" = "Play faster";
+"Playback speed" = "Playback speed";
