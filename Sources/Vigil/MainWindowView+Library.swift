@@ -204,11 +204,20 @@ extension MainWindowView {
             Task { await eventFeed.delete(event.id, camera: session.camera) }
         }
         actions.onScrub = { phase, instant in
-            // Only `.ended` would issue a seek — and there is nothing to seek yet, because playing
-            // the device's archive needs the playback pipeline `VigilVideo` does not have. The
-            // playhead still follows the pointer, so the scrubber reads its own position honestly.
             archive.movePlayhead(to: instant, isScrubbing: phase != .ended)
+            // ⚠️ The comment that used to sit here said there was nothing to seek, "because playing
+            // the device's archive needs the playback pipeline `VigilVideo` does not have". That
+            // stopped being true when `playArchive(from:)` landed — the stage's own scrubber has
+            // been seeking through it since — and a stale reason is worse than none, because the
+            // next reader takes it as a decision rather than an artefact.
+            //
+            // Release only, for the reason `VLibraryActions.onScrub` gives: every seek is a fresh
+            // RTSP session, and one per drag tick would open a hundred at a camera that allows a
+            // handful.
+            guard phase == .ended else { return }
+            playArchive(from: instant)
         }
+        actions.onHoverInstant = { instant in archive.preview(at: instant) }
         actions.onZoom = { stop in archive.zoom(stop) }
         actions.onActivateMarker = { cluster in
             // A cluster is one or more markers at the same x; the earliest is the one the badge is

@@ -46,8 +46,32 @@ extension MainWindowView {
                         patrols: ptz.patrols,
                         runningPatrol: ptz.runningPatrol,
                         image: deviceInfo.image ?? InspectorImageSettings(),
+                        events: inspectorEvents,
                         recording: recordingState)
     }
+
+    /// The camera's alerts, as the Events tab reads them.
+    ///
+    /// ⛔ This argument was simply never passed. `VInspectorEventsTab` is written, `InspectorEvent`
+    /// is written, `EventCoordinator` has been filling the sidebar's badge and the Events *screen*
+    /// from the same feed the whole time — and the tab defaulted to `[]`, so the panel rendered its
+    /// empty state on a camera that was reporting motion.
+    ///
+    /// Capped, because this is a side panel and not the Events screen: the tab is a glance at what
+    /// just happened, the screen is the record. Reading the whole feed into a 320 pt column would
+    /// also rebuild the array on every body evaluation, which is once a second while telemetry ticks.
+    var inspectorEvents: [InspectorEvent] {
+        eventFeed.events.prefix(Self.inspectorEventLimit).map { event in
+            InspectorEvent(id: event.id,
+                           instant: event.occurredAt,
+                           kind: event.kind,
+                           label: event.label,
+                           duration: event.durationSeconds)
+        }
+    }
+
+    /// How many alerts the inspector's Events tab shows. UX.md §6.2 calls it a recent list.
+    static let inspectorEventLimit = 50
 
     /// The address half of the Info tab.
     ///
@@ -93,6 +117,10 @@ extension MainWindowView {
         actions.onRevealRecordings = { openRecordingsFolder() }
         actions.onCopyDiagnostics = { copyDiagnostics() }
         actions.onCycleStream = { cycleStreamQuality() }
+        // The same act as clicking the row on the Events screen: bring the scrubber up on that day
+        // with the playhead five seconds early (UX.md §9.1). Routed through the one function so the
+        // two surfaces cannot drift apart about what "open this event" means.
+        actions.onOpenEvent = { event in openArchive(at: event.instant) }
         // ⛔ Both of these say what is true instead of doing nothing. A button that answers to
         // silence is worse than one that is not offered — this project's own rule — and the two
         // features behind them are genuinely absent rather than broken.
