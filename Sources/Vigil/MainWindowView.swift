@@ -43,6 +43,13 @@ struct MainWindowView: View {
     /// Window furniture: what is shown, what is selected, what is being searched.
     @Bindable var window: MainWindowState
 
+    /// Opens the network scan.
+    ///
+    /// A closure rather than state owned here, because the sheet and the `DiscoveryScanModel` behind
+    /// it belong to `RootView`: the same run has to be presentable from the connect form *and* from
+    /// this window, and two owners would mean two coordinators flooding one subnet.
+    let onFindCameras: () -> Void
+
     /// Fetches the Info tab's device identity over ISAPI.
     ///
     /// Owned here rather than by `AppSessionModel`, because nothing it does can affect the stream:
@@ -117,9 +124,13 @@ struct MainWindowView: View {
     /// - Parameters:
     ///   - session: the streaming session.
     ///   - window: per-window view state.
-    init(session: AppSessionModel, window: MainWindowState) {
+    ///   - onFindCameras: opens the scan sheet, which `RootView` owns.
+    init(session: AppSessionModel,
+         window: MainWindowState,
+         onFindCameras: @escaping () -> Void) {
         self.session = session
         self.window = window
+        self.onFindCameras = onFindCameras
         _deviceInfo = State(initialValue: DeviceInfoService(logger: session.dependencies.logger,
                                                             clock: session.dependencies.clock))
         _library = State(initialValue: AppLibraryModel(logger: session.dependencies.logger))

@@ -391,11 +391,31 @@ reverted — it broke `discoveryCoordinatorStreamTerminationCancelsTheRun` on *b
 the pump and `DiscoveryTestBed.run`'s settle loop are coupled through real time. Widening the
 assertion buries the next real defect, three for three.
 
-The fix remains a deterministic scheduler: a pump that knows whether a task is *runnable*, rather
-than one inferring it from a counter. Swift's runtime exposes no such signal, so this means driving
-the run through a custom executor and advancing only when that executor's queue is empty. Nothing
-smaller than that removes the class, and this entry exists so the next person does not spend the
-afternoon re-tuning two constants that cannot fix it.
+#### What was done instead: settle credits
+
+Three consecutive Linux runs produced the *identical* `[10, 550, 1010]`, which is not the profile of
+a race — it is a deterministic ordering that happens to lose. That made it worth fixing rather than
+recording.
+
+`advanceToEarliestDeadline` now mints one **settle credit** per task it wakes, and a credit is spent
+by that task's next clock *read* — `now()`, `wallNow`, or starting another sleep. Those are the calls
+a task makes once it has actually run; clearing a wake, registering a continuation and cancelling are
+not, because they happen on the suspension machinery's schedule rather than the task's. That
+distinction is the one `pendingWakes` got wrong. The pump then waits, after its quiet loop, for the
+credits to be spent.
+
+Why this is not the reverted change wearing a hat: the wait is charged **only** while a credit is
+outstanding. Raising `quietChecks` added 3 ms to every advance in the suite, which is what broke
+teardown against `DiscoveryTestBed.run`'s 50 ms settle budget. Teardown mints no credits at all —
+cancellation resumes sleepers through `cancelSleeper`, which never goes through `pendingWakes` — so
+the wait cannot engage there. It is also bounded: a task that woke only to return never spends its
+credit, costs `settlePatience × checkInterval` once, and the pump moves on. Nothing can wedge.
+
+⚠️ This is still not a deterministic scheduler, and it should not be mistaken for one. The honest
+end state is driving the run on a custom executor and advancing only when that executor's queue is
+empty; Swift exposes no runnable-task signal short of that. What settle credits buy is the specific
+window that three CI runs measured, on a mechanism narrow enough to reason about. If this fires again
+with a *fourth* signature, that is the evidence that the executor is now worth writing.
 
 Splitting these suites into their own non-parallel invocation is also worse than it looks: a
 `--filter` typo runs nothing at all and reports success, which is a green CI that tests nothing.

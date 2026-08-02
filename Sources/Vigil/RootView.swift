@@ -78,6 +78,12 @@ struct RootView: View {
 
             content
         }
+        // ⛔ On the `ZStack` and not on the connect form. It used to hang off `ConnectFormView`,
+        // which meant the scan sheet could be presented only from the form — so *Find Cameras* was
+        // unreachable the moment a picture existed, which is exactly when a user goes looking for a
+        // second camera. `MainWindowView` now asks for it too, and both phases present the same
+        // sheet over the same one run.
+        .sheet(item: $scan) { model in discoverySheet(model) }
         // ⛔ Twenty-one views read `\.vMotionEnabled` and, until this line, exactly one published
         // it — `VInspectorView`, for its own subtree. Everywhere else the key fell back to its
         // default of `true`, so the stage's staggered entrance, the tile hover, the sidebar rows,
@@ -109,15 +115,14 @@ struct RootView: View {
                             onConnect: { session.connect($0) },
                             onRemedy: { session.perform($0) },
                             onScan: { beginScan() })
-                .sheet(item: $scan) { model in
-                    discoverySheet(model)
-                }
         case .live:
             // The full window — toolbar, camera list, stage, inspector, status bar — around the
             // same tile `liveVideo` mounts. To fall back to the bare picture, substitute
             // `liveVideo` here; that property is kept for exactly that reason, and because it is
             // still the honest minimum if the chrome turns out to cost frames.
-            MainWindowView(session: session, window: window)
+            MainWindowView(session: session,
+                           window: window,
+                           onFindCameras: { beginScan() })
         }
     }
 
@@ -206,6 +211,16 @@ struct RootView: View {
     private func chose(_ camera: VDiscoveredCamera, from model: DiscoveryScanModel) {
         session.form.host = camera.address
         session.form.validate(.host)
+        // Choosing from the main window has to leave the user somewhere the password can be typed,
+        // and the form is the only such place — writing the address into a form nobody can see would
+        // look exactly like the sheet closing and nothing happening. The password is cleared with
+        // it: the one that is in the field belongs to the camera being left, and offering it to a
+        // different device is how an account gets locked out.
+        if session.phase == .live {
+            session.disconnect()
+            session.form.password = ""
+            session.form.clearDiagnosis()
+        }
         endScan(model)
     }
 

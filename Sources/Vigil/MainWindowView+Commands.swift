@@ -88,6 +88,9 @@ extension MainWindowView {
                                  category: .view,
                                  isEnabled: window.cycle.canCycle(cameraCount: 1,
                                                                   layout: window.layout)))
+        commands.append(VCommand(id: "camera.find",
+                                 title: Self.localized("Find Cameras…"),
+                                 category: .camera))
         return commands
     }
 
@@ -125,6 +128,7 @@ extension MainWindowView {
         case "view.cycle":     window.cycle = window.cycle.toggledRunning()
         case "record.toggle":  toggleRecording()
         case "capture.snapshot": takeSnapshot()
+        case "camera.find":    onFindCameras()
         default:
             if let layout = VGridLayout(rawValue: String(command.id.dropFirst("layout.".count))) {
                 selectLayout(layout)
@@ -160,13 +164,24 @@ extension MainWindowView {
     ///
     /// Removing them would make the menu's shape change as features land, and a user who learned
     /// where Settings sits would find it somewhere else next month.
+    ///
+    /// ⛔ `.discovery` left this set, and it should have left it when `VigilDiscovery` landed. The
+    /// coordinator, the sockets, the sheet and the model are all written and CI-tested, and the only
+    /// way into them was the connect form's *Find Cameras* button — reachable exactly when the user
+    /// has no camera, and gone the moment they have one. That is the opposite of when somebody looks
+    /// for a second device.
+    ///
+    /// The other four stay dimmed and are not given "not in this build" toasts: an item in a menu
+    /// can be genuinely disabled, which says the same thing without spending a click to say it.
     var unavailableOverflowItems: Set<VOverflowItem> {
-        [.videoWall, .pictureInPicture, .discovery, .streamDoctor, .settings]
+        [.videoWall, .pictureInPicture, .streamDoctor, .settings]
     }
 
-    /// Handles an overflow choice. Every item is disabled today, so this only closes the menu.
+    /// Handles an overflow choice.
     func select(_ item: VOverflowItem) {
         window.isOverflowMenuOpen = false
+        guard item == .discovery else { return }
+        onFindCameras()
     }
 
     /// Applies a layout and re-anchors the cycle, so a page index cannot survive into a layout that
