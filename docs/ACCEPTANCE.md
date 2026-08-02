@@ -163,9 +163,9 @@ process with `lsof -i` before recording a failure.
 **Fail:** any packet at all. That is a defect regardless of where it went or what it carried, and it
 is the one failure in this document that should stop a release rather than be filed.
 
-*Wording to fix in the specs, not in the code: §20.3 and API_CONTRACT §8.2 should say "zero egress
-beyond the local network" rather than "zero network connections". The code is right; the sentence
-predates the feature.*
+*Both specifications now say this: `FEATURES.md` §20.3 and `API_CONTRACT.md` §8.2 were reworded
+from "zero network connections" to "zero egress beyond the local network". The code was right and
+the sentences predated the scan — corrected there rather than worked around here.*
 
 ---
 

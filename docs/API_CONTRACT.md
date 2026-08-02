@@ -6120,8 +6120,10 @@ it is trusted.
 - [ ] `codesign --verify --deep --strict` clean; entitlements dump matches `Vigil.entitlements`.
 - [ ] `Info.plist` contains `NSLocalNetworkUsageDescription`, `NSBonjourServices`,
       `NSAllowsLocalNetworking`, the `vigil` URL type and **three** `UTExportedTypeDeclarations`.
-- [ ] Zero-egress test green: no network connection with no cameras configured, confirmed by
-      `HostPolicy` unit tests **and** a packet capture.
+- [ ] Zero-egress test green: no packet leaves the local network, with or without cameras
+      configured, confirmed by `HostPolicy` unit tests **and** a packet capture. Not "no
+      connection" — the R1 scan opens LAN sockets at launch by design; see FEATURES §20.3
+      and the capture filter in `docs/ACCEPTANCE.md` §3.5.
 - [ ] Secret-absence test green over `library.json`, `events.json`, the diagnostics bundle, the CSV
       export and the log export.
 - [ ] Leak tests: 500 reconnect cycles, 200 decoder start/stops, 100 discovery cycles all return to

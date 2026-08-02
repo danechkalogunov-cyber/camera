@@ -2205,8 +2205,16 @@ file descriptors ≤ 3 per stream (TCP) or 5 (UDP+RTCP).
 ### 20.3 No telemetry
 - No analytics SDK, no crash reporter, no usage ping, no "anonymous statistics" checkbox, no
   A/B framework, no remote config, no font or asset CDN, no automatic update check in 1.0.
-- Enforcement: `F-SEC-02`'s single policy-gated egress path, plus a test asserting **zero** network
-  connections with no cameras configured, plus a release-checklist packet capture.
+- Enforcement: `F-SEC-02`'s single policy-gated egress path, plus a test asserting **zero egress
+  beyond the local network** — with or without cameras configured — plus a release-checklist
+  packet capture.
+- ⚠️ Not "zero connections". Vigil opens LAN sockets with no cameras configured, on purpose:
+  R1 requires it to find a camera rather than ask for its address, so a scan starts at launch.
+  The rule this section exists to enforce is untouched by that — nothing may reach the
+  internet — and `HostPolicy` makes it a code property by refusing `.publicInternet` before a
+  socket is created. The earlier wording predated the scan and would have failed a build that
+  is behaving correctly. `docs/ACCEPTANCE.md` §3.5 carries the packet-capture form of the
+  check.
 - Crash handling is local only: an unclean-shutdown flag and the last 200 in-app breadcrumbs are
   written to `crash-context.json` for the *user* to send us deliberately via `F-DAT-03`. Nothing is
   uploaded.
