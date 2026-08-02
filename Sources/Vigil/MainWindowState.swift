@@ -35,11 +35,50 @@ final class MainWindowState {
 
     // MARK: - Chrome
 
-    /// Whether the camera list is shown. The toolbar's leading toggle writes this.
+    /// Whether the user wants the camera list shown. The toolbar's leading toggle writes this.
+    ///
+    /// ⚠️ The user's *intent*, not what is drawn — read ``showsSidebar`` for that. Keeping the two
+    /// apart is what lets a narrow window put the panel away without forgetting that the user had
+    /// asked for it: widen the window again and it comes back, rather than needing a second click.
     var isSidebarVisible = true
 
-    /// Whether the inspector is shown. The toolbar's trailing toggle writes this.
+    /// Whether the user wants the inspector shown. The toolbar's trailing toggle writes this.
     var isInspectorVisible = true
+
+    /// The window's content width, measured once per resize.
+    ///
+    /// `0` means "not measured yet", which is the first frame only. Both panels are shown in that
+    /// state rather than hidden: a window that opens with its chrome missing for one frame reads as
+    /// a flash of breakage, and the default window is 1280 pt wide — well over both thresholds.
+    var contentWidth: CGFloat = 0
+
+    /// Whether the camera list is actually drawn.
+    ///
+    /// ⛔ DESIGN.md §11.2 requires this and it was missing. The window's minimum is 640 pt wide; the
+    /// sidebar is 264 and the inspector 320, so at the minimum the two panels claimed 584 pt and the
+    /// video was left a 56 pt strip between them. §11.2's rule — "below 900 the inspector auto-hides;
+    /// below 700 wide the sidebar collapses" — exists precisely to stop that, and nothing implemented
+    /// it.
+    ///
+    /// ⚠️ §11.2 says the sidebar *collapses to the rail*, and there is no rail: `VSidebarView` has no
+    /// icon-only mode. Hiding it is the honest approximation until that mode exists — it loses the
+    /// camera list at 640 pt, where the alternative was losing the picture.
+    var showsSidebar: Bool {
+        guard contentWidth > 0 else { return isSidebarVisible }
+        return isSidebarVisible && contentWidth >= Self.sidebarMinimumWidth
+    }
+
+    /// Whether the inspector is actually drawn. See ``showsSidebar``.
+    var showsInspector: Bool {
+        guard contentWidth > 0 else { return isInspectorVisible }
+        return isInspectorVisible && contentWidth >= Self.inspectorMinimumWidth
+    }
+
+    /// Below this the inspector auto-hides (DESIGN.md §11.2).
+    static let inspectorMinimumWidth: CGFloat = 900
+
+    /// Below this the camera list goes too (DESIGN.md §11.2).
+    static let sidebarMinimumWidth: CGFloat = 700
 
     // MARK: - Stage
 
@@ -74,6 +113,13 @@ final class MainWindowState {
 
     /// Free-text filter over the camera list, bound to the toolbar's search field.
     var searchText = ""
+
+    /// Bumped to put the cursor in the toolbar's search field.
+    ///
+    /// A counter and not a `Bool`, because the request is an *event*: pressing `/` twice has to move
+    /// focus twice, and a flag that is already `true` the second time would not. The value itself
+    /// means nothing — `VToolbarView` watches it for a change.
+    var focusSearchRequests = 0
 
     /// Sidebar focus and selection.
     var sidebarSelection = VSidebarSelectionState()

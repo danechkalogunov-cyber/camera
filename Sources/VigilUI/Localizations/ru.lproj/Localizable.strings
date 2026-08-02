@@ -217,6 +217,8 @@
    одинаковую подпись (DESIGN.md §10.7). Та же строка служит всплывающей подсказкой. */
 "Toggle Sidebar" = "Показать или скрыть боковую панель";
 "Toggle Inspector" = "Показать или скрыть инспектор";
+"The window is too narrow for the camera list" = "Окно слишком узкое для списка камер";
+"The window is too narrow for the inspector" = "Окно слишком узкое для инспектора";
 "Cycle" = "Обход";
 "Cycle cameras" = "Обход камер";
 "More" = "Ещё";

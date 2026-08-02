@@ -141,12 +141,21 @@ struct MainWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VToolbarView(isSidebarVisible: window.isSidebarVisible,
-                         isInspectorVisible: window.isInspectorVisible,
+            VToolbarView(isSidebarVisible: window.showsSidebar,
+                         isInspectorVisible: window.showsInspector,
                          layout: window.layout,
                          searchText: $window.searchText,
                          isCycling: window.cycle.isRunning,
-                         showsSeparator: true,
+                         // ⛔ DESIGN.md §11.2: the hairline is drawn "only when the stage is
+                         // scrolled — over video there is no separator at all". This was `true`
+                         // unconditionally, so a 1 px line sat across the top of every live picture.
+                         // The library screens scroll; the tiles do not.
+                         showsSeparator: stageScrolls,
+                         canShowSidebar: window.contentWidth == 0
+                             || window.contentWidth >= MainWindowState.sidebarMinimumWidth,
+                         canShowInspector: window.contentWidth == 0
+                             || window.contentWidth >= MainWindowState.inspectorMinimumWidth,
+                         focusSearchRequests: window.focusSearchRequests,
                          onToggleSidebar: { window.isSidebarVisible.toggle() },
                          onToggleInspector: { window.isInspectorVisible.toggle() },
                          onSelectLayout: { selectLayout($0) },
@@ -155,7 +164,7 @@ struct MainWindowView: View {
                          onShowMore: { window.isOverflowMenuOpen = true })
 
             HStack(spacing: 0) {
-                if window.isSidebarVisible {
+                if window.showsSidebar {
                     sidebar
                         .frame(width: VTheme.Metrics.sidebarWidth)
                 }
@@ -168,7 +177,7 @@ struct MainWindowView: View {
                     .vShowsVideoOverlay(window.showsVideoOverlay)
                     .vTileActions(tileActions)
 
-                if window.isInspectorVisible {
+                if window.showsInspector {
                     VInspectorView(tab: $window.inspectorTab,
                                    state: inspectorState,
                                    actions: inspectorActions)
@@ -181,7 +190,7 @@ struct MainWindowView: View {
             // counters (UX.md §3.3), and the mockup puts the status inside the sidebar column rather
             // than across the window — so showing both stacked two status lines on top of each other.
             // The bar is kept for the collapsed case, where the sidebar's footer goes with it.
-            if !window.isSidebarVisible {
+            if !window.showsSidebar {
                 VStatusBarView(status: chromeStatus,
                                onOpenSettings: { window.sheet = .cameraSettings },
                                // The degraded chip is only reachable while something *is*
@@ -190,6 +199,20 @@ struct MainWindowView: View {
             }
         }
         .background(VTheme.Color.Layer.canvas)
+        // What decides whether the two side panels fit (DESIGN.md §11.2). Measured rather than read
+        // from the `NSWindow`, because it is the *content* width the panels have to divide up and
+        // the window's frame includes chrome this view does not own.
+        //
+        //     func onChange<V: Equatable>(of: V, initial: Bool = false,
+        //                                 _ action: @escaping (V, V) -> Void) -> some View
+        .background {
+            GeometryReader { proxy in
+                SwiftUI.Color.clear
+                    .onChange(of: proxy.size.width, initial: true) { _, width in
+                        window.contentWidth = width
+                    }
+            }
+        }
         // The toolbar *is* the title bar. `WindowChrome` sets `.fullSizeContentView` and nudges the
         // traffic lights down 10 pt so they centre in a 52 pt bar, but SwiftUI still insets content
         // by the title bar's safe area — which left the lights stranded in an empty strip above the
@@ -226,6 +249,14 @@ struct MainWindowView: View {
                 window.sidebarSelection.selectAll(in: sidebarTree.visibleCameras)
             })
                 .keyboardShortcut("a", modifiers: .command)
+                .hidden()
+            // UX.md §4: `/` moves the cursor to the toolbar's search field. `VToolbarView` has taken
+            // a `focusSearchRequests` counter since it was written — the field's `@FocusState`
+            // cannot be lifted out without making the whole view generic — and nothing ever
+            // incremented it, so the `/` key cap drawn inside the field advertised a shortcut that
+            // did not exist.
+            Button("", action: { window.focusSearchRequests &+= 1 })
+                .keyboardShortcut("/", modifiers: [])
                 .hidden()
         }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
@@ -456,6 +487,12 @@ struct MainWindowView: View {
         } else {
             stage
         }
+    }
+
+    /// Whether what is under the toolbar scrolls, which is the only case DESIGN.md §11.2 draws the
+    /// toolbar's hairline in. The three library screens scroll; the tile stage does not.
+    var stageScrolls: Bool {
+        VLibrarySection(window.sidebarSelection.focus) != nil
     }
 
     /// The advisory banner, when there is one.

@@ -145,6 +145,16 @@ package struct VToolbarView: View {
     /// decides; the toolbar draws.
     package let showsSeparator: Bool
 
+    /// Whether the window is wide enough to hold the camera list at all (DESIGN.md §11.2).
+    ///
+    /// The toggle is *disabled* rather than merely unlit when this is `false`. A button that stays
+    /// pressable while the panel it names cannot appear is a button that does nothing, and the
+    /// tooltip is the only place the width rule can be explained.
+    package let canShowSidebar: Bool
+
+    /// Whether the window is wide enough to hold the inspector. See ``canShowSidebar``.
+    package let canShowInspector: Bool
+
     /// Incremented by the window to put the cursor in the search field — the `/` shortcut, or the
     /// palette handing over. Any change moves focus; the value itself means nothing.
     package let focusSearchRequests: Int
@@ -188,6 +198,8 @@ package struct VToolbarView: View {
                  searchText: Binding<String>,
                  isCycling: Bool = false,
                  showsSeparator: Bool = false,
+                 canShowSidebar: Bool = true,
+                 canShowInspector: Bool = true,
                  focusSearchRequests: Int = 0,
                  onToggleSidebar: @escaping () -> Void = {},
                  onToggleInspector: @escaping () -> Void = {},
@@ -201,6 +213,8 @@ package struct VToolbarView: View {
         self._searchText = searchText
         self.isCycling = isCycling
         self.showsSeparator = showsSeparator
+        self.canShowSidebar = canShowSidebar
+        self.canShowInspector = canShowInspector
         self.focusSearchRequests = focusSearchRequests
         self.onToggleSidebar = onToggleSidebar
         self.onToggleInspector = onToggleInspector
@@ -282,7 +296,10 @@ package struct VToolbarView: View {
                 style: isSidebarVisible ? .secondary : .icon,
                 accessibilityLabel: "Toggle Sidebar",
                 action: onToggleSidebar)
-            .help(Text("Toggle Sidebar", bundle: .vigilUI))
+            .disabled(!canShowSidebar)
+            .help(canShowSidebar
+                ? Text("Toggle Sidebar", bundle: .vigilUI)
+                : Text("The window is too narrow for the camera list", bundle: .vigilUI))
     }
 
     private var inspectorToggle: some View {
@@ -290,7 +307,10 @@ package struct VToolbarView: View {
                 style: isInspectorVisible ? .secondary : .icon,
                 accessibilityLabel: "Toggle Inspector",
                 action: onToggleInspector)
-            .help(Text("Toggle Inspector", bundle: .vigilUI))
+            .disabled(!canShowInspector)
+            .help(canShowInspector
+                ? Text("Toggle Inspector", bundle: .vigilUI)
+                : Text("The window is too narrow for the inspector", bundle: .vigilUI))
     }
 
     /// Camera cycling.

@@ -231,6 +231,8 @@
    share one (DESIGN.md §10.7); each label doubles as the control's tooltip. */
 "Toggle Sidebar" = "Toggle Sidebar";
 "Toggle Inspector" = "Toggle Inspector";
+"The window is too narrow for the camera list" = "The window is too narrow for the camera list";
+"The window is too narrow for the inspector" = "The window is too narrow for the inspector";
 "Cycle" = "Cycle";
 "Cycle cameras" = "Cycle cameras";
 "More" = "More";
