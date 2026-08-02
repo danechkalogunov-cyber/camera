@@ -60,9 +60,14 @@ struct StageTimelineOverlay: View {
     let onZoom: (TimelineZoom) -> Void
 
     /// The playback-speed stop in force, and whether one can be asked for at all.
-    var rate: TimelinePlaybackRate = .normal
-    var isRateAdjustable = false
-    var onRate: (TimelinePlaybackRate) -> Void = { _ in }
+    ///
+    /// ⚠️ `let`, and passed through the initialiser above. As `var`s with defaults they compiled
+    /// and silently did nothing: this type declares its initialiser by hand — the header explains
+    /// why — so a default on the property is not a default on the parameter, and the call site kept
+    /// building overlays whose speed was permanently `.normal`.
+    let rate: TimelinePlaybackRate
+    let isRateAdjustable: Bool
+    let onRate: (TimelinePlaybackRate) -> Void
     let onActivateMarker: (TimelineMarkerCluster) -> Void
 
     /// Steps the playhead by a number of seconds, positive or negative.
@@ -119,7 +124,10 @@ struct StageTimelineOverlay: View {
          onStepToEdge: @escaping (Bool) -> Void,
          onStepToMarker: @escaping (Bool) -> Void,
          onGoToDayEdge: @escaping (Bool) -> Void,
-         onDismiss: @escaping () -> Void) {
+         onDismiss: @escaping () -> Void,
+         rate: TimelinePlaybackRate = .normal,
+         isRateAdjustable: Bool = false,
+         onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.archive = archive
         self.clock = clock
         self.onSelectDay = onSelectDay
@@ -136,6 +144,9 @@ struct StageTimelineOverlay: View {
         self.onStepToMarker = onStepToMarker
         self.onGoToDayEdge = onGoToDayEdge
         self.onDismiss = onDismiss
+        self.rate = rate
+        self.isRateAdjustable = isRateAdjustable
+        self.onRate = onRate
     }
 
     // MARK: - View

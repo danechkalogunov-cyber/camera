@@ -24,6 +24,7 @@ import Observation
 
 import VigilCore
 import VigilProtocols
+import VigilUI
 
 // MARK: - AppLibraryModel
 
