@@ -54,7 +54,33 @@ TCP connect, `OPTIONS`, both `DESCRIBE`s and `SETUP`:
 So "reduce it to the minimum" has a floor of roughly **1.2 s on this camera**, and the floor is the
 device's, not Vigil's.
 
-## Why it is not implemented yet
+## Tried on hardware, and reverted
+
+In-session seeking was implemented and tested against the DS-I256 on 2026-08-02. **It does not
+work on this firmware.** Seeking produced a connection error, and the wait was no shorter — so the
+3 s fallback was being spent and then the session rebuilt anyway, which is strictly worse than not
+trying.
+
+Reverted in full (`Revert "Seek inside the open session instead of rebuilding it"`). Recorded here
+rather than left as a gap in the history, because the reasoning that led to it is sound and someone
+will have it again: `RTSPSessionDriving.perform` takes commands, `.play(rangeText:)` exists,
+`PlaybackLocator.clockRange` already formats `clock=…-…`, and the arithmetic says a third off. All
+of that is still true. What is also true is that V5.5.6 on a DS-I256 will not reposition a session
+opened with `?starttime=`.
+
+⚠️ If this is attempted again, it needs a per-device capability probe — try once, remember the
+answer, and never pay the timeout twice — not another unconditional fast path. And it needs a
+camera to develop against, because nothing in this repository can tell you whether a firmware
+honours the header.
+
+## What is left
+
+Nothing on the client side worth having. With in-session seeking out, the remaining candidates are
+`OPTIONS` (~12 ms) and the unauthenticated `DESCRIBE` that collects the 401 (~10 ms) — about 1 % of
+the wait between them. The measurement says the time belongs to the camera, and the honest response
+is to make the wait legible rather than to keep shaving at it.
+
+## The original reasoning, kept for the record
 
 The change is not small, and its risk lands on a feature that currently works.
 
