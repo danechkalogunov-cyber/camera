@@ -313,7 +313,22 @@ extension MainWindowView {
         VGridStageView(assignment: stageAssignment,
                        cameras: stageCameras,
                        selection: cameraID,
+                       // Keyboard focus moving between cells binds the sidebar and the inspector
+                       // to whatever it lands on, which is what makes ⌥-arrow useful rather than
+                       // decorative. One cell today; the mapping is the same at sixteen.
+                       onFocusCell: { index in
+                           // `cells` is one optional per cell; an empty one selects nothing rather
+                           // than clearing what is selected, because arrowing across a gap should
+                           // not deselect the camera you came from.
+                           let cells = stageAssignment.cells
+                           guard cells.indices.contains(index), let id = cells[index] else { return }
+                           window.sidebarSelection.select(.camera(id))
+                       },
+                       // Selecting a tile is selecting that camera everywhere else.
+                       onSelectCamera: { id in window.sidebarSelection.select(.camera(id)) },
                        onToggleFullscreen: { id in focusCamera(id) },
+                       // The empty cell's "+" is the same act as the sidebar's.
+                       onAddCamera: { _ in addCamera() },
                        onRetry: { _ in session.perform(.retry) },
                        onRemedy: { _, remedy in session.perform(remedy) },
                        video: { _ in
