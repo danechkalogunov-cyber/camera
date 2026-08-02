@@ -237,9 +237,23 @@ extension RTSPConnection {
     private func record(_ event: RTSPLogEvent) {
         let level: LogLevel
         switch event {
-        case .requestSent, .responseReceived, .sdpParsed, .trackControlResolved,
+        case .requestSent, .sdpParsed, .trackControlResolved,
              .keepaliveSent, .sessionEstablished, .serverRequest:
             level = .debug
+        // ⬆️ Promoted from `.debug`, and it is the one line in this switch worth arguing about.
+        //
+        // `.responseReceived` carries `rttMilliseconds`, which is the only per-request timing this
+        // app produces. At debug it was absent from every field log anyone actually captures, so a
+        // real report of "playback takes a second and a half to start" arrived with a 1.3 s gap in
+        // it and no way to say which of OPTIONS, DESCRIBE, SETUP or PLAY spent it. The difference
+        // matters: a slow PLAY on a `?starttime=` URL is the camera seeking its own disk and no
+        // client change touches it, while a slow OPTIONS is a round trip we can simply stop making.
+        //
+        // The cost is one line per response. In a running session that is a keepalive every ~30 s,
+        // which is a rate a camera app should be able to afford — and which is itself useful when
+        // the complaint is that video stopped.
+        case .responseReceived:
+            level = .info
         case .authChallenged, .authRetried, .assumedInterleavedChannels, .trackSkipped,
              .noticeReceived, .redirected:
             level = .info
