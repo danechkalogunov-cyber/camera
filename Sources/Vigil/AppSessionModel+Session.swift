@@ -73,7 +73,18 @@ extension AppSessionModel {
     /// The form path: write the password to the Keychain, then stream.
     func connect(_ request: ConnectRequest, ref: CredentialRef, rtspPath: String?) async {
         do {
-            let camera = try makeCamera(host: request.host, ref: ref, rtspPath: rtspPath)
+            // ⚠️ The remembered name is carried in, and this is not cosmetic. Built without one,
+            // `Camera.validated()` invents "Camera 192.168.1.64" from the host — and because
+            // `rememberThisCamera()` runs on every first frame, that invention was then written
+            // over whatever the user had renamed the camera to. A rename survived until the first
+            // reconnect and no longer, which reads exactly like "renaming does not save".
+            //
+            // Only for the same host: a different address is a different camera and must not
+            // inherit its name.
+            let remembered = LastConnection.load(from: defaults)
+            let rememberedName = remembered?.host == request.host ? remembered?.name : nil
+            let camera = try makeCamera(host: request.host, ref: ref, rtspPath: rtspPath,
+                                        name: rememberedName)
             if request.password.isEmpty {
                 // A retry after the password already reached the Keychain: the form clears its
                 // secure field once a frame arrives, so the empty string it now holds must never be

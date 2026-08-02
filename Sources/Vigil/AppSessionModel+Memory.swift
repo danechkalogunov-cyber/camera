@@ -19,20 +19,44 @@ import VigilProtocols
 
 extension AppSessionModel {
 
+    /// Stores the connection that just produced a picture.
+    ///
+    /// ⛔ MERGES INTO THE EXISTING RECORD, IT DOES NOT REPLACE IT. This used to build a fresh
+    /// `LastConnection` every time, and because it is called on **every** first frame — so after
+    /// every reconnect and after every archive seek — it silently reset every field it did not
+    /// mention. `showsVideoOverlay` was one such field: the user turned the chrome off, the next
+    /// seek wrote a new record, the flag went back to its `true` default, and the setting looked
+    /// like it had never been saved. Anything added to this record later would have been lost the
+    /// same way, which is why the merge is the rule and not a patch for one flag.
+    ///
+    /// A different host is a different camera, so its settings do not come along: the record is
+    /// rebuilt from scratch in that case, deliberately.
     func rememberThisCamera() {
         guard let activeRef, let camera else { return }
+        var record: LastConnection
+        if let existing = LastConnection.load(from: defaults), existing.host == camera.host {
+            record = existing
+        } else {
+            record = LastConnection(host: camera.host,
+                                    account: form.request.username,
+                                    credentialRef: activeRef,
+                                    rtspPath: resolvedPath)
+        }
+        record.host = camera.host
         // `form.request.username`, not `form.username`: the request is the trimmed form, and it is
         // what `knownHandle(for:)` compares against on the next connect. Storing the raw field
         // would make a name typed with a trailing space fail to match itself, mint a second
         // `CredentialRef`, orphan the Keychain item and lose the learned RTSP path.
-        LastConnection(host: camera.host,
-                       account: form.request.username,
-                       credentialRef: activeRef,
-                       rtspPath: resolvedPath,
-                       // The name the user gave it, not the fallback `Camera.validated()` invents
-                       // from the host — storing that one would make "Camera 192.168.1.64" look
-                       // like a deliberate choice on the next launch.
-                       name: camera.name).save(to: defaults)
+        record.account = form.request.username
+        record.credentialRef = activeRef
+        record.rtspPath = resolvedPath
+        // Safe to write unconditionally *because* `connect(_:ref:rtspPath:)` now seeds the camera
+        // with the remembered name. Before that it did not, `Camera.validated()` invented "Camera
+        // 192.168.1.64" from the host, and this line then replaced the user's rename with the
+        // invention on the first reconnect. Fixing it here instead would have meant re-deriving
+        // "is this name synthesised?", which duplicates a rule that lives in `validated()`.
+        record.name = camera.name
+        record.save(to: defaults)
     }
 
     /// Plays the archive from one instant, through the same decode path as the live picture.
