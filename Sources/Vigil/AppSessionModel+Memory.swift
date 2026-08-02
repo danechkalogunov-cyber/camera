@@ -57,12 +57,28 @@ extension AppSessionModel {
         guard let camera, let activeRef else { return }
         seekGeneration &+= 1
         let generation = seekGeneration
+        let previous = playback
         var target = camera
         target.rtspPathOverride = locator.rawQuery.isEmpty
             ? locator.path
             : locator.path + "?" + locator.rawQuery
         playback = locator
         seekStartedAt = dependencies.clock.now()
+
+        // Fast path: an archive session on this very track is already open, so move it instead of
+        // rebuilding it. Measured on a DS-I256 (docs/PLAYBACK-LATENCY.md): this skips the connect,
+        // OPTIONS, both DESCRIBEs and SETUP, which together are ~650 ms of a ~1 900 ms seek. What
+        // it does not skip is PLAY itself (~870 ms) and the first keyframe (~350 ms) — the camera
+        // seeking and then encoding, which no client-side change can avoid.
+        if previous?.path == locator.path, let controller,
+           await controller.seekWithinSession(toRange: locator.clockRange) {
+            // ⛔ The pipeline must be told, and nothing else will tell it. On the rebuild path the
+            // reset rides on `.connectAttemptStarted`; an in-session seek raises no such event, so
+            // without this the decoder would carry frames from the old position across the jump.
+            resetDecodePipeline()
+            armSeekFallback(generation: generation, camera: target, ref: activeRef)
+            return
+        }
         dependencies.logger.info(.app, "seek: opening \(target.rtspPathOverride ?? "")")
         stopSession()
         guard generation == seekGeneration else {
@@ -71,6 +87,34 @@ extension AppSessionModel {
         }
         beginConnecting()
         await stream(camera: target, ref: activeRef)
+    }
+
+    /// Rebuilds the session if an in-session seek produced no picture.
+    ///
+    /// **Why a timeout and not an error.** `perform(.play(rangeText:))` is handed to the session and
+    /// answered on the event stream, so firmware that ignores `Range:` on a URL opened with
+    /// `?starttime=` does not fail — it simply keeps sending the old position, or nothing. There is
+    /// no error to catch, only a picture that does not arrive, and the only place that knows what
+    /// was expected is here.
+    ///
+    /// The budget is deliberately generous against the measurement: PLAY plus the first keyframe is
+    /// ~1.2 s on the device in docs/PLAYBACK-LATENCY.md, so 3 s is more than double and still far
+    /// under the wait it is protecting against. Overshooting costs a slower seek on cameras that do
+    /// not support this; undershooting would tear down a session that was about to deliver.
+    ///
+    /// ⚠️ Worst case is the old behaviour plus this timeout — never a broken seek. That is the whole
+    /// design: the fast path is an attempt, not an assumption, because no camera here can be asked
+    /// in advance whether it honours the header.
+    private func armSeekFallback(generation: UInt64, camera: Camera, ref: CredentialRef) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, generation == seekGeneration, seekStartedAt != nil else { return }
+            dependencies.logger.notice(.app, "in-session seek produced no picture; rebuilding")
+            stopSession()
+            guard generation == seekGeneration else { return }
+            beginConnecting()
+            await stream(camera: camera, ref: ref)
+        }
     }
 
     /// Returns the picture to the live stream.
