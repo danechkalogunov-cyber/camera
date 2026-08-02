@@ -302,75 +302,27 @@ struct MainWindowView: View {
             guard let notice else { return }
             window.toast = MainWindowToast(kind: .warning, message: notice)
         }
-    }
-
-    // MARK: - Sheets
-
-    /// The form behind whichever sheet is up.
-    ///
-    /// One `switch` rather than five `.sheet(isPresented:)` modifiers stacked on the same view:
-    /// SwiftUI presents only one of those and drops the rest silently, so two that could both be
-    /// true is a bug waiting for a fast double-click. `MainWindowSheet` makes that unrepresentable.
-    @ViewBuilder
-    private func sheetBody(_ sheet: MainWindowSheet) -> some View {
-        switch sheet {
-        case .cameraSettings:
-            CameraSettingsSheet(name: identity.name,
-                                groupID: groups.group(for: cameraID),
-                                showsOverlay: window.showsVideoOverlay,
-                                host: identity.host,
-                                httpPort: session.camera?.httpPort ?? 80,
-                                model: deviceInfo.identity.model,
-                                groups: groups.groups,
-                                onSave: { name, group, overlay in
-                                    renameCamera(to: name)
-                                    groups.setGroup(group, for: cameraID)
-                                    window.showsVideoOverlay = overlay
-                                    session.rememberVideoOverlay(overlay)
-                                    window.sheet = nil
-                                },
-                                onCancel: { window.sheet = nil })
-        case .newGroup:
-            GroupNameSheet(isNew: true,
-                           onSave: { name in
-                               // The camera goes in as the group is created. A user who makes a
-                               // group while looking at a camera means that camera to be in it.
-                               groups.create(named: name, cameras: [cameraID])
-                               window.sheet = nil
-                           },
-                           onCancel: { window.sheet = nil })
-        case .renameGroup(let id):
-            GroupNameSheet(name: groups.groups.first { $0.id == id }?.name ?? "",
-                           isNew: false,
-                           onSave: { name in
-                               groups.rename(id, to: name)
-                               window.sheet = nil
-                           },
-                           onCancel: { window.sheet = nil })
-        case .newBookmark(let instant):
-            BookmarkSheet(instant: instant,
-                          isNew: true,
-                          onSave: { title, note in
-                              bookmarks.add(cameraID: cameraID,
-                                            instant: instant,
-                                            title: title,
-                                            note: note)
-                              window.sheet = nil
-                          },
-                          onCancel: { window.sheet = nil })
-        case .editBookmark(let id):
-            let record = bookmarks.bookmarks.first { $0.id == id }
-            BookmarkSheet(title: record?.title ?? "",
-                          note: record?.note ?? "",
-                          instant: record?.instant ?? Date(),
-                          isNew: false,
-                          onSave: { title, note in
-                              bookmarks.update(id, title: title, note: note)
-                              window.sheet = nil
-                          },
-                          onCancel: { window.sheet = nil })
+        // ⛔ `RecordingCoordinator`'s own header says it: "Every failure becomes a logged, named
+        // outcome in `lastFailure`. A Record button that does nothing and says nothing is the exact
+        // shape this project refuses." It has been exactly that shape, because nothing read the
+        // property. A destination the sandbox will not write to, a disk with no room, a clip that
+        // closes without producing a file — all of them logged, none of them said.
+        .onChange(of: recording.lastFailure) { _, failure in
+            guard let failure else { return }
+            window.toast = MainWindowToast(
+                kind: .error,
+                message: String(format: Self.localized("Recording failed: %@"), failure))
+        }
+        // The same omission, one coordinator over. A PTZ command that the camera refuses left the
+        // pad looking like it had worked.
+        .onChange(of: ptz.lastFailure) { _, failure in
+            guard let failure else { return }
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: String(format: Self.localized("The camera refused that move: %@"), failure))
         }
     }
+
 
     /// Renames the camera and remembers the new name for the next launch.
     ///

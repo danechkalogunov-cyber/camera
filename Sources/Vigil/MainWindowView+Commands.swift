@@ -147,7 +147,22 @@ extension MainWindowView {
             recording.stop()
             return
         }
-        guard let camera = session.camera, let format = session.format else { return }
+        // ⛔ Said, not swallowed. This used to `return` on both guards, so ⌘R and the tile's Record
+        // button did nothing at all before the DESCRIBE landed — which is precisely the window in
+        // which an eager user presses them. The palette entry is disabled in that state; a keyboard
+        // shortcut and a tile button are not, and cannot be without a per-tile enabled set.
+        guard let camera = session.camera else {
+            window.toast = MainWindowToast(kind: .warning,
+                                           message: Self.localized("Connect a camera first"))
+            return
+        }
+        guard let format = session.format else {
+            window.toast = MainWindowToast(
+                kind: .info,
+                message: Self.localized("Recording starts once the stream's format is known. "
+                                        + "Try again in a moment."))
+            return
+        }
         recording.start(camera: camera,
                         codec: format.videoCodec,
                         parameterSets: format.parameterSets,

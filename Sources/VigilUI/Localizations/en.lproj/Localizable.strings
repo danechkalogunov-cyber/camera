@@ -490,6 +490,9 @@
 "The camera accepted the reset and reported the same settings — its picture was already at the defaults." = "The camera accepted the reset and reported the same settings — its picture was already at the defaults.";
 "The camera refused to reset its picture settings: %@" = "The camera refused to reset its picture settings: %@";
 "Connect a camera first" = "Connect a camera first";
+"Recording failed: %@" = "Recording failed: %@";
+"The camera refused that move: %@" = "The camera refused that move: %@";
+"Recording starts once the stream's format is known. Try again in a moment." = "Recording starts once the stream's format is known. Try again in a moment.";
 "This camera has no reset command, so Vigil wrote the standard picture values instead." = "This camera has no reset command, so Vigil wrote the standard picture values instead.";
 
 /* WINDOW SHEETS — camera settings, groups, bookmarks */
