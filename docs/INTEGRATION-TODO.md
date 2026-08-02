@@ -11,8 +11,11 @@ showing moving video.
 
 ## Status, checked against the tree rather than against reports
 
-Re-verified by grep on 2026-07-26, because an item marked done in a report and an item actually
-present in `Sources/` are different things and this list is only worth keeping if it tracks the second.
+Re-verified by grep on 2026-07-26 and again on 2026-08-02, because an item marked done in a report
+and an item actually present in `Sources/` are different things and this list is only worth keeping
+if it tracks the second.
+
+The 2026-08-02 pass closed item 10 and left item 11 open on purpose — see the note under each.
 
 | # | Item | State | Evidence |
 |---|---|---|---|
@@ -25,6 +28,9 @@ present in `Sources/` are different things and this list is only worth keeping i
 | 7 | Nothing calls `reset()`/`stop()` | **closed** | `stop(reason:)` from `stopSession()`; `reset()` from the new `.connectAttemptStarted` arm in `AppSessionModel.apply(_:)` — chosen because it is the only hook that is provably a gap, so the reset cannot race the detached decode task. |
 | 8 | `.noFormat` is a silent black tile | **closed, all three links** | `VigilRender` witnesses `didDropFrames`; `TileVideoSink` forwards it (`DecodePipeline` holds the sink, not the tile, so without that forward the report died on the protocol default); `RootView` passes `onFramesDropped` and `onDecodeFailure`, which were defaulting to `nil`, and the **logger**, which was defaulting to `NullLogger`. Fifty `noFormat` drops now force a keyframe, which is what makes Hikvision re-send the parameter sets. |
 | 9 | Two contract deviations | **recorded** | `requestKeyframe` stays sync. `streamDidReset`/`streamDidEnd` keep defaults; `didDropFrames` no longer does, which was the one that made 8 silent. |
+| 10 | Discovery has no coordinator | **closed** | `VigilDiscovery/Coordinator/DiscoveryCoordinator.swift` plus `+Multicast`/`+Probes`, and `Transport/Protocols.swift`'s eleven members. `VigilTransport/Discovery/LiveDiscoveryEnvironment.make(logger:)` supplies the real sockets; tests 78–100 exist and run on Linux. Reachable from the UI two ways — `Find Cameras…`, and a silent scan at launch when there is no address, which is what R1 needs. |
+| 11 | Two fixtures synthesised, not captured | **open, and now testable** | Unchanged in the tree and unchanged in risk: no `sysctl(PF_ROUTE)` and no socket exists in the container. What changed is that both are now reachable on a Mac, so `docs/ACCEPTANCE.md` §3 is where they get answered rather than argued about. |
+| 12 | Spec error corrected at source | **recorded** | Kept below as the record. |
 
 Items 1–3 blocked first light and none of them do now. What remains below is kept as the record of why
 each was decided the way it was.
@@ -136,13 +142,23 @@ run: SADP and WS-Discovery codecs (byte-exact, hostile-input tested), the sweep 
 subnet guard, the Van der Corput host order, the ARP decoder, the vendor classifier, the union-find
 merge engine and the progress estimator — 6 179 lines, 293 tests.
 
-What is missing is the actor that sequences the phases, enforces the time budget, emits progress at
-20 Hz, handles cancellation, and the seven injected socket protocols it would talk through. So
-`spec-discovery.md` tests 78–100 cannot be written yet, and the feature is unreachable from the UI.
+**Closed.** The actor exists and so does everything it needed: `DiscoveryCoordinator` sequences the
+phases, enforces the time budget, emits progress at 20 Hz and handles cancellation;
+`Transport/Protocols.swift` declares the eleven injected members;
+`VigilTransport/Discovery/LiveDiscoveryEnvironment.make(logger:)` supplies the real sockets behind
+them. Tests 78–100 are written and run on Linux against fakes.
 
-This is a clean seam rather than a defect — everything the coordinator needs is in place and typed
-(`ProgressEstimator.shouldEmit`, `DiscoveryDeadline`, `MergeEngine`, `DiscoveryPlan`) — but it is the
-single largest remaining item in this module and it must not be mistaken for "discovery is done".
+It is reachable from the UI by two paths, deliberately different: `Find Cameras…` opens a sheet and
+lets a person choose, and a **silent** scan runs at launch when there is no address to start from,
+filling in the first confident answer. The second is what R1 rests on — "launch it, type the
+password, see a picture" has no room in it for choosing from a list.
+
+⚠️ What closing this item does *not* mean: that discovery works. Every test above drives fake
+sockets, which by construction answer what they were told to. Three defects in this path were found
+only by running the suite on a real runner — `.finished` published before the sockets closed, a
+channel that finished opening after a run ended and was never closed, and a scan that kept opening
+sockets after cancellation. All three are fixed; none of them was visible to a compiler, and the
+first real camera is still ahead. That is item 11 and `docs/ACCEPTANCE.md`.
 
 ### 11. Two fixtures are synthesised from a spec, not captured from a Mac
 
