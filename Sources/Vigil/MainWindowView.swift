@@ -218,6 +218,12 @@ struct MainWindowView: View {
             // still works" and "type your password again".
             await library.load(importingLegacyFrom: session.defaults)
         }
+        // Filed once a picture exists, which is the only moment Vigil knows the record is good for
+        // anything. Adding at connect time would fill the list with addresses that never answered.
+        .onChange(of: session.isReceivingMedia) { _, isReceiving in
+            guard isReceiving else { return }
+            Task { await session.fileCurrentCameraIfNew(into: library) }
+        }
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
@@ -384,6 +390,7 @@ struct MainWindowView: View {
                          }
                      },
                      onAddGroup: { window.sheet = .newGroup },
+                     onAddCamera: { addCamera() },
                      onClearSearch: { window.searchText = "" },
                      cameraMenu: { camera in cameraMenu(camera) },
                      groupMenu: { group in groupMenu(group) },

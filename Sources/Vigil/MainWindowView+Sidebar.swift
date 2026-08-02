@@ -80,6 +80,14 @@ extension MainWindowView {
         window.sidebarSelection.select(selection)
         guard case .camera(let id) = selection else { return }
         focusCamera(id)
+        // A row that is not the camera on screen means "show me that one". Before the library
+        // existed there was only ever one row, so focusing was the whole of it; now focusing a
+        // different camera without connecting to it would leave the stage on the old picture with
+        // the new name selected, which is the worst of both.
+        guard id != cameraID, let target = library.cameras.first(where: { $0.id == id }) else {
+            return
+        }
+        Task { await session.switchTo(target) }
     }
 
     /// Brings the window to one camera.
@@ -94,6 +102,24 @@ extension MainWindowView {
         window.sidebarSelection.select(.camera(id))
         selectLayout(.single)
         window.isInspectorVisible = false
+    }
+
+    /// Puts the connect form up for a camera that is not in the library yet.
+    ///
+    /// **It disconnects, and it says so by doing it.** This build streams one camera at a time, so
+    /// there is no honest way to add a second while the first is on screen — a form floating over
+    /// live video would imply the video survives, and it will not. Going back to the form is the
+    /// truthful version of the same action, and the camera being left is already in the library, so
+    /// one click in the sidebar brings it back.
+    ///
+    /// The address is cleared and the account is not: a second camera on the same site almost
+    /// always shares its account, and `admin` is the answer often enough that pre-filling it is
+    /// worth more than the rare correction.
+    func addCamera() {
+        session.disconnect()
+        session.form.host = ""
+        session.form.password = ""
+        session.form.clearDiagnosis()
     }
 
     /// Moves the focused camera one row up or down the *visible* list.

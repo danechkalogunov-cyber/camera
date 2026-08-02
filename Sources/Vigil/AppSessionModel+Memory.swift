@@ -98,6 +98,43 @@ extension AppSessionModel {
         await stream(camera: target, ref: activeRef)
     }
 
+    /// Streams a different camera from the library.
+    ///
+    /// **One stream at a time, and that is the honest shape of this build.** Switching stops the
+    /// current session before starting the next — it does not run two. A viewer who selects another
+    /// camera wants to see it, and pretending otherwise would mean two decode pipelines, two
+    /// recorders and two archive scrubbers with no UI that can show either pair.
+    ///
+    /// The credential comes from the stored record and is never re-asked for: `Camera.credentialRef`
+    /// is the Keychain handle the library carried through from wherever the camera was added. A
+    /// switch that prompted for a password would make the list useless.
+    ///
+    /// Returns to live and to normal speed on the way, because neither the archive position nor the
+    /// scale means anything on a different device.
+    func switchTo(_ target: Camera) async {
+        guard target.id != camera?.id else { return }
+        playback = nil
+        playbackRate = .normal
+        seekGeneration &+= 1
+        seekStartedAt = nil
+        resolvedPath = target.capabilities?.resolvedRTSPPath
+        dependencies.logger.info(.app, "switching camera", ["host": target.host])
+        stopSession()
+        beginConnecting()
+        form.host = target.host
+        await stream(camera: target, ref: target.credentialRef)
+    }
+
+    /// Files the camera that is streaming into the library, if it is not there already.
+    ///
+    /// Called once a picture exists, which is the only moment Vigil knows the record is good for
+    /// anything. Adding at connect time would fill the list with addresses that never answered.
+    func fileCurrentCameraIfNew(into library: AppLibraryModel) async {
+        guard let camera else { return }
+        guard !library.cameras.contains(where: { $0.host == camera.host }) else { return }
+        await library.add(camera)
+    }
+
     /// Changes archive playback speed, which means rebuilding the session at the current position.
     ///
     /// ⚠️ A RECONNECT, NOT A COMMAND, AND THAT IS FORCED BY THE FIRMWARE. RTSP changes speed with a
