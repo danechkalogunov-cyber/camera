@@ -361,11 +361,11 @@ expectation, and every time it was loosened-by-instinct the underlying bug would
 three for three. If it fires again, the residual window named in defect 13 is the first suspect, and
 the fix for that is an absolute `sleep(until:)` rather than a wider tolerance.
 
-#### 2026-08-02: it fired again, and the diagnosis moved
+#### 2026-08-02: it fired again — and the fix attempt failed, twice over
 
 `sleep(until:)` exists now, and `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` failed on
 Linux anyway — on a commit whose whole diff was macOS-only files, so nothing in it can have caused
-this. The signature is **different from defect 13's and that difference is the finding**:
+this. The signature is **different from defect 13's**:
 
 ```
 wsdProbes → [10 ms, 550 ms, 1010 ms]   expected [10, 510, 1010]
@@ -376,7 +376,7 @@ defect 13 shifted *every* probe on *both* channels uniformly. A uniform shift is
 against a stale reading; a single displaced sample is not. The first and third probes landing exactly
 on their deadlines proves the registration window defect 13 named is closed.
 
-What is left is the window **after** the wake, not before the registration:
+The window that is left is **after** the wake, not before the registration:
 
 1. The pump resumes the sleeper due at 510 ms and holds `pendingWakes` so it cannot advance.
 2. The woken task returns from `sleep(untilRegistered:)`, whose `defer` clears that wake at once.
@@ -391,31 +391,37 @@ reverted — it broke `discoveryCoordinatorStreamTerminationCancelsTheRun` on *b
 the pump and `DiscoveryTestBed.run`'s settle loop are coupled through real time. Widening the
 assertion buries the next real defect, three for three.
 
-#### What was done instead: settle credits
+#### The settle-credit attempt, and why it was reverted
 
-Three consecutive Linux runs produced the *identical* `[10, 550, 1010]`, which is not the profile of
-a race — it is a deterministic ordering that happens to lose. That made it worth fixing rather than
-recording.
+⛔ **This was tried and it failed. Do not try it again.**
 
-`advanceToEarliestDeadline` now mints one **settle credit** per task it wakes, and a credit is spent
-by that task's next clock *read* — `now()`, `wallNow`, or starting another sleep. Those are the calls
-a task makes once it has actually run; clearing a wake, registering a continuation and cancelling are
-not, because they happen on the suspension machinery's schedule rather than the task's. That
-distinction is the one `pendingWakes` got wrong. The pump then waits, after its quiet loop, for the
-credits to be spent.
+Three consecutive Linux runs produced the *identical* `[10, 550, 1010]`. That was read as
+determinism rather than a race, which made it look worth fixing rather than recording, and
+`advanceToEarliestDeadline` was changed to mint one **settle credit** per task it woke — spent by
+that task's next clock read, with the pump waiting, bounded, for the credits before advancing again.
+The argument for it was that the wait is charged only while a credit is outstanding, so unlike the
+reverted `quietChecks` change it costs nothing on the common path.
 
-Why this is not the reverted change wearing a hat: the wait is charged **only** while a credit is
-outstanding. Raising `quietChecks` added 3 ms to every advance in the suite, which is what broke
-teardown against `DiscoveryTestBed.run`'s 50 ms settle budget. Teardown mints no credits at all —
-cancellation resumes sleepers through `cancelSleeper`, which never goes through `pendingWakes` — so
-the wait cannot engage there. It is also bounded: a task that woke only to return never spends its
-credit, costs `settlePatience × checkInterval` once, and the pump moves on. Nothing can wedge.
+The very next run gave `[10, 510, 1050]`: second probe fixed, **third** probe adrift by the same
+40 ms. The mechanism moved the symptom one deadline along instead of removing it, and cost the suite
+8.4 s → 10.9 s. Reverted in full.
 
-⚠️ This is still not a deterministic scheduler, and it should not be mistaken for one. The honest
-end state is driving the run on a custom executor and advancing only when that executor's queue is
-empty; Swift exposes no runnable-task signal short of that. What settle credits buy is the specific
-window that three CI runs measured, on a mechanism narrow enough to reason about. If this fires again
-with a *fourth* signature, that is the evidence that the executor is now worth writing.
+Two beliefs behind it were wrong, and both are worth writing down because they are easy to have
+again:
+
+1. **Three identical failures are not evidence of determinism.** The run immediately before them
+   passed and the run after passed too. Three draws from a loaded die look like a constant if you
+   only look at the three.
+2. **"Close the window after the wake" is not a different *kind* of fix from "wait longer".** A
+   spent credit is still an inference about whether a task has run, made from outside the task. Both
+   levers are the same lever, and this pump has now moved the failure twice without removing it.
+
+The failure is intermittent, it is in the harness rather than in production, and it does not
+misreport anything a user would see. The only fix that removes the class is a custom executor that
+the run is driven on, advanced when its queue is empty; Swift exposes no runnable-task signal short
+of that. Until someone writes it, this test will occasionally go red on a loaded runner, and a re-run
+is the correct response to *this specific assertion* — the one and only place in this document where
+that sentence is true, and it is true only because two attempts have now measured the mechanism.
 
 Splitting these suites into their own non-parallel invocation is also worse than it looks: a
 `--filter` typo runs nothing at all and reports success, which is a green CI that tests nothing.

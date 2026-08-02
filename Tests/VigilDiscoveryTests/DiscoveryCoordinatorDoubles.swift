@@ -77,8 +77,6 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
         /// turning a run that should complete in 3 s into one that hit a 12 s budget. Nothing may
         /// advance while this set is non-empty.
         var pendingWakes: Set<Int> = []
-        /// Clock reads still owed by tasks the last advance woke. See ``settleCredits``.
-        var settleCredits = 0
         var nextID = 0
         var activity = 0
         /// Every advance the pump made: from, to, and how many sleepers were waiting. Capped, and
@@ -100,7 +98,6 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     var wallNow: Date {
         let nanoseconds = state.withLock { state -> Int64 in
             state.activity += 1
-            consumeSettleCredit(&state)
             return state.current.nanoseconds
         }
         return epoch.addingTimeInterval(Double(nanoseconds) / 1e9)
@@ -109,7 +106,6 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     func now() -> MediaInstant {
         state.withLock { state in
             state.activity += 1
-            consumeSettleCredit(&state)
             return state.current
         }
     }
@@ -147,7 +143,6 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
         // task the pump should conclude has gone quiet.
         let deadline = state.withLock { state -> MediaInstant in
             state.activity += 1
-            consumeSettleCredit(&state)
             return state.current + duration
         }
         try await sleep(untilRegistered: deadline)
@@ -161,10 +156,7 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     /// window — a deadline already in the past is filed as-is and fires on the next advance.
     func sleep(until deadline: MediaInstant) async throws {
         try Task.checkCancellation()
-        state.withLock { state in
-            state.activity += 1
-            consumeSettleCredit(&state)
-        }
+        state.withLock { $0.activity += 1 }
         try await sleep(untilRegistered: deadline)
     }
 
@@ -223,46 +215,11 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
                 state.pendingWakes.insert(id)
             }
             state.activity += 1
-            // One credit per task woken: the pump owes each of them a clock read before it may move
-            // time again. See ``settleCredits``.
-            state.settleCredits = ready.count
             return Array(ready.values)
         }
         // Resumed outside the lock: a continuation may run synchronously and re-enter this clock.
         for sleeper in due { sleeper.continuation.resume() }
         return !due.isEmpty
-    }
-
-    /// How many tasks woken by the last advance have not yet read this clock.
-    ///
-    /// ⛔ THIS IS WHAT STOPS TIME MOVING OUT FROM UNDER A TASK THAT HAS BEEN WOKEN BUT NOT RUN.
-    /// `pendingWakes` was supposed to cover that window and covers only half of it: it is cleared in
-    /// `sleep(untilRegistered:)`'s `defer`, which fires the instant the continuation resumes — while
-    /// the woken task still has an actor hop to make before it does the thing the wake was for.
-    ///
-    /// `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` measured it, three CI runs in a row
-    /// with the identical value: probes at `[10, 550, 1010]` against `[10, 510, 1010]`. Both
-    /// multicast senders are due at 510 ms; SADP resumes first, sends, and its script files an
-    /// answer at 550 ms; WS-Discovery has cleared its wake but is still hopping toward
-    /// `channel.send` — which is the call that stamps the time. Eight quiet checks pass, the pump
-    /// advances to 550, and the send is stamped there.
-    ///
-    /// A credit is consumed by a clock *read* (`now()`, `wallNow`) or by starting another sleep,
-    /// because those are what a task does when it has actually run. Clearing a wake, registering a
-    /// continuation and cancelling do not count: they happen on the suspension machinery's schedule
-    /// rather than the task's, which is exactly the confusion `pendingWakes` fell into.
-    ///
-    /// ⚠️ The pump waits on this **bounded**, and only while a credit is outstanding. That is the
-    /// difference between this and raising `quietChecks`, which was tried and reverted: that change
-    /// charged every advance in the whole suite an extra 3 ms and broke teardown, which is coupled to
-    /// the pump through `DiscoveryTestBed.run`'s 50 ms settle budget. Teardown wakes nothing —
-    /// cancellation resumes sleepers through `cancelSleeper`, which never mints a credit — so the
-    /// wait cannot engage there at all.
-    var settleCredits: Int { state.withLock { $0.settleCredits } }
-
-    /// Spends one credit, if any is outstanding.
-    private func consumeSettleCredit(_ state: inout State) {
-        if state.settleCredits > 0 { state.settleCredits -= 1 }
     }
 
     /// Starts the scheduler. Cancel the returned task once the run under test has ended.
@@ -299,30 +256,33 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     /// The timetable flake is still open and is documented in docs/BUILD-VERIFICATION.md; the fix
     /// for it is a deterministic scheduler, not a more patient one.
     ///
-    /// ⚠️ 2026-08-02: it fired again with `sleep(until:)` in place, and the *shape* changed — one
-    /// probe adrift on one channel, `[10, 550, 1010]`, where the old defect shifted every probe on
-    /// both channels uniformly. That rules out the pre-registration window and locates the remaining
-    /// one **after** the wake: `sleep(untilRegistered:)`'s `defer` clears the pending wake the
-    /// instant the task resumes, and the task then needs an actor hop to reach `channel.send` — the
-    /// call that stamps the time. It touches no clock in that hop, so eight quiet checks elapse and
-    /// this pump advances out from under it.
+    /// ⛔ 2026-08-02: A SECOND ATTEMPT TO FIX THIS WAS MADE AND REVERTED. Read this before a third.
     ///
-    /// Three consecutive runs gave the *identical* number, which is not a race's profile, so it was
-    /// fixed rather than recorded: see ``settleCredits`` and the `settlePatience` parameter below.
-    /// The full trace is in docs/BUILD-VERIFICATION.md.
+    /// It fired again with `sleep(until:)` in place, `[10, 550, 1010]` — one probe adrift on one
+    /// channel, where the old defect shifted every probe on both uniformly. Three consecutive runs
+    /// gave the identical number, which looked like determinism rather than a race, so the window
+    /// after the wake was closed: `advanceToEarliestDeadline` minted one "settle credit" per task it
+    /// woke and the pump waited, bounded, for each of them to read the clock before advancing again.
+    ///
+    /// It did not work. The very next run gave `[10, 510, 1050]` — the second probe fixed, the third
+    /// adrift by the same 40 ms — so the mechanism moved the symptom instead of removing it. It also
+    /// cost the suite 8.4 s → 10.9 s. That is the outcome this comment's own paragraph above
+    /// predicts, in a new costume, and it is the second time this session that has happened here.
+    ///
+    /// Two beliefs were wrong and both were mine. Three identical failures are not evidence of
+    /// determinism: the run *before* them and the run after both passed, so the sample was three
+    /// draws from a loaded die, not a proof. And "close the window after the wake" is not a
+    /// different kind of fix from "wait longer" — it is the same inference dressed up, because a
+    /// credit spent is still a heuristic about whether a task has run.
+    ///
+    /// The failure is intermittent, it is in this harness and not in production, and the only fix
+    /// that removes the class is a custom executor advanced when its queue is empty. See
+    /// docs/BUILD-VERIFICATION.md.
     ///
     /// ⛔ Nor should the nanosecond assertion be loosened instead. On a virtual clock exact is the
     /// correct expectation; three separate times this session a timing failure that looked like
     /// noise turned out to be a real defect, and a tolerance would have buried every one.
-    /// - Parameter settlePatience: how many extra checks to allow while a task woken by the previous
-    ///   advance still owes this clock a read (``settleCredits``). Paid **only** when a credit is
-    ///   outstanding, which is why it is not the reverted `quietChecks` change wearing a hat: that
-    ///   one charged every advance in the suite, this one charges the rare advance whose woken task
-    ///   has not been scheduled yet. A task that legitimately never reads the clock again — one that
-    ///   woke only to return — costs `settlePatience × checkInterval` once and then the pump moves
-    ///   on, so nothing can wedge.
     func startPump(quietChecks: Int = 8, checkInterval: Duration = .microseconds(250),
-                   settlePatience: Int = 40,
                    maximumAdvances: Int = 100_000) -> Task<Void, Never> {
         Task { [weak self] in
             var advances = 0
@@ -335,15 +295,6 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
                     try? await Task.sleep(for: checkInterval)
                     let stillQuiet = clock.activityCounter == before && !clock.hasPendingWakes
                     quiet = stillQuiet ? quiet + 1 : 0
-                }
-                // Quiet is not the same as done. Everything the last advance woke has to have read
-                // the clock at least once, because reading it is what a task does when it has
-                // actually run — and the read is what stamps the instant a test then asserts on.
-                var settling = 0
-                while clock.settleCredits > 0, settling < settlePatience, !Task.isCancelled {
-                    await Task.yield()
-                    try? await Task.sleep(for: checkInterval)
-                    settling += 1
                 }
                 if Task.isCancelled { return }
                 if clock.advanceToEarliestDeadline() { advances += 1 }
