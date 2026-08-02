@@ -4,7 +4,7 @@
 //
 //  The camera's picture controls: reading them, writing them without flooding the device, and
 //  resetting them on firmware that has no reset command.
-//  macOS-only. Split from DeviceInfoService.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from DeviceInfoService.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)

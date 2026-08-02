@@ -4,7 +4,7 @@
 //
 //  The adapters: one live session presented as the collections the VigilUI screens expect, plus
 //  the polls that keep them current.
-//  macOS-only. Split from MainWindowView.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from MainWindowView.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)
@@ -89,12 +89,12 @@ extension MainWindowView {
                        serial: deviceInfo.identity.serialNumber)
     }
 
-    /// One cell, holding the one camera — unless a group is selected that it is not in.
+    /// The layout, filled from ``stageOrder``.
     ///
-    /// Selecting a group opens it into the stage (UX.md §1.3), and this build has one camera, so
-    /// there are exactly two honest outcomes: the camera is in the group and the stage shows it, or
-    /// it is not and the stage shows an empty cell. Showing the camera regardless would make the
-    /// GROUPS section decorative.
+    /// ⚠️ The doc that used to sit here described a stage of exactly one cell holding exactly one
+    /// camera, and it survived the change that made this the whole library — a stale comment on a
+    /// rewritten body, which is worse than none, because it reads as a decision rather than as an
+    /// oversight. ``stageOrder`` now carries the reasoning, including what a selected group does.
     var stageAssignment: VStageAssignment {
         VStageAssignment(layout: window.layout, cameras: stageOrder)
     }

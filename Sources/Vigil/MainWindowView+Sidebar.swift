@@ -4,7 +4,7 @@
 //
 //  The camera list's behaviour: selection and its modifiers, keyboard navigation, the row and
 //  group context menus, and the tile HUD's actions.
-//  macOS-only. Split from MainWindowView.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from MainWindowView.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)
@@ -145,10 +145,11 @@ extension MainWindowView {
     /// one stream. The search box is cleared on the way, because an overflow the user cannot see in
     /// the list they were just sent to is not an answer.
     ///
-    /// ⛔ Unreachable in this build, and wired anyway. `stageAssignment` puts exactly one camera on
-    /// the stage, so `VStagePlan.overflowCount` is always zero and the `+3` chip never draws. This
-    /// is the contract the chip will call when it does, and leaving it as the empty default is how
-    /// the other seventeen callbacks in this window came to be silently inert.
+    /// ⚠️ This became a live path and the note here has been corrected rather than left. It was
+    /// written when `stageAssignment` held exactly one camera, so `VStagePlan.overflowCount` was
+    /// always zero and the `+3` chip never drew — wired against the day it would. That day was two
+    /// commits later: the stage now takes the whole library, so five cameras in the `.single`
+    /// layout put four in overflow and the chip appears.
     func showOverflowCameras() {
         window.isSidebarVisible = true
         window.searchText = ""

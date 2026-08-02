@@ -44,6 +44,7 @@ FORBIDDEN_IN_PURE = [
 ]
 
 MAX_LINE = 110
+MAX_FILE_LINES = 600
 
 Violation = tuple[str, int, str, str]  # path, line number, rule, message
 
@@ -210,6 +211,38 @@ def check_trailing_whitespace(path: pathlib.Path, lines: list[str]) -> list[Viol
     rel = str(path.relative_to(ROOT))
     return [(rel, n, "whitespace", "trailing whitespace")
             for n, raw in enumerate(lines, 1) if raw.rstrip("\n") != raw.rstrip()]
+
+
+def check_file_length(path: pathlib.Path, lines: list[str]) -> list[Violation]:
+    """API_CONTRACT.md §7.2: a source file is ≤ 600 lines, split at a `// MARK:` boundary.
+
+    ⛔ Nothing checked this until now, and it had already drifted: `MainWindowView.swift` reached 630
+    lines while every file in the tree carried a header citing the rule. A limit that only exists in
+    prose is a limit that is enforced when somebody happens to notice, which is not enforcement — and
+    this one matters because the whole `Type+Feature.swift` layout of `Sources/Vigil` exists to
+    honour it.
+
+    ⚠️ Deliberately not applied to `Tests/`. The contract's table does not scope the rule, and ten
+    test files are over it today — the largest at 1 306 lines. Failing the build on those would mean
+    either a mechanical split nobody asked for or an exemption list that quietly becomes permanent.
+    They are reported as notes instead, so the number is visible and can be brought down on purpose.
+    """
+    rel = str(path.relative_to(ROOT))
+    if len(lines) <= MAX_FILE_LINES:
+        return []
+    return [(rel, len(lines), "file-length",
+             f"{len(lines)} lines, limit is {MAX_FILE_LINES} (API_CONTRACT.md §7.2). "
+             "Split at a `// MARK:` boundary into Type+Feature.swift")]
+
+
+def oversized_test_files() -> list[tuple[str, int]]:
+    """Test files past the same ceiling, reported rather than enforced. See ``check_file_length``."""
+    out: list[tuple[str, int]] = []
+    for path in swift_files("Tests"):
+        count = len(path.read_text().splitlines())
+        if count > MAX_FILE_LINES:
+            out.append((str(path.relative_to(ROOT)), count))
+    return sorted(out, key=lambda row: -row[1])
 
 
 GENERIC_DECL = re.compile(
@@ -1407,6 +1440,7 @@ def main() -> int:
         violations += check_macos_guard(path, text)
         violations += check_banned(path, lines)
         violations += check_line_length(path, lines)
+        violations += check_file_length(path, lines)
         violations += check_trailing_whitespace(path, lines)
         violations += check_file_header(path, lines)
         violations += check_static_stored_in_generic(path, lines)
@@ -1430,6 +1464,12 @@ def main() -> int:
     violations += check_plists()
     violations += check_localization_tables()
     violations += check_bonjour_declarations()
+
+    # Reported, never fatal. See `check_file_length` for why `Tests/` is not held to the ceiling.
+    oversized = oversized_test_files()
+    for rel, count in oversized:
+        print(f"note: {rel} is {count} lines, over the {MAX_FILE_LINES}-line guidance for a "
+              "source file (not enforced in Tests/)")
 
     if not violations:
         n_src = len(swift_files("Sources"))

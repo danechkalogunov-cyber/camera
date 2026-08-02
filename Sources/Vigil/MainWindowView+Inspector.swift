@@ -4,7 +4,7 @@
 //
 //  The window's right-hand panel: what it shows, and every action it offers — snapshot, PTZ,
 //  stream quality, picture settings, diagnostics.
-//  macOS-only. Split from MainWindowView.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from MainWindowView.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)

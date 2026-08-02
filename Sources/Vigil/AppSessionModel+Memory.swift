@@ -4,7 +4,7 @@
 //
 //  What survives quitting: the camera Vigil reconnects to, its name, and whether its picture
 //  carries chrome. Plus the archive-playback pair that swaps the live path for a recorded one.
-//  macOS-only. Split from AppSessionModel+Session.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from AppSessionModel+Session.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)

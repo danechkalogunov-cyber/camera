@@ -4,7 +4,7 @@
 //
 //  Archive playback and the stage it happens over: seeking the camera's recordings, the day the
 //  scrubber shows, and what the three library screens read.
-//  macOS-only. Split from MainWindowView.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from MainWindowView.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)

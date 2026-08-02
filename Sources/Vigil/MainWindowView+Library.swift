@@ -4,7 +4,7 @@
 //
 //  The window's clip library: listing the recordings folder, enriching what is listed, and the
 //  actions the Recordings screen offers over them.
-//  macOS-only. Split from MainWindowView.swift, which docs/DESIGN.md §7.2 caps at 600 lines.
+//  macOS-only. Split from MainWindowView.swift, which docs/API_CONTRACT.md §7.2 caps at 600 lines.
 //
 
 #if os(macOS)
