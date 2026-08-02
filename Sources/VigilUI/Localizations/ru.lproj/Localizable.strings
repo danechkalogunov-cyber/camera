@@ -608,6 +608,8 @@
 "No signal" = "Нет сигнала";
 "REC" = "REC";
 "Add camera" = "Добавить камеру";
+"Not connected" = "Не подключена";
+"Press Return to view this camera" = "Нажмите Return, чтобы посмотреть эту камеру";
 "Empty cell" = "Пустая ячейка";
 "Drop a camera here or press Return to choose one" = "Перетащите сюда камеру или нажмите Return, чтобы выбрать";
 "Today" = "Сегодня";

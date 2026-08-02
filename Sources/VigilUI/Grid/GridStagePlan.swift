@@ -279,6 +279,18 @@ package struct VStageCamera: Sendable, Hashable, Identifiable {
     /// The negotiated stream facts for the top-trailing readout, or `nil` to omit it.
     package var stats: VTileStats?
 
+    /// Whether a session exists for this camera at all.
+    ///
+    /// ⛔ NOT THE SAME QUESTION AS ``state``, and the difference is the whole reason this flag is
+    /// here. `LiveConnectionState` describes a session — connecting, live, degraded, offline. A
+    /// camera the app knows about but has never dialled has no session to describe, and `.offline`
+    /// would claim an attempt was made and failed, which is the one thing that must not be said
+    /// about a device nobody tried. `false` makes the stage draw ``VGridIdleCell`` instead of a
+    /// tile, and `state` is then ignored.
+    ///
+    /// Defaults to `true`, so every existing call site keeps meaning what it meant.
+    package var isStreaming: Bool
+
     // MARK: - Initialisation
 
     /// Creates a tile payload.
@@ -287,13 +299,15 @@ package struct VStageCamera: Sendable, Hashable, Identifiable {
                  attemptStartedAt: Date? = nil,
                  isRecording: Bool = false,
                  recordingElapsed: Duration? = nil,
-                 stats: VTileStats? = nil) {
+                 stats: VTileStats? = nil,
+                 isStreaming: Bool = true) {
         self.camera = camera
         self.state = state
         self.attemptStartedAt = attemptStartedAt
         self.isRecording = isRecording
         self.recordingElapsed = recordingElapsed
         self.stats = stats
+        self.isStreaming = isStreaming
     }
 
     // MARK: - Computed Properties

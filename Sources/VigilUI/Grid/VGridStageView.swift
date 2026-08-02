@@ -120,6 +120,13 @@ package struct VGridStageView<Video: View>: View {
     /// Opens the popover listing the cameras that did not fit.
     package let onShowOverflow: () -> Void
 
+    /// Starts streaming a camera that is on the stage but idle (``VStageCamera/isStreaming``).
+    ///
+    /// Separate from ``onSelectCamera`` because selecting binds the panels and this one costs a
+    /// session: in a build that streams one camera at a time it stops whatever is playing, and a
+    /// gesture that expensive must not be something a click on a row can trigger by accident.
+    package let onConnectCamera: (CameraID) -> Void
+
     private let cameraIndex: [CameraID: VStageCamera]
     private let video: (CameraID) -> Video
 
@@ -168,6 +175,7 @@ package struct VGridStageView<Video: View>: View {
                  onRetry: @escaping (CameraID) -> Void = { _ in },
                  onRemedy: @escaping (CameraID, ConnectRemedy) -> Void = { _, _ in },
                  onShowOverflow: @escaping () -> Void = {},
+                 onConnectCamera: @escaping (CameraID) -> Void = { _ in },
                  @ViewBuilder video: @escaping (CameraID) -> Video) {
         self.plan = VStagePlan(assignment: assignment)
         self.mode = mode
@@ -187,6 +195,7 @@ package struct VGridStageView<Video: View>: View {
         self.onRetry = onRetry
         self.onRemedy = onRemedy
         self.onShowOverflow = onShowOverflow
+        self.onConnectCamera = onConnectCamera
         // Built once, not per lookup: sixteen linear searches through sixteen cameras inside a
         // body evaluation is 256 comparisons for a job a dictionary does in sixteen.
         //     init<S>(_ keysAndValues: S, uniquingKeysWith combine: (Value, Value) throws -> Value)
@@ -241,7 +250,22 @@ package struct VGridStageView<Video: View>: View {
     @ViewBuilder
     private func cell(_ slot: VStageSlot, in geometry: VGridGeometry) -> some View {
         let rect = plan.frame(for: slot, in: geometry, promoted: promotedCamera)
-        if let camera = slot.camera, let model = cameraIndex[camera] {
+        if let camera = slot.camera, let model = cameraIndex[camera], !model.isStreaming {
+            // A camera the app holds but is not streaming. Not a tile — there is no picture to
+            // preserve behind it — and not an empty cell, which would offer to *add* a camera that
+            // is already here. See `VGridIdleCell` for why this is not a `LiveConnectionState` case.
+            VGridIdleCell(camera: model.camera,
+                          isSelected: selection == model.id,
+                          isFocused: focusedIndex == slot.index,
+                          onConnect: { onConnectCamera(model.id) })
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .transition(entrance(slot))
+                .simultaneousGesture(TapGesture().onEnded {
+                    onFocusCell(slot.index)
+                    onSelectCamera(model.id)
+                })
+        } else if let camera = slot.camera, let model = cameraIndex[camera] {
             tile(model, slot: slot)
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
@@ -389,10 +413,17 @@ package struct VGridStageView<Video: View>: View {
     /// `⏎` on a filled cell binds the inspector; on an empty one it opens the picker (UX.md §5.7).
     private func activate(_ index: Int) {
         guard let slot = plan.slot(at: index) else { return }
-        if let camera = slot.camera {
-            onSelectCamera(camera)
-        } else {
+        guard let camera = slot.camera else {
             onAddCamera(index)
+            return
+        }
+        // ⏎ on an idle cell means the same as clicking it: show me this camera. Binding the
+        // inspector to a cell that is already selected — which arrowing onto it just did — would
+        // make the key do nothing on exactly the cells where it has the most to offer.
+        if cameraIndex[camera]?.isStreaming == false {
+            onConnectCamera(camera)
+        } else {
+            onSelectCamera(camera)
         }
     }
 

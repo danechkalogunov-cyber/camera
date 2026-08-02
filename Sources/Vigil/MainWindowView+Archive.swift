@@ -342,6 +342,16 @@ extension MainWindowView {
                        onRetry: { _ in session.perform(.retry) },
                        onRemedy: { _, remedy in session.perform(remedy) },
                        onShowOverflow: { showOverflowCameras() },
+                       // Clicking an idle cell is the same act as opening its sidebar row: stop
+                       // what is playing and stream this one. `switchTo` refuses a no-op switch, so
+                       // clicking the cell that is already live costs nothing.
+                       onConnectCamera: { id in
+                           guard let target = library.cameras.first(where: { $0.id == id }) else {
+                               return
+                           }
+                           window.sidebarSelection.select(.camera(id))
+                           Task { await session.switchTo(target) }
+                       },
                        video: { _ in
                            VideoTile(cameraID: cameraID,
                                      frames: session.frames,

@@ -625,6 +625,8 @@
 "No signal" = "No signal";
 "REC" = "REC";
 "Add camera" = "Add camera";
+"Not connected" = "Not connected";
+"Press Return to view this camera" = "Press Return to view this camera";
 "Empty cell" = "Empty cell";
 "Drop a camera here or press Return to choose one" = "Drop a camera here or press Return to choose one";
 "Today" = "Today";

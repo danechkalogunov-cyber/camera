@@ -96,21 +96,60 @@ extension MainWindowView {
     /// it is not and the stage shows an empty cell. Showing the camera regardless would make the
     /// GROUPS section decorative.
     var stageAssignment: VStageAssignment {
-        if case .group(let group) = window.sidebarSelection.focus,
-           groups.group(for: cameraID) != group {
-            return VStageAssignment(layout: window.layout, cameras: [])
-        }
-        return VStageAssignment(layout: window.layout, cameras: [cameraID])
+        VStageAssignment(layout: window.layout, cameras: stageOrder)
     }
 
-    /// The session camera as a stage tile.
+    /// Which cameras belong on the stage, in the order the cells take them.
+    ///
+    /// ⛔ The whole library, not just the one that is streaming. The stage used to hold exactly one
+    /// camera, so a user with four cameras and a 2 × 2 layout saw one picture beside three *Add
+    /// camera* placeholders — offering to add cameras they had already added. The sidebar listed all
+    /// four the entire time, which is what made it read as breakage rather than as capacity.
+    ///
+    /// The streaming camera leads, because it is the one with a picture and the eye should not have
+    /// to hunt for it. The rest follow in library order.
+    ///
+    /// A selected group narrows this to its members (UX.md §1.3): selecting a group opens it into
+    /// the stage, and a group that showed every camera would make the GROUPS section decorative.
+    var stageOrder: [CameraID] {
+        var ids = library.cameras.map { $0.id }
+        if !ids.contains(cameraID) { ids.insert(cameraID, at: 0) }
+        if case .group(let group) = window.sidebarSelection.focus {
+            ids = ids.filter { groups.group(for: $0) == group }
+        }
+        // ⛔ Partitioned, never `sorted(by:)`. The obvious spelling — `sorted { left, _ in left ==
+        // cameraID }` — is not a strict weak ordering: it reports `a < b` and `b < a` as both false
+        // for two idle cameras and both true is unreachable, which Swift's introsort is entitled to
+        // treat as undefined. It traps at runtime with "not a valid strict weak ordering" once the
+        // array is long enough to leave the insertion-sort path, so a library of four cameras would
+        // have looked fine and one of thirty would have crashed the window.
+        return ids.filter { $0 == cameraID } + ids.filter { $0 != cameraID }
+    }
+
+    /// One tile payload per camera on the stage.
+    ///
+    /// ⚠️ Exactly one of them carries a session. `isStreaming` is false for every other camera, so
+    /// the stage draws `VGridIdleCell` rather than a tile whose `LiveConnectionState` would have to
+    /// lie — `.offline` claims an attempt was made and failed, and nothing has been attempted for a
+    /// camera this build has not dialled. Clicking one switches the session to it, which is the
+    /// honest meaning of "show me this camera" while there is one decode pipeline.
     var stageCameras: [VStageCamera] {
-        [VStageCamera(camera: identity,
-                      state: session.liveState,
-                      attemptStartedAt: session.attemptStartedAt,
-                      isRecording: recording.isRecording,
-                      recordingElapsed: recording.elapsed(now: recordingTick),
-                      stats: tileStats)]
+        stageOrder.map { id in
+            guard id == cameraID else {
+                let stored = library.cameras.first { $0.id == id }
+                return VStageCamera(camera: LiveCameraIdentity(id: id.rawValue,
+                                                               name: stored?.displayName ?? "",
+                                                               host: stored?.host ?? ""),
+                                    state: .offline(OfflineDetail()),
+                                    isStreaming: false)
+            }
+            return VStageCamera(camera: identity,
+                                state: session.liveState,
+                                attemptStartedAt: session.attemptStartedAt,
+                                isRecording: recording.isRecording,
+                                recordingElapsed: recording.elapsed(now: recordingTick),
+                                stats: tileStats)
+        }
     }
 
     /// What the Stream tab's header describes.
