@@ -191,6 +191,9 @@ extension MainWindowView {
     var libraryActions: VLibraryActions {
         var actions = VLibraryActions()
         actions.onOpenRecordingsFolder = { openRecordingsFolder() }
+        // Clicking a recording played nothing: `onPlayClip` was declared, `VClipPlayerView` was
+        // written, and no one connected them.
+        actions.onPlayClip = { clip in window.sheet = .clipPlayer(clip.id) }
         actions.onRevealClip = { clip in revealClip(clip) }
         actions.onDeleteClip = { clip in deleteClip(clip) }
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }

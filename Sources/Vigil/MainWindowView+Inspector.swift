@@ -93,6 +93,21 @@ extension MainWindowView {
         actions.onRevealRecordings = { openRecordingsFolder() }
         actions.onCopyDiagnostics = { copyDiagnostics() }
         actions.onCycleStream = { cycleStreamQuality() }
+        // ⛔ Both of these say what is true instead of doing nothing. A button that answers to
+        // silence is worse than one that is not offered — this project's own rule — and the two
+        // features behind them are genuinely absent rather than broken.
+        actions.onSwapTransport = {
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: Self.localized("This build streams over TCP only. UDP is refused at "
+                                        + "SETUP rather than negotiated badly."))
+        }
+        actions.onRunStreamDoctor = {
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: Self.localized("Stream Doctor is not in this build. The Info tab has the "
+                                        + "same numbers it would read."))
+        }
         return actions
     }
 

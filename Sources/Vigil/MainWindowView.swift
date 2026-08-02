@@ -175,7 +175,11 @@ struct MainWindowView: View {
             // than across the window — so showing both stacked two status lines on top of each other.
             // The bar is kept for the collapsed case, where the sidebar's footer goes with it.
             if !window.isSidebarVisible {
-                VStatusBarView(status: chromeStatus)
+                VStatusBarView(status: chromeStatus,
+                               onOpenSettings: { window.sheet = .cameraSettings },
+                               // The degraded chip is only reachable while something *is*
+                               // degraded, and the Info tab is where the reason lives.
+                               onShowDegraded: { window.isInspectorVisible = true })
             }
         }
         .background(VTheme.Color.Layer.canvas)
@@ -294,6 +298,13 @@ struct MainWindowView: View {
                                     window.sheet = nil
                                 },
                                 onCancel: { window.sheet = nil })
+        case .clipPlayer(let id):
+            // Looked up rather than carried: the library reloads whenever a recording finishes, and
+            // a sheet holding the value would be showing a clip the list no longer has.
+            if let clip = window.clips.first(where: { $0.id == id }) {
+                VClipPlayerView(clip: clip, onClose: { window.sheet = nil })
+            }
+
         case .newGroup:
             GroupNameSheet(isNew: true,
                            onSave: { name in
@@ -397,6 +408,8 @@ struct MainWindowView: View {
                          }
                      },
                      onAddGroup: { window.sheet = .newGroup },
+                     // The gear in the sidebar footer drew itself and answered to nothing.
+                     onOpenSettings: { window.sheet = .cameraSettings },
                      onAddCamera: { addCamera() },
                      onClearSearch: { window.searchText = "" },
                      cameraMenu: { camera in cameraMenu(camera) },

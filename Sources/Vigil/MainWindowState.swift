@@ -167,6 +167,13 @@ enum MainWindowSheet: Identifiable, Hashable {
     /// Basic settings for one camera: its name, and what it belongs to.
     case cameraSettings
 
+    /// Playing back a clip Vigil recorded.
+    ///
+    /// Carries the clip's identifier and not the clip, for the reason this enum's own header gives:
+    /// a sheet that held the value would go stale the moment the library reloaded, which happens on
+    /// every recording that finishes. The window looks the clip up when it presents.
+    case clipPlayer(UUID)
+
     /// Naming a new group.
     case newGroup
 
@@ -187,6 +194,7 @@ enum MainWindowSheet: Identifiable, Hashable {
     var id: String {
         switch self {
         case .cameraSettings:           return "cameraSettings"
+        case .clipPlayer(let clip):     return "clipPlayer.\(clip)"
         case .newGroup:                 return "newGroup"
         case .renameGroup(let group):   return "renameGroup.\(group)"
         case .newBookmark(let instant): return "newBookmark.\(instant.timeIntervalSince1970)"

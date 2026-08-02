@@ -624,3 +624,8 @@
 "Your camera list was damaged and has been restored from a backup. Some recent changes may be missing." = "Список камер был повреждён и восстановлен из резервной копии. Последние изменения могли не сохраниться.";
 "This camera list was written by a newer version of Vigil. It is being shown read-only so nothing is lost." = "Этот список камер записан более новой версией Vigil. Он показан только для чтения, чтобы ничего не потерялось.";
 "That camera could not be added." = "Эту камеру не удалось добавить.";
+
+/* TWO BUTTONS THAT ANSWER HONESTLY. Both features are absent rather than broken, and this
+   project's rule is that a control answering to silence is worse than one not offered. */
+"This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "Эта сборка передаёт только по TCP. UDP отклоняется на SETUP, а не согласуется кое-как.";
+"Stream Doctor is not in this build. The Info tab has the same numbers it would read." = "Stream Doctor в эту сборку не входит. Во вкладке «Инфо» те же числа, которые он читал бы.";
