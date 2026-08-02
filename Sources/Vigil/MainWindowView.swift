@@ -319,6 +319,20 @@ struct MainWindowView: View {
         // through `loadArchiveDay` rather than `loadArchive`, and an incomplete Tuesday must be
         // announced even though Monday was already announced.
         .onChange(of: archive.incompleteAfter) { _, _ in reportIncompleteDay() }
+        // ⛔ `AppLibraryModel` has been writing this on three paths — a list recovered from a backup,
+        // a list written by a newer Vigil and therefore read-only, and an add the store refused —
+        // and nothing has ever read it. That file's own header says why it matters: "a silent
+        // recovery is how a user discovers weeks later that half their cameras are gone and nothing
+        // ever mentioned it." That is precisely what has been happening.
+        //
+        // ⚠️ A toast is the right shape for a recovery and the wrong one for read-only, which is a
+        // condition rather than an event and outlasts any banner. Saying it once is still better
+        // than never, and a persistent read-only indicator belongs with the sidebar's own chrome
+        // rather than being faked with a toast that refuses to dismiss.
+        .onChange(of: library.notice) { _, notice in
+            guard let notice else { return }
+            window.toast = MainWindowToast(kind: .warning, message: notice)
+        }
     }
 
     // MARK: - Sheets
@@ -508,7 +522,13 @@ struct MainWindowView: View {
                        actionTitle: toast.actionTitle,
                        width: nil,
                        onAction: { toast.action?() },
-                       onDismiss: { window.toast = nil })
+                       // The library's notice is cleared with the toast, not left behind: it is
+                       // `Equatable` state on an `@Observable`, so an identical message arriving
+                       // later would not read as a change and the second recovery would be silent.
+                       onDismiss: {
+                           window.toast = nil
+                           library.dismissNotice()
+                       })
                 .padding(.bottom, VTheme.Space.xl)
         }
     }
