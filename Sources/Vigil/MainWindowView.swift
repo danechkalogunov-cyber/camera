@@ -347,13 +347,6 @@ struct MainWindowView: View {
                                     window.sheet = nil
                                 },
                                 onCancel: { window.sheet = nil })
-        case .clipPlayer(let id):
-            // Looked up rather than carried: the library reloads whenever a recording finishes, and
-            // a sheet holding the value would be showing a clip the list no longer has.
-            if let clip = window.clips.first(where: { $0.id == id }) {
-                VClipPlayerView(clip: clip, onClose: { window.sheet = nil })
-            }
-
         case .newGroup:
             GroupNameSheet(isNew: true,
                            onSave: { name in

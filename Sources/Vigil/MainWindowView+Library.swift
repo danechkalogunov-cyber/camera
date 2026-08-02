@@ -191,9 +191,21 @@ extension MainWindowView {
     var libraryActions: VLibraryActions {
         var actions = VLibraryActions()
         actions.onOpenRecordingsFolder = { openRecordingsFolder() }
-        // Clicking a recording played nothing: `onPlayClip` was declared, `VClipPlayerView` was
-        // written, and no one connected them.
-        actions.onPlayClip = { clip in window.sheet = .clipPlayer(clip.id) }
+        // ⛔ `onPlayClip` IS A NOTIFICATION, NOT A REQUEST TO PRESENT ANYTHING. Do not wire a player
+        // to it. `VRecordingsView` owns playback: it holds its own `playing` clip and mounts
+        // `VClipPlayerView` inline above the scrubber at `VLibraryMetrics.playerHeight`, and it
+        // calls this *as well* so the app can react.
+        //
+        // This was wired to a sheet, on the reasoning that a declared handler with no assignment is
+        // an unfinished feature. It was not — and the result was that clicking a recording played it
+        // inline *and* opened a second copy in a sheet on top, which arrived tiny because
+        // `VClipPlayerView` has no intrinsic size and a sheet takes its content's. That is the bug
+        // the user reported as "a little window opens for some reason", and they were right on both
+        // halves: it was small, and it should not have been there.
+        //
+        // Left unassigned deliberately. The app has nothing to do when a clip starts playing inside
+        // a screen it does not own, and the next mechanical sweep for empty defaults must read this
+        // comment rather than re-add a surface.
         actions.onRevealClip = { clip in revealClip(clip) }
         actions.onDeleteClip = { clip in deleteClip(clip) }
         actions.onOpenNotificationSettings = { window.isInspectorVisible = true }
