@@ -242,6 +242,32 @@ public protocol DiscoveryClock: Sendable {
     /// Cancellable sleep. Implementations must throw `CancellationError` on task cancellation, which
     /// is what makes `cancel()` close every socket inside 50 ms (§8.4).
     func sleep(for duration: Duration) async throws
+
+    /// Cancellable sleep to an **absolute** instant on this clock's own timeline.
+    ///
+    /// Defaulted below to `sleep(for: deadline - now())`, which is exactly right for a real clock
+    /// and is why `SystemDiscoveryClock` implements nothing extra. It exists for the other kind: a
+    /// *virtual* clock that something else winds forward.
+    ///
+    /// On such a clock the relative spelling has a hole. `deadline - now()` is measured here, but
+    /// the sleeper is filed after a suspension, and anything that advanced the clock in between is
+    /// added on top of a duration that was already measured against the older reading. The probe
+    /// timetable in `DiscoveryCoordinatorTests` caught precisely that, twice: first as a uniform
+    /// 40 ms shift across all three probes, then — after the deadline capture moved earlier — as a
+    /// 40 ms shift on the third alone. An absolute deadline cannot drift, however late it is filed;
+    /// a deadline already in the past simply fires at once, which is the correct reading of "this
+    /// was due before it was registered".
+    func sleep(until deadline: MediaInstant) async throws
+}
+
+extension DiscoveryClock {
+
+    /// The relative spelling, correct for any clock that only moves on its own.
+    public func sleep(until deadline: MediaInstant) async throws {
+        let remaining = deadline - now()
+        guard remaining > .zero else { try Task.checkCancellation(); return }
+        try await sleep(for: remaining)
+    }
 }
 
 // MARK: - Environment

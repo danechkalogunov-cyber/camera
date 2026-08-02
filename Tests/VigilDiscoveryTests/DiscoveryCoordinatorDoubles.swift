@@ -118,27 +118,49 @@ final class VirtualDiscoveryClock: DiscoveryClock, @unchecked Sendable {
     /// advanced in that window was then added *on top of* the requested duration, because the
     /// caller had already measured `duration` against the older reading.
     ///
-    /// That is not a rounding error, it is the whole failure of
-    /// `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` on a loaded runner: the multicast
-    /// phase asks to pause until 10 ms, the pump sees only the scripted datagram's 40 ms sleeper
-    /// because this one has not registered yet, jumps to 40 ms, and the sleeper then lands at
-    /// 50 ms. The probes came out at exactly [50, 550, 1050] against a schedule of [10, 510, 1010]
-    /// — one uniform 40 ms shift, which is the script's own answer delay and the clue that named
-    /// the mechanism.
+    /// `discoveryCoordinatorSequencesPhasesOnTheSpecTimetable` measured the whole thing for us. The
+    /// multicast phase asks to pause until 10 ms; the pump sees only the scripted datagram's 40 ms
+    /// sleeper, because this one has not registered yet; it jumps to 40 ms; the sleeper files at
+    /// 50 ms. Probes came out at [50, 550, 1050] against a schedule of [10, 510, 1010] — one
+    /// uniform 40 ms shift, exactly the script's own answer delay, which is what named the
+    /// mechanism.
     ///
-    /// Nothing about this is a production concern: a real monotonic clock does not jump, so `now()`
-    /// and a registration a moment later agree. It is only reachable on a clock something else can
-    /// wind forward.
+    /// ⚠️ Capturing the deadline here was necessary and **not sufficient**, and the same test said
+    /// so: the next run gave [10, 510, 1050]. Two probes exact, one still adrift, because a caller
+    /// that wants an absolute instant has to convert it to a duration against `now()` *before*
+    /// calling this, and the pump can advance in that gap too. That is what `sleep(until:)` below
+    /// exists for, and why `pause(until:)` goes through it. This overload is now only for sleeps
+    /// that are genuinely relative — a poll interval, a rate-limit window — where there is no
+    /// absolute instant to drift from.
+    ///
+    /// Nothing about any of this is a production concern: a real monotonic clock does not jump, so
+    /// `now()` and a registration a moment later agree. It is only reachable on a clock something
+    /// else winds forward.
     func sleep(for duration: Duration) async throws {
         try Task.checkCancellation()
         guard duration > .zero else { return }
-        // Counts as activity on purpose. A task that has read the clock in order to sleep is a task
-        // the pump should not conclude has gone quiet, and that shortens the one window this fix
-        // cannot close: the async call boundary between the caller's `now()` and this line.
+        // Counts as activity on purpose: a task that has read the clock in order to sleep is not a
+        // task the pump should conclude has gone quiet.
         let deadline = state.withLock { state -> MediaInstant in
             state.activity += 1
             return state.current + duration
         }
+        try await sleep(untilRegistered: deadline)
+    }
+
+    /// The absolute spelling, which is the one that cannot drift.
+    ///
+    /// Overriding the protocol's default is the entire point: the default converts to a duration
+    /// against `now()`, and on this clock the pump can advance between that reading and the moment
+    /// the sleeper is filed. Taking the deadline as given removes the arithmetic and therefore the
+    /// window — a deadline already in the past is filed as-is and fires on the next advance.
+    func sleep(until deadline: MediaInstant) async throws {
+        try Task.checkCancellation()
+        state.withLock { $0.activity += 1 }
+        try await sleep(untilRegistered: deadline)
+    }
+
+    private func sleep(untilRegistered deadline: MediaInstant) async throws {
         let id = reserveID()
         // Runs whether the sleep completed or threw: either way this task is running again, and the
         // pump is free to consider advancing.

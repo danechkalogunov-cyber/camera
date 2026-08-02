@@ -427,8 +427,22 @@ extension DiscoveryCoordinator {
 
     /// Sleeps until `offset` after the run started. Returns immediately when that moment has passed,
     /// so a phase that was scheduled while the machine was busy starts late rather than never.
+    ///
+    /// ⚠️ Goes through `sleep(until:)` rather than converting to a duration here. The two are the
+    /// same thing on a real clock; on the virtual one the tests drive, converting to a duration
+    /// measures against a reading that can be stale by the time the sleeper is filed, and the
+    /// difference lands directly in the probe timestamps §2.2 pins to the millisecond. See the note
+    /// on `DiscoveryClock.sleep(until:)`.
     @discardableResult
     func pause(until offset: Duration) async -> Bool {
-        await pause(for: (runStart + offset) - environment.clock.now())
+        guard !stopping, !isFinished else { return false }
+        let deadline = runStart + offset
+        guard deadline > environment.clock.now() else { return !Task.isCancelled }
+        do {
+            try await environment.clock.sleep(until: deadline)
+        } catch {
+            return false
+        }
+        return !stopping && !isFinished && !Task.isCancelled
     }
 }
