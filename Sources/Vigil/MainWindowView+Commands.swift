@@ -86,8 +86,9 @@ extension MainWindowView {
         commands.append(VCommand(id: "view.cycle",
                                  title: Self.localized("Cycle cameras"),
                                  category: .view,
-                                 isEnabled: window.cycle.canCycle(cameraCount: 1,
-                                                                  layout: window.layout)))
+                                 isEnabled: window.cycle.canCycle(
+                                     cameraCount: library.cameras.count,
+                                     layout: window.layout)))
         commands.append(VCommand(id: "camera.find",
                                  title: Self.localized("Find Cameras…"),
                                  category: .camera))
@@ -188,7 +189,7 @@ extension MainWindowView {
     /// has fewer pages than it.
     func selectLayout(_ layout: VGridLayout) {
         window.layout = layout
-        window.cycle = window.cycle.retargeted(cameraCount: 1, layout: layout)
+        window.cycle = window.cycle.retargeted(cameraCount: library.cameras.count, layout: layout)
     }
 
     /// What restarts the cycle timer: whether it is ticking, how fast, and over what.
@@ -211,8 +212,37 @@ extension MainWindowView {
                 return                  // cancelled: the task id changed, or the view went away
             }
             guard !Task.isCancelled else { return }
-            window.cycle = window.cycle.next(cameraCount: 1, layout: window.layout)
+            // ⛔ `library.cameras.count`, not the `1` that used to be hard-coded here. With one
+            // camera `pageCount` is 1, `next` returns the same page every time, and the cycle
+            // advanced through nothing for as long as it was switched on — which is what the
+            // toolbar's spinning ring was reporting. It was right when the app held one camera and
+            // wrong from the moment the library landed.
+            window.cycle = window.cycle.next(cameraCount: library.cameras.count,
+                                             layout: window.layout)
+            await showCyclePage()
         }
+    }
+
+    /// Brings the camera the cycle's current page names onto the stage.
+    ///
+    /// ⚠️ A RECONNECT PER STEP, AND THAT IS WHAT A ONE-STREAM BUILD CAN HONESTLY DO. `switchTo`
+    /// stops the current session and opens another, so each advance costs the ~1.2 s this device
+    /// takes to reach a first frame (docs/PLAYBACK-LATENCY.md). At the 10 s default dwell that is a
+    /// tenth of the interval; at the 2 s floor `VCycleModel` clamps to, it would be most of it,
+    /// which is why that floor exists and why this does not try to pre-warm the next page. Pre-warm
+    /// means holding two sessions, and holding two sessions is the multi-camera work this build has
+    /// not done.
+    ///
+    /// `.single` is the layout this matters in — one page per camera — but nothing here assumes it:
+    /// `visibleRange` is asked for the page's indices and the first is taken, so a 2 × 2 page of
+    /// four cameras streams the first of the four rather than silently doing nothing.
+    private func showCyclePage() async {
+        let cameras = library.cameras
+        let range = window.cycle.visibleRange(cameraCount: cameras.count, layout: window.layout)
+        guard let index = range.first, cameras.indices.contains(index) else { return }
+        let target = cameras[index]
+        guard target.id != session.camera?.id else { return }
+        await session.switchTo(target)
     }
 }
 
