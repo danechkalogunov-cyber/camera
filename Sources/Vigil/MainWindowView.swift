@@ -69,6 +69,13 @@ struct MainWindowView: View {
     /// Pan, tilt, zoom, focus, iris, presets and patrols.
     @State var ptz: PTZCoordinator
 
+    /// Every camera the user has added.
+    ///
+    /// Separate from `session`, which owns exactly one live stream. The library is the *set*; the
+    /// session is whichever member of it is on screen. Keeping them apart is what lets a second
+    /// camera exist before a second stream does.
+    @State var library: AppLibraryModel
+
     /// Stills written to the user's Pictures folder.
     @State var snapshots: SnapshotCoordinator
 
@@ -101,6 +108,7 @@ struct MainWindowView: View {
         self.window = window
         _deviceInfo = State(initialValue: DeviceInfoService(logger: session.dependencies.logger,
                                                             clock: session.dependencies.clock))
+        _library = State(initialValue: AppLibraryModel(logger: session.dependencies.logger))
         _recording = State(initialValue: RecordingCoordinator(tap: session.recordingTap,
                                                               logger: session.dependencies.logger,
                                                               clock: session.dependencies.clock))
@@ -204,6 +212,12 @@ struct MainWindowView: View {
         }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
         .task { window.showsVideoOverlay = session.remembersVideoOverlay }
+        .task {
+            // Opens `library.json` and, on a first run, adopts the camera the prototype remembered
+            // — carrying its `CredentialRef` through, which is the difference between "the camera
+            // still works" and "type your password again".
+            await library.load(importingLegacyFrom: session.defaults)
+        }
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.

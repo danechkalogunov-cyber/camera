@@ -25,9 +25,19 @@ import VigilUI
 /// `private` reaches a type's extensions only within one file.
 extension MainWindowView {
 
-    /// The library as the sidebar sees it: one camera, and whatever groups the user has made.
+    /// The library as the sidebar sees it: every camera the user has added, and their groups.
+    ///
+    /// ⚠️ The live one is *substituted*, not appended. It carries the status, the codec, the frame
+    /// rate and the recording flag, none of which exist on a stored record — so the row for the
+    /// camera currently on screen has to be the session's row, and every other row is the stored
+    /// one at rest. Appending instead would show the same camera twice, once live and once idle,
+    /// which is exactly the confusion this list exists to remove.
+    ///
+    /// Before the library has loaded, or when it is empty, this is the single session row it always
+    /// was. A window that flashed an empty sidebar at a user who has cameras would be worse than
+    /// one that shows the camera it is already streaming.
     var sidebarTree: VSidebarTree {
-        VSidebarTree(cameras: [sidebarCamera],
+        VSidebarTree(cameras: sidebarCameras,
                      groups: groups.groups.map {
                          VSidebarGroup(id: $0.id, name: $0.name, identityIndex: $0.identityIndex)
                      },
@@ -37,6 +47,33 @@ extension MainWindowView {
                      recordingCount: window.clips.isEmpty ? nil : window.clips.count,
                      bookmarkCount: bookmarks.bookmarks.isEmpty ? nil : bookmarks.bookmarks.count,
                      now: Date())
+    }
+
+    /// Every row: the live camera as itself, the rest as stored.
+    var sidebarCameras: [VSidebarCamera] {
+        let stored = library.cameras
+        guard !stored.isEmpty else { return [sidebarCamera] }
+        var rows = stored.map { camera -> VSidebarCamera in
+            guard camera.id != cameraID else { return sidebarCamera }
+            return VSidebarCamera(id: camera.id,
+                                  name: camera.displayName,
+                                  host: camera.host,
+                                  groupID: groups.group(for: camera.id),
+                                  isEnabled: camera.isEnabled,
+                                  // ⚠️ `.disabled` for every stored row, including enabled ones.
+                                  // `.offline` claims a connection was tried and lost, and
+                                  // `.connecting` claims one is in flight; neither is true — this
+                                  // build runs one stream, so a camera that is not it has had
+                                  // nothing attempted. Saying "not running" is the only honest
+                                  // option until a second stream exists to say otherwise.
+                                  status: .disabled)
+        }
+        // The live camera may not be in the library yet — it is not, until the legacy import lands
+        // or the user adds it — and it must still appear.
+        if !stored.contains(where: { $0.id == cameraID }) {
+            rows.insert(sidebarCamera, at: 0)
+        }
+        return rows
     }
 
     /// The session camera as a sidebar row.

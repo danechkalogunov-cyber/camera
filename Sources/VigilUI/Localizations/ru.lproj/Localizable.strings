@@ -618,3 +618,9 @@
 "Play slower" = "Медленнее";
 "Play faster" = "Быстрее";
 "Playback speed" = "Скорость воспроизведения";
+
+/* THE CAMERA LIST ON DISK. Said out loud rather than logged, because a silent recovery is how
+   a user finds out weeks later that half their cameras are gone and nothing ever mentioned it. */
+"Your camera list was damaged and has been restored from a backup. Some recent changes may be missing." = "Список камер был повреждён и восстановлен из резервной копии. Последние изменения могли не сохраниться.";
+"This camera list was written by a newer version of Vigil. It is being shown read-only so nothing is lost." = "Этот список камер записан более новой версией Vigil. Он показан только для чтения, чтобы ничего не потерялось.";
+"That camera could not be added." = "Эту камеру не удалось добавить.";
