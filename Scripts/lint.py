@@ -565,6 +565,103 @@ def check_argument_order(path: pathlib.Path, text: str,
     return out
 
 
+def check_mutating_in_expect() -> list[Violation]:
+    """`#expect(x.mutate())` does not compile, and the error is unreadable.
+
+    swift-testing's macro rewrites a function call into `__checkFunctionCall(x.self, calling: { $0.f() })`
+    so it can print the receiver in a failure message — and `$0` in that closure is a **`let`**. A
+    `mutating` method called there fails with
+
+        macro expansion #expect:2:6: error: cannot use mutating member on immutable value:
+        '$0' is immutable
+
+    which names a line inside a generated macro rather than the test. Ten of these arrived at once
+    from one file of otherwise-correct tests, and none of them was visible in this container: the
+    macro is expanded by the compiler, so only a Mac sees it.
+
+    The fix at the call site is to hoist — `let applied = form.absorbPastedURL()` and then
+    `#expect(applied)` — which also reads better, because the assertion is then about a named
+    outcome rather than about a side effect.
+
+    Three conditions have to hold together, and each one was learned by watching a looser draft
+    misfire:
+
+    1. The name is declared `mutating func` somewhere in `Sources/`. Alone this is far too loose —
+       the first draft matched on the name and reported **183** violations against files that have
+       been compiling on macOS for weeks.
+    2. The macro's whole argument is that one call, with nothing after it. See the comment below.
+    3. The receiver is declared `var` in the same test file. This is what separates
+       `#expect(form.absorbPastedURL())` — `var form` — from `#require(document.node("x"))`, where
+       `node` happens to also name a `mutating` method on `MergeEngine` but `document` is a `let`
+       `ISAPIDocument`. Without it the rule reported eight collisions out of seventeen hits, and a
+       linter that is wrong half the time is a linter the next person turns off.
+
+    A mutating method cannot be called on a `let` at all, so condition 3 costs nothing in coverage:
+    any call this rule skips for want of a `var` would not have compiled in the first place.
+    """
+    mutating = re.compile(r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
+                          r"(?:public\s+|package\s+|open\s+|internal\s+|private\s+|fileprivate\s+)*"
+                          r"mutating\s+func\s+(\w+)")
+    names: set[str] = set()
+    for path in swift_files("Sources"):
+        for raw in path.read_text().splitlines():
+            match = mutating.match(raw)
+            if match:
+                names.add(match.group(1))
+    if not names:
+        return []
+
+    macro = re.compile(r"#(?:expect|require)\s*\(")
+    receiver = re.compile(r"^\s*([A-Za-z_]\w*)\.(\w+)\s*\(")
+    declared_var = re.compile(r"\bvar\s+([A-Za-z_]\w*)\b")
+    out: list[Violation] = []
+    for path in swift_files("Tests"):
+        rel = str(path.relative_to(ROOT))
+        text = blank_comments_and_strings(path.read_text())
+        variables = set(declared_var.findall(text))
+        for match in macro.finditer(text):
+            argument = _balanced(text, match.end() - 1)
+            if argument is None:
+                continue
+            call = receiver.match(argument)
+            if not call or call.group(2) not in names:
+                continue
+            if call.group(1) not in variables:
+                continue
+            # ⛔ ONLY A BARE CALL. `#expect(p.evaluate(…) == .stop(…))` compiles perfectly well:
+            # swift-testing takes the `__checkBinaryOperation` path for an operator expression and
+            # evaluates the left side normally. It is `#expect(p.mutate())` — the whole argument
+            # being one call — that becomes `__checkFunctionCall(p.self, calling: { $0.mutate() })`
+            # with its immutable `$0`. The first draft of this rule matched the name alone and
+            # produced 183 false positives against code that has been compiling on macOS for weeks,
+            # which is how the distinction was found.
+            opening = argument.index("(", call.end(2))
+            inner = _balanced(argument, opening)
+            if inner is None:
+                continue
+            if argument[opening + len(inner) + 2:].strip():
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            out.append((rel, line, "mutating-in-expect",
+                        f"#expect/#require wraps a bare call in a closure whose `$0` is a `let`, "
+                        f"so the mutating '{call.group(2)}' cannot be called there. Hoist it: "
+                        f"`let outcome = {call.group(1)}.{call.group(2)}()`, then assert `outcome`"))
+    return out
+
+
+def _balanced(text: str, open_index: int) -> str | None:
+    """The contents of the parenthesis at `open_index`, or `None` when it never closes."""
+    depth = 0
+    for index in range(open_index, len(text)):
+        if text[index] in "([{":
+            depth += 1
+        elif text[index] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return text[open_index + 1:index]
+    return None
+
+
 def check_duplicate_test_names() -> list[Violation]:
     """Defect 4: two agents choosing the same obvious @Test name break the whole target.
 
@@ -1496,6 +1593,7 @@ def main() -> int:
         violations += check_theme_isolation(path, lines)
 
     violations += check_duplicate_test_names()
+    violations += check_mutating_in_expect()
     violations += check_split_file_access()
     violations += check_undeclared_v_types()
     violations += check_scaffold_tests()

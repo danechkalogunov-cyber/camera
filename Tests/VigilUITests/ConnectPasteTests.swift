@@ -10,6 +10,13 @@
 //  hardest to retype — and the user then watched the probe ladder search for a path they had just
 //  supplied.
 //
+//  ⚠️ EVERY CALL IS HOISTED INTO A `let`, DELIBERATELY. `#expect(form.absorbPastedURL())` does not
+//  compile: swift-testing rewrites a bare call into `__checkFunctionCall(form.self, calling: {
+//  $0.absorbPastedURL() })` so it can print the receiver on failure, and that `$0` is a `let`, which
+//  a `mutating` method may not touch. The error names a line inside the expanded macro rather than
+//  this file, so it is worth recognising once. `Scripts/lint.py` now catches it — see
+//  `check_mutating_in_expect`.
+//
 
 #if os(macOS)
 
@@ -24,7 +31,8 @@ import Testing
 @Test func connectPasteFillsEveryFieldFromAFullURL() {
     var form = ConnectFormState()
     form.host = "rtsp://admin:secret@192.168.1.64:554/Streaming/Channels/101"
-    #expect(form.absorbPastedURL())
+    let applied = form.absorbPastedURL()
+    #expect(applied)
     #expect(form.host == "192.168.1.64")
     #expect(form.username == "admin")
     #expect(form.password == "secret")
@@ -38,7 +46,8 @@ import Testing
 @Test func connectPasteKeepsANonDefaultPort() {
     var form = ConnectFormState()
     form.host = "rtsp://192.168.1.64:8554/Streaming/Channels/102"
-    #expect(form.absorbPastedURL())
+    let applied = form.absorbPastedURL()
+    #expect(applied)
     #expect(form.rtspPort == 8554)
     #expect(form.rtspPath == "/Streaming/Channels/102")
 }
@@ -50,7 +59,8 @@ import Testing
 @Test func connectPasteKeepsTheQueryWithThePath() {
     var form = ConnectFormState()
     form.host = "rtsp://192.168.1.64/Streaming/tracks/101?starttime=20260803T090000Z"
-    #expect(form.absorbPastedURL())
+    let applied = form.absorbPastedURL()
+    #expect(applied)
     #expect(form.rtspPath == "/Streaming/tracks/101?starttime=20260803T090000Z")
 }
 
@@ -59,7 +69,8 @@ import Testing
 @Test func connectPasteTreatsABareSlashAsNoPath() {
     var form = ConnectFormState()
     form.host = "rtsp://192.168.1.64/"
-    #expect(form.absorbPastedURL())
+    let applied = form.absorbPastedURL()
+    #expect(applied)
     #expect(form.host == "192.168.1.64")
     #expect(form.rtspPath == nil)
 }
@@ -69,7 +80,8 @@ import Testing
 @Test func connectPasteRecordsTLSFromTheScheme() {
     var form = ConnectFormState()
     form.host = "rtsps://192.168.1.64:322/Streaming/Channels/101"
-    #expect(form.absorbPastedURL())
+    let applied = form.absorbPastedURL()
+    #expect(applied)
     #expect(form.usesTLS)
     #expect(form.rtspPort == 322)
 }
@@ -81,7 +93,8 @@ import Testing
     var form = ConnectFormState()
     form.password = "already typed"
     form.host = "rtsp://192.168.1.64/Streaming/Channels/101"
-    #expect(form.absorbPastedURL())
+    let applied = form.absorbPastedURL()
+    #expect(applied)
     #expect(form.password == "already typed")
     #expect(form.username == "admin")
 }
@@ -91,7 +104,8 @@ import Testing
 @Test func connectPasteLeavesABareAddressAlone() {
     var form = ConnectFormState()
     form.host = "192.168.1.64"
-    #expect(form.absorbPastedURL() == false)
+    let applied = form.absorbPastedURL()
+    #expect(applied == false)
     #expect(form.host == "192.168.1.64")
 }
 
@@ -99,7 +113,8 @@ import Testing
 @Test func connectPasteIgnoresAnUnrelatedScheme() {
     var form = ConnectFormState()
     form.host = "ftp://192.168.1.64/pub"
-    #expect(form.absorbPastedURL() == false)
+    let applied = form.absorbPastedURL()
+    #expect(applied == false)
     #expect(form.host == "ftp://192.168.1.64/pub")
     #expect(form.rtspPath == nil)
 }
@@ -115,13 +130,15 @@ import Testing
 @Test func connectPasteClearsThePathWhenTheAddressStopsBeingAURL() {
     var form = ConnectFormState()
     form.host = "rtsp://192.168.1.64:8554/Streaming/Channels/102"
-    #expect(form.absorbPastedURL())
+    let pasted = form.absorbPastedURL()
+    #expect(pasted)
     #expect(form.rtspPath != nil)
     #expect(form.rtspPort != nil)
 
     // The user selects the field and types a different camera's address.
     form.host = "192.168.1.70"
-    #expect(form.absorbPastedURL() == false)
+    let afterEditingTheAddress = form.absorbPastedURL()
+    #expect(afterEditingTheAddress == false)
     #expect(form.rtspPath == nil)
     #expect(form.rtspPort == nil)
     #expect(form.usesTLS == false)
@@ -131,9 +148,11 @@ import Testing
 @Test func connectPasteReplacesAPreviousURLsPath() {
     var form = ConnectFormState()
     form.host = "rtsp://192.168.1.64:8554/Streaming/Channels/102"
-    #expect(form.absorbPastedURL())
+    let firstPaste = form.absorbPastedURL()
+    #expect(firstPaste)
     form.host = "rtsp://192.168.1.70/Streaming/Channels/201"
-    #expect(form.absorbPastedURL())
+    let secondPaste = form.absorbPastedURL()
+    #expect(secondPaste)
     #expect(form.host == "192.168.1.70")
     #expect(form.rtspPath == "/Streaming/Channels/201")
     #expect(form.rtspPort == nil)
