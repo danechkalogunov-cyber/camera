@@ -333,9 +333,19 @@ final class AppSessionModel {
         diagnosis = nil
         beginConnecting()
         let known = knownHandle(for: request)
-        resolvedPath = known.rtspPath
+        // ⛔ A pasted URL beats the remembered path, and beats the probe ladder. The user has just
+        // told us exactly where the stream is; searching for it anyway would be ignoring an answer
+        // in favour of a guess, and on a camera whose sub-stream is at `/Streaming/Channels/102` the
+        // ladder happily finds `/101` instead and shows the wrong picture with no error.
+        //
+        // `form.rtspPath` is `nil` for every address that is not a URL — `absorbPastedURL()` clears
+        // it on the same change that fails to parse — so this cannot resurrect a path from a camera
+        // the user has since typed away from.
+        let pastedPath = form.rtspPath
+        if let port = form.rtspPort { rtspPort = port }
+        resolvedPath = pastedPath ?? known.rtspPath
         sessionTask = Task { [weak self] in
-            await self?.connect(request, ref: known.ref, rtspPath: known.rtspPath)
+            await self?.connect(request, ref: known.ref, rtspPath: pastedPath ?? known.rtspPath)
         }
     }
 

@@ -122,6 +122,24 @@ package struct ConnectFormState: Sendable, Hashable {
     /// Increments on every failure, driving the error shake (§7.4 #45).
     package var failureCount: Int = 0
 
+    /// The RTSP path a pasted URL carried, or `nil` when the address is a bare host.
+    ///
+    /// ⚠️ Carried, not shown. The form has no path field yet — that is a separate piece of work —
+    /// so this is state the user cannot see, which is a trap unless it is cleared the moment the
+    /// address stops being the URL it came from. ``absorbPastedAddress()`` is what guarantees that:
+    /// it rewrites *and* clears from the same rule, on every change to ``host``.
+    package var rtspPath: String?
+
+    /// The port a pasted URL carried. Same visibility caveat as ``rtspPath``.
+    package var rtspPort: Int?
+
+    /// Whether the pasted URL was `rtsps://` or `https://`.
+    ///
+    /// Recorded and not yet acted on: this build has no TLS transport. Kept so that pasting a
+    /// `rtsps://` URL does not silently lose the one bit of the address that says it is encrypted —
+    /// when the transport lands, the intent is already here rather than needing to be retyped.
+    package var usesTLS: Bool = false
+
     // MARK: - Initialisation
 
     /// Creates an empty form with `admin` prefilled.
@@ -197,6 +215,17 @@ package struct ConnectFormState: Sendable, Hashable {
     /// the user name and the password in one action — the fastest path an advanced user has, and
     /// the one UX.md §8.3 calls out by name. Anything that is not a URL with a host is left alone.
     ///
+    /// ⛔ THE PORT AND THE PATH USED TO BE DROPPED. Only host, user and password were taken, so
+    /// pasting the full URL a camera's own web page hands you threw away the two parts that are
+    /// hardest to retype — `:8554` on a device behind a port map, and `/Streaming/Channels/102` for
+    /// the sub-stream. The user then watched the probe ladder search for a path they had just
+    /// supplied. UX.md §12 says "auto-parses into **every** field"; this is the rest of it.
+    ///
+    /// The clearing arm matters as much as the parsing one. `rtspPath` and `rtspPort` are state the
+    /// form does not yet display, and this method is the only writer of both — so a value left over
+    /// from a URL the user has since edited away would silently override the probe ladder for a
+    /// different camera. Every non-URL address resets them.
+    ///
     /// - Returns: `true` when the text was a URL and the fields were rewritten.
     @discardableResult
     package mutating func absorbPastedURL() -> Bool {
@@ -204,11 +233,12 @@ package struct ConnectFormState: Sendable, Hashable {
         guard text.contains("://"),
               let components = URLComponents(string: text),
               let parsedHost = components.host,
-              !parsedHost.isEmpty else {
-            return false
-        }
-        let schemes: Set<String> = ["rtsp", "rtsps", "http", "https"]
-        guard let scheme = components.scheme?.lowercased(), schemes.contains(scheme) else {
+              !parsedHost.isEmpty,
+              let scheme = components.scheme?.lowercased(),
+              Self.pasteableSchemes.contains(scheme) else {
+            rtspPath = nil
+            rtspPort = nil
+            usesTLS = false
             return false
         }
         // `URLComponents` percent-decodes `user` and `password` for us, which matters because a
@@ -220,8 +250,29 @@ package struct ConnectFormState: Sendable, Hashable {
         if let secret = components.password, !secret.isEmpty {
             password = secret
         }
+        rtspPort = components.port
+        rtspPath = Self.streamPath(from: components)
+        usesTLS = scheme == "rtsps" || scheme == "https"
         hostProblem = Self.problem(forHost: host)
         return true
+    }
+
+    /// The schemes worth expanding. A pasted `ftp://` is not a camera, and rewriting the field for
+    /// one would be worse than ignoring it.
+    private static let pasteableSchemes: Set<String> = ["rtsp", "rtsps", "http", "https"]
+
+    /// The path with its query, or `nil` when the URL carried nothing beyond `/`.
+    ///
+    /// The query is kept because Hikvision puts real arguments there — `?starttime=` is how the
+    /// archive is addressed (spec-isapi.md §15.6), and a path stripped of it would open the live
+    /// stream while claiming to open a recording. A bare `/` is dropped: that is what a browser
+    /// adds, not where the stream lives, and storing it would override the probe ladder with
+    /// nothing.
+    private static func streamPath(from components: URLComponents) -> String? {
+        let path = components.path
+        guard !path.isEmpty, path != "/" else { return nil }
+        guard let query = components.query, !query.isEmpty else { return path }
+        return path + "?" + query
     }
 
     // MARK: - Private Helpers
