@@ -38,10 +38,11 @@ struct RootView: View {
 
     /// The window's own state: which panels are shown, the layout, the search box.
     ///
-    /// Created here rather than injected because it is per-window and has no dependencies. It
-    /// outlives a reconnect, which is the point — losing the sidebar every time a camera blinks
-    /// would be worse than not having one.
-    @State private var window = MainWindowState()
+    /// ⚠️ Handed in, and it used to be created here. The menu bar is built by `VigilApp` and acts on
+    /// this state, and a `Commands` builder cannot reach what a view owns — so the ownership moved
+    /// up. It still outlives a reconnect, which was the original point: losing the sidebar every
+    /// time a camera blinks would be worse than not having one.
+    @Bindable var window: MainWindowState
 
     /// Every camera the user has added.
     ///
@@ -83,8 +84,9 @@ struct RootView: View {
     /// Explicit because ``library`` needs the session's logger, which a property initialiser cannot
     /// reach: `@State private var library = AppLibraryModel(logger: session…)` would be reading one
     /// stored property from another's default value, which Swift does not allow.
-    init(session: AppSessionModel) {
+    init(session: AppSessionModel, window: MainWindowState) {
         self.session = session
+        self.window = window
         _library = State(initialValue: AppLibraryModel(logger: session.dependencies.logger))
     }
 

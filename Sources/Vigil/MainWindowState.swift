@@ -121,6 +121,41 @@ final class MainWindowState {
     /// means nothing — `VToolbarView` watches it for a change.
     var focusSearchRequests = 0
 
+    // MARK: - Menu requests
+
+    /// Counters the menu bar bumps and the window acts on.
+    ///
+    /// ⛔ WHY A COUNTER AND NOT A CLOSURE. `VigilCommands` is built by `VigilApp`, above the window,
+    /// and the four actions below live on `MainWindowView` — they need its `snapshots`, `recording`
+    /// and `archive` coordinators, which are `@State` on the view and cannot be reached from a
+    /// `Commands` builder. Handing the menu a closure would mean hoisting those coordinators to the
+    /// app, which is a much larger change than a menu deserves and would make them outlive the
+    /// window they belong to.
+    ///
+    /// The counter is the same idiom `focusSearchRequests` already uses here: the menu records that
+    /// something was asked for, the window notices the change and does it. Menu items that need
+    /// nothing but `session` or this state call those directly and take no counter.
+    var snapshotRequests = 0
+
+    /// See ``snapshotRequests``.
+    var recordToggleRequests = 0
+
+    /// See ``snapshotRequests``.
+    var findCamerasRequests = 0
+
+    /// See ``snapshotRequests``.
+    var openRecordingsFolderRequests = 0
+
+    /// Whether a clip is being written, mirrored here from `RecordingCoordinator`.
+    ///
+    /// ⚠️ A mirror, with exactly one writer — `MainWindowView` on every change to the coordinator.
+    /// The menu needs it to say *Start* or *Stop*, and it cannot read the coordinator: that lives in
+    /// the view's `@State`, and `RecordingTap` — the one piece the app *can* reach — is a plain
+    /// `Sendable` box behind a lock, not `@Observable`, so a menu title read from it would never
+    /// update. Duplicated state is a smell; a menu that says "Start Recording" while recording is a
+    /// worse one.
+    var isRecording = false
+
     /// Sidebar focus and selection.
     var sidebarSelection = VSidebarSelectionState()
 

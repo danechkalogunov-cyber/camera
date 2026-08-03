@@ -298,6 +298,17 @@ struct MainWindowView: View {
         // condition rather than an event and outlasts any banner. Saying it once is still better
         // than never, and a persistent read-only indicator belongs with the sidebar's own chrome
         // rather than being faked with a toast that refuses to dismiss.
+        // The menu bar's half of the bargain. `VigilCommands` is built above this window and cannot
+        // reach the coordinators these four need, so it bumps a counter and this is where the work
+        // happens. See `MainWindowState.snapshotRequests` for why it is a counter and not a closure.
+        .onChange(of: window.snapshotRequests) { _, _ in takeSnapshot() }
+        .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
+        .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
+        .onChange(of: window.openRecordingsFolderRequests) { _, _ in openRecordingsFolder() }
+        // The mirror the menu reads to say Start or Stop. One writer, here.
+        .onChange(of: recording.isRecording, initial: true) { _, isRecording in
+            window.isRecording = isRecording
+        }
         .onChange(of: library.notice) { _, notice in
             guard let notice else { return }
             // The *Reveal in Finder* action FEATURES.md §F-INV-01 acceptance 3 names. Every notice

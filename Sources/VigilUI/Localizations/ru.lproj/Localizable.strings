@@ -498,6 +498,14 @@
 "Copy Serial Number" = "Скопировать серийный номер";
 "Open in Browser" = "Открыть в браузере";
 "Camera Settings…" = "Настройки камеры…";
+"Add Camera…" = "Добавить камеру…";
+"Discover Cameras…" = "Найти камеры…";
+"Open Recordings Folder" = "Открыть папку записей";
+"Save Snapshot" = "Сохранить снимок";
+"Command Palette" = "Палитра команд";
+"Cycle Cameras" = "Цикл по камерам";
+"Show Sidebar" = "Показать боковую панель";
+"Show Inspector" = "Показать инспектор";
 "New Group…" = "Новая группа…";
 "Delete Group" = "Удалить группу";
 "Remove Camera" = "Удалить камеру";

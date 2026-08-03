@@ -518,6 +518,14 @@
 "Copy Serial Number" = "Copy Serial Number";
 "Open in Browser" = "Open in Browser";
 "Camera Settings…" = "Camera Settings…";
+"Add Camera…" = "Add Camera…";
+"Discover Cameras…" = "Discover Cameras…";
+"Open Recordings Folder" = "Open Recordings Folder";
+"Save Snapshot" = "Save Snapshot";
+"Command Palette" = "Command Palette";
+"Cycle Cameras" = "Cycle Cameras";
+"Show Sidebar" = "Show Sidebar";
+"Show Inspector" = "Show Inspector";
 "New Group…" = "New Group…";
 "Delete Group" = "Delete Group";
 "Remove Camera" = "Remove Camera";

@@ -60,6 +60,14 @@ struct VigilApp: App {
     /// the value is created in `init()` and never replaced.
     @State private var session: AppSessionModel
 
+    /// The main window's own state.
+    ///
+    /// ⚠️ Owned here rather than by `RootView`, which is where it started. The menu bar is built at
+    /// this level and acts on it — layout, sidebar, inspector, cycle, palette — and a `Commands`
+    /// builder cannot reach state a view owns. Moving it up is the smaller of the two changes; the
+    /// other is threading a dozen closures from the window back into the app.
+    @State private var window = MainWindowState()
+
     // MARK: - Initialisation
 
     // Explicit, though `App` is a `@MainActor` protocol and `VigilApp` therefore infers that
@@ -79,7 +87,7 @@ struct VigilApp: App {
 
     var body: some Scene {
         WindowGroup("Vigil", id: SceneID.main) {
-            RootView(session: session)
+            RootView(session: session, window: window)
                 .frame(minWidth: Self.minWidth, minHeight: Self.minHeight)
         }
         // docs/DESIGN.md §11.2: the toolbar merges into the title bar and no title is drawn. The
@@ -90,13 +98,7 @@ struct VigilApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: Self.defaultWidth, height: Self.defaultHeight)
         .defaultPosition(.center)
-        .commands {
-            // A `WindowGroup` offers File ▸ New Window and ⌘N by default, and a second window would
-            // open a second, camera-less copy of the app's only screen. Replacing the group with an
-            // empty one removes the item. This is the *only* menu customisation in the slice: the
-            // full menu bar (docs/UX.md §11.2) is `VigilCommands`, in W6.
-            CommandGroup(replacing: .newItem) {}
-        }
+        .commands { VigilCommands(session: session, window: window) }
     }
 
     // MARK: - Private Helpers
