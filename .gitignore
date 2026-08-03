@@ -26,5 +26,7 @@ __pycache__/
 .rtpb-logs/
 .*-logs/
 
-# SwiftPM scratch path that got committed once; see the note in ЗАПУСК.md
+# SwiftPM scratch path that got committed once (ed45068), untracked again in 4b5bee6. The blobs
+# stay in history by decision, not by oversight — rewriting would change every SHA from the 47th
+# commit on. ЗАПУСК.md, «Шаг 2», says why the clone is 110 MB and how --depth 1 avoids it.
 .b/
