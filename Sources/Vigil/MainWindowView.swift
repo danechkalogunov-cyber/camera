@@ -301,6 +301,9 @@ struct MainWindowView: View {
         // The menu bar's half of the bargain. `VigilCommands` is built above this window and cannot
         // reach the coordinators these four need, so it bumps a counter and this is where the work
         // happens. See `MainWindowState.snapshotRequests` for why it is a counter and not a closure.
+        // `initial: true` so a link that arrived during launch — before this window existed — is
+        // performed the moment it does. That is §F-AUT-03 acceptance 5.
+        .onChange(of: window.pendingDeepLink, initial: true) { _, _ in performPendingDeepLink() }
         .onChange(of: window.snapshotRequests) { _, _ in takeSnapshot() }
         .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
         .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }

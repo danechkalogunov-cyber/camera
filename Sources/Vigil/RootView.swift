@@ -118,6 +118,20 @@ struct RootView: View {
         // ⚠️ Not the whole of §7.10: the motion governor's T3 tier also has to be able to force
         // this off under thermal or dropped-frame pressure, and `VMotionGovernor` is unwritten. When
         // it lands it ANDs into this expression rather than replacing it.
+        // ⛔ Parsed here, performed by the window. `RootView` exists from launch, so a link that
+        // arrives before there is a camera — the case §F-AUT-03 acceptance 5 names — is held rather
+        // than dropped. A URL scheme is an unauthenticated input surface, so the parse is total and
+        // an unreadable link says so instead of doing nothing.
+        .onOpenURL { url in
+            do {
+                window.pendingDeepLink = try DeepLink.parse(url)
+            } catch {
+                session.dependencies.logger.notice(.ui, "rejected a link: \(error)")
+                window.toast = MainWindowToast(
+                    kind: .warning,
+                    message: MainWindowView.localized("That Vigil link isn't valid."))
+            }
+        }
         .vMotionEnabled(!reduceMotion)
         .background(WindowChromeInstaller())
         .task {

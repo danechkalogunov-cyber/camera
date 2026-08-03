@@ -490,6 +490,13 @@
 "The camera accepted the reset and reported the same settings — its picture was already at the defaults." = "The camera accepted the reset and reported the same settings — its picture was already at the defaults.";
 "The camera refused to reset its picture settings: %@" = "The camera refused to reset its picture settings: %@";
 "Connect a camera first" = "Connect a camera first";
+"That Vigil link isn't valid." = "That Vigil link isn't valid.";
+"No layout is called that." = "No layout is called that.";
+"This build shows one camera at a time." = "This build shows one camera at a time.";
+"This build cannot open that yet." = "This build cannot open that yet.";
+"A link cannot start recording or take a snapshot while Vigil is in the background." = "A link cannot start recording or take a snapshot while Vigil is in the background.";
+"No group is called that." = "No group is called that.";
+"That camera is not in your list." = "That camera is not in your list.";
 "Recording failed: %@" = "Recording failed: %@";
 "The camera refused that move: %@" = "The camera refused that move: %@";
 "Recording starts once the stream's format is known. Try again in a moment." = "Recording starts once the stream's format is known. Try again in a moment.";

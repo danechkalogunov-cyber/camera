@@ -470,6 +470,13 @@
 "The camera accepted the reset and reported the same settings — its picture was already at the defaults." = "Камера приняла сброс и вернула те же значения — изображение уже было на заводских настройках.";
 "The camera refused to reset its picture settings: %@" = "Камера отказалась сбросить настройки изображения: %@";
 "Connect a camera first" = "Сначала подключите камеру";
+"That Vigil link isn't valid." = "Эта ссылка Vigil недействительна.";
+"No layout is called that." = "Раскладки с таким именем нет.";
+"This build shows one camera at a time." = "Эта сборка показывает одну камеру за раз.";
+"This build cannot open that yet." = "Эта сборка пока не умеет такое открывать.";
+"A link cannot start recording or take a snapshot while Vigil is in the background." = "Ссылка не может начать запись или сделать снимок, пока Vigil в фоне.";
+"No group is called that." = "Группы с таким именем нет.";
+"That camera is not in your list." = "Этой камеры нет в вашем списке.";
 "Recording failed: %@" = "Не удалось записать: %@";
 "The camera refused that move: %@" = "Камера отклонила это движение: %@";
 "Recording starts once the stream's format is known. Try again in a moment." = "Запись начнётся, когда станет известен формат потока. Попробуйте через мгновение.";

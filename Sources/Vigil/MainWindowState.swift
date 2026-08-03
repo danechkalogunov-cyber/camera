@@ -146,6 +146,20 @@ final class MainWindowState {
     /// See ``snapshotRequests``.
     var openRecordingsFolderRequests = 0
 
+    /// A `vigil://` link that has been parsed and not yet acted on.
+    ///
+    /// ⛔ Held rather than performed on arrival, and that is acceptance 5 of §F-AUT-03: "a link
+    /// received while the app is not running launches it, restores state, **then** performs the
+    /// action". `RootView` parses the URL the moment macOS delivers it — which may be before there
+    /// is a window at all, while the connect form is still up — and `MainWindowView` performs it
+    /// when it can and clears this. A link that arrives during launch therefore waits for the
+    /// camera rather than being dropped.
+    ///
+    /// One property rather than a counter per action, unlike the menu's requests above: a link
+    /// carries a payload — an instant, a preset number, a query — so there is something to hold,
+    /// and holding it is the whole mechanism.
+    var pendingDeepLink: DeepLinkTarget?
+
     /// Whether a clip is being written, mirrored here from `RecordingCoordinator`.
     ///
     /// ⚠️ A mirror, with exactly one writer — `MainWindowView` on every change to the coordinator.
