@@ -111,19 +111,18 @@ extension MainWindowView {
     ///
     /// A selected group narrows this to its members (UX.md §1.3): selecting a group opens it into
     /// the stage, and a group that showed every camera would make the GROUPS section decorative.
+    /// ⚠️ The rule itself lives in `VigilUI.VStageOrder`, not here. It was written inline in this
+    /// file and shipped with a latent crash — a sort comparator that is not a strict weak ordering —
+    /// which reading caught and no test could have, because the app target has no test bundle. This
+    /// property is now the seam that supplies the group store; the ordering is tested next door.
     var stageOrder: [CameraID] {
-        var ids = library.cameras.map { $0.id }
-        if !ids.contains(cameraID) { ids.insert(cameraID, at: 0) }
-        if case .group(let group) = window.sidebarSelection.focus {
-            ids = ids.filter { groups.group(for: $0) == group }
-        }
-        // ⛔ Partitioned, never `sorted(by:)`. The obvious spelling — `sorted { left, _ in left ==
-        // cameraID }` — is not a strict weak ordering: it reports `a < b` and `b < a` as both false
-        // for two idle cameras and both true is unreachable, which Swift's introsort is entitled to
-        // treat as undefined. It traps at runtime with "not a valid strict weak ordering" once the
-        // array is long enough to leave the insertion-sort path, so a library of four cameras would
-        // have looked fine and one of thirty would have crashed the window.
-        return ids.filter { $0 == cameraID } + ids.filter { $0 != cameraID }
+        var selectedGroup: GroupID?
+        if case .group(let group) = window.sidebarSelection.focus { selectedGroup = group }
+        return VStageOrder.resolve(library: library.cameras.map { $0.id },
+                                   live: cameraID,
+                                   isInSelectedGroup: selectedGroup.map { group in
+                                       { camera in groups.group(for: camera) == group }
+                                   })
     }
 
     /// One tile payload per camera on the stage.
