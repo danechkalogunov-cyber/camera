@@ -483,3 +483,64 @@ drop will produce the same three.
 `Scripts/lint.py` gained two rules from this: `preview-guard`, and an extension to `generic-static`
 that follows `extension Foo` when `Foo` is generic anywhere in the tree — the rule existed and
 missed the case that hit, because nothing in the extension's own file says `<Video>`.
+
+---
+
+## The first live picture, and the four defects between it and the build — 2026-08-04
+
+The same day the macOS half first compiled, it was pointed at a real camera: a Hikvision DS-I256 on
+V5.5.6 at 192.168.88.50. It works. RTSP handshake, Digest accepted, `session playing`, first frame
+in 5.5 s cold and 0.59 s on a reconnect, 1920×1080 H.264 at 33 fps through the hardware decoder.
+ISAPI answers alongside it: `deviceInfo` parsed, "no PTZ on channel 1" read from the device rather
+than assumed, and the three-session concurrency limit observed and recorded as a quirk.
+
+### It took four fixes, and not one of them was a test failure
+
+This is the part worth keeping. The suite was green on every one of these, and each was found by
+one person looking at one window.
+
+1. **A black rectangle over a healthy stream.** `VideoSink` has two ingest paths — compressed
+   samples for `AVSampleBufferDisplayLayer`, decoded pixel buffers for Metal — and `DecodePipeline`
+   picks one in `init` from `prefersDecodedPixelBuffers`. The sink it asks is `TileVideoSink`, an
+   adapter that forwarded two of the protocol's six members and took the defaults for the rest. The
+   default is `false`. So the pipeline sent compressed samples to a tile whose backing layer is a
+   `CAMetalLayer`, and every frame was dropped behind one `noRenderer` line. **A proxy has to
+   forward everything it stands in front of**; the two it did forward were the two anybody would
+   think to test.
+
+2. **The picture was stretched.** The Metal shader draws one quad over the whole drawable, so a 16:9
+   frame in a tile of any other shape is distorted. `AVSampleBufferDisplayLayer` applies
+   `videoGravity` itself — which is exactly why the option could exist for a year and reach nothing.
+   An abstraction that is honoured by one implementation and silently ignored by the other is worse
+   than one that is missing from both.
+
+3. **A spinner on top of the working picture.** `TileRenderState.isReceivingFrames` decides whether
+   the window says "live" or "Waiting for a keyframe…", and it was set only from the sample-buffer
+   path's outcome. Same shape as 2: a fact both backends must publish, published by one.
+
+4. **One camera, two rows in the sidebar.** `Camera.id` defaults to a fresh `CameraID()` and the
+   resumed camera was rebuilt from a remembered *host*, so it never matched its own row in
+   `library.json`. The visible symptom was a duplicate permanently marked not-running; underneath,
+   everything keyed by `CameraID` — group membership, bookmarks, the clip list, the stage
+   assignment — detached on every launch.
+
+Three of the four are the same failure of imagination: a two-implementation seam where one side was
+built, used and tested, and the other was left to be finished later. The tests could not have caught
+any of them, because every unit was correct — what was wrong was the wiring between them, and there
+is no unit test for "these two agree".
+
+### What a green suite did not say
+
+At the moment the black screen was diagnosed, `swift test` had never run at all, and when it did run
+it was 2798 tests over 198 suites with three failures — two of which were real defects in shipped
+behaviour that no camera was needed to find:
+
+- `Camera.encode(to:)` had no line for `colorTag`. The property, the coding key and the decoder all
+  existed, so a colour chosen in settings was written away on the next save and read back as
+  `.none`. A hand-written `encode(to:)` invites exactly this: adding a property updates the decoder,
+  because a missing key throws there, and skips the encoder, because a missing line throws nothing.
+- `ConnectFormState.absorbPastedURL` assigned `rtspPort` only when the pasted URL carried one, so a
+  second paste kept the first camera's port under a different address.
+
+The third was load, not logic: an event-collapse test reached 13 of 30 alerts inside a ~9.8 s wait,
+on a run of 2798 tests in parallel on three cores.
