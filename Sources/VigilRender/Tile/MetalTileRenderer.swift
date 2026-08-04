@@ -121,7 +121,9 @@ public final class MetalTileRenderer: @unchecked Sendable {
               let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
         var uniforms = TileShaderUniforms(crop: crop, adjustments: adjustments,
                                           overlayCount: min(motionZones.count, 16))
-        var zones = motionZones.prefix(16).map { SIMD4($0.x, $0.y, $0.width, $0.height) }
+        // `let`: `withUnsafeBytes` on an array only reads, unlike the `&uniforms` above, which
+        // hands the encoder an inout pointer.
+        let zones = motionZones.prefix(16).map { SIMD4($0.x, $0.y, $0.width, $0.height) }
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<TileShaderUniforms>.stride, index: 0)

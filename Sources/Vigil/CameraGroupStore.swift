@@ -206,9 +206,17 @@ final class CameraGroupStore {
     }
 
     /// Pure pre-removal-index permutation used by drag/drop and its off-by-one tests.
-    static func moving(_ records: [CameraGroupRecord],
-                       id: GroupID,
-                       before index: Int) -> [CameraGroupRecord] {
+    ///
+    /// ⚠️ `nonisolated`, and it has to be. This type is `@MainActor`, which every member inherits —
+    /// including a static function over two arguments that touches no instance state. Its tests are
+    /// ordinary synchronous `@Test` functions, so calling it from them is "call to main
+    /// actor-isolated static method in a synchronous nonisolated context", and the alternative fix
+    /// — `@MainActor` on each test — would isolate the *tests* to hide that this function never
+    /// needed isolation. It is the pure half of ``move(_:to:)``, extracted precisely so the
+    /// off-by-one can be checked without a store.
+    nonisolated static func moving(_ records: [CameraGroupRecord],
+                                   id: GroupID,
+                                   before index: Int) -> [CameraGroupRecord] {
         guard let from = records.firstIndex(where: { $0.id == id }) else { return records }
         let clamped = min(max(0, index), records.count)
         guard clamped != from, clamped != from + 1 else { return records }
