@@ -35,14 +35,20 @@ package struct VShortcutEntry: Sendable, Hashable, Identifiable {
     /// which are exactly the ones nothing else advertises.
     package let keys: String
 
-    /// What the key does, in the user's words.
-    package let action: LocalizedStringKey
+    /// What the key does, in the user's words — a **localisation key**, not a rendered string.
+    ///
+    /// ⚠️ `String` and not `LocalizedStringKey`, and the compiler is what settled it:
+    /// `LocalizedStringKey` conforms to neither `Sendable` nor `Hashable`, so a value type holding
+    /// one can be neither, and this table is a `static let` read from a view — it has to be both.
+    /// The key is the English sentence, exactly as it appears in `Localizable.strings`, and the row
+    /// wraps it at render time.
+    package let action: String
 
     /// Stable identity for `ForEach`. The combination is unique across the whole sheet, which
     /// `ShortcutReferenceTests` asserts.
     package var id: String { keys }
 
-    package init(_ keys: String, _ action: LocalizedStringKey) {
+    package init(_ keys: String, _ action: String) {
         self.keys = keys
         self.action = action
     }
@@ -52,13 +58,15 @@ package struct VShortcutEntry: Sendable, Hashable, Identifiable {
 
 /// A titled group of rows, in the order the sheet shows them.
 package struct VShortcutSection: Sendable, Hashable, Identifiable {
-    package let title: LocalizedStringKey
+
+    /// The section heading, as a localisation key. Same reason as ``VShortcutEntry/action``.
+    package let title: String
     package let entries: [VShortcutEntry]
 
     /// Identity for `ForEach`. The keys of the first entry are unique per section by construction.
     package var id: String { entries.first?.keys ?? "" }
 
-    package init(_ title: LocalizedStringKey, _ entries: [VShortcutEntry]) {
+    package init(_ title: String, _ entries: [VShortcutEntry]) {
         self.title = title
         self.entries = entries
     }
@@ -151,7 +159,7 @@ package struct VShortcutsSheet: View {
                           spacing: VTheme.Space.lg) {
                     ForEach(sections) { section in
                         VStack(alignment: .leading, spacing: VTheme.Space.xs) {
-                            Text(section.title, bundle: .vigilUI)
+                            Text(LocalizedStringKey(section.title), bundle: .vigilUI)
                                 .vType(VTheme.Typography.caption1)
                                 .foregroundStyle(VTheme.Color.Text.secondary)
                                 .textCase(.uppercase)
@@ -181,7 +189,7 @@ package struct VShortcutsSheet: View {
                 .vType(VTheme.Typography.mono)
                 .foregroundStyle(VTheme.Color.Text.primary)
                 .frame(width: 116, alignment: .leading)
-            Text(entry.action, bundle: .vigilUI)
+            Text(LocalizedStringKey(entry.action), bundle: .vigilUI)
                 .vType(VTheme.Typography.body)
                 .foregroundStyle(VTheme.Color.Text.secondary)
                 .fixedSize(horizontal: false, vertical: true)
