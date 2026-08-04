@@ -128,7 +128,10 @@ struct MainWindowView: View {
     @State var telemetry = StreamTelemetrySnapshot.unmeasured
 
     /// Balanced with `NSCursor.unhide()` when cinema mode ends.
-    @State private var cinemaCursorHidden = false
+    ///
+    /// ⚠️ `internal`: the `.task` that hides and unhides it lives in
+    /// `MainWindowView+Lifecycle.swift`, and Swift scopes `private` to a file rather than to a type.
+    @State var cinemaCursorHidden = false
 
     // MARK: - Initialisation
 
@@ -165,81 +168,123 @@ struct MainWindowView: View {
 
     // MARK: - Body
 
+    /// ⛔ FOUR PIECES, DELIBERATELY. As one expression this is
+    ///
+    ///     error: the compiler is unable to type-check this expression in reasonable time;
+    ///            try breaking up the expression into distinct sub-expressions
+    ///
+    /// and it is not a close call: the window is a `VStack` of three chunks under roughly forty
+    /// modifiers, every `.task`/`.onChange` carries a closure whose types have to be inferred, and
+    /// SwiftUI's builders make the whole thing one nested generic type. The solver's cost grows
+    /// superlinearly in that chain, so it does not fail gently — it compiles for minutes and then
+    /// gives up.
+    ///
+    /// Splitting is the whole fix. `windowChrome`, `windowTasks` and `windowReactions` each take a
+    /// view and return one, so the type checker gets three small problems in place of one
+    /// intractable one, and each `let` below pins an opaque type that the next call starts from
+    /// rather than re-deriving. Adding a modifier back into `body` directly is how this returns.
     var body: some View {
+        let chromed = windowChrome(windowStack)
+        let live = windowTasks(chromed)
+        return windowReactions(live)
+    }
+
+    /// The window's three bands: toolbar, columns, status bar.
+    ///
+    /// Each band is its own property for the reason ``body`` gives: three declarations the solver
+    /// can finish are worth more than one it cannot.
+    private var windowStack: some View {
         VStack(spacing: 0) {
-            if !window.isCinemaMode {
-                VToolbarView(isSidebarVisible: window.showsSidebar,
-                         isInspectorVisible: window.showsInspector,
-                         layout: window.layout,
-                         title: identity.name.isEmpty ? Self.layoutTitle(window.layout) : identity.name,
-                         searchText: $window.searchText,
-                         isCycling: window.cycle.isRunning,
-                         cycleInterval: window.cycle.interval,
-                         // ⛔ DESIGN.md §11.2: the hairline is drawn "only when the stage is
-                         // scrolled — over video there is no separator at all". This was `true`
-                         // unconditionally, so a 1 px line sat across the top of every live picture.
-                         // The library screens scroll; the tiles do not.
-                         showsSeparator: stageScrolls,
-                         canShowSidebar: window.contentWidth == 0
-                             || window.contentWidth >= MainWindowState.sidebarMinimumWidth,
-                         canShowInspector: window.contentWidth == 0
-                             || window.contentWidth >= MainWindowState.inspectorMinimumWidth,
-                         focusSearchRequests: window.focusSearchRequests,
-                         onToggleSidebar: { window.isSidebarVisible.toggle() },
-                         onToggleInspector: { window.isInspectorVisible.toggle() },
-                         onSelectLayout: { selectLayout($0) },
-                         onToggleCycle: { window.cycle = window.cycle.toggledRunning() },
-                         onSelectCycleInterval: { window.cycle = window.cycle.withInterval($0) },
-                         onOpenPalette: { openPalette() },
-                         onShowMore: { window.isOverflowMenuOpen = true })
-            }
-
-            HStack(spacing: 0) {
-                if window.showsSidebar {
-                    sidebar
-                        .frame(width: VTheme.Metrics.sidebarWidth)
-                        .overlay { keyboardRegionRing(.sidebar) }
-                } else if window.showsSidebarRail && !window.isCinemaMode {
-                    sidebarRail
-                }
-
-                stageRoute
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .scaleEffect(window.digitalViewport.scale)
-                    .offset(x: window.digitalViewport.offset.width * window.contentWidth,
-                            y: window.digitalViewport.offset.height * window.contentWidth)
-                    // One place, and it reaches every tile on the stage — which is the whole
-                    // reason this is an environment value rather than an argument threaded through
-                    // three initialisers.
-                    .vShowsVideoOverlay(window.showsVideoOverlay)
-                    .onHover { hovering in
-                        window.cycle = window.cycle.paused(hovering)
-                    }
-                    .vTileActions(tileActions)
-                    .overlay { keyboardRegionRing(.stage) }
-
-                if window.showsInspector {
-                    VInspectorView(tab: $window.inspectorTab,
-                                   state: inspectorState,
-                                   actions: inspectorActions)
-                        .frame(width: VTheme.Metrics.inspectorWidth)
-                        .overlay { keyboardRegionRing(.inspector) }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
+            if !window.isCinemaMode { toolbarBand }
+            columnsBand
             // Only when the list is hidden. `VSidebarView` draws its own footer carrying the same
             // counters (UX.md §3.3), and the mockup puts the status inside the sidebar column rather
             // than across the window — so showing both stacked two status lines on top of each other.
             // The bar is kept for the collapsed case, where the sidebar's footer goes with it.
             if !window.showsSidebar && !window.showsSidebarRail && !window.isCinemaMode {
-                VStatusBarView(status: chromeStatus,
-                               onOpenSettings: { window.sheet = .cameraSettings },
-                               // The degraded chip is only reachable while something *is*
-                               // degraded, and the Info tab is where the reason lives.
-                               onShowDegraded: { window.isInspectorVisible = true })
+                statusBand
             }
         }
+    }
+
+    /// The toolbar, which is also the title bar.
+    private var toolbarBand: some View {
+        VToolbarView(isSidebarVisible: window.showsSidebar,
+                     isInspectorVisible: window.showsInspector,
+                     layout: window.layout,
+                     title: identity.name.isEmpty ? Self.layoutTitle(window.layout) : identity.name,
+                     searchText: $window.searchText,
+                     isCycling: window.cycle.isRunning,
+                     cycleInterval: window.cycle.interval,
+                     // ⛔ DESIGN.md §11.2: the hairline is drawn "only when the stage is
+                     // scrolled — over video there is no separator at all". This was `true`
+                     // unconditionally, so a 1 px line sat across the top of every live picture.
+                     // The library screens scroll; the tiles do not.
+                     showsSeparator: stageScrolls,
+                     canShowSidebar: window.contentWidth == 0
+                         || window.contentWidth >= MainWindowState.sidebarMinimumWidth,
+                     canShowInspector: window.contentWidth == 0
+                         || window.contentWidth >= MainWindowState.inspectorMinimumWidth,
+                     focusSearchRequests: window.focusSearchRequests,
+                     onToggleSidebar: { window.isSidebarVisible.toggle() },
+                     onToggleInspector: { window.isInspectorVisible.toggle() },
+                     onSelectLayout: { selectLayout($0) },
+                     onToggleCycle: { window.cycle = window.cycle.toggledRunning() },
+                     onSelectCycleInterval: { window.cycle = window.cycle.withInterval($0) },
+                     onOpenPalette: { openPalette() },
+                     onShowMore: { window.isOverflowMenuOpen = true })
+    }
+
+    /// Camera list, stage, inspector.
+    private var columnsBand: some View {
+        HStack(spacing: 0) {
+            if window.showsSidebar {
+                sidebar
+                    .frame(width: VTheme.Metrics.sidebarWidth)
+                    .overlay { keyboardRegionRing(.sidebar) }
+            } else if window.showsSidebarRail && !window.isCinemaMode {
+                sidebarRail
+            }
+
+            stageRoute
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scaleEffect(window.digitalViewport.scale)
+                .offset(x: window.digitalViewport.offset.width * window.contentWidth,
+                        y: window.digitalViewport.offset.height * window.contentWidth)
+                // One place, and it reaches every tile on the stage — which is the whole
+                // reason this is an environment value rather than an argument threaded through
+                // three initialisers.
+                .vShowsVideoOverlay(window.showsVideoOverlay)
+                .onHover { hovering in
+                    window.cycle = window.cycle.paused(hovering)
+                }
+                .vTileActions(tileActions)
+                .overlay { keyboardRegionRing(.stage) }
+
+            if window.showsInspector {
+                VInspectorView(tab: $window.inspectorTab,
+                               state: inspectorState,
+                               actions: inspectorActions)
+                    .frame(width: VTheme.Metrics.inspectorWidth)
+                    .overlay { keyboardRegionRing(.inspector) }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The counters, shown only where the sidebar's own footer is not.
+    private var statusBand: some View {
+        VStatusBarView(status: chromeStatus,
+                       onOpenSettings: { window.sheet = .cameraSettings },
+                       // The degraded chip is only reachable while something *is* degraded, and the
+                       // Info tab is where the reason lives.
+                       onShowDegraded: { window.isInspectorVisible = true })
+    }
+
+    /// Everything painted on or around the stack: the canvas, the width probe, the overlays, the
+    /// sheet and the window-wide shortcuts.
+    private func windowChrome(_ content: some View) -> some View {
+        content
         .background(window.isCinemaMode ? SwiftUI.Color.black : VTheme.Color.Layer.canvas)
         // What decides whether the two side panels fit (DESIGN.md §11.2). Measured rather than read
         // from the `NSWindow`, because it is the *content* width the panels have to divide up and
@@ -283,138 +328,6 @@ struct MainWindowView: View {
         // no label and cannot be reached by the pointer or by focus; only ⌘K triggers it.
         .background { windowShortcuts }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
-        .task { window.showsVideoOverlay = session.remembersVideoOverlay }
-        .task {
-            window.isFullKeyboardAccessEnabled = NSApp.isFullKeyboardAccessEnabled
-        }
-        .task(id: window.isCinemaMode) {
-            if window.isCinemaMode {
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled, window.isCinemaMode, !cinemaCursorHidden else { return }
-                NSCursor.hide()
-                cinemaCursorHidden = true
-            } else if cinemaCursorHidden {
-                NSCursor.unhide()
-                cinemaCursorHidden = false
-            }
-        }
-        // ⚠️ The library is *not* loaded here any more — `RootView` does it at launch, so the
-        // connect form and the scan see it too. Loading it again on this view's appearance would
-        // re-run the legacy import against a library that may have just been populated by it.
-        // Filed once a picture exists, which is the only moment Vigil knows the record is good for
-        // anything. Adding at connect time would fill the list with addresses that never answered.
-        .onChange(of: session.isReceivingMedia) { _, isReceiving in
-            guard isReceiving else { return }
-            Task { await session.fileCurrentCameraIfNew(into: library) }
-        }
-        .onChange(of: session.isReceivingMedia) { wasReceiving, isReceiving in
-            guard wasReceiving, !isReceiving else { return }
-            Task { await eventFeed.cameraLost(session.camera) }
-        }
-        .task(id: cycleTick) { await runCycle() }
-        // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
-        // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
-        .task(id: session.camera?.id) { loadDeviceInfo() }
-        // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
-        .task(id: recording.completed.count) {
-            vouchForFinishedClips()
-            reloadClips()
-        }
-        .task(id: recording.isRecording) {
-            // Also re-read on start, so the `.partial` file appears while it is being written
-            // rather than only once the clip closes.
-            reloadClips()
-            await tickWhileRecording()
-        }
-        .task { await pollTelemetry() }
-        .task(id: session.camera?.id) { await pollPoster() }
-        .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
-        .task {
-            streamLifecycle.start { session.reconnectImmediately() }
-            await withTaskCancellationHandler(operation: {
-                try? await Task.sleep(for: .seconds(60 * 60 * 24 * 365))
-            }, onCancel: {
-                Task { @MainActor in streamLifecycle.stop() }
-            })
-        }
-        // Looking at the feed is what marks it read. Anything else — a button, a per-row gesture —
-        // leaves a badge that counts events the user has already seen, which is a badge nobody
-        // believes after the first time.
-        .task(id: isEventsScreenOpen) { await markEventsRead() }
-        // Only when the Image tab is actually looked at: these are four HTTP reads per channel.
-        .task(id: window.inspectorTab) { await loadImageIfShown() }
-        // The capability read is cached for 24 h by the session, so re-running this on a tab change
-        // costs nothing after the first time — and the coordinator ignores a repeat for the same
-        // channel anyway.
-        .task(id: deviceInfoReady) { followPTZ() }
-        // The index is only worth reading when the Recordings screen is actually on the stage:
-        // it is a paged search at the device and a camera with a full card answers slowly.
-        .task(id: archiveTrigger) { await loadArchive() }
-        // Fires on every day the user steps to, not just the first load. Stepping a day goes
-        // through `loadArchiveDay` rather than `loadArchive`, and an incomplete Tuesday must be
-        // announced even though Monday was already announced.
-        .onChange(of: archive.incompleteAfter) { _, _ in reportIncompleteDay() }
-        // ⛔ `AppLibraryModel` has been writing this on three paths — a list recovered from a backup,
-        // a list written by a newer Vigil and therefore read-only, and an add the store refused —
-        // and nothing has ever read it. That file's own header says why it matters: "a silent
-        // recovery is how a user discovers weeks later that half their cameras are gone and nothing
-        // ever mentioned it." That is precisely what has been happening.
-        //
-        // ⚠️ A toast is the right shape for a recovery and the wrong one for read-only, which is a
-        // condition rather than an event and outlasts any banner. Saying it once is still better
-        // than never, and a persistent read-only indicator belongs with the sidebar's own chrome
-        // rather than being faked with a toast that refuses to dismiss.
-        // The menu bar's half of the bargain. `VigilCommands` is built above this window and cannot
-        // reach the coordinators these four need, so it bumps a counter and this is where the work
-        // happens. See `MainWindowState.snapshotRequests` for why it is a counter and not a closure.
-        // `initial: true` so a link that arrived during launch — before this window existed — is
-        // performed the moment it does. That is §F-AUT-03 acceptance 5.
-        .onChange(of: window.pendingDeepLink, initial: true) { _, _ in performPendingDeepLink() }
-        .onChange(of: window.isOverflowMenuOpen) { _, open in
-            window.cycle = window.cycle.paused(open)
-        }
-        .onChange(of: window.snapshotRequests) { _, _ in takeSnapshot() }
-        .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
-        .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
-        .onChange(of: window.openRecordingsFolderRequests) { _, _ in openRecordingsFolder() }
-        // The mirror the menu reads to say Start or Stop. One writer, here.
-        .onChange(of: recording.isRecording, initial: true) { _, isRecording in
-            window.isRecording = isRecording
-        }
-        .onChange(of: library.notice) { _, notice in
-            guard let notice else { return }
-            // The *Reveal in Finder* action FEATURES.md §F-INV-01 acceptance 3 names. Every notice
-            // this model raises is about `library.json`, so the folder is always the right
-            // destination; it is omitted only when the directory could not be resolved at all,
-            // which is the one case where there is nothing to reveal.
-            let folder = library.storeDirectory
-            window.toast = MainWindowToast(
-                kind: .warning,
-                message: notice,
-                actionTitle: folder == nil ? nil : "Reveal in Finder",
-                action: folder.map { url in
-                    { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                })
-        }
-        // ⛔ `RecordingCoordinator`'s own header says it: "Every failure becomes a logged, named
-        // outcome in `lastFailure`. A Record button that does nothing and says nothing is the exact
-        // shape this project refuses." It has been exactly that shape, because nothing read the
-        // property. A destination the sandbox will not write to, a disk with no room, a clip that
-        // closes without producing a file — all of them logged, none of them said.
-        .onChange(of: recording.lastFailure) { _, failure in
-            guard let failure else { return }
-            window.toast = MainWindowToast(
-                kind: .error,
-                message: String(format: Self.localized("Recording failed: %@"), failure))
-        }
-        // The same omission, one coordinator over. A PTZ command that the camera refuses left the
-        // pad looking like it had worked.
-        .onChange(of: ptz.lastFailure) { _, failure in
-            guard let failure else { return }
-            window.toast = MainWindowToast(
-                kind: .warning,
-                message: String(format: Self.localized("The camera refused that move: %@"), failure))
-        }
     }
 
 
