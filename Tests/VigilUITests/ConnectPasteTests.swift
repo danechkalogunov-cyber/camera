@@ -123,10 +123,12 @@ import Testing
 
 /// ⛔ The regression this guards is invisible state surviving an edit.
 ///
-/// `rtspPath` and `rtspPort` are not displayed by the form, and `absorbPastedURL()` is their only
-/// writer. If a path from a pasted URL survived the user editing the address into a different
-/// camera, it would override the probe ladder for a device it does not belong to — which looks
-/// exactly like the app connecting to the wrong stream, with nothing on screen to explain it.
+/// `rtspPath` is not displayed by the form, and `absorbPastedURL()` is its only writer. If a path
+/// from a pasted URL survived the user editing the address into a different camera, it would
+/// override the probe ladder for a device it does not belong to — which looks exactly like the app
+/// connecting to the wrong stream, with nothing on screen to explain it. `rtspPort` *is* displayed,
+/// so the same edit has to put it back to 554 rather than leave the previous camera's `:8554`
+/// sitting in a visible field under a new address.
 @Test func connectPasteClearsThePathWhenTheAddressStopsBeingAURL() {
     var form = ConnectFormState()
     form.host = "rtsp://192.168.1.64:8554/Streaming/Channels/102"

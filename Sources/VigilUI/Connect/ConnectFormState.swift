@@ -116,6 +116,16 @@ package struct ConnectFormState: Sendable, Hashable {
     package var password: String = ""
 
     /// Explicit connection coordinates. Unlike a parsed URL, these stay visible and editable.
+    ///
+    /// ⚠️ These are the *only* declarations of the four. ``absorbPastedURL()`` writes them too —
+    /// a pasted `:8554` lands in ``rtspPort``, a pasted `rtsps://` in ``usesTLS`` — and it used to
+    /// do so through a second, shadow set of optional properties further down this struct. Two
+    /// declarations of `rtspPort` do not compile, and the half of that pair the form displayed was
+    /// never the half the paste wrote. One declaration, two writers: the field and the parser.
+    ///
+    /// ``usesTLS`` is recorded and not yet acted on — this build has no TLS transport — but it is
+    /// kept so pasting an `rtsps://` URL does not silently lose the one bit of the address that
+    /// says it is encrypted.
     package var httpPort: Int = 80
     package var rtspPort: Int = 554
     package var channel: Int = 1
@@ -147,19 +157,9 @@ package struct ConnectFormState: Sendable, Hashable {
     ///
     /// ⚠️ Carried, not shown. The form has no path field yet — that is a separate piece of work —
     /// so this is state the user cannot see, which is a trap unless it is cleared the moment the
-    /// address stops being the URL it came from. ``absorbPastedAddress()`` is what guarantees that:
+    /// address stops being the URL it came from. ``absorbPastedURL()`` is what guarantees that:
     /// it rewrites *and* clears from the same rule, on every change to ``host``.
     package var rtspPath: String?
-
-    /// The port a pasted URL carried. Same visibility caveat as ``rtspPath``.
-    package var rtspPort: Int?
-
-    /// Whether the pasted URL was `rtsps://` or `https://`.
-    ///
-    /// Recorded and not yet acted on: this build has no TLS transport. Kept so that pasting a
-    /// `rtsps://` URL does not silently lose the one bit of the address that says it is encrypted —
-    /// when the transport lands, the intent is already here rather than needing to be retyped.
-    package var usesTLS: Bool = false
 
     // MARK: - Initialisation
 

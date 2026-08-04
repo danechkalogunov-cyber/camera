@@ -223,6 +223,21 @@ package struct ConnectFormView: View {
     // MARK: - Actions
 
     private var actions: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            actionRow
+            if let result = state.testResult {
+                Text(verbatim: result)
+                    .vType(VTheme.Typography.caption1)
+                    .foregroundStyle(VTheme.Color.Text.secondary)
+                    .padding(.top, VTheme.Space.sm)
+            }
+        }
+    }
+
+    /// The buttons themselves. Split out so ``actions`` stays a single expression: a `var` returning
+    /// `some View` is not a `@ViewBuilder`, so a second top-level statement there is not a second
+    /// subview — it is a discarded expression and a missing `return`.
+    private var actionRow: some View {
         HStack(spacing: VTheme.Space.sm) {
             if let onScan {
                 // Leading, and secondary: typing a known address is the primary path and stays the
@@ -241,12 +256,6 @@ package struct ConnectFormView: View {
             }
             Spacer(minLength: 0)
             connectButton
-        }
-        if let result = state.testResult {
-            Text(verbatim: result)
-                .vType(VTheme.Typography.caption1)
-                .foregroundStyle(VTheme.Color.Text.secondary)
-                .padding(.top, VTheme.Space.sm)
         }
     }
 
