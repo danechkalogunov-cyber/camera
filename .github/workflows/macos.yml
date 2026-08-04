@@ -38,22 +38,20 @@ jobs:
       - name: Test
         run: swift test --parallel
 
-      # ⛔ REPORTING, NOT ENFORCING, AND THAT IS THE SCRIPT'S OWN INSTRUCTION. `coverage.sh`'s header
-      # says it in as many words: the 90 % / 70 % floors in API_CONTRACT.md §5 have never been
-      # measured against this tree, "wiring an unmeasured threshold into CI fails the next commit for
-      # a reason that has nothing to do with it, and the usual response to that is to lower the
-      # threshold until it passes — which leaves a number in a config file that means nothing."
+      # Enforcing again, and now against measured numbers. This step ran `--enforce` from the day it
+      # was written, against floors nobody could measure because nothing on macOS compiled; it was
+      # turned down to reporting for exactly one run, and that run produced the figures the floors
+      # are now set from (90.31 % pure, 17.84 % macOS — see the table in `coverage.sh`).
       #
-      # This step was written `--enforce` anyway, at a time when nothing here could run at all, so
-      # the contradiction was invisible. The suite reached this step for the first time today.
-      # So: measure first. The run prints per-target percentages and both bucket figures, and
-      # `--enforce` goes back on in the same commit that sets the floors from those numbers —
-      # ЧТО-НЕ-СДЕЛАНО §0.2 is the open item, and it is the *evidence* that is missing, not the will.
+      # ⚠️ The macOS floor is a ratchet at 17 %, not the contract's 70 %. It stops the number going
+      # down unnoticed, which is all a floor can do at this distance from the goal; the gap is
+      # tracked in ЧТО-НЕ-СДЕЛАНО §22 rather than papered over with a threshold that would have to
+      # be lowered to pass.
       #
-      # Keeping it on macOS is intentional either way: Linux can measure the pure bucket, but
-      # compiling the Apple-only sources out would make the app-layer figure silently meaningless.
-      - name: Measure coverage
-        run: Scripts/coverage.sh
+      # Keeping it on macOS is intentional: Linux can measure the pure bucket, but compiling the
+      # Apple-only sources out would make the app-layer figure silently meaningless.
+      - name: Enforce coverage floors
+        run: Scripts/coverage.sh --enforce
 
       - name: Release build
         run: swift build -c release
