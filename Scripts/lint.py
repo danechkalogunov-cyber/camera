@@ -491,6 +491,13 @@ def check_theme_isolation(path: pathlib.Path, lines: list[str]) -> list[Violatio
 INIT_DECL = re.compile(
     r"^\s*(?:package |public |private |internal |fileprivate )?"
     r"(?:convenience )?init\??\(")
+
+# A stored property at a type's member level: `var host: String`, `let id = CameraID()`.
+# Deliberately narrow — `static`, `lazy`, anything attributed, and any computed form are excluded
+# by the guards at the call site rather than by this pattern.
+MEMBER_STORED = re.compile(
+    r"^\s*(?:(?:public|package|internal|private|fileprivate)(?:\(set\))?\s+)*"
+    r"(?:var|let)\s+(\w+)\s*[:=]")
 CALL_START = re.compile(r"\b([A-Z]\w*)\(")
 # A call-site label: `name:`, with no attributes and no second identifier.
 ARG_LABEL = re.compile(r"^\s*([a-z_]\w*)\s*:")
@@ -552,6 +559,19 @@ def declared_initialiser_labels() -> dict[str, list[list[str]]]:
 
     A type may declare several initialisers; a call is legal if it matches any one of them, so the
     value is a list of orders rather than a single one.
+
+    ⛔ A STRUCT WITH NO `init` STILL HAS ONE, and it is the one this rule kept missing. Swift
+    synthesises a memberwise initialiser whose labels are the stored properties **in declaration
+    order**, with no defaults to reorder around — so inserting a field in the middle of a struct
+    silently invalidates every call site that passes anything after it:
+
+        error: argument 'cameraID' must precede argument 'showsVideoOverlay'
+
+    That is the same error this rule exists to catch, and it went to a Mac because `LastConnection`
+    declares no `init` and so had no order here to check against. The synthesised order is derived
+    below, conservatively: any `init` in the type's own body suppresses it, and anything this
+    scanner cannot read as a plain stored property is left out — which only ever *shortens* a
+    declared order, and a call whose labels are not all covered is skipped rather than guessed at.
     """
     out: dict[str, list[list[str]]] = {}
     for path in swift_files("Sources"):
@@ -559,21 +579,35 @@ def declared_initialiser_labels() -> dict[str, list[list[str]]]:
         # after it, and a declared order short of a label stops being a superset of the call's.
         text = blank_comments_and_strings(path.read_text())
         lines = text.split("\n")
-        stack: list[tuple[str, int]] = []
+        # (type name, brace depth at its opening, is a struct, saw an init, stored labels so far)
+        stack: list[tuple[str, int, bool, list[bool], list[str]]] = []
         depth = 0
         for n, raw in enumerate(lines):
             code = strip_comments_and_strings(raw)
             decl = TYPE_DECL.match(raw)
             if decl and "{" in code:
-                stack.append((decl.group(1), depth))
+                stack.append((decl.group(1), depth, " struct " in f" {raw.strip()} ", [False], []))
             if stack and INIT_DECL.match(raw):
+                stack[-1][3][0] = True
                 offset = sum(len(l) + 1 for l in lines[:n]) + raw.index("(")
                 labels = _labels_in_parens(text, offset, declaration=True)
                 if labels:
                     out.setdefault(stack[-1][0], []).append(labels)
+            elif stack and depth == stack[-1][1] + 1:
+                member = MEMBER_STORED.match(raw)
+                stripped = raw.strip()
+                # `static` and `lazy` are not memberwise parameters; an attribute means a property
+                # wrapper or a macro, whose parameter spelling is not the property's name; and a
+                # `{` with no `=` is a computed property or one with observers.
+                if (member
+                        and not re.match(r"^\s*(?:@|.*\b(?:static|class|lazy)\s)", stripped)
+                        and not ("{" in code and "=" not in code)):
+                    stack[-1][4].append(member.group(1))
             depth += code.count("{") - code.count("}")
             while stack and depth <= stack[-1][1]:
-                stack.pop()
+                name, _, is_struct, saw_init, members = stack.pop()
+                if is_struct and not saw_init[0] and len(members) > 1:
+                    out.setdefault(name, []).append(members)
     return out
 
 

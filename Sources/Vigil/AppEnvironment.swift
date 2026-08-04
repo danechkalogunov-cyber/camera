@@ -242,10 +242,14 @@ struct LastConnection: Sendable, Hashable {
                               credentialRef: CredentialRef(uuid),
                               rtspPath: path?.isEmpty == false ? path : nil,
                               name: name?.isEmpty == false ? name : nil,
+                              // Before `showsVideoOverlay`, because that is the declaration order.
+                              // A synthesised memberwise initialiser has no defaults to reorder
+                              // around: its arguments must arrive in the order the stored
+                              // properties are written, and Swift rejects any other order outright.
+                              cameraID: camera.map(CameraID.init),
                               showsVideoOverlay: defaults.object(forKey: overlayKey) == nil
                                   ? true
-                                  : defaults.bool(forKey: overlayKey),
-                              cameraID: camera.map(CameraID.init))
+                                  : defaults.bool(forKey: overlayKey))
     }
 
     /// Stores this connection as the one to resume on the next launch.
