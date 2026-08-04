@@ -60,8 +60,17 @@ extension VideoTileView: VideoSink {
 
     public nonisolated var prefersDecodedPixelBuffers: Bool { metalFrames.isAvailable }
 
+    /// Draws a decoded frame, or reports why it could not be drawn.
+    ///
+    /// The refusal is forwarded through the same channel as every other drop, so a tile that is
+    /// receiving frames and showing nothing says which of the two backends they are falling into.
+    /// That is not a hypothetical: `TileVideoSink` answered `prefersDecodedPixelBuffers` with the
+    /// protocol's `false` default while the tile underneath was rendering through Metal, so the
+    /// pipeline sent compressed samples to a tile that had no sample-buffer renderer, and every
+    /// frame of a healthy stream was dropped behind one `noRenderer` line.
     public nonisolated func enqueuePixelBuffer(_ pixelBuffer: CVPixelBuffer, generation: UInt32) {
-        metalFrames.enqueue(pixelBuffer)
+        guard let refusal = metalFrames.enqueue(pixelBuffer) else { return }
+        reportUpstreamDrop(1, reason: refusal.rawValue)
     }
 
     public nonisolated func enqueueJPEG(_ image: CGImage) {

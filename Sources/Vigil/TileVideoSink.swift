@@ -9,7 +9,9 @@
 
 #if os(macOS)
 
+import CoreGraphics
 import CoreMedia
+import CoreVideo
 import Foundation
 import os
 
@@ -107,12 +109,45 @@ final class TileVideoSink: VideoSink {
 
     // MARK: - VideoSink
 
+    /// ⛔ THIS WAS THE BLACK PICTURE, AND IT WAS THREE MISSING FORWARDS.
+    ///
+    /// `VideoSink` has two ingest paths — compressed samples for `AVSampleBufferDisplayLayer`, and
+    /// decoded pixel buffers for the Metal tile — and `DecodePipeline` picks one **in `init`**, from
+    /// `prefersDecodedPixelBuffers`, then builds a `PixelBufferDecoder` or not. This adapter
+    /// forwarded `enqueue` and `streamDidReset` and took the protocol's defaults for the rest, so it
+    /// answered `false` on behalf of a tile that renders through Metal. The pipeline therefore sent
+    /// compressed samples to a tile whose backing layer is a `CAMetalLayer` and whose sample-buffer
+    /// renderer is nil forever, and a completely healthy stream — RTSP up, auth accepted, first
+    /// frame assembled in 0.6 s — produced a black rectangle and one `dropped 100 frame(s), reason:
+    /// noRenderer` line every few seconds.
+    ///
+    /// A proxy has to forward *everything* it stands in front of. The three members below are the
+    /// rest of the protocol, and the default answer when no tile is mounted is the one the tile is
+    /// going to give when it mounts.
+    nonisolated var prefersDecodedPixelBuffers: Bool {
+        if let view = attached.withLock({ $0 }) { return view.prefersDecodedPixelBuffers }
+        // No tile yet — which is the normal case, since the pipeline is built before SwiftUI mounts
+        // one. `resolvedDefault` builds the same renderer `makeBackingLayer()` will, so the answer
+        // is this machine's, not a guess.
+        return TileRenderBackend.resolvedDefault == .metal
+    }
+
     nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
                              generation: UInt32) {
         // The sample buffer is neither boxed nor stored: both sides are `nonisolated` and the call
         // is synchronous, so no isolation boundary is crossed (R-51).
         let view = attached.withLock { $0 }
         view?.enqueue(sampleBuffer, format: format, generation: generation)
+    }
+
+    nonisolated func enqueuePixelBuffer(_ pixelBuffer: CVPixelBuffer, generation: UInt32) {
+        let view = attached.withLock { $0 }
+        view?.enqueuePixelBuffer(pixelBuffer, generation: generation)
+    }
+
+    nonisolated func enqueueJPEG(_ image: CGImage) {
+        let view = attached.withLock { $0 }
+        view?.enqueueJPEG(image)
     }
 
     nonisolated func streamDidReset() {
@@ -134,9 +169,12 @@ final class TileVideoSink: VideoSink {
         view?.didDropFrames(count, reason: reason)
     }
 
-    // `didChangeFormat` and `streamDidEnd` keep the protocol's no-op defaults: the tile learns about
-    // a format change from the generation stamped on the next sample buffer, and holding the last
-    // picture after the stream ends is the required behaviour rather than something to react to.
+    // `willChangeFormat`, `didChangeFormat`, `streamDidEnd`, `didStall` and `didRecover` are the
+    // only members left on the default, and each is a default this adapter *means*: the tile learns
+    // about a format change from the generation stamped on the next frame, it learns about a stall
+    // from its own layer, and holding the last picture after the stream ends is the required
+    // behaviour rather than something to react to. Every member that carries a frame, or decides
+    // which kind of frame arrives, is forwarded above — that is the lesson of the missing three.
 }
 
 #endif  // os(macOS)

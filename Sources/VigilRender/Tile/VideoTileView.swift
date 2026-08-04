@@ -48,6 +48,20 @@ public enum VideoGravity: String, Sendable, Codable, CaseIterable {
 public enum TileRenderBackend: String, Sendable, Codable, CaseIterable {
     case sampleBufferLayer
     case metal
+
+    /// Which backend a tile built with the default options will actually use on **this** machine.
+    ///
+    /// ⚠️ Ask before the tile exists, not instead of asking the tile. `DecodePipeline` chooses its
+    /// decoder once, in `init`, from `VideoSink.prefersDecodedPixelBuffers` — and the sink the app
+    /// hands it is an adapter that may have no tile attached yet, because SwiftUI has not mounted
+    /// one. Something has to answer, and answering "sample buffers" while the tile then comes up
+    /// with a `CAMetalLayer` is the black picture this property exists to prevent: compressed
+    /// samples arrive at a tile with no sample-buffer renderer and every frame is dropped.
+    ///
+    /// Resolved once, lazily, by building the renderer the tile would build — same code path as
+    /// `MetalFrameBackend.isAvailable` and `makeBackingLayer()`, so the three cannot disagree.
+    public static let resolvedDefault: TileRenderBackend =
+        MetalFrameBackend(enabled: true).isAvailable ? .metal : .sampleBufferLayer
 }
 
 /// The subset of `TileRenderOptions` the slice honours.
