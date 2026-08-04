@@ -234,6 +234,24 @@
         /// What the hover buttons do. Supplied by the app through the environment.
         @Environment(\.vTileActions) private var tileActions
 
+        /// ⌃⌘H: the focused tile's chrome stays up without the pointer (UX.md §6.2).
+        @Environment(\.vPinsTileControls) private var pinsControls
+
+        /// Whether this tile shows its chrome right now.
+        ///
+        /// Pointer, stage focus, or the ⌃⌘H pin — and the pin reaches only the **selected** tile,
+        /// so §6.2's rule that chrome is never shown on a tile the pointer is not over is widened
+        /// by exactly one tile, the one the rest of the window is already talking about.
+        ///
+        /// That third clause is the whole of the accessibility gap §6.2 names. Stage focus exists
+        /// only once ⌥-arrow has been pressed, so before that a keyboard-only user has no route to
+        /// snapshot, record, fit/fill or close on any tile: those live in the hover row and nothing
+        /// else opens it. Named once, because three copies of `isHovering || isFocused` is how the
+        /// stats readout and the action bar come to disagree about what "showing chrome" means.
+        private var showsChrome: Bool {
+            isHovering || isFocused || (pinsControls && isSelected)
+        }
+
         /// The tile's measured size. See ``sizeReader``.
         @State private var size: CGSize = .zero
 
@@ -243,7 +261,7 @@
         /// not needed and the stats are the least urgent thing on a tile.
         @ViewBuilder
         private var statsReadout: some View {
-            if showsOverlay, let stats, isHovering || isFocused {
+            if showsOverlay, let stats, showsChrome {
                 VTileStatsView(stats: stats, isRecording: isRecording)
                     .padding(VTheme.Metrics.tileChromeInset)
                     .transition(.opacity)
@@ -274,7 +292,7 @@
         /// wall of tiles each wearing seven buttons is not a wall of pictures.
         @ViewBuilder
         private var actionBar: some View {
-            if showsOverlay, hasRoomForActions, isHovering || isFocused {
+            if showsOverlay, hasRoomForActions, showsChrome {
                 VTileActionBar(isRecording: isRecording, actions: barActions)
                     .padding(VTheme.Metrics.tileChromeInset)
                     .transition(.opacity)

@@ -443,6 +443,8 @@ extension MainWindowView {
                               window.sheet = nil
                           },
                           onCancel: { window.sheet = nil })
+        case .shortcuts:
+            VShortcutsSheet(sections: VShortcutReference.sections) { window.sheet = nil }
         }
     }
 }

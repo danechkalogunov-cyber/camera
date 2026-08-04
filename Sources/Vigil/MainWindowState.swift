@@ -47,8 +47,27 @@ final class MainWindowState {
     /// asked for it: widen the window again and it comes back, rather than needing a second click.
     var isSidebarVisible = true
 
+    /// Whether the user has asked for the icon rail rather than the full list — ⌥⌘L, UX.md §2.3.
+    ///
+    /// A second flag rather than a third case on ``isSidebarVisible``, because the two questions are
+    /// independent and the user answers them separately: ⌘L is "is the list there at all", ⌥⌘L is
+    /// "how wide". Folding them into one enum would make ⌘L from the rail state ambiguous — hide,
+    /// or go back to full? — and would lose the rail preference across a hide/show cycle.
+    ///
+    /// The rail also appears *without* this, when the window is too narrow for the full list
+    /// (DESIGN.md §11.2). That is why ``showsSidebarRail`` is a computed answer over both facts and
+    /// nothing reads this flag directly.
+    var prefersSidebarRail = false
+
     /// Whether the user wants the inspector shown. The toolbar's trailing toggle writes this.
     var isInspectorVisible = true
+
+    /// ⌃⌘H: keep the selected tile's controls up without the pointer (UX.md §6.2).
+    ///
+    /// Off by default, because chrome over every picture is the thing §6.2 spends a paragraph
+    /// forbidding. On, it is the only way a keyboard-only user reaches snapshot, record, fit/fill
+    /// and close — those live in the hover row, and a hover row is not a keyboard affordance.
+    var pinsTileControls = false
 
     /// Full Keyboard Access is a system preference and may change while Vigil is running.
     var isFullKeyboardAccessEnabled = false
@@ -74,16 +93,28 @@ final class MainWindowState {
     /// below 700 wide the sidebar collapses" — exists precisely to stop that, and nothing implemented
     /// it.
     ///
-    /// ⚠️ §11.2 says the sidebar *collapses to the rail*, and there is no rail: `VSidebarView` has no
-    /// icon-only mode. Hiding it is the honest approximation until that mode exists — it loses the
-    /// camera list at 640 pt, where the alternative was losing the picture.
+    /// The rail takes over below §11.2's threshold, and now also whenever the user asks for it with
+    /// ⌥⌘L — the two reasons are independent and either one is enough.
     var showsSidebar: Bool {
+        guard !prefersSidebarRail else { return false }
         guard contentWidth > 0 else { return isSidebarVisible }
         return isSidebarVisible && contentWidth >= Self.sidebarMinimumWidth
     }
 
+    /// Whether the icon rail is drawn in place of the full list.
+    ///
+    /// Two independent reasons, either sufficient: the user asked (⌥⌘L, UX.md §2.3), or the window
+    /// is too narrow for the full list (DESIGN.md §11.2). Both are gated on the list being wanted at
+    /// all, so ⌘L still puts everything away — a rail the user cannot dismiss would be a worse
+    /// answer to "hide the camera list" than the hiding it replaced.
+    ///
+    /// ⚠️ `contentWidth > 0` guards only the *narrow-window* reason. The first frame has no
+    /// measurement, and treating "not measured yet" as narrow would open every window with the rail
+    /// up for one frame; an explicit preference has no such excuse and applies immediately.
     var showsSidebarRail: Bool {
-        isSidebarVisible && contentWidth > 0 && contentWidth < Self.sidebarMinimumWidth
+        guard isSidebarVisible else { return false }
+        if prefersSidebarRail { return true }
+        return contentWidth > 0 && contentWidth < Self.sidebarMinimumWidth
     }
 
     /// Whether the inspector is actually drawn. See ``showsSidebar``.
@@ -108,6 +139,53 @@ final class MainWindowState {
     /// is the cheapest way to exercise them against a real window.
     var layout: VGridLayout = .single {
         didSet { UserDefaults.standard.set(layout.rawValue, forKey: Self.layoutKey) }
+    }
+
+    /// The layout ⌘F replaced, or `nil` when no tile is soloed.
+    ///
+    /// ⛔ SOLO IS A ROUND TRIP OR IT IS A TRAP. UX.md §5.8 says exit restores what was there —
+    /// `Esc`, ⌘F or a double-click, "reverse transition". Without somewhere to put the previous
+    /// layout, ⌘F is a one-way switch to `.single` and the user's 2 × 2 is gone for good: they have
+    /// to remember which of eight arrangements they were in and pick it again, having pressed a key
+    /// that promised a zoom.
+    ///
+    /// `nil` is the whole of the "not soloed" state, so the two facts cannot disagree.
+    private(set) var layoutBeforeSolo: VGridLayout?
+
+    /// Whether one tile is currently filling the stage.
+    var isSoloed: Bool { layoutBeforeSolo != nil }
+
+    /// Fills the stage with the selected tile, or puts the previous layout back.
+    ///
+    /// Idempotent in both directions and safe to call when already in `.single`: soloing from
+    /// `.single` records `.single` and restores it, which does nothing visible — the right outcome
+    /// for a key the user may press twice.
+    func toggleSolo() {
+        if let previous = layoutBeforeSolo {
+            layoutBeforeSolo = nil
+            layout = previous
+            return
+        }
+        layoutBeforeSolo = layout
+        layout = .single
+    }
+
+    /// Applies a layout the user picked by name — and that is also what leaves solo behind.
+    ///
+    /// ⚠️ Every user-facing layout change goes through here, so that the memory ⌘F keeps cannot go
+    /// stale. Soloing from 2 × 2 and then picking 4 × 4 from the toolbar leaves nothing to restore:
+    /// the user has chosen a layout, so ⌘F must offer to solo *that*, not to snap back to an
+    /// arrangement they have since replaced.
+    func chooseLayout(_ next: VGridLayout) {
+        layoutBeforeSolo = nil
+        layout = next
+    }
+
+    /// Leaves solo without toggling into it. What `Esc` is bound to.
+    func exitSolo() {
+        guard let previous = layoutBeforeSolo else { return }
+        layoutBeforeSolo = nil
+        layout = previous
     }
 
     /// The stage cell keyboard focus is on, or `nil` before the stage has been used.
@@ -351,6 +429,9 @@ enum MainWindowSheet: Identifiable, Hashable {
     /// Editing a bookmark that already exists.
     case editBookmark(UUID)
 
+    /// The keyboard cheat sheet — ⌘/, UX.md §11.1.
+    case shortcuts
+
     /// Distinguishes one presentation from the next, which is what `sheet(item:)` keys on.
     var id: String {
         switch self {
@@ -359,6 +440,7 @@ enum MainWindowSheet: Identifiable, Hashable {
         case .renameGroup(let group):   return "renameGroup.\(group)"
         case .newBookmark(let instant): return "newBookmark.\(instant.timeIntervalSince1970)"
         case .editBookmark(let mark):   return "editBookmark.\(mark)"
+        case .shortcuts:                return "shortcuts"
         }
     }
 }

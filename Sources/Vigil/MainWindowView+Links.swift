@@ -67,7 +67,9 @@ extension MainWindowView {
             guard resolveLinkedCamera(reference) != nil else { return }
             ptz.goToPreset(number)
         case .snapshotAll:
-            snapshotCameras(library.cameras)
+            // Same rule as ⌥⇧⌘S: enabled cameras only. A link and a key that mean the same
+            // sentence must not capture different sets.
+            snapshotAllEnabledCameras()
         case let .event(id):
             guard let event = eventFeed.events.first(where: { $0.id == id }) else {
                 unsupportedLink(MainWindowView.localized("That event is no longer available."))

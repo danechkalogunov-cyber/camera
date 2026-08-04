@@ -262,6 +262,9 @@ struct MainWindowView: View {
                 // reason this is an environment value rather than an argument threaded through
                 // three initialisers.
                 .vShowsVideoOverlay(window.showsVideoOverlay)
+                // ⌃⌘H, beside the overlay flag and an environment value for the same reason: it has
+                // to reach `GridTileView` through `VGridStageView`, which makes no decision about it.
+                .vPinsTileControls(window.pinsTileControls)
                 .onHover { hovering in
                     window.cycle = window.cycle.paused(hovering)
                 }

@@ -40,6 +40,10 @@ private struct VVideoOverlayKey: EnvironmentKey {
     static let defaultValue: Bool = true
 }
 
+private struct VPinsTileControlsKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
 private struct VTextScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = VTheme.Typography.Scale.standard
 }
@@ -99,6 +103,21 @@ extension EnvironmentValues {
         set { self[VVideoOverlayKey.self] = newValue }
     }
 
+    /// Whether a tile's controls stay up without the pointer — ⌃⌘H, "Show Tile Controls".
+    ///
+    /// ⛔ UX.md §6.2 puts this in the accessibility column, not the convenience one: "Chrome is
+    /// **never** shown on a tile that is not under the pointer, except the focused tile's focus
+    /// ring. Keyboard users get chrome via ⌃⌘H (Show Tile Controls) which pins it for the focused
+    /// tile." Without it, every per-tile action — snapshot, record, fit/fill, close — is reachable
+    /// only by pointing at the picture, which is the definition of a control a keyboard user does
+    /// not have.
+    ///
+    /// It pins the **focused** tile and no other, so the rule above still holds everywhere else.
+    public var vPinsTileControls: Bool {
+        get { self[VPinsTileControlsKey.self] }
+        set { self[VPinsTileControlsKey.self] = newValue }
+    }
+
     /// The user's Settings ▸ General ▸ Interface text size factor: 0.92, 1.00 or 1.15 (§4.5).
     public var vTextScale: CGFloat {
         get { self[VTextScaleKey.self] }
@@ -155,6 +174,12 @@ extension View {
     @MainActor
     package func vShowsVideoOverlay(_ shows: Bool) -> some View {
         environment(\.vShowsVideoOverlay, shows)
+    }
+
+    /// Pins the focused tile's controls, so they do not need the pointer (⌃⌘H).
+    @MainActor
+    package func vPinsTileControls(_ pins: Bool) -> some View {
+        environment(\.vPinsTileControls, pins)
     }
 }
 

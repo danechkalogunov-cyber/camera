@@ -261,6 +261,56 @@ extension MainWindowView {
             Button("", action: { selectNextCycleInterval() })
                 .keyboardShortcut("y", modifiers: [.option, .command])
         }.hidden()
+        accessibilityShortcuts
+    }
+
+    /// The four §11.1 keys that were listed as "waiting for features that do not exist" and were
+    /// not: every one of them had its behaviour already built and no way to reach it.
+    ///
+    /// A fourth `Group` for `ViewBuilder`'s ten-child ceiling, like the three above it.
+    @ViewBuilder
+    private var accessibilityShortcuts: some View {
+        Group {
+            // ⌥⌘L — the icon rail (UX.md §2.3). `VSidebarView` has had a rail since the narrow-window
+            // rule landed; nothing let the user ask for one at a comfortable width.
+            Button("", action: { window.prefersSidebarRail.toggle() })
+                .keyboardShortcut("l", modifiers: [.option, .command])
+            // ⌘F — solo the selected tile, and ⌘F again to put the layout back (UX.md §5.8).
+            Button("", action: { window.toggleSolo() })
+                .keyboardShortcut("f", modifiers: .command)
+            // ⌃⌘H — pin the selected tile's controls, which is the *only* way a keyboard-only user
+            // reaches snapshot, record, fit/fill and close (UX.md §6.2).
+            Button("", action: { window.pinsTileControls.toggle() })
+                .keyboardShortcut("h", modifiers: [.control, .command])
+            // ⌥⇧⌘S — capture every enabled camera (FEATURES.md §F-CAP-02 acceptance 1). The
+            // sequential capture behind it has existed since the deep link `vigil://snapshot-all`
+            // was wired; the key was never bound and the menu never offered it.
+            Button("", action: { snapshotAllEnabledCameras() })
+                .keyboardShortcut("s", modifiers: [.option, .shift, .command])
+            // ⌘/ — the cheat sheet. Every other shortcut in this file is discoverable only by
+            // reading UX.md §11.1, which the customer does not have.
+            Button("", action: { window.sheet = .shortcuts })
+                .keyboardShortcut("/", modifiers: .command)
+        }
+        .hidden()
+        // `Esc` leaves solo, per §5.8 — but only when the timeline is away, because the scrubber's
+        // overlay binds the same key to dismissing itself and two `.cancelAction`s in one window is
+        // a coin toss. With the timeline up, ⌘F is still the way out.
+        if window.isSoloed && !window.showsTimeline {
+            Button("", action: { window.exitSolo() })
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
+    }
+
+    /// ⌥⇧⌘S: every **enabled** camera, which is what F-CAP-02 acceptance 1 asks for.
+    ///
+    /// ⚠️ Enabled, not "all". A camera the user has switched off in its settings is one they have
+    /// said they do not want Vigil talking to; a snapshot-all that dials it anyway would be the app
+    /// overriding a preference on the user's behalf, and on a camera that is off because it is
+    /// unreachable it would mean waiting out a connect timeout per row.
+    func snapshotAllEnabledCameras() {
+        snapshotCameras(library.cameras.filter(\.isEnabled))
     }
 
     /// ⌥⌘Y walks the same finite dwell menu shown by the toolbar.
@@ -342,7 +392,8 @@ extension MainWindowView {
     /// Applies a layout and re-anchors the cycle, so a page index cannot survive into a layout that
     /// has fewer pages than it.
     func selectLayout(_ layout: VGridLayout) {
-        window.layout = layout
+        // Through `chooseLayout`, so an explicit choice also ends solo — see `layoutBeforeSolo`.
+        window.chooseLayout(layout)
         window.cycle = window.cycle.retargeted(cameraCount: library.cameras.count, layout: layout)
     }
 
