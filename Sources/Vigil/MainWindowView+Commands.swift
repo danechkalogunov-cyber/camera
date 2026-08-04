@@ -293,6 +293,38 @@ extension MainWindowView {
                 .keyboardShortcut("/", modifiers: .command)
         }
         .hidden()
+        Group {
+            // ⌥N ⌥S ⌥T ⌥B — View ▸ Tile Overlays. One switch per piece, because §11.1 gives each its
+            // own key: the stats readout is for diagnosing a stream and noise the rest of the time,
+            // while the name chip is what tells you which camera you are looking at.
+            Button("", action: { window.tileOverlays.formSymmetricDifference(.name) })
+                .keyboardShortcut("n", modifiers: .option)
+            Button("", action: { window.tileOverlays.formSymmetricDifference(.stats) })
+                .keyboardShortcut("s", modifiers: .option)
+            Button("", action: { window.tileOverlays.formSymmetricDifference(.timestamp) })
+                .keyboardShortcut("t", modifiers: .option)
+            Button("", action: { window.tileOverlays.formSymmetricDifference(.motion) })
+                .keyboardShortcut("b", modifiers: .option)
+            // ⌥⌘F — the camera-list filter. `VSidebarFilter` has been complete since the sidebar
+            // landed; every call site built its search with the default `.all`, so the list could be
+            // narrowed by text and by nothing else.
+            Button("", action: { selectNextSidebarFilter() })
+                .keyboardShortcut("f", modifiers: [.option, .command])
+        }
+        .hidden()
+        Group {
+            // ⇧⌘I, ⌥⌘E, ⌥⌘D — the three File/Help commands whose machinery shipped without a door:
+            // `CameraCSVImporter`, `ConfigurationArchiveCodec` and the Stream Doctor prefix behind
+            // the connect form's Test button. All three were written, tested and reachable from
+            // nothing.
+            Button("", action: { importCamerasFromCSV() })
+                .keyboardShortcut("i", modifiers: [.shift, .command])
+            Button("", action: { exportConfiguration() })
+                .keyboardShortcut("e", modifiers: [.option, .command])
+            Button("", action: { runStreamDoctor() })
+                .keyboardShortcut("d", modifiers: [.option, .command])
+        }
+        .hidden()
         // `Esc` leaves solo, per §5.8 — but only when the timeline is away, because the scrubber's
         // overlay binds the same key to dismissing itself and two `.cancelAction`s in one window is
         // a coin toss. With the timeline up, ⌘F is still the way out.
@@ -311,6 +343,20 @@ extension MainWindowView {
     /// unreachable it would mean waiting out a connect timeout per row.
     func snapshotAllEnabledCameras() {
         snapshotCameras(library.cameras.filter(\.isEnabled))
+    }
+
+    /// ⌥⌘F walks the five filters, the way ⌥⌘Y walks the dwell intervals.
+    ///
+    /// ⚠️ A cycle rather than a menu, and that is a deliberate reduction of §11.1's "open the filter
+    /// menu". A key that opens a menu needs the menu to exist and to be anchored to something on
+    /// screen; a key that steps through five named states needs neither, works from the keyboard
+    /// alone, and — crucially — is honest about what it does. The menu belongs with the sidebar's
+    /// own chrome, which is where UX.md draws it; this is the binding that makes the model
+    /// reachable in the meantime, and the sidebar shows which filter is on.
+    func selectNextSidebarFilter() {
+        let filters = VSidebarFilter.allCases
+        let current = filters.firstIndex(of: window.sidebarFilter) ?? -1
+        window.sidebarFilter = filters[(current + 1) % filters.count]
     }
 
     /// ⌥⌘Y walks the same finite dwell menu shown by the toolbar.

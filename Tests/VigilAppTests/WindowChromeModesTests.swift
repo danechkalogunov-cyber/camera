@@ -2,10 +2,11 @@
 //  WindowChromeModesTests.swift
 //  VigilAppTests
 //
-//  The window-state half of four keyboard shortcuts that UX.md §11.1 specifies and nothing bound:
-//  ⌥⌘L (icon rail), ⌘F (solo a tile), ⌃⌘H (pin the tile controls) and ⌥⇧⌘S (snapshot everything
-//  enabled). The bindings themselves live in `MainWindowView+Commands.swift`; what is testable
-//  without a window is the state they move, and that is what is here.
+//  The window-state half of the keyboard shortcuts UX.md §11.1 specifies and nothing bound:
+//  ⌥⌘L (icon rail), ⌘F (solo a tile), ⌃⌘H (pin the tile controls), ⌥N ⌥S ⌥T ⌥B (the four tile
+//  overlays) and ⌥⌘F (the camera-list filter). The bindings themselves live in
+//  `MainWindowView+Commands.swift`; what is testable without a window is the state they move, and
+//  that is what is here.
 //
 
 #if os(macOS)
@@ -129,6 +130,51 @@ struct WindowChromeModesTests {
         #expect(!window.pinsTileControls)
         window.pinsTileControls.toggle()
         #expect(window.pinsTileControls)
+    }
+
+    // MARK: - ⌥N ⌥S ⌥T ⌥B, the four overlays
+
+    /// Everything on to begin with: a window that opened with the camera names hidden would look
+    /// broken rather than tidy.
+    @Test func everyOverlayStartsOn() {
+        let window = MainWindowState()
+        #expect(window.tileOverlays == .all)
+        #expect(window.tileOverlays.contains(.name))
+        #expect(window.tileOverlays.contains(.stats))
+        #expect(window.tileOverlays.contains(.timestamp))
+        #expect(window.tileOverlays.contains(.motion))
+    }
+
+    /// ⛔ The point of four switches: turning the stats off leaves the name alone. One flag meant
+    /// quieting the diagnostics also removed the label that says which camera you are looking at.
+    @Test func togglingOneOverlayLeavesTheOthersAlone() {
+        let window = MainWindowState()
+
+        window.tileOverlays.formSymmetricDifference(.stats)
+        #expect(!window.tileOverlays.contains(.stats))
+        #expect(window.tileOverlays.contains(.name))
+        #expect(window.tileOverlays.contains(.timestamp))
+        #expect(window.tileOverlays.contains(.motion))
+
+        window.tileOverlays.formSymmetricDifference(.stats)
+        #expect(window.tileOverlays == .all)
+    }
+
+    /// All four off is a picture and its borders, and is reachable.
+    @Test func everyOverlayCanBeTurnedOff() {
+        let window = MainWindowState()
+        for overlay in [VTileOverlays.name, .stats, .timestamp, .motion] {
+            window.tileOverlays.formSymmetricDifference(overlay)
+        }
+        #expect(window.tileOverlays == .hidden)
+        #expect(window.tileOverlays.isEmpty)
+    }
+
+    // MARK: - ⌥⌘F, the camera-list filter
+
+    /// The filter starts at "everything", which is the only honest default for a list.
+    @Test func theListIsUnfilteredToBeginWith() {
+        #expect(MainWindowState().sidebarFilter == .all)
     }
 }
 

@@ -75,6 +75,7 @@ package enum VShortcutReference {
             VShortcutEntry("⇧⌘N", "Find cameras on this network"),
             VShortcutEntry("⌘K", "Command palette"),
             VShortcutEntry("/", "Search the camera list"),
+            VShortcutEntry("⌥⌘F", "Filter the camera list"),
             VShortcutEntry("↑ ↓", "Move through the camera list"),
             VShortcutEntry("⌘A", "Select every camera"),
         ]),
@@ -96,6 +97,8 @@ package enum VShortcutReference {
             VShortcutEntry("⌘R", "Start or stop recording"),
             VShortcutEntry("⌘D", "Mark this moment"),
             VShortcutEntry("⇧⌘O", "Open the recordings folder"),
+            VShortcutEntry("⇧⌘I", "Import cameras from a CSV file"),
+            VShortcutEntry("⌥⌘E", "Export the configuration"),
         ]),
         VShortcutSection("Panels", [
             VShortcutEntry("⌘L", "Show or hide the camera list"),
@@ -103,6 +106,8 @@ package enum VShortcutReference {
             VShortcutEntry("⌥⌘I", "Show or hide the inspector"),
             VShortcutEntry("⌃1 … ⌃6", "Inspector tab"),
             VShortcutEntry("⌃⌘H", "Keep the selected tile's controls up"),
+            VShortcutEntry("⌥N ⌥S ⌥T ⌥B", "Overlays: name, stats, timecode, motion"),
+            VShortcutEntry("⌥⌘D", "Check the camera's ports"),
             VShortcutEntry("⌘/", "This list"),
         ]),
         VShortcutSection("The timeline", [

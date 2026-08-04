@@ -758,3 +758,26 @@
 "The stage" = "The stage";
 "The timeline" = "The timeline";
 "This list" = "This list";
+
+// MARK: - Import, export and Stream Doctor (⇧⌘I, ⌥⌘E, ⌥⌘D), UX.md §8.5
+"Checking the camera's ports…" = "Checking the camera's ports…";
+"Choose a CSV file with a header row and a host column." = "Choose a CSV file with a header row and a host column.";
+"Could not build the export: %@" = "Could not build the export: %@";
+"Could not read that CSV: %@" = "Could not read that CSV: %@";
+"Could not write the export: %@" = "Could not write the export: %@";
+"Export" = "Export";
+"Exported cameras: %lld" = "Exported cameras: %lld";
+"Import" = "Import";
+"Import finished — added %lld, already here %lld" = "Import finished — added %lld, already here %lld";
+"That file listed no cameras." = "That file listed no cameras.";
+"The export lists cameras and groups. It holds no passwords." = "The export lists cameras and groups. It holds no passwords.";
+"no host column in the header row" = "no host column in the header row";
+"row %lld has the wrong number of columns" = "row %lld has the wrong number of columns";
+"row %lld, column %@ is not a number" = "row %lld, column %@ is not a number";
+"row %lld, column %@ is not yes or no" = "row %lld, column %@ is not yes or no";
+"the file is empty or not UTF-8 text" = "the file is empty or not UTF-8 text";
+"Filter the camera list" = "Filter the camera list";
+"Import cameras from a CSV file" = "Import cameras from a CSV file";
+"Export the configuration" = "Export the configuration";
+"Overlays: name, stats, timecode, motion" = "Overlays: name, stats, timecode, motion";
+"Check the camera's ports" = "Check the camera's ports";

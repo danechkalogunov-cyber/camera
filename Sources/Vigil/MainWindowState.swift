@@ -62,6 +62,22 @@ final class MainWindowState {
     /// Whether the user wants the inspector shown. The toolbar's trailing toggle writes this.
     var isInspectorVisible = true
 
+    /// The camera-list filter behind ⌥⌘F (UX.md §11.1, `Find ▸ Filter…`).
+    ///
+    /// ⛔ `VSidebarFilter` has been complete since the sidebar landed — five cases, an `accepts`
+    /// rule per case, a documented 24-hour motion window and its own tests — and every call site in
+    /// the app built `VSidebarSearch(query:)` with the default `.all`. The list could be filtered
+    /// by nothing but text, and the menu item that UX.md draws was not there to say otherwise.
+    var sidebarFilter: VSidebarFilter = .all
+
+    /// Which pieces of tile chrome are drawn — ⌥N, ⌥S, ⌥T, ⌥B (UX.md §11.1).
+    ///
+    /// Separate from ``showsVideoOverlay``, which is the camera's own remembered "chrome on this
+    /// picture at all" and is persisted with the connection. These four are a view preference about
+    /// *which* parts, they apply to every tile, and they start with everything on — a window that
+    /// opened with the camera names hidden would look broken rather than tidy.
+    var tileOverlays: VTileOverlays = .all
+
     /// ⌃⌘H: keep the selected tile's controls up without the pointer (UX.md §6.2).
     ///
     /// Off by default, because chrome over every picture is the thing §6.2 spends a paragraph

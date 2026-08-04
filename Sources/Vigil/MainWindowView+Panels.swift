@@ -17,7 +17,7 @@ extension MainWindowView {
     var sidebar: some View {
         VSidebarView(tree: sidebarTree,
                      selection: window.sidebarSelection,
-                     search: VSidebarSearch(query: window.searchText),
+                     search: VSidebarSearch(query: window.searchText, filter: window.sidebarFilter),
                      collapsed: window.collapsedRows,
                      layout: window.layout,
                      aggregateBitsPerSecond: telemetry.bitsPerSecond,

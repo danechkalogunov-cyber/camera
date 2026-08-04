@@ -265,6 +265,8 @@ struct MainWindowView: View {
                 // ⌃⌘H, beside the overlay flag and an environment value for the same reason: it has
                 // to reach `GridTileView` through `VGridStageView`, which makes no decision about it.
                 .vPinsTileControls(window.pinsTileControls)
+                // ⌥N ⌥S ⌥T ⌥B — which pieces of chrome, as against `vShowsVideoOverlay`'s whether.
+                .vTileOverlays(window.tileOverlays)
                 .onHover { hovering in
                     window.cycle = window.cycle.paused(hovering)
                 }

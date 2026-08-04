@@ -41,7 +41,7 @@ extension MainWindowView {
                      groups: groups.groups.map {
                          VSidebarGroup(id: $0.id, name: $0.name, identityIndex: $0.identityIndex)
                      },
-                     search: VSidebarSearch(query: window.searchText),
+                     search: VSidebarSearch(query: window.searchText, filter: window.sidebarFilter),
                      collapsed: window.collapsedRows,
                      eventBadge: eventFeed.unreadCount > 0 ? eventFeed.unreadCount : nil,
                      recordingCount: window.clips.isEmpty ? nil : window.clips.count,

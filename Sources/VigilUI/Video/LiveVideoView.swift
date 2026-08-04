@@ -59,6 +59,11 @@ package struct LiveVideoView<Video: View>: View {
     /// settings; the failure overlays deliberately ignore it.
     @Environment(\.vShowsVideoOverlay) private var showsOverlay
 
+    /// Which pieces of it — ⌥N for the name chip (UX.md §11.1). The status chip beside it is not
+    /// one of the four: it says whether there is a picture, which is the failure-reporting rule
+    /// `VTileOverlays` documents, not decoration.
+    @Environment(\.vTileOverlays) private var overlays
+
     @State private var showsNarration = false
     @State private var showsElapsed = false
     @State private var isSlow = false
@@ -169,7 +174,9 @@ package struct LiveVideoView<Video: View>: View {
             Spacer(minLength: 0)
             if showsOverlay {
                 HStack(alignment: .bottom, spacing: VTheme.Space.xs) {
-                    CameraNameChip(camera: camera, isHovered: isHovering)
+                    if overlays.contains(.name) {
+                        CameraNameChip(camera: camera, isHovered: isHovering)
+                    }
                     ConnectionStatusChip(state: state)
                     Spacer(minLength: 0)
                 }

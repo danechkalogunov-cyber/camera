@@ -231,6 +231,12 @@
         /// picture, and a user who hid the chrome has not asked to stop being told that.
         @Environment(\.vShowsVideoOverlay) private var showsOverlay
 
+        /// Which pieces of that chrome are wanted — ⌥N, ⌥S, ⌥T, ⌥B (UX.md §11.1).
+        ///
+        /// Both gates apply, and they answer different questions: `showsOverlay` is the camera's own
+        /// "draw chrome over this picture at all", this is the user's "which parts".
+        @Environment(\.vTileOverlays) private var overlays
+
         /// What the hover buttons do. Supplied by the app through the environment.
         @Environment(\.vTileActions) private var tileActions
 
@@ -261,7 +267,7 @@
         /// not needed and the stats are the least urgent thing on a tile.
         @ViewBuilder
         private var statsReadout: some View {
-            if showsOverlay, let stats, showsChrome {
+            if showsOverlay, overlays.contains(.stats), let stats, showsChrome {
                 VTileStatsView(stats: stats, isRecording: isRecording)
                     .padding(VTheme.Metrics.tileChromeInset)
                     .transition(.opacity)
@@ -271,7 +277,7 @@
         /// The bottom-leading readout. At most one at a time, recording first (UX.md §5.3).
         @ViewBuilder
         private var elapsedReadout: some View {
-            if showsOverlay, isRecording, let recordingElapsed {
+            if showsOverlay, overlays.contains(.timestamp), isRecording, let recordingElapsed {
                 Text(verbatim: VTileStats.timecode(recordingElapsed))
                     .vType(VTheme.Typography.monoLarge.numeric)
                     .foregroundStyle(VTheme.Color.Text.onVideo)

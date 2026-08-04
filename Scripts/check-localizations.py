@@ -156,6 +156,17 @@ NON_PLURAL_INTEGER_KEYS = {
     "%lld: footage",
     "%lld: nothing recorded",
     "%lld: unknown",
+    # CSV import and configuration export (UX.md §8.5). Every number here is either a row position
+    # — an address in a file, which inflects in no language — or a count written *after* its noun,
+    # which is the construction both English and Russian use precisely to avoid agreeing with it:
+    # "Exported cameras: 1" and "Экспортировано камер: 1" are as correct as they are at 18.
+    # Phrased that way on purpose rather than sent to the stringsdict, because a two-count sentence
+    # needs two plural variables and reads worse in both languages than the colon form.
+    "Import finished — added %lld, already here %lld",
+    "Exported cameras: %lld",
+    "row %lld has the wrong number of columns",
+    "row %lld, column %@ is not a number",
+    "row %lld, column %@ is not yes or no",
 }
 
 
