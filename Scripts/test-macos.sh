@@ -31,11 +31,15 @@ fi
 # once per preview and once per test file: thousands of lines that all mean "wrong toolchain" and
 # none of which say anything about this code. So each is *probed* rather than inferred, because
 # where they live has moved between releases and `xcode-select -p` does not actually answer the
-# question. Two `swiftc -typecheck` runs on two-line files cost a second and cannot be wrong.
+# question. Two `swiftc -typecheck` runs on two-line files cost a second.
 #
-# Only the missing `Testing` module is fatal. A missing preview plugin turns into
-# `-DVIGIL_NO_PREVIEWS`, which compiles the previews out and runs everything else — see the branch
-# below and README §"Building on a Mac without Xcode".
+# ⛔ NEITHER PROBE STOPS THE RUN, and the `Testing` one used to. A bare `swiftc` searches the
+# toolchain's default paths; SwiftPM passes its own, so `import Testing` can fail here and succeed
+# under `swift test`. Turning that into an exit meant declining to run 688 tests on the strength of
+# a proxy — the probe is evidence, the run is the answer. A missing preview plugin turns into
+# `-DVIGIL_NO_PREVIEWS`, which compiles the previews out and runs everything else; a genuinely
+# missing `Testing` is recognised in the log afterwards. See README §"Building on a Mac without
+# Xcode".
 #
 # `Scripts/build-app.sh` needs neither: it builds `-c release`, where every `#if DEBUG` block — and
 # so every `#Preview` — is compiled out before the compiler sees it. That is why `Scripts/run.sh`
@@ -74,21 +78,23 @@ say_where_the_plugins_live() {
 # array would be tidier but `${arr[@]}` under `set -u` is an error on the bash 3.2 macOS ships.
 preview_flags=""
 
+# ⚠️ ADVISORY, NOT FATAL — and it used to be fatal, which was a bug in this script.
+#
+# `swiftc -typecheck` on a bare file searches the toolchain's default paths. SwiftPM does not: it
+# passes its own search paths for the testing library, so `swift test` can resolve `import Testing`
+# on a toolchain where this probe cannot. Refusing to run on the strength of the probe means
+# refusing to run the 688 tests because of a *proxy* for whether they can run — exactly the kind of
+# claim this project does not make without executing it. So the probe informs and `swift test`
+# decides; the guidance below is printed only if the real thing actually fails on the import.
 if [ "$has_testing" = no ]; then
-    echo "test-macos.sh: this toolchain cannot build the debug configuration." >&2
+    echo "test-macos.sh: 'import Testing' does not resolve for a bare swiftc." >&2
     echo >&2
     echo "  swift --version  ->  $(swift --version 2>&1 | head -1)" >&2
     echo "  xcode-select -p  ->  $(xcode-select -p 2>/dev/null || echo '(nothing)')" >&2
-    echo "  ✗ swift-testing: 'import Testing' does not resolve" >&2
-    [ "$has_previews" = no ] && echo "  ✗ #Preview: the PreviewsMacros plugin is not installed" >&2
-    [ "$has_previews" = yes ] && echo "  ✓ #Preview" >&2
     echo >&2
-    say_where_the_plugins_live
+    echo "  That may be a false alarm: SwiftPM adds search paths this probe does not have, so" >&2
+    echo "  swift test can still find the module. Running it to find out." >&2
     echo >&2
-    echo "  There is no flag for this one: without swift-testing there is no test suite to run." >&2
-    echo "  Scripts/run.sh still builds and launches the app — a release build imports no test" >&2
-    echo "  module — but it runs none of the 688 tests, which is the point of this script." >&2
-    exit 2
 fi
 
 # ⚠️ A missing preview plugin is survivable and a missing test framework is not, which is why they
@@ -114,9 +120,13 @@ swift build $preview_flags || fail=1
 
 echo
 echo "== test =="
+# Tee'd, so the run is visible live *and* can be examined afterwards for the one failure mode that
+# has a fix outside this repository. `set -o pipefail` at the top is what keeps the exit status the
+# compiler's rather than `tee`'s.
+log="$probe_dir/test.log"
 if [ "$coverage" -eq 1 ]; then
     # shellcheck disable=SC2086
-    swift test --parallel --enable-code-coverage $preview_flags || fail=1
+    swift test --parallel --enable-code-coverage $preview_flags 2>&1 | tee "$log" || fail=1
     echo
     echo "== coverage =="
     # Reported, not gated. docs/API_CONTRACT.md §5 sets floors of 90 % pure / 70 % macOS for a
@@ -134,7 +144,20 @@ if [ "$coverage" -eq 1 ]; then
     fi
 else
     # shellcheck disable=SC2086
-    swift test --parallel $preview_flags || fail=1
+    swift test --parallel $preview_flags 2>&1 | tee "$log" || fail=1
+fi
+
+# The one failure this script can explain rather than just report. Everything else in the log is
+# about this code and belongs to whoever changed it.
+if [ $fail -ne 0 ] && grep -q "no such module 'Testing'" "$log"; then
+    echo >&2
+    echo "test-macos.sh: swift-testing really is missing — SwiftPM could not find it either." >&2
+    echo >&2
+    say_where_the_plugins_live
+    echo >&2
+    echo "  There is no flag for this one: without swift-testing there is no test suite to run." >&2
+    echo "  Scripts/run.sh still builds and launches the app — a release build imports no test" >&2
+    echo "  module — but it runs none of the 688 tests, which is the point of this script." >&2
 fi
 
 echo
