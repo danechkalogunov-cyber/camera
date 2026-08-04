@@ -433,3 +433,53 @@ Fixing defect 10 the obvious way — making `register(_:)` `async` so it could `
 path defect-class above measures to the millisecond. The guarantee never needed it: the late path is
 not the hot path, so the close is spawned and the ordinary path keeps its timing. The note on
 `register` says so, because the `async` spelling will look tidier to the next person too.
+
+---
+
+## The macOS half compiles — 2026-08-04
+
+`swift build` completed on the developer's Mac. Every target in the package, including the six that
+Linux compiles to empty modules — `VigilTransport`, `VigilVideo`, `VigilRender`, `VigilCore`,
+`VigilUI` and `Vigil` — was type-checked by a real compiler for the first time.
+
+```
+Building for debugging...
+Build complete!
+```
+
+### What that sentence does and does not cover
+
+- **Does:** debug configuration, the whole package, on macOS with the Command Line Tools.
+- **Does not:** the previews. The build ran with `-Xswiftc -DVIGIL_NO_PREVIEWS` because the
+  `PreviewsMacros` plugin ships with Xcode and not with the CLT, so every `#Preview` block in
+  `VigilUI` was compiled out. Those blocks and their fixtures are still unverified.
+- **Does not:** the tests. 688 of them have still never executed.
+- **Does not:** release configuration, `Vigil.app` assembly, signing, or a camera.
+
+### What it caught, by class
+
+Nineteen errors over five rounds, and they fall into three groups worth naming because the next
+drop will produce the same three.
+
+1. **Code that moved without what it depends on** — five of them. `DeepLinkTarget`, `ColorTag` and
+   `CameraID` were each used in a file that did not import the module declaring them; two more were
+   a call site and a declaration that had drifted apart (`StageTimelineOverlay` gained three
+   arguments its initialiser never grew, and the narrow-window rail called a `selectCamera` that
+   does not exist). A transitive import makes the *name* resolve, which is why the `CameraID` case
+   surfaced as "`CameraWatchPolicy` does not conform to `Equatable`" rather than as a missing type:
+   a synthesised conformance needs the real declaration, not a leaked name.
+
+2. **Expressions too large for the type checker** — two, both in `MainWindowView.body`, and the
+   second only appeared after the first was fixed. The working budget is four or five modifiers per
+   function, with any `@ViewBuilder` overlay whose content is more than a single property lifted
+   out. Eleven modifiers with four overlays still failed. There is no diagnostic that says "you are
+   close"; it compiles until it doesn't.
+
+3. **API that was never checked against the framework** — `Button(_:bundle:)` (no such
+   initialiser), `VSidebarSelection.library` (no such case), `.enableAsynchronousDecompression`
+   (the importer keeps the underscore), a `static let` inside a type nested in a generic type's
+   extension, `deinit` reading a `@MainActor` property, and implicit `self` one closure too deep.
+
+`Scripts/lint.py` gained two rules from this: `preview-guard`, and an extension to `generic-static`
+that follows `extension Foo` when `Foo` is generic anywhere in the tree — the rule existed and
+missed the case that hit, because nothing in the extension's own file says `<Video>`.
