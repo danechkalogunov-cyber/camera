@@ -177,15 +177,26 @@ struct LastConnection: Sendable, Hashable {
 
     /// The name the user gave this camera, or `nil` if they never renamed it.
     ///
-    /// **Keyed by nothing, on purpose.** `Camera.id` is minted fresh on every launch — `makeCamera`
-    /// builds the record from the remembered host, not from a stored document — so a per-`CameraID`
-    /// name store would forget the name on the next launch and be silently useless. The host is the
-    /// only identity that survives a relaunch today, and this record is already the thing keyed by
-    /// it. `ConfigStore` in W4 replaces the arrangement wholesale.
+    /// Keyed by host rather than by ``cameraID``, and staying that way: the host is what identifies
+    /// a camera *before* anything has been resumed, which is when this record is read.
     ///
     /// Last in the declaration order and defaulted, so the memberwise initialiser's existing four
     /// call sites still compile unchanged.
     var name: String?
+
+    /// The identity the camera had last time, so it is the same camera this time.
+    ///
+    /// ⛔ WITHOUT THIS, EVERY LAUNCH INVENTS A NEW CAMERA. `makeCamera` builds a `Camera` from the
+    /// remembered host and `Camera.id` defaults to a fresh `CameraID()`, so the resumed camera and
+    /// the one sitting in `library.json` — the same device, the same address — had different
+    /// identities from the first frame onwards. The visible symptom was two rows in the sidebar for
+    /// one camera, the live one and a stored one permanently marked not-running; underneath it,
+    /// everything keyed by `CameraID` detached on every launch: group membership, bookmarks, the
+    /// per-camera clip list, the stage assignment.
+    ///
+    /// `nil` on a record written before this field existed, which resumes exactly as it used to and
+    /// then writes an id on the first frame.
+    var cameraID: CameraID?
 
     /// Whether the chrome drawn over this camera's picture is shown.
     ///
@@ -203,6 +214,7 @@ struct LastConnection: Sendable, Hashable {
     private static let pathKey = "vigil.lastConnection.rtspPath"
     private static let nameKey = "vigil.lastConnection.name"
     private static let overlayKey = "vigil.lastConnection.showsVideoOverlay"
+    private static let cameraKey = "vigil.lastConnection.cameraID"
 
     // MARK: API
 
@@ -222,6 +234,9 @@ struct LastConnection: Sendable, Hashable {
         }
         let path = defaults.string(forKey: pathKey)
         let name = defaults.string(forKey: nameKey)
+        // A camera id that no longer parses is treated as absent, like every other malformed field
+        // here: the next first frame writes a good one.
+        let camera = defaults.string(forKey: cameraKey).flatMap(UUID.init(uuidString:))
         return LastConnection(host: host,
                               account: account,
                               credentialRef: CredentialRef(uuid),
@@ -229,7 +244,8 @@ struct LastConnection: Sendable, Hashable {
                               name: name?.isEmpty == false ? name : nil,
                               showsVideoOverlay: defaults.object(forKey: overlayKey) == nil
                                   ? true
-                                  : defaults.bool(forKey: overlayKey))
+                                  : defaults.bool(forKey: overlayKey),
+                              cameraID: camera.map(CameraID.init))
     }
 
     /// Stores this connection as the one to resume on the next launch.
@@ -248,6 +264,11 @@ struct LastConnection: Sendable, Hashable {
             defaults.removeObject(forKey: Self.nameKey)
         }
         defaults.set(showsVideoOverlay, forKey: Self.overlayKey)
+        if let cameraID {
+            defaults.set(cameraID.rawValue.uuidString, forKey: Self.cameraKey)
+        } else {
+            defaults.removeObject(forKey: Self.cameraKey)
+        }
     }
 
     /// Forgets the remembered connection. Called when its credential no longer opens the camera, so
@@ -259,6 +280,7 @@ struct LastConnection: Sendable, Hashable {
         defaults.removeObject(forKey: pathKey)
         defaults.removeObject(forKey: nameKey)
         defaults.removeObject(forKey: overlayKey)
+        defaults.removeObject(forKey: cameraKey)
     }
 }
 

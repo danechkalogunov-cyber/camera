@@ -87,7 +87,7 @@ extension MainWindowView {
         // anything. Adding at connect time would fill the list with addresses that never answered.
         .onChange(of: session.isReceivingMedia) { _, isReceiving in
             guard isReceiving else { return }
-            Task { await session.fileCurrentCameraIfNew(into: library) }
+            Task { await session.reconcileCurrentCamera(with: library) }
         }
         .onChange(of: session.isReceivingMedia) { wasReceiving, isReceiving in
             guard wasReceiving, !isReceiving else { return }

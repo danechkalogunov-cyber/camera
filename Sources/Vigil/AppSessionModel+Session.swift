@@ -154,10 +154,15 @@ extension AppSessionModel {
                 form.isConnecting = false
                 return
             }
+            // ⚠️ `id:` carried through, and it is the whole of the fix for "two cameras, one of
+            // them permanently offline". Without it every launch minted a fresh `CameraID` for the
+            // same device, so the resumed camera never matched its own row in `library.json` — the
+            // sidebar drew both, and group membership, bookmarks and the clip list all detached.
             let camera = try makeCamera(host: remembered.host,
                                         ref: remembered.credentialRef,
                                         rtspPath: remembered.rtspPath,
-                                        name: remembered.name)
+                                        name: remembered.name,
+                                        id: remembered.cameraID)
             resolvedPath = remembered.rtspPath
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
@@ -178,9 +183,15 @@ extension AppSessionModel {
     /// - Parameter name: the name the user gave this camera on a previous launch, or `nil` to let
     ///   `validated()` derive one from the host. Passing it back in is what makes a rename survive
     ///   a relaunch — the record itself is rebuilt from scratch every time, so nothing else could.
+    /// - Parameter id: the identity this camera had last launch, or `nil` to mint a new one. Same
+    ///   argument as `name`, and with more riding on it: `CameraID` is the key for group
+    ///   membership, bookmarks, the clip list and the stage assignment, so a fresh one silently
+    ///   detaches all four and leaves the library's own row for this device looking like a second,
+    ///   permanently offline camera.
     func makeCamera(host: String, ref: CredentialRef, rtspPath: String? = nil,
-                    name: String? = nil) throws -> Camera {
-        try Camera(name: name ?? "",
+                    name: String? = nil, id: CameraID? = nil) throws -> Camera {
+        try Camera(id: id ?? CameraID(),
+                   name: name ?? "",
                    host: host,
                    httpPort: form.httpPort,
                    rtspPort: rtspPort,

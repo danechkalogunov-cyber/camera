@@ -57,6 +57,10 @@ extension AppSessionModel {
         // invention on the first reconnect. Fixing it here instead would have meant re-deriving
         // "is this name synthesised?", which duplicates a rule that lives in `validated()`.
         record.name = camera.name
+        // The identity, so the next launch resumes *this* camera rather than a new one with the
+        // same address. Written on every first frame like the rest of the record, which also
+        // repairs a record saved before the field existed.
+        record.cameraID = camera.id
         record.save(to: defaults)
     }
 
@@ -125,14 +129,34 @@ extension AppSessionModel {
         await stream(camera: target, ref: target.credentialRef)
     }
 
-    /// Files the camera that is streaming into the library, if it is not there already.
+    /// Makes the library and the session agree about the camera that is streaming: files it if it
+    /// is new, and adopts its stored identity if it is not.
     ///
     /// Called once a picture exists, which is the only moment Vigil knows the record is good for
     /// anything. Adding at connect time would fill the list with addresses that never answered.
-    func fileCurrentCameraIfNew(into library: AppLibraryModel) async {
+    func reconcileCurrentCamera(with library: AppLibraryModel) async {
         guard let camera else { return }
-        guard !library.cameras.contains(where: { $0.host == camera.host }) else { return }
-        await library.add(camera)
+        guard let stored = library.cameras.first(where: { $0.host == camera.host }) else {
+            await library.add(camera)
+            return
+        }
+        // ⛔ THE SAME DEVICE MUST NOT HAVE TWO IDENTITIES. The library row was written by whichever
+        // launch first reached a picture; every launch since built its own `Camera` from the
+        // remembered host, and `Camera.id` defaults to a fresh `CameraID()`. Two ids for one
+        // address is what put the same camera in the sidebar twice — live, and a second row
+        // permanently marked not-running — and what detached its group, its bookmarks and its clips
+        // on every launch.
+        //
+        // The library's id wins, because it is the one everything else is already keyed by. Adopting
+        // it here rather than at connect time is deliberate: this runs on the first frame, when the
+        // library is certainly loaded, whereas the resume starts before `library.load` may have
+        // finished. `rememberThisCamera()` then persists the adopted id, so the next launch resumes
+        // as this camera and never needs adopting again.
+        guard stored.id != camera.id else { return }
+        dependencies.logger.info(.app, "adopting the library's identity for this camera",
+                                 ["host": camera.host])
+        self.camera?.id = stored.id
+        rememberThisCamera()
     }
 
     /// Changes archive playback speed, which means rebuilding the session at the current position.
