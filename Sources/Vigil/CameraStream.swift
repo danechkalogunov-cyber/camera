@@ -35,6 +35,7 @@
 #if os(macOS)
 
 import Foundation
+import Observation
 
 import VigilCore
 import VigilISAPI

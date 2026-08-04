@@ -127,7 +127,7 @@ extension MainWindowView {
                 kind: .success,
                 message: String(format: Self.localized("Exported cameras: %lld"),
                                 archive.cameras.count),
-                actionTitle: Self.localized("Reveal in Finder"),
+                actionTitle: "Reveal in Finder",
                 action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
         } catch {
             window.toast = MainWindowToast(
@@ -158,7 +158,7 @@ extension MainWindowView {
                                               password: "",
                                               httpPort: camera.httpPort,
                                               rtspPort: camera.rtspPort,
-                                              channel: camera.channel.rawValue,
+                                              channel: camera.channel.value,
                                               usesTLS: camera.useTLS))
     }
 

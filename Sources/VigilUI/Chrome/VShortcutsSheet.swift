@@ -143,43 +143,71 @@ package struct VShortcutsSheet: View {
         self.onDismiss = onDismiss
     }
 
+    /// ⚠️ Four small pieces rather than one nested body, and that is not tidiness: a `body` with the
+    /// grid, both `ForEach`es and the row inline is what the SwiftUI type checker gives up on
+    /// ("unable to type-check this expression in reasonable time"), which this project has now hit
+    /// three times. Every piece below stays inside the four-or-five-modifier budget.
     package var body: some View {
         VStack(alignment: .leading, spacing: VTheme.Space.md) {
-            Text("Keyboard shortcuts", bundle: .vigilUI)
-                .vType(VTheme.Typography.headline)
-                .foregroundStyle(VTheme.Color.Text.primary)
-                .accessibilityAddTraits(.isHeader)
-
-            ScrollView(.vertical) {
-                // Two columns, because §11.1 is forty rows and one column of forty is a sheet
-                // taller than a laptop screen.
-                LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading),
-                                    GridItem(.flexible(), alignment: .topLeading)],
-                          alignment: .leading,
-                          spacing: VTheme.Space.lg) {
-                    ForEach(sections) { section in
-                        VStack(alignment: .leading, spacing: VTheme.Space.xs) {
-                            Text(LocalizedStringKey(section.title), bundle: .vigilUI)
-                                .vType(VTheme.Typography.caption1)
-                                .foregroundStyle(VTheme.Color.Text.secondary)
-                                .textCase(.uppercase)
-                            ForEach(section.entries) { entry in
-                                row(entry)
-                            }
-                        }
-                    }
-                }
-                .padding(.trailing, VTheme.Space.sm)
-            }
-            .frame(maxHeight: 420)
-
-            HStack {
-                Spacer(minLength: 0)
-                VButton("Done", style: .primary, size: .sm, action: onDismiss)
-            }
+            heading
+            scroller
+            footer
         }
         .padding(VTheme.Space.lg)
         .frame(width: 620)
+    }
+
+    private var heading: some View {
+        Text("Keyboard shortcuts", bundle: .vigilUI)
+            .vType(VTheme.Typography.headline)
+            .foregroundStyle(VTheme.Color.Text.primary)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var scroller: some View {
+        ScrollView(.vertical) {
+            grid
+        }
+        .frame(maxHeight: 420)
+    }
+
+    /// Two columns, because §11.1 is forty rows and one column of forty is a sheet taller than a
+    /// laptop screen.
+    private var grid: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: VTheme.Space.lg) {
+            ForEach(sections) { section in
+                column(section)
+            }
+        }
+        .padding(.trailing, VTheme.Space.sm)
+    }
+
+    /// ⚠️ Computed rather than a `static let`: `GridItem` is not `Sendable`, and a static stored
+    /// property of a non-`Sendable` type is an error under the Swift 6 language mode this package
+    /// builds in. Two allocations per body evaluation of a sheet is not a cost worth a `nonisolated(unsafe)`.
+    private var columns: [GridItem] {
+        [GridItem(.flexible(), alignment: .topLeading),
+         GridItem(.flexible(), alignment: .topLeading)]
+    }
+
+    /// One section: its heading, then its rows.
+    private func column(_ section: VShortcutSection) -> some View {
+        VStack(alignment: .leading, spacing: VTheme.Space.xs) {
+            Text(LocalizedStringKey(section.title), bundle: .vigilUI)
+                .vType(VTheme.Typography.caption1)
+                .foregroundStyle(VTheme.Color.Text.secondary)
+                .textCase(.uppercase)
+            ForEach(section.entries) { entry in
+                row(entry)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Spacer(minLength: 0)
+            VButton("Done", style: .primary, size: .sm, action: onDismiss)
+        }
     }
 
     /// One row: the keys in monospace so they align down the column, then the sentence.
