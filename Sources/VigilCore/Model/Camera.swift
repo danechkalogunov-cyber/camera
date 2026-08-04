@@ -233,6 +233,13 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
         try container.encode(isEnabled, forKey: .isEnabled)
         try container.encodeIfPresent(rtspPathOverride, forKey: .rtspPathOverride)
         try container.encode(latencyPreset, forKey: .latencyPreset)
+        // ⛔ WRITTEN, AND IT WAS NOT. The property, the coding key and the *decoder* all existed;
+        // this one line did not, so a colour chosen in the camera's settings was encoded away on
+        // the next save and read back as `.none`. The symptom is the mildest kind — a tag that
+        // quietly reverts on relaunch — and the cause is the kind a hand-written `encode(to:)`
+        // invites: adding a property updates the decoder, because a missing key throws there, and
+        // silently skips the encoder, because a missing line throws nothing at all.
+        try container.encode(colorTag, forKey: .colorTag)
     }
 }
 

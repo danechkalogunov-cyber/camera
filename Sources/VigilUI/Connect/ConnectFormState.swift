@@ -259,7 +259,7 @@ package struct ConnectFormState: Sendable, Hashable {
               let scheme = components.scheme?.lowercased(),
               Self.pasteableSchemes.contains(scheme) else {
             rtspPath = nil
-            rtspPort = 554
+            rtspPort = Self.defaultRTSPPort
             usesTLS = false
             return false
         }
@@ -272,12 +272,23 @@ package struct ConnectFormState: Sendable, Hashable {
         if let secret = components.password, !secret.isEmpty {
             password = secret
         }
-        if let port = components.port { rtspPort = port }
+        // ⛔ ASSIGNED, NOT CONDITIONALLY ASSIGNED. `if let port = components.port` left the previous
+        // URL's port in a visible field: paste a camera on `:8554`, then paste a second camera with
+        // no port, and the form shows the new address on the old camera's port — which is a
+        // connection attempt to a device that never answers, with the wrong number sitting in plain
+        // sight and nothing to say where it came from. Every other field this method touches is
+        // rewritten unconditionally; this one has to be too, and 554 is the default it falls back
+        // to for the same reason the clearing arm above uses it.
+        rtspPort = components.port ?? Self.defaultRTSPPort
         rtspPath = Self.streamPath(from: components)
         usesTLS = scheme == "rtsps" || scheme == "https"
         hostProblem = Self.problem(forHost: host)
         return true
     }
+
+    /// What ``rtspPort`` falls back to whenever a pasted address does not name one. Spelled once,
+    /// because the parse arm and the clearing arm must agree and used to be two loose literals.
+    static let defaultRTSPPort = 554
 
     /// The schemes worth expanding. A pasted `ftp://` is not a camera, and rewriting the field for
     /// one would be worse than ignoring it.

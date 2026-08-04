@@ -377,8 +377,19 @@ final class EventScriptedRequests: ISAPIRequesting, @unchecked Sendable {
 /// and, in the same edit, cut the ceiling to about 1.8 s — and a loaded runner then ingested 19 of
 /// 30 alerts inside it and failed. The mechanism was right and the budget was wrong, which reads
 /// exactly like the mechanism still being wrong.
+///
+/// And the third: about 9.8 s was not enough either. On the first full CI run of this suite — 2798
+/// tests under `--parallel` on a three-core runner — `…CollapsesARepeatedWireAlarmIntoOneRow`
+/// reached 13 of 30 inside the budget. Raised to about 30 s, for the reason above and no other: the
+/// loop returns the instant the condition holds, so a healthy machine never spends it, and a
+/// ceiling only ever bounds a hang.
+///
+/// ⚠️ What this budget cannot do is hide a real defect, and the number it reports is how to tell
+/// the difference. A count that climbs with the budget and reaches its target is a starved pool. A
+/// count that stops well short of the target with thirty seconds available is events being lost,
+/// and no ceiling will fix that — go and read the ingest path instead of raising this again.
 @discardableResult
-func eventWaitUntil(attempts: Int = 10_000,
+func eventWaitUntil(attempts: Int = 30_000,
                     _ condition: @Sendable () async -> Bool) async -> Bool {
     /// Yields before falling back to sleeping. Small: on an idle machine the work lands within a
     /// handful of hops, and past that the pool is busy and yielding is the wrong tool.
