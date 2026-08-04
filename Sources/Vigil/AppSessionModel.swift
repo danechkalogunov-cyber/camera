@@ -72,152 +72,188 @@ final class AppSessionModel {
     /// Which screen is showing.
     var phase: Phase = .connect
 
-    /// The live controller, handed to the video screen so it can attach its display layer.
-    var controller: StreamController?
-
-    /// The camera currently being connected or streamed.
-    var camera: Camera?
-
-    /// Time from `start()` to the first assembled access unit. The R1.7 measurement.
-    var firstFrameLatency: Duration?
-
-    /// Counts archive seeks so a superseded one can stop instead of finishing into a stale session.
+    /// The one camera whose media path this model is driving.
     ///
-    /// `&+=` rather than `+=` at the call site: this only ever needs to differ from the last value,
-    /// and a viewer who somehow scrubbed 2^63 times should get a wrapped counter, not a crash.
-    var seekGeneration: UInt64 = 0
-
-    /// When the current archive seek was asked for, so the wait can be *measured* rather than
-    /// guessed at.
+    /// ⛔ STEP 1 OF F-LIV-01. Every property below is a forwarder onto this object, keeping the
+    /// names the window already uses — `session.camera`, `session.streamState`, `session.frames` —
+    /// so that moving the storage changes no behaviour and no call site. The seam is the point: the
+    /// next step replaces this single stream with `[CameraID: CameraStream]`, and only the
+    /// forwarders have to learn which one they mean.
     ///
-    /// The whole point is to split a number the user experiences as one second into the part Vigil
-    /// spends and the part the camera spends. `firstFrameLatency` already measures from
-    /// `StreamController.start()`; this measures from the click, so the difference is Vigil's own
-    /// teardown and setup. Without both numbers, "make the seek faster" is optimising in the dark.
-    var seekStartedAt: MediaInstant?
-
-    /// The controller's last reported state.
-    var streamState: StreamState = .idle
-
-    /// Whether any RTP has arrived, which is what separates "no video is arriving" from "waiting
-    /// for a keyframe" in the connecting narration.
-    var hasFirstPacket: Bool = false
-
-    /// Whether a complete access unit has been assembled. See `StreamEvent.firstFrameAssembled`.
-    ///
-    /// ⛔ This is **not** "the user can see the camera", and it must never be what says `Live`:
-    /// an access unit that assembled can still fail to decode, and the difference on screen is a
-    /// black well wearing a `Live` chip with no narration — the exact failure DESIGN.md §3.6 exists
-    /// to prevent. ``renderState`` is the authority on pixels; this drives the narration ladder and
-    /// the R1.7 latency number.
-    var isReceivingMedia: Bool = false
-
-    /// The mounted tile's own render state, or `nil` while no tile is mounted.
-    ///
-    /// Published by `TileVideoSink.follow(_:onRenderState:)` when `VideoTile.makeNSView` attaches a
-    /// view. `TileRenderState` is `@Observable`, so reading ``isDisplayingPicture`` during a body
-    /// evaluation subscribes to it and the overlay clears on the frame the picture actually appears.
-    /// The `nil` → non-`nil` transition is itself observed, because this property is tracked.
-    var renderState: TileRenderState?
-
-    /// The latest 1 Hz telemetry, used for the degraded banner's measured cause.
-    /// The negotiated stream format, once the camera has described it.
-    ///
-    /// Stored because recording needs the codec, the parameter sets and the resolution up front, and
-    /// `formatResolved` is the only place they arrive. `nil` until the DESCRIBE lands.
-    var format: StreamFormat?
-
-    var statistics = StreamStatistics()
-
-    /// The named cause of the current failure, in `VigilUI`'s vocabulary.
-    var diagnosis: ConnectDiagnosis?
-
-    /// Which reconnect attempt we are on. `1` until the controller says otherwise.
-    var attempt: Int = 1
-
-    /// Seconds until the next reconnect, when one is scheduled.
-    var retryInSeconds: Int?
-
-    /// When media was last flowing, for the offline card's "Last seen" line.
-    var lastSeen: Date?
-
-    /// The attach point the video screen's tile registers with. One per window, not one per
-    /// session: SwiftUI keeps the tile mounted across a reconnect, and so must its frame source.
-    let frames = FrameStreamHandle()
+    /// A `var` rather than a `let` so that step can swap it, and non-optional because a stream
+    /// exists before its camera does: the connect form writes `streamState` and a diagnosis while
+    /// the user is still typing an address.
+    var live = CameraStream()
 
     let dependencies: CoreDependencies
-    /// The recorder's inlet into the encoded-frame path.
-    ///
-    /// Owned here because the decode loop is created here, and handed to `RecordingCoordinator`,
-    /// which decides when it holds a recorder. Empty means nothing is being written.
-    /// Counts what the stream is doing, for the inspector and the status bar.
-    ///
-    /// `Sendable` and lock-guarded, so the detached frame loop and the event loop can both fold into
-    /// it without hopping to the main actor. Nothing reads it on the media path — the window pulls a
-    /// snapshot once a second.
-    let telemetry = StreamStatisticsCollector()
-
-    /// Frames waiting between the network and the decoder. Feeds the inspector's decode queue.
-    let backlog = FrameBacklog()
-
-    let recordingTap = RecordingTap()
-
     let credentials: CredentialStore
     let defaults: UserDefaults
-    let tileSink = TileVideoSink()
+
+    /// The launch-time resume, and the connect the form submits. Application-scoped: there is one
+    /// user pressing Return, however many cameras are streaming.
     var sessionTask: Task<Void, Never>?
-    var eventTask: Task<Void, Never>?
-    var decodeTask: Task<Void, Never>?
-    var frameContinuation: AsyncStream<EncodedFrame>.Continuation?
-    var pipeline: DecodePipeline?
-    var tilePolicyTask: Task<Void, Never>?
 
-    /// When the current connect attempt began, for the video screen's elapsed counter.
-    var attemptStartedAt: Date?
+    // MARK: - Forwarders onto ``live``
+    //
+    // Mechanical, and deliberately so. Each pair is the property `CameraStream` now stores; the
+    // bodies do nothing but read and write it. `@Observable` tracks through them, because the nested
+    // object is `@Observable` too and SwiftUI observes whatever is read during a body evaluation.
 
-    /// When a keyframe recovery was last forced, so a decoder that keeps asking cannot put the
-    /// session into a restart loop.
-    var lastRecoveryAt: Date?
+    var controller: StreamController? {
+        get { live.controller }
+        set { live.controller = newValue }
+    }
 
-    /// Consecutive decode failures reported by the renderer, reset when one triggers a recovery.
-    ///
-    /// Not published: the status line has no use for it, and a number that changes on the display
-    /// path would invalidate the view body from a report that is not about what is on screen.
-    var decodeFailures = 0
+    var camera: Camera? {
+        get { live.camera }
+        set { live.camera = newValue }
+    }
 
-    /// Frames dropped, per `FrameDropReason.rawValue`, for the session.
-    ///
-    /// Keyed by the raw string rather than the enum so this file needs no `VigilVideo` type in its
-    /// stored state; the reasons arrive as strings from `VigilRender` in any case.
-    var droppedByReason: [String: Int] = [:]
+    var firstFrameLatency: Duration? {
+        get { live.firstFrameLatency }
+        set { live.firstFrameLatency = newValue }
+    }
 
-    /// Keychain handle of the camera currently being connected, so the first frame can be
-    /// remembered against the right item.
-    var activeRef: CredentialRef?
+    var seekGeneration: UInt64 {
+        get { live.seekGeneration }
+        set { live.seekGeneration = newValue }
+    }
 
-    /// The RTSP path the ladder settled on, persisted only once a frame has arrived.
-    var resolvedPath: String?
+    var seekStartedAt: MediaInstant? {
+        get { live.seekStartedAt }
+        set { live.seekStartedAt = newValue }
+    }
 
-    /// Set by the "Try Port 8554" remedy, and only by it.
-    var rtspPort: Int = 554
+    var streamState: StreamState {
+        get { live.streamState }
+        set { live.streamState = newValue }
+    }
 
-    /// The archive address being played, or `nil` when the picture is live.
-    ///
-    /// Published so the window can say which of the two the user is looking at. A recorded stream
-    /// and a live one are pixel-identical on screen and arrive through exactly the same decode
-    /// path — without this the app would have no way to tell the user which they are watching, and
-    /// neither would the user.
-    var playback: PlaybackLocator?
+    var hasFirstPacket: Bool {
+        get { live.hasFirstPacket }
+        set { live.hasFirstPacket = newValue }
+    }
 
-    /// How fast the archive is playing, and in which direction.
-    ///
-    /// Meaningless while `playback` is `nil` — a live stream arrives at the rate the camera sends
-    /// it, and asking a live channel for `Scale: 4` is asking for the next four seconds, which do
-    /// not exist yet. Reset to `.normal` by ``returnToLive()`` for that reason.
-    var playbackRate: TimelinePlaybackRate = .normal
+    var isReceivingMedia: Bool {
+        get { live.isReceivingMedia }
+        set { live.isReceivingMedia = newValue }
+    }
 
-    /// A paused archive retains its locator but owns no streaming session.
-    var isPlaybackPaused = false
+    var renderState: TileRenderState? {
+        get { live.renderState }
+        set { live.renderState = newValue }
+    }
+
+    var format: StreamFormat? {
+        get { live.format }
+        set { live.format = newValue }
+    }
+
+    var statistics: StreamStatistics {
+        get { live.statistics }
+        set { live.statistics = newValue }
+    }
+
+    var diagnosis: ConnectDiagnosis? {
+        get { live.diagnosis }
+        set { live.diagnosis = newValue }
+    }
+
+    var attempt: Int {
+        get { live.attempt }
+        set { live.attempt = newValue }
+    }
+
+    var retryInSeconds: Int? {
+        get { live.retryInSeconds }
+        set { live.retryInSeconds = newValue }
+    }
+
+    var lastSeen: Date? {
+        get { live.lastSeen }
+        set { live.lastSeen = newValue }
+    }
+
+    var frames: FrameStreamHandle { live.frames }
+    var telemetry: StreamStatisticsCollector { live.telemetry }
+    var backlog: FrameBacklog { live.backlog }
+    var recordingTap: RecordingTap { live.recordingTap }
+    var tileSink: TileVideoSink { live.tileSink }
+
+    var eventTask: Task<Void, Never>? {
+        get { live.eventTask }
+        set { live.eventTask = newValue }
+    }
+
+    var decodeTask: Task<Void, Never>? {
+        get { live.decodeTask }
+        set { live.decodeTask = newValue }
+    }
+
+    var frameContinuation: AsyncStream<EncodedFrame>.Continuation? {
+        get { live.frameContinuation }
+        set { live.frameContinuation = newValue }
+    }
+
+    var pipeline: DecodePipeline? {
+        get { live.pipeline }
+        set { live.pipeline = newValue }
+    }
+
+    var tilePolicyTask: Task<Void, Never>? {
+        get { live.tilePolicyTask }
+        set { live.tilePolicyTask = newValue }
+    }
+
+    var attemptStartedAt: Date? {
+        get { live.attemptStartedAt }
+        set { live.attemptStartedAt = newValue }
+    }
+
+    var lastRecoveryAt: Date? {
+        get { live.lastRecoveryAt }
+        set { live.lastRecoveryAt = newValue }
+    }
+
+    var decodeFailures: Int {
+        get { live.decodeFailures }
+        set { live.decodeFailures = newValue }
+    }
+
+    var droppedByReason: [String: Int] {
+        get { live.droppedByReason }
+        set { live.droppedByReason = newValue }
+    }
+
+    var activeRef: CredentialRef? {
+        get { live.activeRef }
+        set { live.activeRef = newValue }
+    }
+
+    var resolvedPath: String? {
+        get { live.resolvedPath }
+        set { live.resolvedPath = newValue }
+    }
+
+    var rtspPort: Int {
+        get { live.rtspPort }
+        set { live.rtspPort = newValue }
+    }
+
+    var playback: PlaybackLocator? {
+        get { live.playback }
+        set { live.playback = newValue }
+    }
+
+    var playbackRate: TimelinePlaybackRate {
+        get { live.playbackRate }
+        set { live.playbackRate = newValue }
+    }
+
+    var isPlaybackPaused: Bool {
+        get { live.isPlaybackPaused }
+        set { live.isPlaybackPaused = newValue }
+    }
 
     /// Whether the launch-time resume has already been attempted.
     var hasResumed = false
