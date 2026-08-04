@@ -361,13 +361,18 @@ fi
 # SwiftPM already compiled Assets.xcassets into the resource bundle above, so actool is never
 # invoked here. A standalone .icns is still needed because CFBundleIconFile is what the Dock reads
 # on the very first launch, before the catalog is registered.
-ICONSET="Sources/VigilUI/Resources/AppIcon.iconset"
-if [ -d "$ICONSET" ]; then
-    iconutil --convert icns --output "$APP/Contents/Resources/AppIcon.icns" "$ICONSET" \
-        || die 7 "iconutil failed on $ICONSET."
+# ⛔ THROUGH `make-icon.sh`, AND AT THE CATALOG. This step used to name
+# `Sources/VigilUI/Resources/AppIcon.iconset` — a directory that has never existed — take the `else`
+# branch every single time, and warn. The renditions were there all along, in the asset catalog
+# beside it, so every build so far shipped the generic Dock icon while saying so in one line nobody
+# read. `make-icon.sh` owns the staging and the validation; this step owns where the file goes.
+ICONS="Sources/VigilUI/Resources/Assets.xcassets/AppIcon.appiconset"
+if [ -d "$ICONS" ]; then
+    Scripts/make-icon.sh --input "$ICONS" --output "$APP/Contents/Resources/AppIcon.icns" >/dev/null \
+        || die 7 "make-icon.sh failed on $ICONS."
     note "AppIcon.icns"
 else
-    warn "$ICONSET does not exist yet — the Dock will show the generic application icon."
+    warn "$ICONS does not exist — the Dock will show the generic application icon."
 fi
 
 # MARK: - Step 10 — choose entitlements
