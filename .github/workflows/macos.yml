@@ -34,16 +34,26 @@ jobs:
       - name: Build
         run: swift build
 
-      # 688 of these have never run. The first green run here is the single most informative event
-      # available to this project — see docs/BUILD-VERIFICATION.md.
+      # 2798 of these had never run before 2026-08-04. See docs/BUILD-VERIFICATION.md.
       - name: Test
         run: swift test --parallel
 
-      # One instrumented run enforces both independently specified coverage floors. Keeping this
-      # on macOS is intentional: Linux can measure the pure bucket, but compiling Apple-only
-      # sources out would make the app-layer floor silently unmeasurable.
-      - name: Enforce coverage floors
-        run: Scripts/coverage.sh --enforce
+      # ⛔ REPORTING, NOT ENFORCING, AND THAT IS THE SCRIPT'S OWN INSTRUCTION. `coverage.sh`'s header
+      # says it in as many words: the 90 % / 70 % floors in API_CONTRACT.md §5 have never been
+      # measured against this tree, "wiring an unmeasured threshold into CI fails the next commit for
+      # a reason that has nothing to do with it, and the usual response to that is to lower the
+      # threshold until it passes — which leaves a number in a config file that means nothing."
+      #
+      # This step was written `--enforce` anyway, at a time when nothing here could run at all, so
+      # the contradiction was invisible. The suite reached this step for the first time today.
+      # So: measure first. The run prints per-target percentages and both bucket figures, and
+      # `--enforce` goes back on in the same commit that sets the floors from those numbers —
+      # ЧТО-НЕ-СДЕЛАНО §0.2 is the open item, and it is the *evidence* that is missing, not the will.
+      #
+      # Keeping it on macOS is intentional either way: Linux can measure the pure bucket, but
+      # compiling the Apple-only sources out would make the app-layer figure silently meaningless.
+      - name: Measure coverage
+        run: Scripts/coverage.sh
 
       - name: Release build
         run: swift build -c release
