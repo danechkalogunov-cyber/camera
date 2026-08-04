@@ -324,6 +324,10 @@ extension MainWindowView {
     func removeCamera(_ id: CameraID) {
         Task {
             await library.remove(id)
+            // The media path goes with the record. An entry kept here would outlive the camera it
+            // is keyed by, and the *next* camera to be given that identity — an import, an undo —
+            // would inherit a stream showing something else.
+            session.cameras.forget(id)
             guard id == cameraID else { return }
             guard let next = library.cameras.first else {
                 session.disconnect()

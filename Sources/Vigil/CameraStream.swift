@@ -186,4 +186,87 @@ final class CameraStream {
     init() {}
 }
 
+// MARK: - CameraStreamSet
+
+/// Every camera Vigil has a media path for, keyed by identity. Step 2 of F-LIV-01.
+///
+/// ⛔ WHY A TYPE RATHER THAN A DICTIONARY ON `AppSessionModel`. Two reasons, and the second is the
+/// one that decided it. The filing rule is not `streams[id] = stream`: the app reuses one
+/// `CameraStream` when the user switches cameras, so filing has to *remove the entry it was under*
+/// before adding the new one, or the map grows a stale key per switch pointing at a stream that is
+/// now showing something else. That rule needs tests. And `AppSessionModel` cannot be built in a
+/// test — it needs a `CoreDependencies` with a Keychain, an RTSP factory and a lockout governor,
+/// none of which the app test target has a double for. A rule that lives here is checkable today;
+/// the same rule inlined into the session object would be checkable only on the user's Mac.
+///
+/// ⚠️ Nothing is removed when a stream stops. A camera that has gone offline keeps its entry,
+/// because the offline card is drawn from exactly the state the stopped stream still holds — last
+/// seen, attempt count, diagnosis. Entries go when the *camera* goes, which is ``forget(_:)``.
+@MainActor
+@Observable
+final class CameraStreamSet {
+
+    /// The streams, by camera. Read-only from outside: every write goes through the filing rule.
+    private(set) var streams: [CameraID: CameraStream] = [:]
+
+    /// Creates an empty set.
+    init() {}
+
+    /// The stream for a camera, created and remembered on first ask.
+    ///
+    /// Idempotent: asking twice for the same camera returns the same object, which is what lets a
+    /// tile, the inspector and the recorder all address one media path without any of them owning
+    /// it.
+    func stream(for camera: Camera) -> CameraStream {
+        if let existing = streams[camera.id] {
+            // The record may have been edited — a rename, a new port — since the stream was filed.
+            existing.camera = camera
+            return existing
+        }
+        let fresh = CameraStream()
+        fresh.camera = camera
+        streams[camera.id] = fresh
+        return fresh
+    }
+
+    /// The stream already filed for an identity, or `nil`. Never creates one.
+    func stream(for id: CameraID) -> CameraStream? { streams[id] }
+
+    /// Files a stream under whichever camera it is currently pointed at.
+    ///
+    /// ⚠️ The removal is the point. `AppSessionModel` has one long-lived stream that changes camera
+    /// when the user switches, so filing without unfiling would leave the previous camera's key
+    /// pointing at a stream that is now showing a different picture — and the *next* thing to ask
+    /// the set for that camera would be handed the wrong one.
+    ///
+    /// A stream with no camera is filed nowhere: an unnamed stream cannot be addressed, and giving
+    /// it a key would mean inventing one.
+    func file(_ stream: CameraStream) {
+        for (id, filed) in streams where filed === stream && id != stream.camera?.id {
+            streams.removeValue(forKey: id)
+        }
+        if let id = stream.camera?.id {
+            streams[id] = stream
+        }
+    }
+
+    /// Drops a camera's stream and hands it back, so the caller can tear its tasks down.
+    ///
+    /// Returns `nil` when nothing was filed, which is the ordinary case for a camera that was never
+    /// connected — deleting one from the library is not an error.
+    @discardableResult
+    func forget(_ id: CameraID) -> CameraStream? {
+        streams.removeValue(forKey: id)
+    }
+
+    /// Every filed stream, in no particular order.
+    ///
+    /// ⚠️ Unordered deliberately: the *stage* decides which camera is in which cell, and a set that
+    /// offered an order would invite a caller to trust it.
+    var all: [CameraStream] { Array(streams.values) }
+
+    /// How many cameras have a media path. Drives the decoder budget in `F-DEC-06`.
+    var count: Int { streams.count }
+}
+
 #endif  // os(macOS)

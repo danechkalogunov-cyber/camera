@@ -85,6 +85,16 @@ final class AppSessionModel {
     /// the user is still typing an address.
     var live = CameraStream()
 
+    /// Every camera with a media path, ``live`` among them once it has a camera. Step 2 of
+    /// F-LIV-01.
+    ///
+    /// ⚠️ Filed, not driven. Nothing here starts or stops a stream yet, and the one-camera path is
+    /// byte-for-byte what it was: ``live`` is still the stream every forwarder reads, and it is
+    /// filed here whenever its camera changes so that the map is already true when step 3 asks it
+    /// for a tile's frame source. A map that only becomes true at the moment it is first read is a
+    /// map that is wrong in every state before that.
+    let cameras = CameraStreamSet()
+
     let dependencies: CoreDependencies
     let credentials: CredentialStore
     let defaults: UserDefaults
@@ -104,9 +114,18 @@ final class AppSessionModel {
         set { live.controller = newValue }
     }
 
+    /// The camera ``live`` is pointed at.
+    ///
+    /// ⚠️ The setter also files the stream, which is the whole of how ``cameras`` stays true: the
+    /// app reuses one `CameraStream` across a switch, so the map has to be told when the camera
+    /// under it changes. `CameraStreamSet.file(_:)` removes the entry the stream was filed under
+    /// before adding the new one, so a switch cannot leave a stale key behind.
     var camera: Camera? {
         get { live.camera }
-        set { live.camera = newValue }
+        set {
+            live.camera = newValue
+            cameras.file(live)
+        }
     }
 
     var firstFrameLatency: Duration? {
