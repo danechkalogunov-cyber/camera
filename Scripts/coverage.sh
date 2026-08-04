@@ -20,8 +20,8 @@
 # what the tree actually does, and set the floors from evidence; `Scripts/test-macos.sh` already
 # takes the same position about the single figure it prints.
 #
-# Requires a Mac: `swift test --enable-code-coverage` and `xcrun llvm-cov`. On Linux the profile is
-# produced by a different toolchain layout and this script does not try to guess it.
+# Uses the LLVM coverage tool shipped with the active Swift toolchain. On macOS that is resolved
+# through `xcrun`; on Linux Swift installs `llvm-cov` beside the compiler.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -42,10 +42,14 @@ done
 PURE_FLOOR=90
 APPLE_FLOOR=70
 
-command -v xcrun >/dev/null 2>&1 || {
-    echo "coverage.sh: needs xcrun (a Mac with the Command Line Tools)." >&2
+if command -v xcrun >/dev/null 2>&1; then
+    llvm_cov=(xcrun llvm-cov)
+elif command -v llvm-cov >/dev/null 2>&1; then
+    llvm_cov=(llvm-cov)
+else
+    echo "coverage.sh: needs llvm-cov from the active Swift toolchain." >&2
     exit 2
-}
+fi
 
 if [ "$run_tests" -eq 1 ]; then
     echo "== test (with coverage) =="
@@ -69,7 +73,9 @@ prof="$bin/codecov/default.profdata"
 binaries=()
 while IFS= read -r candidate; do
     binaries+=("$candidate")
-done < <(find "$bin" -path '*PackageTests.xctest/Contents/MacOS/*' -type f -perm -111 2>/dev/null)
+done < <(find "$bin" -type f -perm -111 \
+    \( -path '*PackageTests.xctest/Contents/MacOS/*' -o -name '*PackageTests.xctest' \) \
+    2>/dev/null | sort)
 
 [ "${#binaries[@]}" -gt 0 ] || {
     echo "coverage.sh: found no test binaries under $bin." >&2
@@ -84,19 +90,31 @@ for binary in "${binaries[@]:1}"; do
     extra+=("-object=$binary")
 done
 
-xcrun llvm-cov export "${binaries[0]}" \
+coverage_json=$(mktemp "${TMPDIR:-/tmp}/vigil-coverage.XXXXXX")
+trap 'rm -f "$coverage_json"' EXIT
+
+"${llvm_cov[@]}" export "${binaries[0]}" \
     ${extra[@]+"${extra[@]}"} \
     -instr-profile "$prof" \
-    -ignore-filename-regex='(/Tests/|/\.build/)' 2>/dev/null \
-| PURE_FLOOR="$PURE_FLOOR" APPLE_FLOOR="$APPLE_FLOOR" ENFORCE="$enforce" python3 - <<'PY'
+    -ignore-filename-regex='(/Tests/|/\.build/)' >"$coverage_json" || {
+        echo "coverage.sh: llvm-cov could not export the profile." >&2
+        exit 2
+    }
+
+PURE_FLOOR="$PURE_FLOOR" APPLE_FLOOR="$APPLE_FLOOR" ENFORCE="$enforce" \
+    python3 - "$coverage_json" <<'PY'
 import json, os, sys
 
 # Which targets are the pure layer. Kept as the same list Package.swift's VigilPure product holds;
 # a target added there and forgotten here would be silently measured against the wrong floor.
 PURE = {"VigilProtocols", "VigilBitstream", "VigilRTSP", "VigilRTP", "VigilISAPI", "VigilDiscovery"}
+# Test support is not part of either shipping layer. Counting it as Apple coverage made a Linux run
+# report a healthy macOS percentage even though every macOS-only source was compiled out.
+EXCLUDED = {"VigilTestKit"}
 
 try:
-    data = json.load(sys.stdin)
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        data = json.load(stream)
 except json.JSONDecodeError:
     print("coverage.sh: llvm-cov produced no JSON — is the profile from this build?",
           file=sys.stderr)
@@ -111,6 +129,8 @@ for export in data.get("data", []):
         if "/Sources/" not in path:
             continue
         target = path.split("/Sources/", 1)[1].split("/", 1)[0]
+        if target in EXCLUDED:
+            continue
         summary = entry.get("summary", {}).get("lines", {})
         covered, total = summary.get("covered", 0), summary.get("count", 0)
         if not total:
@@ -141,6 +161,9 @@ print("== against the contract's floors ==")
 failed = []
 for bucket in ("pure", "apple"):
     covered, total = buckets[bucket]
+    if not total:
+        print(f"  n/a  {labels[bucket]:<28} no instrumented lines on this platform")
+        continue
     value, floor = percent(covered, total), floors[bucket]
     verdict = "ok " if value >= floor else "LOW"
     print(f"  {verdict}  {labels[bucket]:<28} {value:6.2f} %   floor {floor} %")
@@ -149,7 +172,12 @@ for bucket in ("pure", "apple"):
 
 print()
 if not failed:
-    print("coverage.sh: both layers meet the floors.")
+    measured = sum(1 for covered, total in buckets.values() if total)
+    if measured == len(buckets):
+        print("coverage.sh: both layers meet the floors.")
+    else:
+        print("coverage.sh: every layer measurable on this platform meets its floor;")
+        print("             run on macOS to assess the macOS layer.")
     sys.exit(0)
 
 if os.environ["ENFORCE"] == "1":

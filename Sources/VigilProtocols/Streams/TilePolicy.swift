@@ -251,3 +251,53 @@ public enum TilePolicy {
         return base > aggregateFloor ? base : aggregateFloor
     }
 }
+
+// MARK: - Stateful selection
+
+/// Applies the policy's dead band and dwell time to successive layout measurements.
+///
+/// Layout is deliberately sampled by the application rather than driving a reconnect directly
+/// from every SwiftUI geometry notification.  The selector is value-typed and clock-agnostic so
+/// callers can feed a monotonic timestamp and tests never have to sleep.
+public struct TilePolicySelector: Sendable {
+    public private(set) var tileClass: TileClass?
+    public private(set) var choice: StreamChoice?
+
+    private var candidate: (tileClass: TileClass, choice: StreamChoice, since: Duration)?
+
+    public init() {}
+
+    /// Returns a new choice only after it has remained eligible for ``TilePolicy/dwell``.
+    /// The first usable measurement is adopted immediately; this avoids adding 750 ms to initial
+    /// connection while still damping all subsequent resize-driven changes.
+    public mutating func ingest(_ context: TileContext, at now: Duration) -> StreamChoice? {
+        let proposedClass = TilePolicy.tileClass(for: context)
+        let proposedChoice = TilePolicy.choice(for: context)
+        guard let currentClass = tileClass, let currentChoice = choice else {
+            tileClass = proposedClass
+            choice = proposedChoice
+            candidate = nil
+            return proposedChoice
+        }
+        guard proposedChoice != currentChoice else {
+            candidate = nil
+            return nil
+        }
+        guard proposedClass == currentClass
+                || TilePolicy.clearsDeadBand(current: currentClass, proposed: proposedClass,
+                                             shortEdge: context.shortEdge) else {
+            candidate = nil
+            return nil
+        }
+        if let candidate,
+           candidate.tileClass == proposedClass, candidate.choice == proposedChoice {
+            guard now - candidate.since >= TilePolicy.dwell else { return nil }
+            tileClass = proposedClass
+            choice = proposedChoice
+            self.candidate = nil
+            return proposedChoice
+        }
+        candidate = (proposedClass, proposedChoice, now)
+        return nil
+    }
+}

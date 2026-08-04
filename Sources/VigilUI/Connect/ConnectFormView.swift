@@ -54,6 +54,9 @@ package struct ConnectFormView: View {
     /// sockets, and this layer holds none — so the app target supplies this and owns the run.
     package let onScan: (() -> Void)?
 
+    /// Runs the credential-free prefix of Stream Doctor against the values currently in the form.
+    package let onTest: ((ConnectRequest) -> Void)?
+
     @FocusState private var focus: ConnectField?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -66,11 +69,13 @@ package struct ConnectFormView: View {
     package init(state: Binding<ConnectFormState>,
                  onConnect: @escaping (ConnectRequest) -> Void,
                  onRemedy: @escaping (ConnectRemedy) -> Void = { _ in },
-                 onScan: (() -> Void)? = nil) {
+                 onScan: (() -> Void)? = nil,
+                 onTest: ((ConnectRequest) -> Void)? = nil) {
         self._state = state
         self.onConnect = onConnect
         self.onRemedy = onRemedy
         self.onScan = onScan
+        self.onTest = onTest
     }
 
     // MARK: - View
@@ -192,6 +197,12 @@ package struct ConnectFormView: View {
                        focusValue: ConnectField.password,
                        onValidate: { _ in state.validate(.password) },
                        onSubmit: { submit() })
+            HStack(spacing: VTheme.Space.sm) {
+                numericField("HTTP port", value: $state.httpPort, range: 1...65_535)
+                numericField("RTSP port", value: $state.rtspPort, range: 1...65_535)
+                numericField("Channel", value: $state.channel, range: 1...256)
+            }
+            VInspectorToggleRow("Use TLS", isOn: $state.usesTLS)
         }
         .padding(VTheme.Space.lg)
         .background(VTheme.Color.Layer.surface, in: VTheme.Radius.shape(VTheme.Radius.lg))
@@ -220,8 +231,34 @@ package struct ConnectFormView: View {
                 VButton("Find Cameras…", style: .secondary, size: .lg, action: onScan)
                     .disabled(state.isConnecting)
             }
+            if let onTest {
+                VButton("Test", style: .secondary, size: .lg, isLoading: state.isTesting) {
+                    state.testResult = nil
+                    state.isTesting = true
+                    onTest(state.request)
+                }
+                .disabled(state.isConnecting || state.isTesting || !ConnectHost.isValid(state.request.host))
+            }
             Spacer(minLength: 0)
             connectButton
+        }
+        if let result = state.testResult {
+            Text(verbatim: result)
+                .vType(VTheme.Typography.caption1)
+                .foregroundStyle(VTheme.Color.Text.secondary)
+                .padding(.top, VTheme.Space.sm)
+        }
+    }
+
+    private func numericField(_ title: LocalizedStringKey, value: Binding<Int>,
+                              range: ClosedRange<Int>) -> some View {
+        VStack(alignment: .leading, spacing: VTheme.Space.xxs) {
+            Text(title, bundle: .vigilUI).vType(VTheme.Typography.caption1)
+            TextField("", value: value, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: value.wrappedValue) { _, newValue in
+                    value.wrappedValue = min(max(newValue, range.lowerBound), range.upperBound)
+                }
         }
     }
 

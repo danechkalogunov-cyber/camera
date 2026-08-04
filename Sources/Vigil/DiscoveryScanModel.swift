@@ -223,7 +223,8 @@ final class DiscoveryScanModel: Identifiable {
             detail: detail,
             confidence: device.confidence,
             supportsISAPI: device.vendor.supportsISAPI,
-            isAlreadyAdded: knownAddresses.contains(address))
+            isAlreadyAdded: knownAddresses.contains(address),
+            needsActivation: device.needsActivation)
     }
 
     /// A stable UUID for a device, hashed from its identity.

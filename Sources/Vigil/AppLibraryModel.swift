@@ -23,6 +23,7 @@ import Foundation
 import Observation
 
 import VigilCore
+import VigilISAPI
 import VigilProtocols
 import VigilUI
 
@@ -178,6 +179,32 @@ final class AppLibraryModel {
         }
     }
 
+    /// Adds one library camera per enabled NVR input and records the authoritative inventory.
+    /// The first record retains the connect form's identity; subsequent records share its
+    /// Keychain handle and device settings but receive fresh stable identifiers.
+    @discardableResult
+    func addNVRChannels(_ channels: [VigilISAPI.DeviceChannel], from camera: Camera) async -> [Camera] {
+        let available = channels.filter(\.isEnabled).sorted { $0.channel < $1.channel }
+        guard !available.isEmpty else { return [] }
+        var added: [Camera] = []
+        for (offset, channel) in available.enumerated() {
+            var copy = camera
+            if offset > 0 { copy.id = CameraID(); copy.createdAt = Date(); copy.lastSeenAt = nil }
+            copy.channel = channel.channel
+            copy.name = channel.displayName
+            if let stored = await add(copy) { added.append(stored) }
+        }
+        if let owner = added.first, let library {
+            do {
+                try await library.recordChannelInventory(for: owner.id, deviceChannels: channels)
+                await refresh()
+            } catch {
+                logger.error(.storage, "could not record NVR channel inventory: \(error)")
+            }
+        }
+        return added
+    }
+
     /// Removes a camera. Its Keychain item is **not** touched here — that belongs to whoever owns
     /// the credential, and deleting a password because a row disappeared is the kind of surprise
     /// that costs a user access to a device they still own.
@@ -191,6 +218,21 @@ final class AppLibraryModel {
         }
     }
 
+    /// Duplicates a camera next to its source and returns the new record for selection/editing.
+    @discardableResult
+    func duplicate(_ id: CameraID) async -> Camera? {
+        guard let library, !isReadOnly else { return nil }
+        do {
+            let copy = try await library.duplicate(id)
+            await refresh()
+            return copy
+        } catch {
+            notice = vigilUIString("That camera could not be duplicated.")
+            logger.error(.storage, "duplicate failed: \(error)")
+            return nil
+        }
+    }
+
     /// Renames a camera.
     func rename(_ id: CameraID, to name: String) async {
         guard let library, !isReadOnly else { return }
@@ -199,6 +241,41 @@ final class AppLibraryModel {
             await refresh()
         } catch {
             logger.error(.storage, "rename failed: \(error)")
+        }
+    }
+
+    /// Moves a camera before a row in the library's pre-move ordering.
+    func move(_ id: CameraID, before destination: Int) async {
+        guard let library, !isReadOnly,
+              let source = cameras.firstIndex(where: { $0.id == id }) else { return }
+        do {
+            _ = try await library.moveCameras(fromOffsets: IndexSet(integer: source),
+                                              toOffset: destination)
+            await refresh()
+        } catch {
+            logger.error(.storage, "camera reorder failed: \(error)")
+        }
+    }
+
+    /// Persists whether a camera participates in automatic connections.
+    func setEnabled(_ enabled: Bool, for id: CameraID) async {
+        guard let library, !isReadOnly else { return }
+        do {
+            _ = try await library.setEnabled(enabled, for: id)
+            await refresh()
+        } catch {
+            logger.error(.storage, "set enabled failed: \(error)")
+        }
+    }
+
+    /// Persists the chosen identity colour (`nil` means automatic).
+    func setColorTag(_ tag: ColorTag, for id: CameraID) async {
+        guard let library, !isReadOnly else { return }
+        do {
+            _ = try await library.setColorTag(tag, for: id)
+            await refresh()
+        } catch {
+            logger.error(.storage, "set colour tag failed: \(error)")
         }
     }
 

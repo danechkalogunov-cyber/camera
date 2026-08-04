@@ -106,6 +106,12 @@ struct CameraSettingsSheet: View {
     /// Whether the chrome drawn over this camera's picture is shown.
     @State private var showsOverlay: Bool
 
+    /// Whether this camera participates in automatic connection.
+    @State private var isEnabled: Bool
+
+    /// Explicit identity colour, or `.none` for deterministic automatic assignment.
+    @State private var colorTag: ColorTag
+
     /// Address, port and model, for the read-only rows.
     let host: String
     let httpPort: Int
@@ -115,7 +121,7 @@ struct CameraSettingsSheet: View {
     let groups: [CameraGroupRecord]
 
     /// Applies the edits. Called with the trimmed name, the chosen group and the overlay switch.
-    let onSave: (String, GroupID?, Bool) -> Void
+    let onSave: (String, GroupID?, Bool, Bool, ColorTag) -> Void
 
     /// Dismisses without applying.
     let onCancel: () -> Void
@@ -124,15 +130,19 @@ struct CameraSettingsSheet: View {
     init(name: String,
          groupID: GroupID?,
          showsOverlay: Bool,
+         isEnabled: Bool,
+         colorTag: ColorTag,
          host: String,
          httpPort: Int,
          model: String,
          groups: [CameraGroupRecord],
-         onSave: @escaping (String, GroupID?, Bool) -> Void,
+         onSave: @escaping (String, GroupID?, Bool, Bool, ColorTag) -> Void,
          onCancel: @escaping () -> Void) {
         _name = State(initialValue: name)
         _groupID = State(initialValue: groupID)
         _showsOverlay = State(initialValue: showsOverlay)
+        _isEnabled = State(initialValue: isEnabled)
+        _colorTag = State(initialValue: colorTag)
         self.host = host
         self.httpPort = httpPort
         self.model = model
@@ -148,7 +158,7 @@ struct CameraSettingsSheet: View {
                    // which replaces one with "Camera <host>" — better to say so than to silently
                    // rename the camera to something the user did not type.
                    isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
-                   onConfirm: { onSave(name, groupID, showsOverlay) },
+                   onConfirm: { onSave(name, groupID, showsOverlay, isEnabled, colorTag) },
                    onCancel: onCancel) {
             VStack(alignment: .leading, spacing: VTheme.Space.md) {
                 field("Name") {
@@ -160,6 +170,20 @@ struct CameraSettingsSheet: View {
                         Text("None", bundle: .vigilUI).tag(GroupID?.none)
                         ForEach(groups) { group in
                             Text(verbatim: group.name).tag(GroupID?.some(group.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
+                Divider()
+                VInspectorToggleRow("Enable camera", isOn: $isEnabled)
+                field("Colour tag") {
+                    Picker("", selection: $colorTag) {
+                        Text("Automatic", bundle: .vigilUI).tag(ColorTag.none)
+                        ForEach(ColorTag.allCases, id: \.self) { tag in
+                            if tag != .none {
+                                Text(Self.colorTagTitle(tag), bundle: .vigilUI).tag(tag)
+                            }
                         }
                     }
                     .labelsHidden()
@@ -189,6 +213,22 @@ struct CameraSettingsSheet: View {
                 .vType(VTheme.Typography.callout)
                 .foregroundStyle(VTheme.Color.Text.tertiary)
             control()
+        }
+    }
+
+    /// Localised user-facing colour name; raw persistence values never leak into UI.
+    private static func colorTagTitle(_ tag: ColorTag) -> LocalizedStringKey {
+        switch tag {
+        case .none: "Automatic"
+        case .red: "Red"
+        case .orange: "Orange"
+        case .yellow: "Yellow"
+        case .green: "Green"
+        case .teal: "Teal"
+        case .blue: "Blue"
+        case .purple: "Purple"
+        case .pink: "Pink"
+        case .graphite: "Graphite"
         }
     }
 
@@ -348,12 +388,15 @@ extension MainWindowView {
             CameraSettingsSheet(name: identity.name,
                                 groupID: groups.group(for: cameraID),
                                 showsOverlay: window.showsVideoOverlay,
+                                isEnabled: session.camera?.isEnabled ?? true,
+                                colorTag: session.camera?.colorTag ?? .none,
                                 host: identity.host,
                                 httpPort: session.camera?.httpPort ?? 80,
                                 model: deviceInfo.identity.model,
                                 groups: groups.groups,
-                                onSave: { name, group, overlay in
+                                onSave: { name, group, overlay, enabled, colorTag in
                                     renameCamera(to: name)
+                                    updateCameraMetadata(isEnabled: enabled, colorTag: colorTag)
                                     groups.setGroup(group, for: cameraID)
                                     window.showsVideoOverlay = overlay
                                     session.rememberVideoOverlay(overlay)

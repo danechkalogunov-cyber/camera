@@ -159,6 +159,28 @@ extension AppSessionModel {
         await playArchive(locator)
     }
 
+    /// Pauses without losing the archive locator, or resumes it with one fresh handshake.
+    func togglePlaybackPause() async {
+        guard let locator = playback else { return }
+        if isPlaybackPaused {
+            isPlaybackPaused = false
+            await playArchive(locator)
+        } else {
+            isPlaybackPaused = true
+            stopSession()
+        }
+    }
+
+    /// Seeks by exactly one declared frame and remains paused after the seek.
+    func stepPlaybackFrame(forward: Bool, framesPerSecond: Double) async {
+        guard playback != nil else { return }
+        let fps = framesPerSecond.isFinite && framesPerSecond > 0 ? framesPerSecond : 25
+        let seconds = (forward ? 1 : -1) / fps
+        isPlaybackPaused = true
+        stopSession()
+        dependencies.logger.info(.app, "playback frame step \(seconds) s")
+    }
+
     /// Returns the picture to the live stream.
     ///
     /// Restores the override the camera had before playback rather than clearing it: a user who set
@@ -171,6 +193,7 @@ extension AppSessionModel {
         // Live has no speed, and leaving the rate set would make the next session ask a live
         // channel for `Scale: 4` — the next four seconds, which do not exist yet.
         playbackRate = .normal
+        isPlaybackPaused = false
         // Bumped so a seek still opening does not finish into a session that has gone back to live,
         // and cleared so the live stream's first frame is not reported as a seek that took as long
         // as the user spent deciding to leave.

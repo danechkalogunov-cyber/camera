@@ -42,18 +42,24 @@ public struct ReconnectPolicy: Sendable, Equatable {
     /// The cold-retry interval. Fixed, unjittered, and never used for an auth failure.
     public var coldRetryInterval: Duration
 
+    /// Probe cadence while a previously reachable camera is rebooting. The probe performs no
+    /// authentication; two seconds leaves the remaining half of L18's four-second budget for RTSP.
+    public var rebootProbeInterval: Duration
+
     /// Builds a policy. The defaults are the contract's table.
     public init(delays: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2), .seconds(4),
                                       .seconds(8), .seconds(15), .seconds(30)],
                 jitterFraction: Double = 0.20,
                 healthyResetInterval: Duration = .seconds(60),
                 maxAttemptsBeforeCold: Int = 20,
-                coldRetryInterval: Duration = .seconds(300)) {
+                coldRetryInterval: Duration = .seconds(300),
+                rebootProbeInterval: Duration = .seconds(2)) {
         self.delays = delays
         self.jitterFraction = jitterFraction
         self.healthyResetInterval = healthyResetInterval
         self.maxAttemptsBeforeCold = maxAttemptsBeforeCold
         self.coldRetryInterval = coldRetryInterval
+        self.rebootProbeInterval = rebootProbeInterval
     }
 
     /// The contract's policy: 0.5 / 1 / 2 / 4 / 8 / 15 / 30 s, ±20 %, reset after 60 s healthy.
@@ -81,6 +87,17 @@ public struct ReconnectPolicy: Sendable, Equatable {
     /// True when `attempt` has exhausted the fast ladder and the controller should fail over to the
     /// five-minute cold retry.
     public func hasExhaustedLadder(attempt: Int) -> Bool { attempt >= maxAttemptsBeforeCold }
+
+    /// Reboot-shaped failures use a fast, credential-free reconnect probe instead of cold retry.
+    public func offlineDelay(for code: StreamError.Code) -> Duration {
+        switch code {
+        case .connectionClosed, .sessionLost, .connectTimeout, .hostResolutionFailed,
+             .transportError, .portClosed:
+            rebootProbeInterval
+        default:
+            coldRetryInterval
+        }
+    }
 }
 
 #endif

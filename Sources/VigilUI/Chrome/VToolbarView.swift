@@ -137,6 +137,7 @@ package struct VToolbarView: View {
 
     /// Whether the camera cycle (patrol) is running.
     package let isCycling: Bool
+    package let cycleInterval: TimeInterval
 
     /// Whether to draw the 1 px bottom hairline.
     ///
@@ -154,6 +155,9 @@ package struct VToolbarView: View {
 
     /// Whether the window is wide enough to hold the inspector. See ``canShowSidebar``.
     package let canShowInspector: Bool
+
+    /// Selected camera or layout name, replacing a redundant window title.
+    package let title: String?
 
     /// Incremented by the window to put the cursor in the search field — the `/` shortcut, or the
     /// palette handing over. Any change moves focus; the value itself means nothing.
@@ -173,6 +177,7 @@ package struct VToolbarView: View {
 
     /// Starts or stops cycling through cameras.
     package let onToggleCycle: () -> Void
+    package let onSelectCycleInterval: (TimeInterval) -> Void
 
     /// Opens the command palette. `⌘K`.
     package let onOpenPalette: () -> Void
@@ -195,8 +200,10 @@ package struct VToolbarView: View {
     package init(isSidebarVisible: Bool,
                  isInspectorVisible: Bool,
                  layout: VGridLayout,
+                 title: String? = nil,
                  searchText: Binding<String>,
                  isCycling: Bool = false,
+                 cycleInterval: TimeInterval = VCycleModel.defaultInterval,
                  showsSeparator: Bool = false,
                  canShowSidebar: Bool = true,
                  canShowInspector: Bool = true,
@@ -205,13 +212,16 @@ package struct VToolbarView: View {
                  onToggleInspector: @escaping () -> Void = {},
                  onSelectLayout: @escaping (VGridLayout) -> Void = { _ in },
                  onToggleCycle: @escaping () -> Void = {},
+                 onSelectCycleInterval: @escaping (TimeInterval) -> Void = { _ in },
                  onOpenPalette: @escaping () -> Void = {},
                  onShowMore: @escaping () -> Void = {}) {
         self.isSidebarVisible = isSidebarVisible
         self.isInspectorVisible = isInspectorVisible
         self.layout = layout
+        self.title = title
         self._searchText = searchText
         self.isCycling = isCycling
+        self.cycleInterval = cycleInterval
         self.showsSeparator = showsSeparator
         self.canShowSidebar = canShowSidebar
         self.canShowInspector = canShowInspector
@@ -220,6 +230,7 @@ package struct VToolbarView: View {
         self.onToggleInspector = onToggleInspector
         self.onSelectLayout = onSelectLayout
         self.onToggleCycle = onToggleCycle
+        self.onSelectCycleInterval = onSelectCycleInterval
         self.onOpenPalette = onOpenPalette
         self.onShowMore = onShowMore
     }
@@ -229,6 +240,13 @@ package struct VToolbarView: View {
     package var body: some View {
         HStack(spacing: VTheme.Space.sm) {
             sidebarToggle
+            if let title, !title.isEmpty {
+                Text(verbatim: title)
+                    .vType(VTheme.Typography.headline)
+                    .foregroundStyle(VTheme.Color.Text.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 180, alignment: .leading)
+            }
             VToolbarSearchField(text: $searchText, focus: $isSearchFocused)
             // Two flexible gaps rather than a centred overlay: the mockup's own layout, and the one
             // arrangement in which the switcher can never end up underneath the group beside it.
@@ -323,6 +341,23 @@ package struct VToolbarView: View {
                 symbol: .patrol,
                 style: isCycling ? .secondary : .ghost,
                 action: onToggleCycle)
+            .overlay {
+                if isCycling {
+                    TimelineView(.periodic(from: .now, by: 0.2)) { context in
+                        let elapsed = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: cycleInterval)
+                        Circle().trim(from: 0, to: VCycleProgress.fraction(elapsed: elapsed,
+                                                                          interval: cycleInterval))
+                            .stroke(.tint, lineWidth: 2).rotationEffect(.degrees(-90)).padding(2)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+            .contextMenu {
+                ForEach(VCycleModel.intervals, id: \.self) { interval in
+                    Button("\(Int(interval)) s") { onSelectCycleInterval(interval) }
+                }
+            }
             .help(Text("Cycle cameras", bundle: .vigilUI))
     }
 

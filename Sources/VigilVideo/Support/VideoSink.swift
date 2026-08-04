@@ -16,6 +16,8 @@
 #if os(macOS)
 
 import CoreMedia
+import CoreGraphics
+import CoreVideo
 import VigilProtocols
 
 // MARK: - Reasons
@@ -77,6 +79,8 @@ public enum PacingMode: String, Sendable, Hashable {
 /// Only `enqueue` has no default: a minimal sink is one method.
 public protocol VideoSink: AnyObject, Sendable {
 
+    nonisolated var prefersDecodedPixelBuffers: Bool { get }
+
     /// Hands over one decoded-ready access unit.
     ///
     /// Must return in under 2 ms and must never block: it is called from the pipeline actor, and
@@ -91,6 +95,11 @@ public protocol VideoSink: AnyObject, Sendable {
     ///     discards buffers from a stale generation.
     nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
                              generation: UInt32)
+
+    /// Hands an ImageIO-decoded legacy MJPEG frame to the renderer.
+    nonisolated func enqueueJPEG(_ image: CGImage)
+
+    nonisolated func enqueuePixelBuffer(_ pixelBuffer: CVPixelBuffer, generation: UInt32)
 
     /// The format is about to change. **The sink must keep showing its current image**: no black
     /// frame, no `flush(removingDisplayedImage:)`, no resize of the hosting view.
@@ -119,6 +128,11 @@ public protocol VideoSink: AnyObject, Sendable {
 // MARK: - Defaults
 
 public extension VideoSink {
+    nonisolated var prefersDecodedPixelBuffers: Bool { false }
+
+    nonisolated func enqueueJPEG(_: CGImage) {}
+
+    nonisolated func enqueuePixelBuffer(_: CVPixelBuffer, generation: UInt32) {}
 
     // No-op defaults for every observability member, so a minimal sink implements `enqueue` alone.
 

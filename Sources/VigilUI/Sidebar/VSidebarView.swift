@@ -100,6 +100,11 @@ package struct VSidebarView<Thumbnail: View>: View {
     /// *Clear Filters* in the no-results empty state.
     package let onClearSearch: () -> Void
 
+    /// Commits a camera/group drag before the indicated item in its pre-move ordering.
+    package let onMoveCamera: (CameraID, CameraID?) -> Void
+    package let onMoveGroup: (GroupID, Int) -> Void
+    package let onAssignCameraToGroup: (CameraID, GroupID) -> Void
+
     /// The right-click menu for one camera row, or an empty array for no menu.
     ///
     /// Data rather than a view builder — see ``VSidebarMenuItem``. An empty array attaches **no**
@@ -141,6 +146,9 @@ package struct VSidebarView<Thumbnail: View>: View {
                  onAddCamera: @escaping () -> Void = {},
                  onOpenSettings: @escaping () -> Void = {},
                  onClearSearch: @escaping () -> Void = {},
+                 onMoveCamera: @escaping (CameraID, CameraID?) -> Void = { _, _ in },
+                 onMoveGroup: @escaping (GroupID, Int) -> Void = { _, _ in },
+                 onAssignCameraToGroup: @escaping (CameraID, GroupID) -> Void = { _, _ in },
                  cameraMenu: @escaping (VSidebarCamera) -> [VSidebarMenuItem] = { _ in [] },
                  groupMenu: @escaping (VSidebarGroup) -> [VSidebarMenuItem] = { _ in [] },
                  motionSamples: @escaping (CameraID) -> [Double] = { _ in [] },
@@ -159,6 +167,9 @@ package struct VSidebarView<Thumbnail: View>: View {
         self.onAddCamera = onAddCamera
         self.onOpenSettings = onOpenSettings
         self.onClearSearch = onClearSearch
+        self.onMoveCamera = onMoveCamera
+        self.onMoveGroup = onMoveGroup
+        self.onAssignCameraToGroup = onAssignCameraToGroup
         self.cameraMenu = cameraMenu
         self.groupMenu = groupMenu
         self.motionSamples = motionSamples
@@ -196,6 +207,15 @@ package struct VSidebarView<Thumbnail: View>: View {
                 ForEach(tree.rows) { row in
                     rowView(row, ordinals: ordinals)
                 }
+                Color.clear
+                    .frame(height: VTheme.Space.sm)
+                    .onDrop(of: [.text], delegate: VSidebarRowDropDelegate { value in
+                        if let camera = VSidebarDraggedID.camera(from: value) {
+                            onMoveCamera(camera, nil)
+                        } else if let group = VSidebarDraggedID.group(from: value) {
+                            onMoveGroup(group, (ordinals.values.max() ?? -1) + 1)
+                        }
+                    })
             }
             .padding(.horizontal, VTheme.Space.sm)
             .padding(.vertical, VTheme.Space.sm)
@@ -213,15 +233,57 @@ package struct VSidebarView<Thumbnail: View>: View {
             layoutRow()
         case .group(let group, let memberCount):
             groupRow(group, memberCount: memberCount, ordinal: ordinals[group.id])
+                .onDrag { NSItemProvider(object: "group:\(group.id)" as NSString) }
+                .onDrop(of: [.text], delegate: VSidebarRowDropDelegate {
+                    if let camera = VSidebarDraggedID.camera(from: $0) {
+                        onAssignCameraToGroup(camera, group.id)
+                    } else if let source = VSidebarDraggedID.group(from: $0),
+                              let index = ordinals[group.id] {
+                        onMoveGroup(source, index)
+                    }
+                })
         case .device(let key, let name, let channelCount):
             deviceRow(key: key, name: name, channelCount: channelCount, indent: row.indent)
         case .camera(let camera, let match):
             cameraRow(camera, match: match, indent: row.indent)
+                .onDrag { NSItemProvider(object: "camera:\(camera.id)" as NSString) }
+                .onDrop(of: [.text], delegate: VSidebarRowDropDelegate {
+                    guard let source = VSidebarDraggedID.camera(from: $0) else { return }
+                    onMoveCamera(source, camera.id)
+                })
         case .libraryLink(let link, let badge):
             libraryRow(link, badge: badge)
         case .emptyNotice(let section):
             emptyNotice(section)
         }
+    }
+}
+
+private enum VSidebarDraggedID {
+    static func camera(from value: String) -> CameraID? {
+        parse(value, prefix: "camera:").map(CameraID.init)
+    }
+
+    static func group(from value: String) -> GroupID? {
+        parse(value, prefix: "group:").map(GroupID.init)
+    }
+
+    private static func parse(_ value: String, prefix: String) -> UUID? {
+        guard value.hasPrefix(prefix) else { return nil }
+        return UUID(uuidString: String(value.dropFirst(prefix.count)))
+    }
+}
+
+private struct VSidebarRowDropDelegate: DropDelegate {
+    let commit: (String) -> Void
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.text]).first else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let value = object as? String else { return }
+            Task { @MainActor in commit(value) }
+        }
+        return true
     }
 }
 

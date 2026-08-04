@@ -256,6 +256,11 @@ extension MainWindowView {
                              symbol: .rename,
                              isEnabled: !library.isReadOnly,
                              action: { window.sheet = .cameraSettings }),
+            VSidebarMenuItem(id: "camera.duplicate",
+                             title: Self.localized("Duplicate for Another Channel…"),
+                             symbol: .copy,
+                             isEnabled: !library.isReadOnly,
+                             action: { duplicateCamera(camera.id) }),
             .submenu(id: "camera.group",
                      title: Self.localized("Add to Group"),
                      symbol: .group,
@@ -294,6 +299,15 @@ extension MainWindowView {
                                       isEnabled: !library.isReadOnly,
                                       action: { removeCamera(camera.id) }))
         return items
+    }
+
+    /// Copies a row, selects it, then opens settings so its channel can be changed immediately.
+    func duplicateCamera(_ id: CameraID) {
+        Task {
+            guard let copy = await library.duplicate(id) else { return }
+            window.sidebarSelection.select(.camera(copy.id))
+            window.sheet = .cameraSettings
+        }
     }
 
     /// Takes a camera out of the library, and moves the window off it if it was the one playing.
@@ -371,6 +385,17 @@ extension MainWindowView {
     /// The right-click menu on a group row.
     func groupMenu(_ group: VSidebarGroup) -> [VSidebarMenuItem] {
         [
+            VSidebarMenuItem(id: "group.snapshot",
+                             title: Self.localized("Snapshot Group"),
+                             symbol: .snapshotAll,
+                             action: { snapshotGroup(group.id) }),
+            VSidebarMenuItem(id: "group.mute",
+                             title: Self.localized(groups.mutedGroups.contains(group.id)
+                                 ? "Unmute Group" : "Mute Group"),
+                             symbol: .mute,
+                             isOn: groups.mutedGroups.contains(group.id),
+                             action: { groups.toggleMuted(group.id) }),
+            .separator(id: "group.actions.rule"),
             VSidebarMenuItem(id: "group.rename",
                              title: Self.localized("Rename…"),
                              symbol: .rename,
@@ -382,6 +407,28 @@ extension MainWindowView {
                              role: .destructive,
                              action: { deleteGroup(group.id) }),
         ]
+    }
+
+    /// Captures each member in group order, switching the single-session build as needed.
+    func snapshotGroup(_ id: GroupID) {
+        let cameras = groups.members(of: id).compactMap { member in
+            library.cameras.first { $0.id == member }
+        }
+        snapshotCameras(cameras)
+    }
+
+    /// Captures cameras sequentially so the single-session transport never overlaps credentials.
+    func snapshotCameras(_ cameras: [Camera]) {
+        guard !cameras.isEmpty else { return }
+        Task {
+            for camera in cameras {
+                if session.camera?.id != camera.id {
+                    await session.switchTo(camera)
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                takeSnapshot()
+            }
+        }
     }
 
     /// Removes a group and steps the selection off it.

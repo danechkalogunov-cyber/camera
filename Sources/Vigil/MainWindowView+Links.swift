@@ -56,21 +56,27 @@ extension MainWindowView {
             window.paletteQuery = query ?? ""
             window.paletteSelection = nil
             window.isPaletteOpen = true
-        case let .playback(reference, instant, _):
-            // The speed is parsed and not applied: a rate belongs to a session that is already
-            // playing, and `openArchive` opens a new one. Applying it here would mean a second
-            // reconnect a moment after the first.
+        case let .playback(reference, instant, speed):
             guard resolveLinkedCamera(reference) != nil else { return }
+            if let speed {
+                session.playbackRate = TimelinePlaybackRate.nearest(
+                    toScale: speed, in: TimelinePlaybackRate.forwardStops)
+            }
             openArchive(at: instant)
         case let .preset(reference, number):
             guard resolveLinkedCamera(reference) != nil else { return }
             ptz.goToPreset(number)
         case .snapshotAll:
-            // Honest: this build streams one camera, so "all" is one, and pretending otherwise
-            // would make the link mean something different from what it says.
-            unsupportedLink(MainWindowView.localized("This build shows one camera at a time."))
-        case .event, .settings:
-            unsupportedLink(MainWindowView.localized("This build cannot open that yet."))
+            snapshotCameras(library.cameras)
+        case let .event(id):
+            guard let event = eventFeed.events.first(where: { $0.id == id }) else {
+                unsupportedLink(MainWindowView.localized("That event is no longer available."))
+                return
+            }
+            window.sidebarSelection.select(.library(.events))
+            openArchive(at: event.occurredAt)
+        case .settings:
+            openWindow(id: SceneID.settings)
         }
     }
 
@@ -90,9 +96,8 @@ extension MainWindowView {
         // is the user acting, and one that arrived from Mail while Vigil sat in the background is
         // not. Checked at the moment of the act rather than at parse time, because the app may have
         // come forward in between — which is exactly what happens when a link launches it.
-        if action.needsConfirmationFromAnotherApp, !NSApp.isActive {
-            unsupportedLink(MainWindowView.localized(
-                "A link cannot start recording or take a snapshot while Vigil is in the background."))
+        if action.needsConfirmationFromAnotherApp, !NSApp.isActive,
+           !Self.confirmExternalAutomation() {
             return
         }
         // Set, not toggled: `cycleStreamQuality()` flips between the two and a link names one. The
@@ -115,6 +120,26 @@ extension MainWindowView {
             window.isInspectorVisible = true
             window.inspectorTab = .info
         }
+    }
+
+    /// Confirms an external recording/snapshot request, with an explicit persistent opt-out.
+    private static func confirmExternalAutomation() -> Bool {
+        let key = "Vigil.deepLinks.allowCaptureWithoutAsking"
+        if UserDefaults.standard.bool(forKey: key) { return true }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = localized("Allow this link to control the camera?")
+        alert.informativeText = localized(
+            "The link wants to start recording or take a snapshot. Only allow links you trust.")
+        alert.addButton(withTitle: localized("Allow"))
+        alert.addButton(withTitle: localized("Cancel"))
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = localized("Allow recording and snapshots without asking")
+        let allowed = alert.runModal() == .alertFirstButtonReturn
+        if allowed, alert.suppressionButton?.state == .on {
+            UserDefaults.standard.set(true, forKey: key)
+        }
+        return allowed
     }
 
     /// Selects a group by identifier or by name.

@@ -324,6 +324,14 @@ public actor StreamController: Identifiable {
         priority = newPriority
     }
 
+    /// Changes encoder profile and reconnects while the renderer retains its last displayed image.
+    public func setQuality(_ newQuality: StreamQuality) async {
+        guard newQuality != quality else { return }
+        quality = newQuality
+        guard currentState != .stopped, currentState != .idle else { return }
+        await restart()
+    }
+
     /// Applies an edited camera record.
     ///
     /// A change to the endpoint, the transport, the channel, the path or the credential handle
@@ -434,17 +442,19 @@ public actor StreamController: Identifiable {
                 }
                 // Non-auth failures get one slow retry every five minutes: a camera that was
                 // unplugged should come back on its own without the user finding a button.
-                let coldRetryAt = Date().addingTimeInterval(policy.coldRetryInterval.seconds)
+                let offlineDelay = policy.offlineDelay(for: error.code)
+                let coldRetryAt = Date().addingTimeInterval(offlineDelay.seconds)
                 transition(to: .failed,
                            detail: .failure(error, state: .failed, attempt: attempt,
                                             nextRetryAt: coldRetryAt))
-                try? await clock.sleep(for: policy.coldRetryInterval)
+                try? await clock.sleep(for: offlineDelay)
                 attempt = 0
 
             case let .retry(error):
                 emit(.error(error, isFatal: false))
                 if policy.hasExhaustedLadder(attempt: attempt) {
-                    let coldDelay = max(policy.coldRetryInterval, Self.pauseDelay(for: error))
+                    let coldDelay = max(policy.offlineDelay(for: error.code),
+                                        Self.pauseDelay(for: error))
                     let coldRetryAt = Date().addingTimeInterval(coldDelay.seconds)
                     transition(to: .failed,
                                detail: .failure(error, state: .failed, attempt: attempt,

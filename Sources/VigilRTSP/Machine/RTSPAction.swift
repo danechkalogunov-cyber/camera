@@ -83,6 +83,12 @@ public struct RTSPTrack: Sendable, Hashable, Identifiable {
     /// `SETUP` response, or from what we requested when the response omits it.
     public var interleavedChannels: ClosedRange<UInt8>?
 
+    /// Local UDP ports reserved for this track (RTP first, RTCP second).
+    public var clientPorts: RTSPUDPPortPair?
+
+    /// Peer UDP ports returned by the server in `server_port`, when present.
+    public var serverPorts: RTSPUDPPortPair?
+
     /// The synchronisation source the server announced, when it announced one.
     public var ssrc: UInt32?
 
@@ -108,6 +114,8 @@ public struct RTSPTrack: Sendable, Hashable, Identifiable {
                 hintedFramerate: Double? = nil,
                 bandwidthKbps: Int? = nil,
                 interleavedChannels: ClosedRange<UInt8>? = nil,
+                clientPorts: RTSPUDPPortPair? = nil,
+                serverPorts: RTSPUDPPortPair? = nil,
                 ssrc: UInt32? = nil) {
         self.id = id
         self.kind = kind
@@ -129,7 +137,21 @@ public struct RTSPTrack: Sendable, Hashable, Identifiable {
         self.hintedFramerate = hintedFramerate
         self.bandwidthKbps = bandwidthKbps
         self.interleavedChannels = interleavedChannels
+        self.clientPorts = clientPorts
+        self.serverPorts = serverPorts
         self.ssrc = ssrc
+    }
+}
+
+/// Consecutive RTP/RTCP UDP ports. RTP is always even as recommended by RFC 3550.
+public struct RTSPUDPPortPair: Sendable, Hashable {
+    public var rtp: UInt16
+    public var rtcp: UInt16
+
+    public init?(rtp: UInt16, rtcp: UInt16) {
+        guard rtp.isMultiple(of: 2), rtcp == rtp &+ 1 else { return nil }
+        self.rtp = rtp
+        self.rtcp = rtcp
     }
 }
 
@@ -361,6 +383,10 @@ public enum RTSPAction: Sendable, Hashable {
     case send(Data)
     /// Frame and write one interleaved packet (an RTCP receiver report). One atomic write.
     case sendInterleaved(channel: UInt8, payload: Data)
+    /// Bind a UDP RTP/RTCP pair before sending this track's SETUP request.
+    case prepareUDP(trackID: Int, ports: RTSPUDPPortPair)
+    /// Send an RTCP datagram from the reserved local RTCP port.
+    case sendUDP(localPort: UInt16, payload: Data)
     /// Arm or re-arm a timer; an existing timer with the same id is **replaced**, not stacked.
     case setTimer(RTSPTimerID, deadline: MediaInstant)
     /// Disarm a timer. Disarming one that is not armed is not an error.

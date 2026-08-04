@@ -253,6 +253,10 @@ public actor RTSPConnection {
     // MARK: - Socket
 
     var socket: NWConnection?
+    /// UDP flows keyed by the local port advertised in SETUP. Populated after the corresponding
+    /// SETUP response supplies the camera's server ports and before PLAY is sent.
+    var udpSockets: [UInt16: NWConnection] = [:]
+    var connectedHostText: String?
     var lifecycle: Lifecycle = .idle
     var connectContinuation: CheckedContinuation<VigilError?, Never>?
     var resolveContinuation: CheckedContinuation<ResolveOutcome, Never>?
@@ -452,6 +456,7 @@ public actor RTSPConnection {
         //   public init(_ string: String)
         // Reads an IPv4 literal, an IPv6 literal (with an optional %zone) or a DNS name.
         let host = NWEndpoint.Host(hostText)
+        connectedHostText = hostText
 
         // NWProtocolTCP.Options:
         //   public init()

@@ -257,6 +257,12 @@ public struct PipelineHarness {
                 framed.append(payload)
                 clientToServer.append(framed)
 
+            case let .prepareUDP(trackID, ports):
+                trace("prepareUDP(\(trackID),\(ports.rtp)-\(ports.rtcp))")
+
+            case let .sendUDP(localPort, payload):
+                trace("sendUDP(\(localPort),\(payload.count))")
+
             case let .setTimer(id, deadline):
                 trace("setTimer(\(id))")
                 timers[id] = deadline

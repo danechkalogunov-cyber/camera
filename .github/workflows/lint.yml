@@ -13,6 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Swift format (changed files, strict)
+        run: Scripts/format-changed.sh
 
       - name: Static rules
         run: python3 Scripts/lint.py

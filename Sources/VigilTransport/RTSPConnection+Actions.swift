@@ -45,6 +45,14 @@ extension RTSPConnection {
                 }
                 enqueueWrite(framed.bytes)
 
+            case .prepareUDP:
+                // The concrete remote ports arrive in the SETUP response. `emitTrack` below opens
+                // both connected datagram flows before the machine advances to PLAY.
+                break
+
+            case let .sendUDP(localPort, payload):
+                sendUDP(payload, from: localPort)
+
             case .setTimer(let id, let deadline):
                 arm(id, deadline: deadline)
 
@@ -52,6 +60,7 @@ extension RTSPConnection {
                 disarm(id)
 
             case .emitTrack(let track):
+                if config.transport == .udpUnicast, !prepareUDP(for: track) { return }
                 emit(.track(track))
 
             case .emitTiming(let timing):
@@ -198,6 +207,8 @@ extension RTSPConnection {
         readTask?.cancel()
         socket?.cancel()
         socket = nil
+        for udpSocket in udpSockets.values { udpSocket.cancel() }
+        udpSockets.removeAll()
         lifecycle = .closed
 
         eventSink?.finish()

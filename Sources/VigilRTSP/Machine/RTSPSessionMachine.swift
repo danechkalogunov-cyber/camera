@@ -162,6 +162,12 @@ public struct RTSPSessionMachine: Sendable {
         }
         switch command {
         case let .sendRTCP(channel, payload):
+            if config.transport == .udpUnicast,
+               let position = negotiatedTracks.indices.first(where: {
+                   UInt8(truncatingIfNeeded: $0 * 2 + 1) == channel
+               }), let port = negotiatedTracks[position].clientPorts?.rtcp {
+                return [.sendUDP(localPort: port, payload: payload)]
+            }
             return [.sendInterleaved(channel: channel, payload: payload)]
         case let .setReadBackpressure(isPaused):
             return [.setReadBackpressure(isPaused)]
@@ -217,6 +223,18 @@ public struct RTSPSessionMachine: Sendable {
         }
         actions += step(now: now)
         return actions
+    }
+
+    /// Supplies one datagram received on a reserved UDP port. The output uses the same logical
+    /// even/odd channel numbering as interleaved TCP, keeping the RTP consumer transport-neutral.
+    public mutating func ingestUDP(_ payload: Data, localPort: UInt16,
+                                   now: MediaInstant) -> [RTSPAction] {
+        guard !isTerminated, config.transport == .udpUnicast,
+              let position = negotiatedTracks.firstIndex(where: {
+                  $0.clientPorts?.rtp == localPort || $0.clientPorts?.rtcp == localPort
+              }), let ports = negotiatedTracks[position].clientPorts else { return [] }
+        let channel = UInt8(truncatingIfNeeded: position * 2 + (localPort == ports.rtcp ? 1 : 0))
+        return handleMedia(channel: channel, payload: payload, now: now)
     }
 
     /// A timer armed by `.setTimer` fired.
@@ -451,6 +469,16 @@ enum RTSPResponseFields {
             return low...low
         }
         return low...high
+    }
+
+    /// Parses an RTP/RTCP UDP port pair such as `server_port=6970-6971`.
+    static func udpPortPair(_ value: String, parameter name: String) -> RTSPUDPPortPair? {
+        guard let raw = parameter(name, in: value) else { return nil }
+        let bounds = raw.split(separator: "-", omittingEmptySubsequences: true)
+        guard bounds.count == 2,
+              let rtp = UInt16(SDPText.trimmedOWS(bounds[0])),
+              let rtcp = UInt16(SDPText.trimmedOWS(bounds[1])) else { return nil }
+        return RTSPUDPPortPair(rtp: rtp, rtcp: rtcp)
     }
 
     /// `ssrc=48A9C1B2` in either case, with no `0x`.

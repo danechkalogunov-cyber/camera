@@ -13,10 +13,12 @@ import Foundation
 import Observation
 
 import VigilCore
+import VigilDiscovery
 import VigilISAPI
 import VigilProtocols
 import VigilRender
 import VigilUI
+import VigilTransport
 import VigilVideo
 
 // MARK: - AppSessionModel
@@ -168,6 +170,7 @@ final class AppSessionModel {
     var decodeTask: Task<Void, Never>?
     var frameContinuation: AsyncStream<EncodedFrame>.Continuation?
     var pipeline: DecodePipeline?
+    var tilePolicyTask: Task<Void, Never>?
 
     /// When the current connect attempt began, for the video screen's elapsed counter.
     var attemptStartedAt: Date?
@@ -212,6 +215,9 @@ final class AppSessionModel {
     /// it, and asking a live channel for `Scale: 4` is asking for the next four seconds, which do
     /// not exist yet. Reset to `.normal` by ``returnToLive()`` for that reason.
     var playbackRate: TimelinePlaybackRate = .normal
+
+    /// A paused archive retains its locator but owns no streaming session.
+    var isPlaybackPaused = false
 
     /// Whether the launch-time resume has already been attempted.
     var hasResumed = false
@@ -342,10 +348,32 @@ final class AppSessionModel {
         // it on the same change that fails to parse — so this cannot resurrect a path from a camera
         // the user has since typed away from.
         let pastedPath = form.rtspPath
-        if let port = form.rtspPort { rtspPort = port }
+        rtspPort = form.rtspPort
         resolvedPath = pastedPath ?? known.rtspPath
         sessionTask = Task { [weak self] in
             await self?.connect(request, ref: known.ref, rtspPath: pastedPath ?? known.rtspPath)
+        }
+    }
+
+    /// Runs only Stream Doctor's credential-free TCP/OPTIONS prefix; it does not save or connect.
+    func testConnection(_ request: ConnectRequest) {
+        guard !form.isTesting, let host = IPv4Address(request.host),
+              let http = UInt16(exactly: request.httpPort),
+              let rtsp = UInt16(exactly: request.rtspPort) else {
+            form.isTesting = false
+            form.testResult = vigilUIString("Testing currently requires an IPv4 address.")
+            return
+        }
+        form.isTesting = true
+        let environment = LiveDiscoveryEnvironment.make(logger: dependencies.logger)
+        Task { [weak self] in
+            let result = await ManualConnectionTest(environment: environment)
+                .run(host: host, httpPort: http, rtspPort: rtsp, useTLS: request.usesTLS)
+            guard let self else { return }
+            self.form.isTesting = false
+            self.form.testResult = result.speaksRTSP
+                ? vigilUIString("Test passed: RTSP OPTIONS answered.")
+                : vigilUIString("Test incomplete: the RTSP endpoint did not answer OPTIONS.")
         }
     }
 
@@ -422,6 +450,12 @@ final class AppSessionModel {
         lastRecoveryAt = now
         guard let controller else { return }
         dependencies.logger.notice(.video, "no keyframe; restarting the session to recover")
+        Task { await controller.restart() }
+    }
+
+    /// Bypasses retry timers after the network returns or the Mac wakes.
+    func reconnectImmediately() {
+        guard let controller else { return }
         Task { await controller.restart() }
     }
 }

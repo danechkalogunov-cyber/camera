@@ -59,6 +59,7 @@ extension MainWindowView {
                                   name: camera.displayName,
                                   host: camera.host,
                                   groupID: groups.group(for: camera.id),
+                                  identityIndex: camera.colorTag.paletteIndex,
                                   isEnabled: camera.isEnabled,
                                   // ⚠️ `.disabled` for every stored row, including enabled ones.
                                   // `.offline` claims a connection was tried and lost, and

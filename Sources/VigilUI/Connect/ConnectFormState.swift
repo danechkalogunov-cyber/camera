@@ -71,11 +71,22 @@ package struct ConnectRequest: Sendable, Hashable, CustomStringConvertible {
     /// The password, held only long enough to reach the Keychain.
     package let password: String
 
+    package let httpPort: Int
+    package let rtspPort: Int
+    package let channel: Int
+    package let usesTLS: Bool
+
     /// Creates a request.
-    package init(host: String, username: String, password: String) {
+    package init(host: String, username: String, password: String,
+                 httpPort: Int = 80, rtspPort: Int = 554, channel: Int = 1,
+                 usesTLS: Bool = false) {
         self.host = host
         self.username = username
         self.password = password
+        self.httpPort = httpPort
+        self.rtspPort = rtspPort
+        self.channel = channel
+        self.usesTLS = usesTLS
     }
 
     package var description: String {
@@ -103,6 +114,16 @@ package struct ConnectFormState: Sendable, Hashable {
 
     /// The password, as typed.
     package var password: String = ""
+
+    /// Explicit connection coordinates. Unlike a parsed URL, these stay visible and editable.
+    package var httpPort: Int = 80
+    package var rtspPort: Int = 554
+    package var channel: Int = 1
+    package var usesTLS: Bool = false
+
+    /// Result of the credential-free connection test shown without leaving or saving the form.
+    package var testResult: String?
+    package var isTesting: Bool = false
 
     /// What is wrong with ``host``, once it has been checked.
     package var hostProblem: ConnectFieldProblem?
@@ -163,7 +184,8 @@ package struct ConnectFormState: Sendable, Hashable {
     package var request: ConnectRequest {
         ConnectRequest(host: Self.trimmed(host),
                        username: Self.trimmed(username),
-                       password: password)
+                       password: password, httpPort: httpPort, rtspPort: rtspPort,
+                       channel: channel, usesTLS: usesTLS)
     }
 
     // MARK: - Validation
@@ -237,7 +259,7 @@ package struct ConnectFormState: Sendable, Hashable {
               let scheme = components.scheme?.lowercased(),
               Self.pasteableSchemes.contains(scheme) else {
             rtspPath = nil
-            rtspPort = nil
+            rtspPort = 554
             usesTLS = false
             return false
         }
@@ -250,7 +272,7 @@ package struct ConnectFormState: Sendable, Hashable {
         if let secret = components.password, !secret.isEmpty {
             password = secret
         }
-        rtspPort = components.port
+        if let port = components.port { rtspPort = port }
         rtspPath = Self.streamPath(from: components)
         usesTLS = scheme == "rtsps" || scheme == "https"
         hostProblem = Self.problem(forHost: host)

@@ -66,5 +66,32 @@
 			<string>%2$lld minutes</string>
 		</dict>
 	</dict>
+	<key>NVR · %lld channels online, %lld empty</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>NVR · %1$#@online@, %2$#@empty@</string>
+		<key>online</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%1$lld channel online</string>
+			<key>other</key>
+			<string>%1$lld channels online</string>
+		</dict>
+		<key>empty</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%2$lld empty</string>
+			<key>other</key>
+			<string>%2$lld empty</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

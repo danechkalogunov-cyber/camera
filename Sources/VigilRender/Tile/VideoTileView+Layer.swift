@@ -14,6 +14,7 @@
 import AppKit
 import AVFoundation
 import QuartzCore
+import Metal
 import VigilProtocols
 
 // MARK: - CA transaction helper
@@ -52,6 +53,16 @@ extension VideoTileView {
     /// AppKit signature:
     ///   `class NSView { func makeBackingLayer() -> CALayer }`
     override public func makeBackingLayer() -> CALayer {
+        if metalFrames.isAvailable, let device = MTLCreateSystemDefaultDevice() {
+            let metalLayer = CAMetalLayer()
+            metalLayer.device = device
+            metalLayer.pixelFormat = .bgra8Unorm
+            metalLayer.framebufferOnly = true
+            metalLayer.backgroundColor = NSColor.black.cgColor
+            metalLayer.isOpaque = true
+            metalLayer.contentsScale = currentBackingScale()
+            return metalLayer
+        }
         // AVFoundation: `class AVSampleBufferDisplayLayer: CALayer` with
         //   `var videoGravity: AVLayerVideoGravity`
         //   `var preventsDisplaySleepDuringVideoPlayback: Bool`   (macOS 11.0+)
@@ -111,13 +122,16 @@ extension VideoTileView {
     /// `Resolution` rather than being skipped, so a consumer of `state.pixelSize` can tell "not laid
     /// out yet" from "small".
     func updateScaleAndBackingSize() {
-        guard let videoLayer = displayLayer else { return }
         guard bounds.width.isFinite, bounds.height.isFinite else { return }
 
         let scale = currentBackingScale()
         withoutCAActions {
-            if videoLayer.contentsScale != scale {
-                videoLayer.contentsScale = scale
+            if layer?.contentsScale != scale {
+                layer?.contentsScale = scale
+            }
+            if let metalLayer = layer as? CAMetalLayer {
+                metalLayer.drawableSize = CGSize(width: bounds.width * scale,
+                                                  height: bounds.height * scale)
             }
         }
 

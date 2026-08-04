@@ -45,6 +45,11 @@ public enum VideoGravity: String, Sendable, Codable, CaseIterable {
     }
 }
 
+public enum TileRenderBackend: String, Sendable, Codable, CaseIterable {
+    case sampleBufferLayer
+    case metal
+}
+
 /// The subset of `TileRenderOptions` the slice honours.
 ///
 /// The full type in docs/API_CONTRACT.md §4.10 also carries `adjustments`, `backendPreference`,
@@ -52,6 +57,8 @@ public enum VideoGravity: String, Sendable, Codable, CaseIterable {
 /// flag and the latency preset. Every one of those only has meaning on the Metal path, which the
 /// slice does not build; they are deliberately absent rather than present and ignored.
 public struct TileRenderOptions: Sendable, Equatable {
+
+    public var backend: TileRenderBackend
 
     /// Fit policy. Changing it retargets `AVSampleBufferDisplayLayer.videoGravity` in place.
     public var gravity: VideoGravity
@@ -66,14 +73,31 @@ public struct TileRenderOptions: Sendable, Equatable {
     /// Keeps the display awake while video is playing. Surveillance video is watched, not glanced
     /// at, so this defaults to `true`.
     public var preventsDisplaySleep: Bool
+    public var zoomScale: Float
+    public var zoomAnchorX: Float
+    public var zoomAnchorY: Float
+    public var adjustments: TileColorAdjustments
+    public var motionZones: [NormalizedVideoRect]
 
     /// Builds an options value. All parameters default to the slice defaults.
     public init(gravity: VideoGravity = .fit,
                 cornerRadiusPt: CGFloat = 0,
-                preventsDisplaySleep: Bool = true) {
+                preventsDisplaySleep: Bool = true,
+                backend: TileRenderBackend = .metal,
+                zoomScale: Float = 1,
+                zoomAnchorX: Float = 0.5,
+                zoomAnchorY: Float = 0.5,
+                adjustments: TileColorAdjustments = TileColorAdjustments(),
+                motionZones: [NormalizedVideoRect] = []) {
+        self.backend = backend
         self.gravity = gravity
         self.cornerRadiusPt = cornerRadiusPt
         self.preventsDisplaySleep = preventsDisplaySleep
+        self.zoomScale = zoomScale
+        self.zoomAnchorX = zoomAnchorX
+        self.zoomAnchorY = zoomAnchorY
+        self.adjustments = adjustments
+        self.motionZones = motionZones
     }
 }
 
@@ -149,6 +173,7 @@ public final class VideoTileView: NSView {
     /// `@MainActor` class into `nonisolated` code however the property is annotated. See the
     /// justification comment on `SampleBufferBackend`.
     let sampleBuffers = SampleBufferBackend()
+    let metalFrames: MetalFrameBackend
 
     /// `true` between `viewWillStartLiveResize()` and `viewDidEndLiveResize()`.
     var isLiveResizing = false
@@ -177,6 +202,7 @@ public final class VideoTileView: NSView {
         self.options = options
         self.logger = logger
         self.state = TileRenderState()
+        self.metalFrames = MetalFrameBackend(enabled: options.backend == .metal)
         super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
         configureBeforeLayer()
 
@@ -309,6 +335,13 @@ public final class VideoTileView: NSView {
 
     /// Wires the freshly created backing layer to the ingest path and the notifications.
     private func adoptBackingLayer() {
+        if let metalLayer = layer as? CAMetalLayer {
+            metalFrames.adopt(metalLayer)
+            applyMetalOptions()
+            state.setBackend(.metal)
+            updateScaleAndBackingSize()
+            return
+        }
         guard let displayLayer else {
             logger.error(.render, "backing layer is not an AVSampleBufferDisplayLayer",
                          ["camera": cameraID.short])
@@ -331,6 +364,10 @@ public final class VideoTileView: NSView {
 
     /// Applies whatever actually changed, with implicit CA animations off.
     private func applyOptions(from old: TileRenderOptions) {
+        if layer is CAMetalLayer {
+            applyMetalOptions()
+            return
+        }
         guard let displayLayer else { return }
         withoutCAActions {
             if options.gravity != old.gravity {
@@ -343,6 +380,16 @@ public final class VideoTileView: NSView {
                 displayLayer.preventsDisplaySleepDuringVideoPlayback = options.preventsDisplaySleep
             }
         }
+    }
+
+    private func applyMetalOptions() {
+        metalFrames.configure(
+            crop: DigitalZoomGeometry.crop(scale: options.zoomScale,
+                                           anchorX: options.zoomAnchorX,
+                                           anchorY: options.zoomAnchorY),
+            adjustments: options.adjustments,
+            motionZones: options.motionZones
+        )
     }
 
     /// Publishes an ingest outcome to `state`, but only when something changed that a status line

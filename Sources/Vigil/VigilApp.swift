@@ -9,7 +9,10 @@
 
 #if os(macOS)
 
+import AppKit
 import SwiftUI
+
+import VigilUI
 
 // MARK: - SceneID
 
@@ -34,6 +37,9 @@ public enum SceneID {
 
     /// About panel. W6.
     public static let about = "about"
+
+    /// Application preferences.
+    public static let settings = "settings"
 }
 
 // MARK: - VigilApp
@@ -75,6 +81,7 @@ struct VigilApp: App {
     // `@MainActor` model here is legal, without the reader having to recall the inference rule.
     @MainActor
     init() {
+        VideoSignposts.emit(.launch)
         // `App.init()` runs on the main actor, which is what lets a `@MainActor` model be built
         // here. Bootstrapping in the initialiser rather than in a `.task` means the Keychain read
         // that resumes the last camera starts in the same run loop turn as the first frame of UI —
@@ -99,20 +106,79 @@ struct VigilApp: App {
         .defaultSize(width: Self.defaultWidth, height: Self.defaultHeight)
         .defaultPosition(.center)
         .commands { VigilCommands(session: session, window: window) }
+
+        Window("Playback", id: SceneID.playback) {
+            AuxiliarySceneView(title: "Playback", symbol: "play.rectangle")
+        }
+        Window("Discovery", id: SceneID.discovery) {
+            AuxiliarySceneView(title: "Discovery", symbol: "dot.radiowaves.left.and.right")
+        }
+        Window("Video Wall", id: SceneID.wall) {
+            VideoWallScene(configuration: $window.videoWall)
+        }
+        Window("About Vigil", id: SceneID.about) {
+            AuxiliarySceneView(title: "About Vigil", symbol: "info.circle")
+        }
+        Window("Settings", id: SceneID.settings) {
+            AuxiliarySceneView(title: "Settings", symbol: "gearshape")
+        }
     }
 
     // MARK: - Private Helpers
 
-    /// Below this the connect form starts clipping (docs/DESIGN.md §11.2 gives 900 × 600 for the
-    /// full three-column window; the slice has neither sidebar nor inspector, so it is smaller).
-    private static let minWidth: CGFloat = 640
-    private static let minHeight: CGFloat = 420
+    /// The full three-column minimum required by docs/DESIGN.md §11.2.
+    private static let minWidth: CGFloat = 900
+    private static let minHeight: CGFloat = 600
 
     /// docs/DESIGN.md §11.2. `docs/UX.md` §2.1 says 1440 × 900 for the full window; the contract's
     /// R-34 gives `DESIGN.md`'s structural numbers precedence, and 1280 × 800 fits a 13-inch
     /// display's usable area without the window opening partly offscreen.
     private static let defaultWidth: CGFloat = 1280
     private static let defaultHeight: CGFloat = 800
+}
+
+private struct VideoWallScene: View {
+    @Binding var configuration: VVideoWallConfiguration
+
+    private var screens: [(String, String)] {
+        NSScreen.screens.enumerated().map { index, screen in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                .map(String.init(describing:)) ?? "screen-\(index)"
+            return (id, screen.localizedName)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Label("Video Wall", systemImage: "rectangle.grid.2x2")
+                .font(.title)
+            Picker("Display", selection: $configuration.screenID) {
+                Text("Automatic").tag(String?.none)
+                ForEach(screens, id: \.0) { screen in Text(screen.1).tag(Optional(screen.0)) }
+            }
+            Picker("Layout", selection: $configuration.layout) {
+                ForEach(VGridLayout.allCases) { layout in Text(layout.rawValue).tag(layout) }
+            }
+            Toggle("Patrol", isOn: $configuration.isPatrolling)
+        }
+        .padding(32).frame(minWidth: 480, minHeight: 320)
+    }
+}
+
+private struct AuxiliarySceneView: View {
+    let title: LocalizedStringKey
+    let symbol: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: symbol).font(.system(size: 36))
+            Text(title).font(.title2.weight(.semibold))
+            Text("This workspace is available in its own window.", bundle: .vigilUI)
+                .foregroundStyle(.secondary)
+        }
+        .frame(minWidth: 420, minHeight: 260)
+        .padding(32)
+    }
 }
 
 #endif  // os(macOS)

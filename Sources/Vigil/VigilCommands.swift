@@ -31,6 +31,8 @@ import VigilUI
 /// Vigil's menu bar.
 struct VigilCommands: Commands {
 
+    @Environment(\.openWindow) private var openWindow
+
     /// The app's session. Owned by `VigilApp`, which is what makes it reachable from here at all.
     let session: AppSessionModel
 
@@ -38,6 +40,11 @@ struct VigilCommands: Commands {
     @Bindable var window: MainWindowState
 
     var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button(MainWindowView.localized("Settings…")) { openWindow(id: SceneID.settings) }
+                .keyboardShortcut(",", modifiers: .command)
+        }
+
         // ⌘N would otherwise be File ▸ New Window, which in a single-window app opens a second,
         // camera-less copy of the only screen. Replacing the group both removes that and gives the
         // shortcut to the item §11.2 assigns it.
@@ -85,9 +92,31 @@ struct VigilCommands: Commands {
                     Button(MainWindowView.layoutTitle(layout)) { selectLayout(layout) }
                         .keyboardShortcut(KeyEquivalent(layout.shortcutDigit), modifiers: .command)
                 }
+                Divider()
+                Button(MainWindowView.localized("Apply First Layout Preset")) { applyFirstPreset() }
+                    .keyboardShortcut("9", modifiers: .command)
+                    .disabled(window.layoutPresets.presets.isEmpty)
+                Button(MainWindowView.localized("Edit Mosaic")) {
+                    window.mosaicEditor = VMosaicEditor(tiles: window.layout.cells)
+                }
+                    .keyboardShortcut("8", modifiers: [.option, .command])
             }
             Button(MainWindowView.localized("Cycle Cameras")) { window.cycle = window.cycle.toggledRunning() }
                 .keyboardShortcut("y", modifiers: .command)
+            Button(MainWindowView.localized("Next Cycle Interval")) { selectNextCycleInterval() }
+                .keyboardShortcut("y", modifiers: [.option, .command])
+            Button(MainWindowView.localized("Video Wall")) { openWindow(id: SceneID.wall) }
+                .keyboardShortcut("w", modifiers: [.control, .command])
+            Button(MainWindowView.localized("Cinema Mode")) { window.isCinemaMode.toggle() }
+                .keyboardShortcut("f", modifiers: [.control, .command])
+            Menu(MainWindowView.localized("Digital Zoom")) {
+                Button(MainWindowView.localized("Zoom In")) { window.digitalViewport.zoom(by: 1.25) }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button(MainWindowView.localized("Zoom Out")) { window.digitalViewport.zoom(by: 0.8) }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button(MainWindowView.localized("Reset Zoom")) { window.digitalViewport.reset() }
+                    .keyboardShortcut("0", modifiers: .command)
+            }
             Divider()
             Button(MainWindowView.localized("Show Sidebar")) { window.isSidebarVisible.toggle() }
                 .keyboardShortcut("l", modifiers: .command)
@@ -133,6 +162,17 @@ struct VigilCommands: Commands {
     private func selectLayout(_ layout: VGridLayout) {
         window.layout = layout
         window.cycle = window.cycle.retargeted(cameraCount: 1, layout: layout)
+    }
+
+    private func applyFirstPreset() {
+        guard let preset = window.layoutPresets.presets.first else { return }
+        selectLayout(preset.layout)
+    }
+
+    private func selectNextCycleInterval() {
+        let intervals = VCycleModel.intervals
+        let current = intervals.firstIndex(of: window.cycle.interval) ?? -1
+        window.cycle = window.cycle.withInterval(intervals[(current + 1) % intervals.count])
     }
 }
 

@@ -35,6 +35,8 @@ import VigilUI
 /// `VChromeStatus` — not to any of the screens, which already take collections.
 struct MainWindowView: View {
 
+    @Environment(\.openWindow) var openWindow
+
     // MARK: - Stored Properties
 
     /// The streaming session. Owns the controller and everything that can fail.
@@ -66,6 +68,9 @@ struct MainWindowView: View {
 
     /// The camera's alert stream, which fills the Events screen and the sidebar's badge.
     @State var eventFeed: EventCoordinator
+
+    /// Restarts the live transport as soon as reachability returns or the Mac wakes.
+    @State var streamLifecycle = StreamLifecycleMonitor()
 
     /// The user's groups, and which camera is in which.
     @State var groups: CameraGroupStore
@@ -122,6 +127,9 @@ struct MainWindowView: View {
     /// forbids. One read per second is what the Stream tab's `LAST 60 S` sparkline needs and no more.
     @State var telemetry = StreamTelemetrySnapshot.unmeasured
 
+    /// Balanced with `NSCursor.unhide()` when cinema mode ends.
+    @State private var cinemaCursorHidden = false
+
     // MARK: - Initialisation
 
     /// Builds the window over a session.
@@ -159,11 +167,14 @@ struct MainWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VToolbarView(isSidebarVisible: window.showsSidebar,
+            if !window.isCinemaMode {
+                VToolbarView(isSidebarVisible: window.showsSidebar,
                          isInspectorVisible: window.showsInspector,
                          layout: window.layout,
+                         title: identity.name.isEmpty ? Self.layoutTitle(window.layout) : identity.name,
                          searchText: $window.searchText,
                          isCycling: window.cycle.isRunning,
+                         cycleInterval: window.cycle.interval,
                          // ⛔ DESIGN.md §11.2: the hairline is drawn "only when the stage is
                          // scrolled — over video there is no separator at all". This was `true`
                          // unconditionally, so a 1 px line sat across the top of every live picture.
@@ -178,28 +189,41 @@ struct MainWindowView: View {
                          onToggleInspector: { window.isInspectorVisible.toggle() },
                          onSelectLayout: { selectLayout($0) },
                          onToggleCycle: { window.cycle = window.cycle.toggledRunning() },
+                         onSelectCycleInterval: { window.cycle = window.cycle.withInterval($0) },
                          onOpenPalette: { openPalette() },
                          onShowMore: { window.isOverflowMenuOpen = true })
+            }
 
             HStack(spacing: 0) {
                 if window.showsSidebar {
                     sidebar
                         .frame(width: VTheme.Metrics.sidebarWidth)
+                        .overlay { keyboardRegionRing(.sidebar) }
+                } else if window.showsSidebarRail && !window.isCinemaMode {
+                    sidebarRail
                 }
 
                 stageRoute
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(window.digitalViewport.scale)
+                    .offset(x: window.digitalViewport.offset.width * window.contentWidth,
+                            y: window.digitalViewport.offset.height * window.contentWidth)
                     // One place, and it reaches every tile on the stage — which is the whole
                     // reason this is an environment value rather than an argument threaded through
                     // three initialisers.
                     .vShowsVideoOverlay(window.showsVideoOverlay)
+                    .onHover { hovering in
+                        window.cycle = window.cycle.paused(hovering)
+                    }
                     .vTileActions(tileActions)
+                    .overlay { keyboardRegionRing(.stage) }
 
                 if window.showsInspector {
                     VInspectorView(tab: $window.inspectorTab,
                                    state: inspectorState,
                                    actions: inspectorActions)
                         .frame(width: VTheme.Metrics.inspectorWidth)
+                        .overlay { keyboardRegionRing(.inspector) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -208,7 +232,7 @@ struct MainWindowView: View {
             // counters (UX.md §3.3), and the mockup puts the status inside the sidebar column rather
             // than across the window — so showing both stacked two status lines on top of each other.
             // The bar is kept for the collapsed case, where the sidebar's footer goes with it.
-            if !window.showsSidebar {
+            if !window.showsSidebar && !window.showsSidebarRail && !window.isCinemaMode {
                 VStatusBarView(status: chromeStatus,
                                onOpenSettings: { window.sheet = .cameraSettings },
                                // The degraded chip is only reachable while something *is*
@@ -216,7 +240,7 @@ struct MainWindowView: View {
                                onShowDegraded: { window.isInspectorVisible = true })
             }
         }
-        .background(VTheme.Color.Layer.canvas)
+        .background(window.isCinemaMode ? SwiftUI.Color.black : VTheme.Color.Layer.canvas)
         // What decides whether the two side panels fit (DESIGN.md §11.2). Measured rather than read
         // from the `NSWindow`, because it is the *content* width the panels have to divide up and
         // the window's frame includes chrome this view does not own.
@@ -237,6 +261,22 @@ struct MainWindowView: View {
         // toolbar instead of sitting in it. `VToolbarView` already reserves the 79 pt they need.
         .ignoresSafeArea(.container, edges: .top)
         .overlay(alignment: .bottom) { toastOverlay }
+        .overlay(alignment: .bottom) {
+            if window.isCinemaMode {
+                HStack {
+                    Text(identity.name).lineLimit(1)
+                    Spacer()
+                    Button("Exit Cinema Mode", bundle: .vigilUI) {
+                        window.isCinemaMode = false
+                    }
+                    .keyboardShortcut(.cancelAction)
+                }
+                .padding(.horizontal, 18)
+                .frame(height: 56)
+                .background(.ultraThinMaterial)
+                .padding(12)
+            }
+        }
         .overlay(alignment: .topTrailing) { overflowMenu }
         .overlay { paletteOverlay }
         // A zero-sized button is how a window-wide shortcut is declared in pure SwiftUI. It carries
@@ -244,6 +284,20 @@ struct MainWindowView: View {
         .background { windowShortcuts }
         .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
         .task { window.showsVideoOverlay = session.remembersVideoOverlay }
+        .task {
+            window.isFullKeyboardAccessEnabled = NSApp.isFullKeyboardAccessEnabled
+        }
+        .task(id: window.isCinemaMode) {
+            if window.isCinemaMode {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled, window.isCinemaMode, !cinemaCursorHidden else { return }
+                NSCursor.hide()
+                cinemaCursorHidden = true
+            } else if cinemaCursorHidden {
+                NSCursor.unhide()
+                cinemaCursorHidden = false
+            }
+        }
         // ⚠️ The library is *not* loaded here any more — `RootView` does it at launch, so the
         // connect form and the scan see it too. Loading it again on this view's appearance would
         // re-run the legacy import against a library that may have just been populated by it.
@@ -252,6 +306,10 @@ struct MainWindowView: View {
         .onChange(of: session.isReceivingMedia) { _, isReceiving in
             guard isReceiving else { return }
             Task { await session.fileCurrentCameraIfNew(into: library) }
+        }
+        .onChange(of: session.isReceivingMedia) { wasReceiving, isReceiving in
+            guard wasReceiving, !isReceiving else { return }
+            Task { await eventFeed.cameraLost(session.camera) }
         }
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
@@ -271,6 +329,14 @@ struct MainWindowView: View {
         .task { await pollTelemetry() }
         .task(id: session.camera?.id) { await pollPoster() }
         .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
+        .task {
+            streamLifecycle.start { session.reconnectImmediately() }
+            await withTaskCancellationHandler(operation: {
+                try? await Task.sleep(for: .seconds(60 * 60 * 24 * 365))
+            }, onCancel: {
+                Task { @MainActor in streamLifecycle.stop() }
+            })
+        }
         // Looking at the feed is what marks it read. Anything else — a button, a per-row gesture —
         // leaves a badge that counts events the user has already seen, which is a badge nobody
         // believes after the first time.
@@ -304,6 +370,9 @@ struct MainWindowView: View {
         // `initial: true` so a link that arrived during launch — before this window existed — is
         // performed the moment it does. That is §F-AUT-03 acceptance 5.
         .onChange(of: window.pendingDeepLink, initial: true) { _, _ in performPendingDeepLink() }
+        .onChange(of: window.isOverflowMenuOpen) { _, open in
+            window.cycle = window.cycle.paused(open)
+        }
         .onChange(of: window.snapshotRequests) { _, _ in takeSnapshot() }
         .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
         .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
@@ -379,6 +448,16 @@ struct MainWindowView: View {
         Task { await library.rename(id, to: trimmed) }
     }
 
+    func updateCameraMetadata(isEnabled: Bool, colorTag: ColorTag) {
+        guard let id = session.camera?.id else { return }
+        session.camera?.isEnabled = isEnabled
+        session.camera?.colorTag = colorTag
+        Task {
+            await library.setEnabled(isEnabled, for: id)
+            await library.setColorTag(colorTag, for: id)
+        }
+    }
+
     // MARK: - Overlays
 
     /// The ⌘K palette, over everything.
@@ -408,95 +487,6 @@ struct MainWindowView: View {
         }
     }
 
-    // MARK: - Panels
-
-    /// The camera list, presenting the single session camera as a one-element library.
-    private var sidebar: some View {
-        VSidebarView(tree: sidebarTree,
-                     selection: window.sidebarSelection,
-                     search: VSidebarSearch(query: window.searchText),
-                     collapsed: window.collapsedRows,
-                     layout: window.layout,
-                     aggregateBitsPerSecond: telemetry.bitsPerSecond,
-                     onSelect: { selection, click in selectInSidebar(selection, click) },
-                     onActivate: { selection in activateInSidebar(selection) },
-                     onToggleCollapse: { rowID in
-                         if window.collapsedRows.contains(rowID) {
-                             window.collapsedRows.remove(rowID)
-                         } else {
-                             window.collapsedRows.insert(rowID)
-                         }
-                     },
-                     onAddGroup: { window.sheet = .newGroup },
-                     onAddCamera: { addCamera() },
-                     // The gear in the sidebar footer drew itself and answered to nothing.
-                     onOpenSettings: { window.sheet = .cameraSettings },
-                     onClearSearch: { window.searchText = "" },
-                     cameraMenu: { camera in cameraMenu(camera) },
-                     groupMenu: { group in groupMenu(group) },
-                     thumbnail: { _ in cameraThumbnail })
-    }
-
-    /// The sidebar row's miniature of what the camera sees.
-    ///
-    /// The camera's own JPEG, not a scaled-down video frame: this app's decode path is passthrough
-    /// and never produces a pixel buffer to scale — see `DeviceInfoService.poster`. Falls back to
-    /// the video-well colour before the first snapshot lands and while a camera is offline.
-    @ViewBuilder
-    private var cameraThumbnail: some View {
-        if let poster = deviceInfo.poster {
-            Image(decorative: poster, scale: 1)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-        } else {
-            VTheme.Color.Layer.videoWell
-        }
-    }
-
-    /// What the centre of the window shows.
-    ///
-    /// The stage is a router (UX.md §5.9): selecting Recordings, Events or Bookmarks in the sidebar
-    /// replaces the tiles *inside this window* rather than opening anything. `VLibrarySection`'s
-    /// failable initialiser is the whole decision — it answers `nil` for the live selections, which
-    /// is exactly the "stay on the tiles" case.
-    ///
-    /// Without this, the three LIBRARY rows changed the selection and nothing else, which is what
-    /// made the screens behind them look absent.
-    @ViewBuilder
-    private var stageRoute: some View {
-        if let section = VLibrarySection(window.sidebarSelection.focus) {
-            VLibraryScreen(section: section, state: libraryState, actions: libraryActions)
-        } else {
-            stage
-        }
-    }
-
-    /// Whether what is under the toolbar scrolls, which is the only case DESIGN.md §11.2 draws the
-    /// toolbar's hairline in. The three library screens scroll; the tile stage does not.
-    var stageScrolls: Bool {
-        VLibrarySection(window.sidebarSelection.focus) != nil
-    }
-
-    /// The advisory banner, when there is one.
-    @ViewBuilder
-    private var toastOverlay: some View {
-        if let toast = window.toast {
-            VToastView(kind: toast.kind,
-                       message: Text(verbatim: toast.message),
-                       actionTitle: toast.actionTitle,
-                       width: nil,
-                       onAction: { toast.action?() },
-                       // The library's notice is cleared with the toast, not left behind: it is
-                       // `Equatable` state on an `@Observable`, so an identical message arriving
-                       // later would not read as a change and the second recovery would be silent.
-                       onDismiss: {
-                           window.toast = nil
-                           library.dismissNotice()
-                       })
-                .padding(.bottom, VTheme.Space.xl)
-        }
-    }
-
     // MARK: - Identity
 
     /// Name, address and identity colour for the one camera.
@@ -504,7 +494,8 @@ struct MainWindowView: View {
         let camera = session.camera
         return LiveCameraIdentity(id: cameraID.rawValue,
                                   name: camera?.displayName ?? session.form.request.host,
-                                  host: camera?.host ?? session.form.request.host)
+                                  host: camera?.host ?? session.form.request.host,
+                                  identityIndex: camera?.colorTag.paletteIndex)
     }
 
     /// The camera's identifier, or the stable placeholder the tile keeps before the record exists.
@@ -566,10 +557,8 @@ struct CycleTick: Equatable {
 
     /// Whether the cycle should be advancing at all.
     let isTicking: Bool
-
     /// Seconds between advances.
     let interval: TimeInterval
-
     /// The layout, which decides how many pages there are to advance through.
     let layout: VGridLayout
 }

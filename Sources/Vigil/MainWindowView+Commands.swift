@@ -235,10 +235,53 @@ extension MainWindowView {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("", action: { openRecordingsFolder() })
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("", action: { cycleKeyboardRegion(forward: true) })
+                .keyboardShortcut(.tab, modifiers: [])
+            Button("", action: { cycleKeyboardRegion(forward: false) })
+                .keyboardShortcut(.tab, modifiers: .shift)
+            Button("", action: { window.isCinemaMode.toggle() })
+                .keyboardShortcut("f", modifiers: [.control, .command])
         }
         .hidden()
         layoutShortcuts
         inspectorTabShortcuts
+        Group {
+            Button("", action: { window.digitalViewport.zoom(by: 1.25) })
+                .keyboardShortcut("=", modifiers: .command)
+            Button("", action: { window.digitalViewport.zoom(by: 0.8) })
+                .keyboardShortcut("-", modifiers: .command)
+            Button("", action: { window.digitalViewport.reset() })
+                .keyboardShortcut("0", modifiers: .command)
+            Button("", action: {
+                window.mosaicEditor = VMosaicEditor(tiles: window.layout.cells)
+            }).keyboardShortcut("8", modifiers: [.option, .command])
+            Button("", action: {
+                if let first = window.layoutPresets.presets.first { selectLayout(first.layout) }
+            }).keyboardShortcut("9", modifiers: .command)
+            Button("", action: { selectNextCycleInterval() })
+                .keyboardShortcut("y", modifiers: [.option, .command])
+        }.hidden()
+    }
+
+    /// ⌥⌘Y walks the same finite dwell menu shown by the toolbar.
+    func selectNextCycleInterval() {
+        let intervals = VCycleModel.intervals
+        let current = intervals.firstIndex(of: window.cycle.interval) ?? -1
+        window.cycle = window.cycle.withInterval(intervals[(current + 1) % intervals.count])
+    }
+
+    func cycleKeyboardRegion(forward: Bool) {
+        guard window.isFullKeyboardAccessEnabled else { return }
+        let visible: [MainWindowState.KeyboardRegion] = [
+            window.showsSidebar ? .sidebar : nil,
+            .stage,
+            window.showsInspector ? .inspector : nil,
+        ].compactMap { $0 }
+        guard let index = visible.firstIndex(of: window.keyboardRegion) else {
+            window.keyboardRegion = visible[0]
+            return
+        }
+        window.keyboardRegion = visible[(index + (forward ? 1 : visible.count - 1)) % visible.count]
     }
 
     /// ⌘1 … ⌘8 select a layout (UX.md §11.1).

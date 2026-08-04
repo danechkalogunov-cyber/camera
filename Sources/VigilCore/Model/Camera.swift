@@ -7,7 +7,7 @@
 //  Implements docs/spec-core.md §4.1 and docs/API_CONTRACT.md §4.8 / §5.12 (`Model/Camera.swift`).
 //
 //  Slice scope (.vigil/SLICE.md): the fields the first-light column needs. `groupID`, `orderIndex`,
-//  `colorTag`, `notes`, `macAddress`, `serialHint`, `audioEnabled`, `autoRecordOnMotion`,
+//  `notes`, `macAddress`, `serialHint`, `audioEnabled`, `autoRecordOnMotion`,
 //  `preferredCodec`, `timeZoneIdentifier`, `isONVIFFallback`, `jpegPollIntervalOverride` and
 //  `isPinnedLive` are deliberately absent until the layers that read them exist; every one of them
 //  is additive-with-default, so adding it later needs no migration (spec-core §4).
@@ -18,6 +18,24 @@
 import Foundation
 import VigilProtocols
 import VigilRTSP
+
+/// Persistent identity tags from the library schema. `.none` selects automatic assignment.
+public enum ColorTag: String, Sendable, Codable, Hashable, CaseIterable {
+    case none, red, orange, yellow, green, teal, blue, purple, pink, graphite
+
+    /// Maps the broader document vocabulary onto the six accessible UI identity colours.
+    public var paletteIndex: Int? {
+        switch self {
+        case .none: nil
+        case .blue, .teal: 0
+        case .green: 1
+        case .yellow: 2
+        case .red, .orange: 3
+        case .purple, .pink: 4
+        case .graphite: 5
+        }
+    }
+}
 
 // MARK: - CameraValidationError
 
@@ -105,6 +123,9 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
     /// `false` means never auto-connect. The record stays in the library.
     public var isEnabled: Bool
 
+    /// User-selected identity colour. `.none` preserves the deterministic UUID-derived fallback.
+    public var colorTag: ColorTag
+
     /// An absolute RTSP path typed by the user, e.g. `/Streaming/Channels/201`. **Empty in the
     /// zero-configuration flow** — R1.1 forbids ever asking for one — and honoured first when it is
     /// set, because a user who has overridden the path has a reason.
@@ -120,7 +141,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, name, host, httpPort, rtspPort, useTLS, channel, preferredQuality, transport
         case credentialRef, capabilities, createdAt, lastSeenAt, isEnabled, rtspPathOverride
-        case latencyPreset
+        case latencyPreset, colorTag
     }
 
     // MARK: Initialisation
@@ -141,6 +162,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
                 createdAt: Date = Date(),
                 lastSeenAt: Date? = nil,
                 isEnabled: Bool = true,
+                colorTag: ColorTag = .none,
                 rtspPathOverride: String? = nil,
                 latencyPreset: LatencyPreset = .balanced) {
         self.id = id
@@ -157,6 +179,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
         self.createdAt = createdAt
         self.lastSeenAt = lastSeenAt
         self.isEnabled = isEnabled
+        self.colorTag = colorTag
         self.rtspPathOverride = rtspPathOverride
         self.latencyPreset = latencyPreset
     }
@@ -184,6 +207,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         lastSeenAt = try container.decodeIfPresent(Date.self, forKey: .lastSeenAt)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        colorTag = (try? container.decodeIfPresent(ColorTag.self, forKey: .colorTag)) ?? .none
         rtspPathOverride = try container.decodeIfPresent(String.self, forKey: .rtspPathOverride)
         latencyPreset = try container.decodeIfPresent(LatencyPreset.self, forKey: .latencyPreset)
             ?? .balanced

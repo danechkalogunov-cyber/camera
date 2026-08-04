@@ -10,7 +10,10 @@ Checks, in order of how expensively they fail on a real Mac:
   5. en and ru cover exactly the same key set;
   6. every key resolves to a real literal in Sources/VigilUI or Sources/Vigil — the app
      target speaks these keys too, through vigilUIString(_:);
-  7. every plural entry has the categories its language needs and a value type that agrees
+  7. localisation keys contain format specifiers, never Swift interpolation syntax;
+  8. every integer-bearing phrase is either a plural rule or an explicitly reviewed
+     non-plural phrase;
+  9. every plural entry has the categories its language needs and a value type that agrees
      with the specifier in the key.
 """
 import plistlib, pathlib, re, sys
@@ -91,7 +94,10 @@ def read_quoted(text, i, path):
     while i < len(text):
         c = text[i]
         if c == "\\":
-            buf.append(text[i + 1])
+            # .strings only needs quote/backslash decoding for this validator. Preserve unknown
+            # escapes so a mistaken Swift `\\(value)` key remains detectable below.
+            escaped = text[i + 1]
+            buf.append(escaped if escaped in '"\\' else "\\" + escaped)
             i += 2
             continue
         if c == '"':
@@ -137,6 +143,20 @@ def check_value_specs(where, key, value):
 
 
 CATEGORIES = {"ru": {"one", "few", "many", "other"}, "en": {"one", "other"}}
+
+# Integer-bearing UI phrases which deliberately do not inflect. Keeping this list explicit makes
+# the plural audit fail closed: a new phrase containing an integer must either be moved to the
+# stringsdict or receive a reviewed explanation here.
+NON_PLURAL_INTEGER_KEYS = {
+    # Network endpoint numbers and the fixed protocol name do not inflect.
+    "Vigil reached %@ on port %lld, but RTSP port %lld refused the connection.",
+    # Abbreviated SI unit and parenthesised attempt metadata are intentionally noun-free.
+    "Reconnecting in %lld s (attempt %lld).",
+    # Timeline hour labels: the text after the colon describes the interval, not the number.
+    "%lld: footage",
+    "%lld: nothing recorded",
+    "%lld: unknown",
+}
 
 
 def check_stringsdict(path, lang):
@@ -236,12 +256,32 @@ for lang in ("en", "ru"):
     s_path = BASE / f"{lang}.lproj" / "Localizable.strings"
     d_path = BASE / f"{lang}.lproj" / "Localizable.stringsdict"
     strings = parse_strings(s_path)
+    for key in strings:
+        if "\\(" in key:
+            problems.append(f"{lang}/strings: Swift interpolation syntax leaked into key {key!r}")
+        if "%?" in key:
+            problems.append(f"{lang}/strings: unresolved interpolation in key {key!r}")
     for key, value in strings.items():
         check_value_specs(f"{lang}/strings", key, value)
     sdict = check_stringsdict(d_path, lang)
+    for key in sdict:
+        if "\\(" in key:
+            problems.append(f"{lang}/stringsdict: Swift interpolation syntax leaked into key "
+                            f"{key!r}")
+        if "%?" in key:
+            problems.append(f"{lang}/stringsdict: unresolved interpolation in key {key!r}")
     both = set(strings) & set(sdict)
     if both:
         problems.append(f"{lang}: {len(both)} key(s) in BOTH tables: {sorted(both)[:2]}")
+    integer_strings = {key for key in strings if any(kind in {"d", "lld"}
+                                                       for _, kind, _ in specs(key))}
+    unexpected_integer = integer_strings - NON_PLURAL_INTEGER_KEYS
+    stale_exemptions = NON_PLURAL_INTEGER_KEYS - integer_strings
+    if unexpected_integer:
+        problems.append(f"{lang}: integer-bearing phrase(s) bypass stringsdict without a reviewed "
+                        f"exemption: {sorted(unexpected_integer)}")
+    if stale_exemptions:
+        problems.append(f"{lang}: stale non-plural integer exemption(s): {sorted(stale_exemptions)}")
     tables[lang] = (strings, sdict)
 
 en_keys = set(tables["en"][0]) | set(tables["en"][1])

@@ -82,5 +82,40 @@
 			<string>%2$lld минуты</string>
 		</dict>
 	</dict>
+	<key>NVR · %lld channels online, %lld empty</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>NVR · %1$#@online@, %2$#@empty@</string>
+		<key>online</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%1$lld канал онлайн</string>
+			<key>few</key>
+			<string>%1$lld канала онлайн</string>
+			<key>many</key>
+			<string>%1$lld каналов онлайн</string>
+			<key>other</key>
+			<string>%1$lld канала онлайн</string>
+		</dict>
+		<key>empty</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%2$lld пустой</string>
+			<key>few</key>
+			<string>%2$lld пустых</string>
+			<key>many</key>
+			<string>%2$lld пустых</string>
+			<key>other</key>
+			<string>%2$lld пустого</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

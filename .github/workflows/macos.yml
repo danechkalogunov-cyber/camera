@@ -39,6 +39,12 @@ jobs:
       - name: Test
         run: swift test --parallel
 
+      # One instrumented run enforces both independently specified coverage floors. Keeping this
+      # on macOS is intentional: Linux can measure the pure bucket, but compiling Apple-only
+      # sources out would make the app-layer floor silently unmeasurable.
+      - name: Enforce coverage floors
+        run: Scripts/coverage.sh --enforce
+
       - name: Release build
         run: swift build -c release
 

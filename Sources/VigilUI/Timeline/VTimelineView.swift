@@ -121,6 +121,9 @@ package struct VTimelineView: View {
 
     /// Called with a requested speed stop. Costly on some firmware: see `VTimelineSpeedControl`.
     package let onRate: (TimelinePlaybackRate) -> Void
+    package let isPaused: Bool
+    package let onTogglePause: () -> Void
+    package let onFrameStep: (Bool) -> Void
 
     @Environment(\.vMotionEnabled) private var motionEnabled
 
@@ -154,6 +157,9 @@ package struct VTimelineView: View {
                  onActivateMarker: @escaping (TimelineMarkerCluster) -> Void = { _ in },
                  rate: TimelinePlaybackRate = .normal,
                  isRateAdjustable: Bool = false,
+                 isPaused: Bool = false,
+                 onTogglePause: @escaping () -> Void = {},
+                 onFrameStep: @escaping (Bool) -> Void = { _ in },
                  onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.tracks = tracks
         self.day = day
@@ -171,6 +177,9 @@ package struct VTimelineView: View {
         self.onActivateMarker = onActivateMarker
         self.rate = rate
         self.isRateAdjustable = isRateAdjustable
+        self.isPaused = isPaused
+        self.onTogglePause = onTogglePause
+        self.onFrameStep = onFrameStep
         self.onRate = onRate
     }
 
@@ -233,6 +242,16 @@ package struct VTimelineView: View {
                 .lineLimit(1)
             Spacer(minLength: VTheme.Space.md)
             VTimelineLegend()
+            if isRateAdjustable {
+                VButton(symbol: isPaused ? VTheme.Symbol.play : VTheme.Symbol.pause,
+                        style: .ghost,
+                        accessibilityLabel: isPaused ? "Resume playback" : "Pause playback",
+                        action: onTogglePause)
+                VButton(symbol: VTheme.Symbol.frameBack, style: .ghost,
+                        accessibilityLabel: "Previous frame") { onFrameStep(false) }
+                VButton(symbol: VTheme.Symbol.frameForward, style: .ghost,
+                        accessibilityLabel: "Next frame") { onFrameStep(true) }
+            }
             VTimelineSpeedControl(rate: rate, isEnabled: isRateAdjustable, onRate: onRate)
             VTimelineZoomControl(zoom: zoom, window: window, clock: clock, onZoom: onZoom)
         }

@@ -49,7 +49,10 @@ final class EventCoordinator {
     private let service: EventMonitorService
     private let credentials: CredentialStore
     private let dependencies: CoreDependencies
+    private let notifications = CameraNotificationCenter()
     private var drain: Task<Void, Never>?
+    private var publishedEventIDs: Set<EventID> = []
+    private var hasNotificationBaseline = false
 
     /// The camera the factory builds credentials for. `CredentialStore` looks a password up by
     /// `Camera`, while `EventMonitorFactory` is handed only a device key, so the current camera has
@@ -114,6 +117,8 @@ final class EventCoordinator {
     /// a second one, which is what stops every event arriving twice.
     func follow(camera: Camera?) async {
         followed.withLock { $0 = camera }
+        publishedEventIDs.removeAll()
+        hasNotificationBaseline = false
         guard let camera else {
             await service.stopAll()
             events = []
@@ -122,6 +127,24 @@ final class EventCoordinator {
         }
         await service.reconcile(cameras: [camera])
         startDraining(camera: camera)
+    }
+
+    /// Enables/disables the explicit “watch this camera” mode and applies optional quiet hours.
+    func setWatching(_ enabled: Bool, camera: Camera,
+                     quietHours: (start: Int, end: Int)? = nil) async {
+        if enabled {
+            notifications.policy.watchedCameraIDs.insert(camera.id)
+            notifications.policy.quietStartHour = quietHours?.start
+            notifications.policy.quietEndHour = quietHours?.end
+            await notifications.requestAuthorization()
+        } else {
+            notifications.policy.watchedCameraIDs.remove(camera.id)
+        }
+    }
+
+    func cameraLost(_ camera: Camera?) async {
+        guard let camera else { return }
+        await notifications.postCameraLost(camera)
     }
 
     /// Forgets one event.
@@ -171,6 +194,10 @@ final class EventCoordinator {
     /// Reads the store into the screen's shape.
     private func refresh(camera: Camera) async {
         let records = await store.recent(cameraID: camera.id, limit: 200)
+        let incoming = hasNotificationBaseline ? records.filter { !publishedEventIDs.contains($0.id) } : []
+        publishedEventIDs.formUnion(records.map(\.id))
+        hasNotificationBaseline = true
+        for record in incoming { await notifications.post(event: record, camera: camera) }
         let unread = await store.unreadCount()
         let source = VLibraryCamera(id: camera.id, name: camera.displayName)
         events = records.map { record in

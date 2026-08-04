@@ -67,6 +67,9 @@ final class CameraGroupStore {
     /// Every group, in display order.
     private(set) var groups: [CameraGroupRecord] = []
 
+    /// Group audio policy, ready for the audio renderer and already exposed in group actions.
+    private(set) var mutedGroups: Set<GroupID> = []
+
     // MARK: - Stored Properties
 
     private let logger: any LoggerProtocol
@@ -169,6 +172,26 @@ final class CameraGroupStore {
         groups.first { $0.id == id }?.members.count ?? 0
     }
 
+    /// Cameras in one group, preserving the group's explicit order.
+    func members(of id: GroupID) -> [CameraID] {
+        groups.first { $0.id == id }?.members ?? []
+    }
+
+    func toggleMuted(_ id: GroupID) {
+        if !mutedGroups.insert(id).inserted { mutedGroups.remove(id) }
+    }
+
+    /// Replaces groups after a validated configuration import and persists them atomically.
+    func replaceForImport(with imported: [CameraGroupRecord], validCameras: Set<CameraID>) {
+        let filtered = imported.map { record in
+            var record = record
+            record.members.removeAll { !validCameras.contains($0) }
+            return record
+        }
+        groups = Self.repaired(filtered)
+        save()
+    }
+
     /// Moves a group to a new position in the list.
     ///
     /// `index` is read against the **pre-move** array — the convention `SwiftUI.onMove` and
@@ -176,12 +199,23 @@ final class CameraGroupStore {
     /// first and then inserting at the raw index would land one place too early for every downward
     /// move, which is precisely the off-by-one that makes a drag appear to snap back.
     func move(_ id: GroupID, to index: Int) {
-        guard let from = groups.firstIndex(where: { $0.id == id }) else { return }
-        let clamped = min(max(0, index), groups.count)
-        guard clamped != from, clamped != from + 1 else { return }
-        let record = groups.remove(at: from)
-        groups.insert(record, at: clamped > from ? clamped - 1 : clamped)
+        let reordered = Self.moving(groups, id: id, before: index)
+        guard reordered != groups else { return }
+        groups = reordered
         save()
+    }
+
+    /// Pure pre-removal-index permutation used by drag/drop and its off-by-one tests.
+    static func moving(_ records: [CameraGroupRecord],
+                       id: GroupID,
+                       before index: Int) -> [CameraGroupRecord] {
+        guard let from = records.firstIndex(where: { $0.id == id }) else { return records }
+        let clamped = min(max(0, index), records.count)
+        guard clamped != from, clamped != from + 1 else { return records }
+        var result = records
+        let record = result.remove(at: from)
+        result.insert(record, at: clamped > from ? clamped - 1 : clamped)
+        return result
     }
 
     // MARK: - Private Helpers

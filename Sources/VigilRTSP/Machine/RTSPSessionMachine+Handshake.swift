@@ -163,13 +163,24 @@ extension RTSPSessionMachine {
     private mutating func startNextSetup(now: MediaInstant) -> [RTSPAction] {
         guard setupCursor < setupOrder.count else { return sendPlay(now: now) }
         let index = setupOrder[setupCursor]
-        let rtpChannel = UInt8(truncatingIfNeeded: 2 * setupCursor)
-        let rtcpChannel = rtpChannel &+ 1
-        // Register **before** sending: the first frames on a channel can race the SETUP response,
-        // and an unregistered channel would trigger a resynchronisation instead of a frame.
-        decoder.registerInterleavedChannels([rtpChannel, rtcpChannel])
-        let transport = "RTP/AVP/TCP;unicast;interleaved=\(rtpChannel)-\(rtcpChannel)"
         var actions = transition(to: .settingUp(trackIndex: setupCursor, of: setupOrder.count))
+        let transport: String
+        switch config.transport {
+        case .udpUnicast:
+            guard let ports = config.udpClientPorts(forTrack: setupCursor) else {
+                return actions + terminate(.transportRejected)
+            }
+            negotiatedTracks[index].clientPorts = ports
+            actions.append(.prepareUDP(trackID: negotiatedTracks[index].id, ports: ports))
+            transport = "RTP/AVP;unicast;client_port=\(ports.rtp)-\(ports.rtcp)"
+        case .tcpInterleaved, .tcpTLS:
+            let channels = requestedChannels(forSetupAt: setupCursor)
+            // Register before sending: frames can race the SETUP response.
+            decoder.registerInterleavedChannels([channels.lowerBound, channels.upperBound])
+            transport = "RTP/AVP/TCP;unicast;interleaved=\(channels.lowerBound)-\(channels.upperBound)"
+        case .udpMulticast:
+            return actions + terminate(.transportRejected)
+        }
         actions += request(.setup, uri: negotiatedTracks[index].controlURI,
                            extra: [("Transport", transport)], trackIndex: index, now: now)
         return actions
@@ -197,7 +208,10 @@ extension RTSPSessionMachine {
         }
         let requested = requestedChannels(forSetupAt: setupCursor)
         if let transport = response.headers.first("Transport") {
-            if let channels = RTSPResponseFields.interleavedChannels(transport) {
+            if config.transport == .udpUnicast {
+                negotiatedTracks[index].serverPorts = RTSPResponseFields.udpPortPair(
+                    transport, parameter: "server_port")
+            } else if let channels = RTSPResponseFields.interleavedChannels(transport) {
                 decoder.registerInterleavedChannels([channels.lowerBound, channels.upperBound])
                 negotiatedTracks[index].interleavedChannels = channels
             } else {
@@ -205,7 +219,7 @@ extension RTSPSessionMachine {
                 actions.append(.log(.assumedInterleavedChannels(requested)))
             }
             negotiatedTracks[index].ssrc = RTSPResponseFields.ssrc(transport)
-        } else {
+        } else if config.transport != .udpUnicast {
             negotiatedTracks[index].interleavedChannels = requested
             actions.append(.log(.assumedInterleavedChannels(requested)))
         }

@@ -27,11 +27,15 @@ import VigilUI
 /// are not allowed to share a type. It also means every property here is safe to write from a view
 /// body's callback without thinking about the actor the controller lives on.
 ///
-/// Persistence is deliberately absent for now: the slice restores a *connection*
-/// (`AppSessionModel.resumeOrPrompt()`), not a workspace. Layout and chrome restoration belongs with
-/// the layout store in `VigilCore`, which the single-camera slice does not yet drive.
 @Observable
 final class MainWindowState {
+
+    enum KeyboardRegion: Int, CaseIterable {
+        case sidebar, stage, inspector
+    }
+
+    private static let layoutKey = "Vigil.workspace.layout"
+    private static let selectedCameraKey = "Vigil.workspace.selectedCamera"
 
     // MARK: - Chrome
 
@@ -44,6 +48,15 @@ final class MainWindowState {
 
     /// Whether the user wants the inspector shown. The toolbar's trailing toggle writes this.
     var isInspectorVisible = true
+
+    /// Full Keyboard Access is a system preference and may change while Vigil is running.
+    var isFullKeyboardAccessEnabled = false
+
+    /// The major window region reached by Tab/Shift-Tab when Full Keyboard Access is enabled.
+    var keyboardRegion: KeyboardRegion = .stage
+
+    /// Cinema mode leaves the video and a compact transport panel visible.
+    var isCinemaMode = false
 
     /// The window's content width, measured once per resize.
     ///
@@ -68,6 +81,10 @@ final class MainWindowState {
         return isSidebarVisible && contentWidth >= Self.sidebarMinimumWidth
     }
 
+    var showsSidebarRail: Bool {
+        isSidebarVisible && contentWidth > 0 && contentWidth < Self.sidebarMinimumWidth
+    }
+
     /// Whether the inspector is actually drawn. See ``showsSidebar``.
     var showsInspector: Bool {
         guard contentWidth > 0 else { return isInspectorVisible }
@@ -88,7 +105,9 @@ final class MainWindowState {
     /// cameras that cannot exist yet, which reads as breakage rather than as capacity. The switcher
     /// still offers them, because the assignment and geometry types behind it are complete and this
     /// is the cheapest way to exercise them against a real window.
-    var layout: VGridLayout = .single
+    var layout: VGridLayout = .single {
+        didSet { UserDefaults.standard.set(layout.rawValue, forKey: Self.layoutKey) }
+    }
 
     /// The stage cell keyboard focus is on, or `nil` before the stage has been used.
     ///
@@ -171,7 +190,13 @@ final class MainWindowState {
     var isRecording = false
 
     /// Sidebar focus and selection.
-    var sidebarSelection = VSidebarSelectionState()
+    var sidebarSelection = VSidebarSelectionState() {
+        didSet {
+            if case .camera(let id) = sidebarSelection.focus {
+                UserDefaults.standard.set(id.rawValue.uuidString, forKey: Self.selectedCameraKey)
+            }
+        }
+    }
 
     /// Rows the user has collapsed, by row id.
     var collapsedRows: Set<String> = []
@@ -205,6 +230,18 @@ final class MainWindowState {
     /// Automatic page advance. A value type — every mutator returns a new one — so the window's
     /// timer can only ever replace it, never mutate it half-way through a render.
     var cycle = VCycleModel()
+
+    /// Named layouts are encoded alongside the workspace by the library owner.
+    var layoutPresets = VLayoutPresetCollection()
+
+    /// Custom 12×12 mosaic edit state; non-nil while the eight resize handles are active.
+    var mosaicEditor: VMosaicEditor?
+
+    /// Renderer-independent zoom transform for the selected live tile.
+    var digitalViewport = VDigitalViewport()
+
+    /// The second-display workspace is intentionally independent from the main stage.
+    var videoWall = VVideoWallConfiguration()
 
     // MARK: - Library
 
@@ -267,8 +304,17 @@ final class MainWindowState {
 
     // MARK: - Initialisation
 
-    /// Builds the default window state: both panels shown, one tile, nothing searched.
-    init() {}
+    /// Builds the window state and restores the last layout and selected camera.
+    init() {
+        if let raw = UserDefaults.standard.string(forKey: Self.layoutKey),
+           let restored = VGridLayout(rawValue: raw) {
+            layout = restored
+        }
+        if let raw = UserDefaults.standard.string(forKey: Self.selectedCameraKey),
+           let uuid = UUID(uuidString: raw) {
+            sidebarSelection.select(.camera(CameraID(uuid)))
+        }
+    }
 }
 
 // MARK: - MainWindowSheet

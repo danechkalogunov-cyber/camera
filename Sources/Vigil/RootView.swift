@@ -30,6 +30,7 @@ import VigilUI
 /// so that `VigilRender`'s display layer is injected at the app layer and the screen stays
 /// previewable — which is why this file is where `VideoTile` is named.
 struct RootView: View {
+    @State private var motionGovernor = VMotionGovernor()
 
     // MARK: - Stored Properties
 
@@ -132,7 +133,7 @@ struct RootView: View {
                     message: MainWindowView.localized("That Vigil link isn't valid."))
             }
         }
-        .vMotionEnabled(!reduceMotion)
+        .vMotionEnabled(!reduceMotion && motionGovernor.allowsMotion)
         .background(WindowChromeInstaller())
         .task {
             // Opens `library.json` and, on a first run, adopts the camera the prototype remembered
@@ -158,7 +159,8 @@ struct RootView: View {
             ConnectFormView(state: $session.form,
                             onConnect: { session.connect($0) },
                             onRemedy: { session.perform($0) },
-                            onScan: { beginScan() })
+                            onScan: { beginScan() },
+                            onTest: { session.testConnection($0) })
         case .live:
             // The full window — toolbar, camera list, stage, inspector, status bar — around the
             // same tile `liveVideo` mounts. To fall back to the bare picture, substitute
@@ -247,6 +249,7 @@ struct RootView: View {
                         isScanning: model.isScanning,
                         notice: model.notice,
                         onChoose: { chose($0, from: model) },
+                        onActivate: { chose($0, from: model) },
                         onToggleScan: { model.toggle() },
                         onClose: { endScan(model) })
     }
@@ -312,7 +315,8 @@ struct RootView: View {
         let camera = session.camera
         return LiveCameraIdentity(id: cameraID.rawValue,
                                   name: camera?.displayName ?? session.form.request.host,
-                                  host: camera?.host ?? session.form.request.host)
+                                  host: camera?.host ?? session.form.request.host,
+                                  identityIndex: camera?.colorTag.paletteIndex)
     }
 
     /// The camera's identifier, or a stable placeholder for the moment between pressing Return and

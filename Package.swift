@@ -155,13 +155,10 @@ let package = Package(
             name: "VigilRender",
             dependencies: ["VigilProtocols", "VigilVideo"],
             path: "Sources/VigilRender",
-            // NO `resources:`. There is nothing to put in a bundle yet — `Shaders/` holds only a
-            // `.placeholder`, and SwiftPM skips dotfiles, so declaring it produced an EMPTY bundle
-            // with no Info.plist. `codesign` then refused it outright and stopped the first Mac build:
-            //   Vigil_VigilRender.bundle: bundle format unrecognized, invalid, or unsuitable
-            // Nothing in this target calls `Bundle.module`, so the bundle bought nothing and cost the
-            // build. Restore `.process("Shaders")` in the same commit that adds the first .metal file,
-            // not before.
+            exclude: ["Shaders/VideoTile.metal"],
+            // Shader sources are embedded deterministically in `ShaderSource.swift`; keeping the
+            // `.metal` input out of resources avoids a second runtime compilation source and the
+            // otherwise-empty resource-bundle signing failure documented in BUILD-VERIFICATION.
             swiftSettings: apple
         ),
         .target(
@@ -188,11 +185,10 @@ let package = Package(
             // VigilRender above this one must keep a resource — and that resource has to be real. It
             // now is: `Localizations/en.lproj/Localizable.strings`, the base localisation.
             //
-            // `Resources` is dropped until there is something in it. It held only a `.placeholder`,
-            // which SwiftPM skips, and an empty directory is not a resource — Assets.xcassets and the
-            // app icon do not exist yet, which the build script already warns about by name.
+            // The localisation bundle also owns the shared app/menu/document asset catalogue.
             resources: [
                 .process("Localizations"),    // en.lproj / ru.lproj .strings + .stringsdict
+                .process("Resources"),        // app, menu-bar and document asset catalogue
             ],
             swiftSettings: apple
         ),
@@ -295,6 +291,11 @@ let package = Package(
             name: "VigilUITests",
             dependencies: ["VigilUI", "VigilTestKit"],
             path: "Tests/VigilUITests"
+        ),
+        .testTarget(
+            name: "VigilAppTests",
+            dependencies: ["Vigil"],
+            path: "Tests/VigilAppTests"
         ),
     ],
     swiftLanguageModes: [.v6]

@@ -51,9 +51,20 @@ public struct RTSPSessionConfig: Sendable {
     /// `User-Agent` on every request. Some Hikvision firmware answers `400` to an empty one.
     public var userAgent = "Vigil/1.0"
 
-    /// The transport to negotiate. The slice supports `.tcpInterleaved` only; anything else is
-    /// refused at `SETUP` time with a clear error rather than negotiated badly.
+    /// The transport to negotiate. TCP interleaving and UDP unicast are supported.
     public var transport: RTSPTransportKind = .tcpInterleaved
+
+    /// First RTP port used by UDP unicast. Each subsequent track consumes the next even/odd pair.
+    public var udpClientPortBase: UInt16 = 50_000
+
+    /// Returns the local port pair reserved for a SETUP position, or `nil` if it would overflow.
+    public func udpClientPorts(forTrack position: Int) -> RTSPUDPPortPair? {
+        guard position >= 0, position <= (Int(UInt16.max) - Int(udpClientPortBase) - 1) / 2 else {
+            return nil
+        }
+        let rtp = UInt16(Int(udpClientPortBase) + position * 2)
+        return RTSPUDPPortPair(rtp: rtp, rtcp: rtp + 1)
+    }
 
     /// Set by the driver once TLS is up. Informational here, except that it permits Basic auth.
     public var isTLS = false

@@ -15,14 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ⛔ The purity gate, and it runs FIRST on purpose. `VigilPure` is exactly the Foundation-only
-      # targets; if a platform framework import creeps into one, this fails here rather than at the
-      # bottom of a full build where the real cause is buried.
-      - name: Purity gate
-        run: swift build --product VigilPure
-
-      - name: Full package
-        run: swift build
-
-      - name: Portable tests
-        run: swift test --parallel
+      # Keeps the purity gate first, then refuses the false-green state where platform guards make
+      # any portable test target report zero tests before running the complete Linux suite.
+      - name: Portable build and tests
+        run: Scripts/test-linux.sh

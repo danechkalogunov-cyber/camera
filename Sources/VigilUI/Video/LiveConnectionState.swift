@@ -261,11 +261,15 @@ package struct LiveCameraIdentity: Sendable, Hashable {
     /// The address, named in the first narration line and in every failure message.
     package let host: String
 
+    /// Persisted palette slot, or `nil` for the stable identifier-derived fallback.
+    package let identityIndex: Int?
+
     /// Creates an identity.
-    package init(id: UUID, name: String, host: String) {
+    package init(id: UUID, name: String, host: String, identityIndex: Int? = nil) {
         self.id = id
         self.name = name
         self.host = host
+        self.identityIndex = identityIndex
     }
 
     /// The camera's first letter, which accompanies the identity colour everywhere so that the
@@ -278,7 +282,7 @@ package struct LiveCameraIdentity: Sendable, Hashable {
     /// explicit assignment has been persisted (DESIGN.md §3.4).
     @MainActor
     package var colour: SwiftUI.Color {
-        VTheme.Color.Ident.colour(for: id)
+        identityIndex.map(VTheme.Color.Ident.colour(at:)) ?? VTheme.Color.Ident.colour(for: id)
     }
 }
 

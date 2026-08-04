@@ -30,6 +30,8 @@ extension AppSessionModel {
     func stopSession() {
         eventTask?.cancel()
         eventTask = nil
+        tilePolicyTask?.cancel()
+        tilePolicyTask = nil
         sessionTask?.cancel()
         sessionTask = nil
         // Finishing the continuation ends the decode task's loop after the frames already queued,
@@ -180,7 +182,10 @@ extension AppSessionModel {
                     name: String? = nil) throws -> Camera {
         try Camera(name: name ?? "",
                    host: host,
+                   httpPort: form.httpPort,
                    rtspPort: rtspPort,
+                   useTLS: form.usesTLS,
+                   channel: ChannelID(form.channel),
                    credentialRef: ref,
                    rtspPathOverride: rtspPath).validated()
     }
@@ -272,6 +277,7 @@ extension AppSessionModel {
                                               ? nil
                                               : playbackRate.scale)
         self.controller = controller
+        startTilePolicy(controller: controller)
         // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so the
         // subscription is established before `start()` and cannot miss the first transition.
         eventTask = Task { [weak self] in
@@ -282,6 +288,32 @@ extension AppSessionModel {
             }
         }
         await controller.start()
+    }
+
+    /// Samples the renderer's authoritative backing-pixel size and applies the policy's dwell.
+    /// A quality handoff restarts only the network session; the mounted tile and its last drawable
+    /// remain in place, so resize-driven promotion never inserts a synthetic black frame.
+    private func startTilePolicy(controller: StreamController) {
+        tilePolicyTask?.cancel()
+        tilePolicyTask = Task { [weak self] in
+            var selector = TilePolicySelector()
+            let clock = ContinuousClock()
+            let origin = clock.now
+            while !Task.isCancelled {
+                guard let self else { return }
+                let context = TileContext(
+                    pixelSize: self.renderState?.pixelSize ?? Resolution(width: 0, height: 0),
+                    isVisible: self.renderState != nil,
+                    isRecording: self.recordingTap.recorder() != nil,
+                    subStreamHeight: nil,
+                    deviceSupportsSubStream: true,
+                    qualityOverride: self.camera?.preferredQuality)
+                if case .stream(let quality)? = selector.ingest(context, at: origin.duration(to: clock.now)) {
+                    await controller.setQuality(quality)
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
     }
 
     /// Folds one controller event into observable state.

@@ -181,6 +181,15 @@
 "New Group" = "Новая группа";
 "Add Camera" = "Добавить камеру";
 "Settings" = "Настройки";
+"Settings…" = "Настройки…";
+"Apply First Layout Preset" = "Применить первый пресет раскладки";
+"Edit Mosaic" = "Изменить мозаику";
+"Next Cycle Interval" = "Следующий интервал патруля";
+"Cinema Mode" = "Кино-режим";
+"Digital Zoom" = "Цифровой зум";
+"Zoom In" = "Увеличить";
+"Zoom Out" = "Уменьшить";
+"Reset Zoom" = "Сбросить масштаб";
 
 /* Подвал состояния, «6 в эфире · 1,8 Гбит/с» (UX.md §3.3). Число и слово — отдельные
    фрагменты Text, поэтому пара никогда не становится согласуемым числительным и не
@@ -472,9 +481,6 @@
 "Connect a camera first" = "Сначала подключите камеру";
 "That Vigil link isn't valid." = "Эта ссылка Vigil недействительна.";
 "No layout is called that." = "Раскладки с таким именем нет.";
-"This build shows one camera at a time." = "Эта сборка показывает одну камеру за раз.";
-"This build cannot open that yet." = "Эта сборка пока не умеет такое открывать.";
-"A link cannot start recording or take a snapshot while Vigil is in the background." = "Ссылка не может начать запись или сделать снимок, пока Vigil в фоне.";
 "No group is called that." = "Группы с таким именем нет.";
 "That camera is not in your list." = "Этой камеры нет в вашем списке.";
 "Recording failed: %@" = "Не удалось записать: %@";
@@ -499,6 +505,8 @@
 
 /* SIDEBAR ROW CONTEXT MENUS */
 "Rename…" = "Переименовать…";
+"Duplicate for Another Channel…" = "Дублировать для другого канала…";
+"That camera could not be duplicated." = "Не удалось дублировать камеру.";
 "Add to Group" = "Добавить в группу";
 "Bookmark This Moment…" = "Отметить этот момент…";
 "Copy Address" = "Скопировать адрес";
@@ -653,3 +661,45 @@
    project's rule is that a control answering to silence is worse than one not offered. */
 "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "Эта сборка передаёт только по TCP. UDP отклоняется на SETUP, а не согласуется кое-как.";
 "Stream Doctor is not in this build. The Info tab has the same numbers it would read." = "Stream Doctor в эту сборку не входит. Во вкладке «Инфо» те же числа, которые он читал бы.";
+"Automatic" = "Автоматически";
+"Colour tag" = "Цветовая метка";
+"Enable camera" = "Включить камеру";
+"Red" = "Красный";
+"Orange" = "Оранжевый";
+"Yellow" = "Жёлтый";
+"Green" = "Зелёный";
+"Teal" = "Бирюзовый";
+"Blue" = "Синий";
+"Purple" = "Фиолетовый";
+"Pink" = "Розовый";
+"Graphite" = "Графитовый";
+"Not activated — set a password before use" = "Не активировано — задайте пароль перед использованием";
+"Activate" = "Активировать";
+
+"HTTP port" = "HTTP-порт";
+
+"RTSP port" = "RTSP-порт";
+
+"Use TLS" = "Использовать TLS";
+
+"Test" = "Проверить";
+
+"Testing currently requires an IPv4 address." = "Для проверки сейчас требуется IPv4-адрес.";
+
+"Test passed: RTSP OPTIONS answered." = "Проверка пройдена: RTSP OPTIONS получил ответ.";
+
+"Test incomplete: the RTSP endpoint did not answer OPTIONS." = "Проверка не завершена: конечная точка RTSP не ответила на OPTIONS.";
+"This workspace is available in its own window." = "Этот раздел доступен в отдельном окне.";
+"Exit Cinema Mode" = "Выйти из кинорежима";
+"Allow" = "Разрешить";
+"Allow this link to control the camera?" = "Разрешить этой ссылке управлять камерой?";
+"The link wants to start recording or take a snapshot. Only allow links you trust." = "Ссылка хочет начать запись или сделать снимок. Разрешайте только доверенным ссылкам.";
+"Allow recording and snapshots without asking" = "Разрешать запись и снимки без запроса";
+"That event is no longer available." = "Это событие больше недоступно.";
+"Snapshot Group" = "Снимок группы";
+"Mute Group" = "Заглушить группу";
+"Unmute Group" = "Включить звук группы";
+"Resume playback" = "Продолжить воспроизведение";
+"Pause playback" = "Приостановить воспроизведение";
+"Previous frame" = "Предыдущий кадр";
+"Next frame" = "Следующий кадр";

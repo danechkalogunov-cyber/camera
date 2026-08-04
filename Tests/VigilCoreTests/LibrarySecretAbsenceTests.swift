@@ -21,6 +21,29 @@ private enum LibrarySecretFixture {
     static let password = "hunter2-Correct-Horse-Battery"
     static let account = "installer-account-name"
     static let secondPassword = "second-camera-P4ssw0rd"
+
+    /// Byte representations called out explicitly by F-INV-01 criterion 5. Searching the bytes,
+    /// rather than a decoded JSON String, also catches a future binary document format.
+    static func encodedForms(of secret: String) -> [(name: String, bytes: Data)] {
+        let utf8 = Data(secret.utf8)
+        let utf16LE = secret.data(using: .utf16LittleEndian)!
+        let utf16BE = secret.data(using: .utf16BigEndian)!
+        return [
+            ("UTF-8", utf8),
+            ("UTF-16LE", utf16LE),
+            ("UTF-16BE", utf16BE),
+            ("Base64(UTF-8)", Data(utf8.base64EncodedString().utf8)),
+            ("Base64(UTF-16LE)", Data(utf16LE.base64EncodedString().utf8)),
+            ("Base64(UTF-16BE)", Data(utf16BE.base64EncodedString().utf8)),
+        ]
+    }
+
+    static func expectAbsent(_ secret: String, from document: Data) {
+        for form in encodedForms(of: secret) {
+            #expect(document.range(of: form.bytes) == nil,
+                    "credential found in serialized library as \(form.name)")
+        }
+    }
 }
 
 @Test func librarySecretAbsenceEncodedDocumentContainsNoSecret() throws {
@@ -57,6 +80,9 @@ private enum LibrarySecretFixture {
     let data = try LibraryCoding.makeEncoder().encode(document)
     let text = try #require(String(data: data, encoding: .utf8))
 
+    LibrarySecretFixture.expectAbsent(LibrarySecretFixture.password, from: data)
+    LibrarySecretFixture.expectAbsent(LibrarySecretFixture.secondPassword, from: data)
+    LibrarySecretFixture.expectAbsent(LibrarySecretFixture.account, from: data)
     #expect(!text.contains(LibrarySecretFixture.password))
     #expect(!text.contains(LibrarySecretFixture.secondPassword))
     #expect(!text.contains(LibrarySecretFixture.account))

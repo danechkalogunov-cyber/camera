@@ -25,6 +25,18 @@ import SwiftUI
 /// One device a scan has found, in the vocabulary a row prints.
 package struct VDiscoveredCamera: Identifiable, Sendable, Hashable {
 
+    /// A channel inventory summary supplied by an authenticated NVR probe. Discovery itself never
+    /// guesses occupancy from SADP's capacity fields: "eight inputs" does not mean eight signals.
+    package struct ChannelSummary: Sendable, Hashable {
+        package let online: Int
+        package let empty: Int
+
+        package init(online: Int, empty: Int) {
+            self.online = max(0, online)
+            self.empty = max(0, empty)
+        }
+    }
+
     /// Stable for the whole run, so a row that gains a name does not become a new row.
     package let id: UUID
 
@@ -49,6 +61,12 @@ package struct VDiscoveredCamera: Identifiable, Sendable, Hashable {
     /// to add a duplicate.
     package let isAlreadyAdded: Bool
 
+    /// Factory-fresh SADP devices cannot be added until the user sets their first password.
+    package let needsActivation: Bool
+
+    /// Present only after channel enumeration produced real online/empty states.
+    package let channelSummary: ChannelSummary?
+
     /// Creates a row.
     package init(id: UUID, title: String, address: String, detail: String = "",
                  confidence: Int, supportsISAPI: Bool, isAlreadyAdded: Bool = false) {
@@ -59,6 +77,22 @@ package struct VDiscoveredCamera: Identifiable, Sendable, Hashable {
         self.confidence = confidence
         self.supportsISAPI = supportsISAPI
         self.isAlreadyAdded = isAlreadyAdded
+        self.needsActivation = false
+        self.channelSummary = nil
+    }
+
+    package init(id: UUID, title: String, address: String, detail: String = "",
+                 confidence: Int, supportsISAPI: Bool, isAlreadyAdded: Bool = false,
+                 needsActivation: Bool, channelSummary: ChannelSummary? = nil) {
+        self.id = id
+        self.title = title
+        self.address = address
+        self.detail = detail
+        self.confidence = confidence
+        self.supportsISAPI = supportsISAPI
+        self.isAlreadyAdded = isAlreadyAdded
+        self.needsActivation = needsActivation
+        self.channelSummary = channelSummary
     }
 
     /// Confident enough to present as a device rather than a possibility (spec-discovery.md §7.6).
@@ -96,6 +130,9 @@ package struct VDiscoverySheet: View {
     /// The user picked a device.
     package let onChoose: (VDiscoveredCamera) -> Void
 
+    /// Opens the existing credential/setup flow for a factory-fresh device.
+    package let onActivate: (VDiscoveredCamera) -> Void
+
     /// Stop a running scan, or start another when it has finished.
     package let onToggleScan: () -> Void
 
@@ -111,6 +148,7 @@ package struct VDiscoverySheet: View {
                  isScanning: Bool,
                  notice: String? = nil,
                  onChoose: @escaping (VDiscoveredCamera) -> Void,
+                 onActivate: @escaping (VDiscoveredCamera) -> Void,
                  onToggleScan: @escaping () -> Void,
                  onClose: @escaping () -> Void) {
         self.cameras = cameras
@@ -119,6 +157,7 @@ package struct VDiscoverySheet: View {
         self.isScanning = isScanning
         self.notice = notice
         self.onChoose = onChoose
+        self.onActivate = onActivate
         self.onToggleScan = onToggleScan
         self.onClose = onClose
     }
@@ -202,7 +241,8 @@ package struct VDiscoverySheet: View {
     }
 
     private func row(_ camera: VDiscoveredCamera) -> some View {
-        Button { onChoose(camera) } label: {
+        HStack(spacing: VTheme.Space.sm) {
+            Button { onChoose(camera) } label: {
             HStack(spacing: VTheme.Space.sm) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: VTheme.Space.xs) {
@@ -223,9 +263,19 @@ package struct VDiscoverySheet: View {
                         .vType(VTheme.Typography.caption1)
                         .foregroundStyle(VTheme.Color.Text.secondary)
                         .lineLimit(1)
+                    if let summary = camera.channelSummary {
+                        Text(verbatim: channelSummary(summary))
+                            .vType(VTheme.Typography.caption1)
+                            .foregroundStyle(VTheme.Color.Text.secondary)
+                    }
+                    if camera.needsActivation {
+                        Text("Not activated — set a password before use", bundle: .vigilUI)
+                            .vType(VTheme.Typography.caption1)
+                            .foregroundStyle(VTheme.Color.Semantic.warn)
+                    }
                 }
                 Spacer(minLength: VTheme.Space.sm)
-                if camera.isAlreadyAdded {
+                if camera.isAlreadyAdded && !camera.needsActivation {
                     Text("Added", bundle: .vigilUI)
                         .vType(VTheme.Typography.caption1)
                         .foregroundStyle(VTheme.Color.Text.tertiary)
@@ -240,10 +290,21 @@ package struct VDiscoverySheet: View {
             .padding(.horizontal, VTheme.Space.lg)
             .padding(.vertical, VTheme.Space.sm)
             .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(camera.isAlreadyAdded || camera.needsActivation)
+            .accessibilityLabel(Text(verbatim: "\(camera.title), \(camera.address)"))
+
+            if camera.needsActivation {
+                VButton("Activate", style: .secondary) { onActivate(camera) }
+                    .padding(.trailing, VTheme.Space.lg)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(camera.isAlreadyAdded)
-        .accessibilityLabel(Text(verbatim: "\(camera.title), \(camera.address)"))
+    }
+
+    private func channelSummary(_ summary: VDiscoveredCamera.ChannelSummary) -> String {
+        let format = vigilUIString("NVR · %lld channels online, %lld empty")
+        return String.localizedStringWithFormat(format, Int64(summary.online), Int64(summary.empty))
     }
 
     private var footer: some View {

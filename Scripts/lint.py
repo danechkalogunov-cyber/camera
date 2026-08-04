@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import plistlib
 import re
 import sys
 from collections import defaultdict
@@ -238,10 +239,8 @@ def check_file_length(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     this one matters because the whole `Type+Feature.swift` layout of `Sources/Vigil` exists to
     honour it.
 
-    ⚠️ Deliberately not applied to `Tests/`. The contract's table does not scope the rule, and ten
-    test files are over it today — the largest at 1 306 lines. Failing the build on those would mean
-    either a mechanical split nobody asked for or an exemption list that quietly becomes permanent.
-    They are reported as notes instead, so the number is visible and can be brought down on purpose.
+    The ceiling applies to production and test sources alike. Keeping this as one enforced rule
+    avoids a second, advisory-only standard drifting after oversized tests have been split.
     """
     rel = str(path.relative_to(ROOT))
     if len(lines) <= MAX_FILE_LINES:
@@ -249,16 +248,6 @@ def check_file_length(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     return [(rel, len(lines), "file-length",
              f"{len(lines)} lines, limit is {MAX_FILE_LINES} (API_CONTRACT.md §7.2). "
              "Split at a `// MARK:` boundary into Type+Feature.swift")]
-
-
-def oversized_test_files() -> list[tuple[str, int]]:
-    """Test files past the same ceiling, reported rather than enforced. See ``check_file_length``."""
-    out: list[tuple[str, int]] = []
-    for path in swift_files("Tests"):
-        count = len(path.read_text().splitlines())
-        if count > MAX_FILE_LINES:
-            out.append((str(path.relative_to(ROOT)), count))
-    return sorted(out, key=lambda row: -row[1])
 
 
 GENERIC_DECL = re.compile(
@@ -1524,6 +1513,9 @@ def check_localization_tables() -> list[Violation]:
     base: set[str] = set()
     for table in sorted(localizations.glob("*.lproj/Localizable.strings")):
         base |= parse_strings_table(table)
+    for table in sorted(localizations.glob("*.lproj/Localizable.stringsdict")):
+        with table.open("rb") as handle:
+            base |= set(plistlib.load(handle))
     if not base:
         return out
     base_rel = "Sources/VigilUI/Localizations/en.lproj/Localizable.strings"
@@ -1586,6 +1578,7 @@ def main() -> int:
     for path in swift_files("Tests"):
         lines = path.read_text().splitlines()
         violations += check_line_length(path, lines)
+        violations += check_file_length(path, lines)
         violations += check_expect_key_path(path, lines)
         violations += check_trailing_whitespace(path, lines)
         violations += check_static_stored_in_generic(path, lines)
@@ -1600,12 +1593,6 @@ def main() -> int:
     violations += check_plists()
     violations += check_localization_tables()
     violations += check_bonjour_declarations()
-
-    # Reported, never fatal. See `check_file_length` for why `Tests/` is not held to the ceiling.
-    oversized = oversized_test_files()
-    for rel, count in oversized:
-        print(f"note: {rel} is {count} lines, over the {MAX_FILE_LINES}-line guidance for a "
-              "source file (not enforced in Tests/)")
 
     if not violations:
         n_src = len(swift_files("Sources"))

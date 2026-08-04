@@ -70,6 +70,7 @@ public actor DecodePipeline {
     /// Where sample buffers go. Held strongly: the pipeline outlives no sink it does not own, and
     /// `VigilCore` tears the pipeline down when the tile goes away.
     private let sink: any VideoSink
+    private let pixelBufferDecoder: PixelBufferDecoder?
 
     /// `.live` for the slice: every sample carries `DisplayImmediately` and there is no timebase.
     private let pacing: PacingMode
@@ -141,6 +142,7 @@ public actor DecodePipeline {
                 requestKeyframe: @escaping @Sendable () -> Void,
                 onError: @escaping @Sendable (VigilError) -> Void) {
         self.sink = sink
+        self.pixelBufferDecoder = sink.prefersDecodedPixelBuffers ? PixelBufferDecoder(sink: sink) : nil
         self.pacing = pacing
         self.requestKeyframe = requestKeyframe
         self.onError = onError
@@ -159,8 +161,17 @@ public actor DecodePipeline {
     public func submit(_ frame: EncodedFrame) {
         guard !isStopped else { return }
 
-        // MJPEG has no parameter sets and is decoded by the ImageIO path; audio does not belong
-        // here at all.
+        if frame.videoCodec == .mjpeg {
+            guard let image = MJPEGImageIODecoder.decode(frame.data) else {
+                drop(reason: .badData)
+                return
+            }
+            sink.enqueueJPEG(image)
+            counters.framesEnqueued &+= 1
+            return
+        }
+
+        // Audio does not belong here at all.
         guard let codec = frame.videoCodec, codec.isNALBased else {
             drop(reason: .policy)
             return
@@ -206,7 +217,11 @@ public actor DecodePipeline {
                                                       duration: duration, pacing: pacing)
             // Synchronous, on this actor's executor: `CMSampleBuffer` crosses no isolation
             // boundary. The sink must return in under 2 ms.
-            sink.enqueue(sample, format: info, generation: generation)
+            if let pixelBufferDecoder {
+                try pixelBufferDecoder.decode(sample)
+            } else {
+                sink.enqueue(sample, format: info, generation: generation)
+            }
             counters.framesEnqueued &+= 1
         } catch {
             report(error)
@@ -237,6 +252,7 @@ public actor DecodePipeline {
     /// Call on reconnect. The sink is told, so it can show its "reconnecting" state **over** the
     /// frozen last frame — it must not clear to black (API_CONTRACT §4.9, the no-black-flash rule).
     public func reset() {
+        pixelBufferDecoder?.invalidate()
         store.reset()
         formatDescription = nil
         formatInfo = nil
@@ -313,6 +329,8 @@ public actor DecodePipeline {
             generation = nextGeneration
             estimator.nominalFrameRate = info.frameRate
             counters.formatDescriptionsBuilt &+= 1
+
+            try pixelBufferDecoder?.configure(format: description, generation: nextGeneration)
 
             if incompatible {
                 // Close the gate, but do **not** ask the camera for an IDR: these sets arrived

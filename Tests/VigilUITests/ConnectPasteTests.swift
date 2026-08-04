@@ -133,14 +133,14 @@ import Testing
     let pasted = form.absorbPastedURL()
     #expect(pasted)
     #expect(form.rtspPath != nil)
-    #expect(form.rtspPort != nil)
+    #expect(form.rtspPort == 8554)
 
     // The user selects the field and types a different camera's address.
     form.host = "192.168.1.70"
     let afterEditingTheAddress = form.absorbPastedURL()
     #expect(afterEditingTheAddress == false)
     #expect(form.rtspPath == nil)
-    #expect(form.rtspPort == nil)
+    #expect(form.rtspPort == 554)
     #expect(form.usesTLS == false)
 }
 
@@ -155,7 +155,22 @@ import Testing
     #expect(secondPaste)
     #expect(form.host == "192.168.1.70")
     #expect(form.rtspPath == "/Streaming/Channels/201")
-    #expect(form.rtspPort == nil)
+    #expect(form.rtspPort == 554)
+}
+
+@Test func connectRequestCarriesVisibleConnectionCoordinates() {
+    var form = ConnectFormState()
+    form.host = "192.168.1.64"
+    form.password = "secret"
+    form.httpPort = 8443
+    form.rtspPort = 8554
+    form.channel = 7
+    form.usesTLS = true
+
+    #expect(form.request.httpPort == 8443)
+    #expect(form.request.rtspPort == 8554)
+    #expect(form.request.channel == 7)
+    #expect(form.request.usesTLS)
 }
 
 #endif  // os(macOS)

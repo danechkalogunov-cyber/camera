@@ -60,6 +60,46 @@ import VigilProtocols
     #expect(camerasIndex.lowerBound < versionIndex.lowerBound, "keys must be sorted")
 }
 
+@Test func libraryDocumentTwoHundredCameraRoundTripIsByteExact() throws {
+    // Fixed identifiers make this a reproducible, reviewable stress fixture rather than 200 random
+    // records whose failure cannot be recreated. Vary every scalar that has a useful alternate
+    // value so this exercises the real library shape, not merely the array's length.
+    let cameras = (0..<200).map { index in
+        let cameraUUID = UUID(uuidString: String(
+            format: "00000000-0000-4000-8000-%012X", index + 1))!
+        let credentialUUID = UUID(uuidString: String(
+            format: "10000000-0000-4000-8000-%012X", index + 1))!
+        return Camera(
+            id: CameraID(cameraUUID),
+            name: "Camera \(String(format: "%03d", index + 1))",
+            host: "camera-\(index + 1).lan",
+            httpPort: index.isMultiple(of: 2) ? 80 : 443,
+            rtspPort: 554 + index,
+            useTLS: !index.isMultiple(of: 2),
+            channel: ChannelID(index % 32 + 1),
+            preferredQuality: index.isMultiple(of: 3) ? .sub : .main,
+            credentialRef: CredentialRef(credentialUUID),
+            createdAt: LibraryTestSupport.epoch.addingTimeInterval(TimeInterval(index)),
+            lastSeenAt: index.isMultiple(of: 4) ? nil : LibraryTestSupport.epoch,
+            isEnabled: !index.isMultiple(of: 5),
+            rtspPathOverride: index.isMultiple(of: 7) ? "/custom/\(index + 1)" : nil)
+    }
+    let document = LibraryDocument(generatedBy: "Vigil 200-camera round-trip",
+                                   updatedAt: LibraryTestSupport.epoch,
+                                   cameras: cameras,
+                                   didImportLegacyConnection: true)
+
+    let originalBytes = try LibraryCoding.makeEncoder().encode(document)
+    let decoded = try LibraryCoding.makeDecoder().decode(LibraryDocument.self,
+                                                          from: originalBytes)
+    let reencodedBytes = try LibraryCoding.makeEncoder().encode(decoded)
+
+    #expect(decoded.cameras.count == 200)
+    #expect(decoded.cameras == cameras)
+    #expect(reencodedBytes == originalBytes,
+            "encode(decode(library)) must preserve all bytes for a 200-camera document")
+}
+
 @Test func libraryDocumentWritesDatesAsISO8601UTC() throws {
     let document = LibraryDocument(updatedAt: LibraryTestSupport.epoch)
     let text = try #require(String(data: try LibraryCoding.makeEncoder().encode(document),

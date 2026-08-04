@@ -18,6 +18,7 @@
 #if os(macOS)
 
 import CoreMedia
+import CoreVideo
 import VigilProtocols
 import VigilVideo
 
@@ -56,6 +57,18 @@ import VigilVideo
 /// written against AppKit, AVFoundation and `VigilProtocols` alone, and keeping the dependency in
 /// one small file makes it plain that the conformance costs the render layer nothing but an import.
 extension VideoTileView: VideoSink {
+
+    public nonisolated var prefersDecodedPixelBuffers: Bool { metalFrames.isAvailable }
+
+    public nonisolated func enqueuePixelBuffer(_ pixelBuffer: CVPixelBuffer, generation: UInt32) {
+        metalFrames.enqueue(pixelBuffer)
+    }
+
+    public nonisolated func enqueueJPEG(_ image: CGImage) {
+        Task { @MainActor [weak self] in
+            self?.layer?.contents = image
+        }
+    }
 
     /// Folds an upstream drop into the tile's published counters and reports it to the owner.
     ///

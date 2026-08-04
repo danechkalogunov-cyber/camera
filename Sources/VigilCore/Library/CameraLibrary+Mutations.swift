@@ -79,6 +79,52 @@ extension CameraLibrary {
         return removed
     }
 
+    /// Copies a camera immediately after the original, ready to be edited as another channel.
+    ///
+    /// Connection settings and the Keychain reference deliberately carry over: duplication is the
+    /// shortcut for adding another channel of the same recorder. Runtime identity does not. The
+    /// copy receives a fresh identifier and creation date, has never been seen, and does not inherit
+    /// the original camera's channel inventory. A unique display name keeps the two sidebar rows
+    /// distinguishable while still allowing the user to rename either one later.
+    ///
+    /// - Parameters:
+    ///   - id: the camera to copy.
+    ///   - newID: identity for the copy. Exposed for deterministic importers and tests.
+    /// - Returns: the copied record as stored.
+    @discardableResult
+    public func duplicate(_ id: CameraID,
+                          as newID: CameraID = CameraID()) throws(LibraryMutationError) -> Camera {
+        try requireWritable()
+        guard let index = document.index(of: id) else {
+            throw LibraryMutationError.unknownCamera(id)
+        }
+        guard document.camera(newID) == nil else {
+            throw LibraryMutationError.duplicateCameraID(newID)
+        }
+
+        var copy = document.cameras[index]
+        copy.id = newID
+        copy.name = Self.copyName(for: copy.name, among: document.cameras.map(\.name))
+        copy.createdAt = wallClock.now
+        copy.lastSeenAt = nil
+        let prepared = try validate(copy)
+        document.cameras.insert(prepared, at: index + 1)
+        commit(.added(prepared.id))
+        return prepared
+    }
+
+    /// Finder-style suffixing without treating duplicate camera names as invalid generally.
+    static func copyName(for original: String, among names: [String]) -> String {
+        let occupied = Set(names)
+        for suffix in 2...Int.max {
+            let marker = " (\(suffix))"
+            let prefix = original.prefix(max(0, 64 - marker.count))
+            let candidate = "\(prefix)\(marker)"
+            if !occupied.contains(candidate) { return candidate }
+        }
+        return original
+    }
+
     // MARK: Mutations — fields
 
     /// Renames a camera.
@@ -95,6 +141,13 @@ extension CameraLibrary {
     public func setEnabled(_ isEnabled: Bool,
                            for id: CameraID) throws(LibraryMutationError) -> Camera {
         try modify(id) { camera in camera.isEnabled = isEnabled }
+    }
+
+    /// Assigns an explicit identity colour, or restores UUID-derived automatic assignment.
+    @discardableResult
+    public func setColorTag(_ colorTag: ColorTag,
+                            for id: CameraID) throws(LibraryMutationError) -> Camera {
+        try modify(id) { camera in camera.colorTag = colorTag }
     }
 
     /// Applies an arbitrary edit to one camera, then validates, normalises, persists and broadcasts.

@@ -195,6 +195,15 @@
 "New Group" = "New Group";
 "Add Camera" = "Add Camera";
 "Settings" = "Settings";
+"Settings…" = "Settings…";
+"Apply First Layout Preset" = "Apply First Layout Preset";
+"Edit Mosaic" = "Edit Mosaic";
+"Next Cycle Interval" = "Next Cycle Interval";
+"Cinema Mode" = "Cinema Mode";
+"Digital Zoom" = "Digital Zoom";
+"Zoom In" = "Zoom In";
+"Zoom Out" = "Zoom Out";
+"Reset Zoom" = "Reset Zoom";
 
 /* The status footer, `6 live · 1.8 Gb/s` (UX.md §3.3). The number is a separate Text run
    from the word, so the pair never becomes a count-bearing phrase and never needs the
@@ -492,9 +501,6 @@
 "Connect a camera first" = "Connect a camera first";
 "That Vigil link isn't valid." = "That Vigil link isn't valid.";
 "No layout is called that." = "No layout is called that.";
-"This build shows one camera at a time." = "This build shows one camera at a time.";
-"This build cannot open that yet." = "This build cannot open that yet.";
-"A link cannot start recording or take a snapshot while Vigil is in the background." = "A link cannot start recording or take a snapshot while Vigil is in the background.";
 "No group is called that." = "No group is called that.";
 "That camera is not in your list." = "That camera is not in your list.";
 "Recording failed: %@" = "Recording failed: %@";
@@ -519,6 +525,8 @@
 
 /* SIDEBAR ROW CONTEXT MENUS */
 "Rename…" = "Rename…";
+"Duplicate for Another Channel…" = "Duplicate for Another Channel…";
+"That camera could not be duplicated." = "That camera could not be duplicated.";
 "Add to Group" = "Add to Group";
 "Bookmark This Moment…" = "Bookmark This Moment…";
 "Copy Address" = "Copy Address";
@@ -670,3 +678,45 @@
    project's rule is that a control answering to silence is worse than one not offered. */
 "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly.";
 "Stream Doctor is not in this build. The Info tab has the same numbers it would read." = "Stream Doctor is not in this build. The Info tab has the same numbers it would read.";
+"Automatic" = "Automatic";
+"Colour tag" = "Colour tag";
+"Enable camera" = "Enable camera";
+"Red" = "Red";
+"Orange" = "Orange";
+"Yellow" = "Yellow";
+"Green" = "Green";
+"Teal" = "Teal";
+"Blue" = "Blue";
+"Purple" = "Purple";
+"Pink" = "Pink";
+"Graphite" = "Graphite";
+"Not activated — set a password before use" = "Not activated — set a password before use";
+"Activate" = "Activate";
+
+"HTTP port" = "HTTP port";
+
+"RTSP port" = "RTSP port";
+
+"Use TLS" = "Use TLS";
+
+"Test" = "Test";
+
+"Testing currently requires an IPv4 address." = "Testing currently requires an IPv4 address.";
+
+"Test passed: RTSP OPTIONS answered." = "Test passed: RTSP OPTIONS answered.";
+
+"Test incomplete: the RTSP endpoint did not answer OPTIONS." = "Test incomplete: the RTSP endpoint did not answer OPTIONS.";
+"This workspace is available in its own window." = "This workspace is available in its own window.";
+"Exit Cinema Mode" = "Exit Cinema Mode";
+"Allow" = "Allow";
+"Allow this link to control the camera?" = "Allow this link to control the camera?";
+"The link wants to start recording or take a snapshot. Only allow links you trust." = "The link wants to start recording or take a snapshot. Only allow links you trust.";
+"Allow recording and snapshots without asking" = "Allow recording and snapshots without asking";
+"That event is no longer available." = "That event is no longer available.";
+"Snapshot Group" = "Snapshot Group";
+"Mute Group" = "Mute Group";
+"Unmute Group" = "Unmute Group";
+"Resume playback" = "Resume playback";
+"Pause playback" = "Pause playback";
+"Previous frame" = "Previous frame";
+"Next frame" = "Next frame";
