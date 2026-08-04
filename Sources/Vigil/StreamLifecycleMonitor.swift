@@ -14,7 +14,7 @@ import Network
 @MainActor
 final class StreamLifecycleMonitor {
     private let pathMonitor: NWPathMonitor
-    private var observers: [NSObjectProtocol] = []
+    private var observers: [any NSObjectProtocol] = []
     private var wasSatisfied = true
     private var reconnect: (@MainActor () -> Void)?
 
@@ -23,11 +23,15 @@ final class StreamLifecycleMonitor {
     func start(reconnect: @escaping @MainActor () -> Void) {
         self.reconnect = reconnect
         pathMonitor.pathUpdateHandler = { [weak self] path in
+            // ⚠️ `self.` spelled out. The `guard let self` that would normally license dropping it
+            // is inside the `Task`, while the capture list is on the `pathUpdateHandler` closure
+            // one level up — Swift only extends the implicit form to the closure that captured
+            // `self` itself, so at this depth it is an error rather than a style choice.
             Task { @MainActor in
                 guard let self else { return }
                 let satisfied = path.status == .satisfied
-                if satisfied, !wasSatisfied { reconnect() }
-                wasSatisfied = satisfied
+                if satisfied, !self.wasSatisfied { reconnect() }
+                self.wasSatisfied = satisfied
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "camera.vigil.network-path"))

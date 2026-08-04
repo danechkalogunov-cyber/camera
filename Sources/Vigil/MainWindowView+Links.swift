@@ -73,7 +73,7 @@ extension MainWindowView {
                 unsupportedLink(MainWindowView.localized("That event is no longer available."))
                 return
             }
-            window.sidebarSelection.select(.library(.events))
+            window.sidebarSelection.select(.events)
             openArchive(at: event.occurredAt)
         case .settings:
             openWindow(id: SceneID.settings)

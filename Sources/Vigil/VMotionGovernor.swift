@@ -14,7 +14,16 @@ import Observation
 @Observable
 final class VMotionGovernor {
     private(set) var allowsMotion = true
-    private var observer: NSObjectProtocol?
+
+    /// The notification token, kept only so `deinit` can hand it back.
+    ///
+    /// ⚠️ `nonisolated(unsafe)`, because `deinit` on a `@MainActor` class is *not* main-actor
+    /// isolated — an object can be released from any thread — and reading an isolated property
+    /// there is an error: "main actor-isolated property 'observer' can not be referenced from a
+    /// nonisolated context". The unsafety is nominal here: this property is written exactly once,
+    /// in `init`, and read exactly once, in `deinit`, which by definition runs when no other
+    /// reference to this object survives. There is no moment at which two contexts can touch it.
+    private nonisolated(unsafe) var observer: (any NSObjectProtocol)?
 
     init(center: NotificationCenter = .default) {
         refresh()

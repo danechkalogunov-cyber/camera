@@ -329,8 +329,14 @@ struct MainWindowView: View {
             HStack {
                 Text(identity.name).lineLimit(1)
                 Spacer()
-                Button("Exit Cinema Mode", bundle: .vigilUI) {
+                // ⚠️ `Text(_:bundle:)` in a label closure, not `Button(_:bundle:)`, which does not
+                // exist — SwiftUI's `Button` takes `systemImage:`, `image:` or `role:` after the
+                // title and nothing else. The bundle matters: every string this app shows is in
+                // `VigilUI`'s table, not the app target's.
+                Button {
                     window.isCinemaMode = false
+                } label: {
+                    Text("Exit Cinema Mode", bundle: .vigilUI)
                 }
                 .keyboardShortcut(.cancelAction)
             }
