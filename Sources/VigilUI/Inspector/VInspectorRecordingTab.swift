@@ -200,7 +200,7 @@ package struct VInspectorRecordingTab: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Rec — recording") {
     VPulseClock {
         ScrollView {

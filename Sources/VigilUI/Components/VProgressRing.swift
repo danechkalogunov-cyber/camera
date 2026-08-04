@@ -145,7 +145,7 @@ package struct VProgressRing: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VProgressRing") {
     HStack(spacing: VTheme.Space.lg) {
         VProgressRing(size: .small)

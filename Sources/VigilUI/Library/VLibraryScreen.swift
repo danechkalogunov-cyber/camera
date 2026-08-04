@@ -369,7 +369,7 @@ package struct VLibraryRowSurface: ViewModifier {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 // MARK: VLibrarySample
 

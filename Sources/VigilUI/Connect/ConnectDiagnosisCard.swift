@@ -135,7 +135,7 @@ package struct ConnectDiagnosisCard: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("ConnectDiagnosisCard") {
     VStack(spacing: VTheme.Space.md) {
         ConnectDiagnosisCard(diagnosis: .wrongPassword(host: "192.168.1.64")) { _ in }

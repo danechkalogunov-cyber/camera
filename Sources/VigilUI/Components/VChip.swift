@@ -177,7 +177,7 @@ package struct VIdentityMark: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VChip") {
     VStack(alignment: .leading, spacing: VTheme.Space.sm) {
         VChip(.onVideo) {

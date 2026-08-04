@@ -216,7 +216,7 @@ package struct ConnectingOverlay: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("ConnectingOverlay") {
     ConnectingOverlay(camera: LiveCameraIdentity(id: UUID(),
                                                  name: "Front Door",

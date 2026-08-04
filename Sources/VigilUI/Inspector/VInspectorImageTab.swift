@@ -226,7 +226,7 @@ package struct VInspectorImageTab: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Image — defaults") {
     ScrollView {
         VInspectorImageTab(state: .previewHealthy, actions: VInspectorActions())

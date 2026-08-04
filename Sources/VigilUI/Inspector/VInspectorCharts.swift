@@ -232,7 +232,7 @@ package struct VInspectorMeter: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Inspector charts") {
     VStack(alignment: .leading, spacing: VTheme.Space.md) {
         VInspectorSparkline(values: [3.1, 3.4, 3.2, 4.0, 3.8, 4.4, 4.1, 4.6, 4.2, 4.9]

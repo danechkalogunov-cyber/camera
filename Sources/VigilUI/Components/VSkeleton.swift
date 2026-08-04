@@ -108,7 +108,7 @@ package struct VSkeleton: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VSkeleton") {
     VStack(alignment: .leading, spacing: VTheme.Space.xs) {
         VSkeleton(radius: VTheme.Radius.xs).frame(width: 90, height: 11)

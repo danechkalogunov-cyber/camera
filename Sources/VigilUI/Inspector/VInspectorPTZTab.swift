@@ -505,7 +505,7 @@ package struct VInspectorPTZTab: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("PTZ — full capability") {
     ScrollView {
         VInspectorPTZTab(state: .previewHealthy, actions: VInspectorActions())

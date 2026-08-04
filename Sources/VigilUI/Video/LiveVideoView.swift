@@ -298,7 +298,7 @@ package struct LiveVideoView<Video: View>: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 /// A stand-in for the renderer: a still, so previews show the chrome against something that reads
 /// as a frame rather than against flat black.

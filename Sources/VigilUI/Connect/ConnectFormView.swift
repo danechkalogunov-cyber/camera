@@ -399,7 +399,7 @@ package struct ConnectShake: ViewModifier {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 /// Preview host: `@State` cannot live directly in a `#Preview` body on the macOS 14 SDK.
 @MainActor

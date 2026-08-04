@@ -207,7 +207,7 @@ package struct VStatusBarView: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VStatusBarView") {
     VStack(spacing: 0) {
         VStatusBarView(status: VChromeStatus(

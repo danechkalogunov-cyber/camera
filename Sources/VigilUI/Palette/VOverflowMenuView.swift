@@ -244,7 +244,7 @@ package struct VOverflowMenuView: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VOverflowMenuView") {
     VOverflowMenuView()
         .padding(VTheme.Space.xl)

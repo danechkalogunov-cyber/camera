@@ -14,6 +14,7 @@ rules as written for implementers.
 from __future__ import annotations
 
 import argparse
+import functools
 import pathlib
 import plistlib
 import re
@@ -218,6 +219,47 @@ def check_banned(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     return out
 
 
+PREVIEW_MACRO = re.compile(r"^\s*#Preview\b")
+
+PREVIEW_GUARD = "#if DEBUG && !VIGIL_NO_PREVIEWS"
+
+
+def check_preview_guard(path: pathlib.Path, lines: list[str]) -> list[Violation]:
+    """Every `#Preview` must sit inside `#if DEBUG && !VIGIL_NO_PREVIEWS`.
+
+    `#Preview` is an external macro whose plugin ships with Xcode, not with the Command Line Tools.
+    On a Mac that has only the CLT the expansion fails —
+
+        error: external macro implementation type 'PreviewsMacros.SwiftUIView' could not be found
+
+    — and it fails per preview, so one unguarded file is enough to make `VigilUI` unbuildable there.
+    The flag is the escape hatch (`swift build -Xswiftc -DVIGIL_NO_PREVIEWS`, README §Build), and it
+    only works if every preview is behind it. A bare `#if DEBUG` looks right and silently isn't.
+    """
+    out: list[Violation] = []
+    rel = str(path.relative_to(ROOT))
+    stack: list[str] = []
+    for n, raw in enumerate(lines, 1):
+        directive = raw.strip()
+        if directive.startswith("#if"):
+            stack.append(directive)
+            continue
+        if directive.startswith(("#else", "#elseif")):
+            if stack:
+                stack[-1] = directive          # the other arm is not the guarded one
+            continue
+        if directive.startswith("#endif"):
+            if stack:
+                stack.pop()
+            continue
+        if PREVIEW_MACRO.match(raw) and not any(c.startswith(PREVIEW_GUARD) for c in stack):
+            out.append((rel, n, "preview-guard",
+                        f"#Preview is not inside `{PREVIEW_GUARD}`, so this file cannot be compiled "
+                        f"on a Mac with only the Command Line Tools — the PreviewsMacros plugin "
+                        f"ships with Xcode. `#if DEBUG` alone is not enough"))
+    return out
+
+
 def check_line_length(path: pathlib.Path, lines: list[str]) -> list[Violation]:
     rel = str(path.relative_to(ROOT))
     return [(rel, n, "width", f"line is {len(raw.rstrip())} columns, limit is {MAX_LINE}")
@@ -258,6 +300,28 @@ GENERIC_DECL = re.compile(
 STATIC_STORED = re.compile(
     r"^\s*(?:public |package |internal |private |fileprivate )?static\s+(let|var)\s+(\w+)")
 
+EXTENSION_DECL = re.compile(
+    r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
+    r"(?:public |package |internal |private |fileprivate )?extension\s+(\w+)")
+
+
+@functools.lru_cache(maxsize=1)
+def generic_type_names() -> frozenset[str]:
+    """Every type in the tree that takes type parameters.
+
+    Needed because `extension Foo` says nothing about whether `Foo` is generic — the parameters are
+    only at the declaration, which is usually in another file. Without this index a type nested in
+    `extension VGridStageView { … }` reads as an ordinary nested type, which is how a `static let`
+    inside one reached a Mac.
+    """
+    names: set[str] = set()
+    for path in list(swift_files("Sources")) + list(swift_files("Tests")):
+        for raw in path.read_text().splitlines():
+            found = GENERIC_DECL.match(raw)
+            if found:
+                names.add(found.group(1))
+    return frozenset(names)
+
 
 TYPE_DECL = re.compile(
     r"^\s*(?:package |public |private |internal |fileprivate )?(?:final )?"
@@ -276,9 +340,16 @@ def check_static_stored_in_generic(path: pathlib.Path, lines: list[str]) -> list
     That is exactly what happened to `VTextField<FocusValue>`, whose three `static let`s stopped the
     very first real build. The fix is a separate non-generic namespace; the rule is here so the next
     one is caught on Linux instead.
+
+    ⚠️ `extension Foo` counts too, when `Foo` is generic. Nothing in the extension's own text says
+    so — the parameters live at the declaration, usually in another file — but a type nested inside
+    one is generic all the same, and its `static let` is the same hard error. That is how
+    `VGridStagePreviews` reached a Mac: six fixtures inside `extension VGridStageView`, whose `<Video>`
+    is three files away. ``generic_type_names`` is the index that closes it.
     """
     out: list[Violation] = []
     rel = str(path.relative_to(ROOT))
+    generics = generic_type_names()
     stack: list[tuple[str, int]] = []      # (type name, brace depth at its opening line)
     depth = 0
     for n, raw in enumerate(lines, 1):
@@ -286,6 +357,10 @@ def check_static_stored_in_generic(path: pathlib.Path, lines: list[str]) -> list
         m = GENERIC_DECL.match(raw)
         if m and "{" in code:
             stack.append((m.group(1), depth))
+        else:
+            found = EXTENSION_DECL.match(raw)
+            if found and "{" in code and found.group(1) in generics:
+                stack.append((found.group(1), depth))
         depth += code.count("{") - code.count("}")
         while stack and depth <= stack[-1][1]:
             stack.pop()
@@ -1573,6 +1648,7 @@ def main() -> int:
         violations += check_static_stored_in_generic(path, lines)
         violations += check_environment_key_isolation(path, lines)
         violations += check_theme_isolation(path, lines)
+        violations += check_preview_guard(path, lines)
         violations += check_argument_order(path, text, initialisers)
 
     for path in swift_files("Tests"):

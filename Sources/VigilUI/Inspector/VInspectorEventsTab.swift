@@ -282,7 +282,7 @@ package struct VInspectorEventDay: Sendable, Hashable, Identifiable {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Events — populated") {
     ScrollView {
         VInspectorEventsTab(state: .previewHealthy, actions: VInspectorActions())

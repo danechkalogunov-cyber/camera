@@ -33,6 +33,10 @@ fi
 # where they live has moved between releases and `xcode-select -p` does not actually answer the
 # question. Two `swiftc -typecheck` runs on two-line files cost a second and cannot be wrong.
 #
+# Only the missing `Testing` module is fatal. A missing preview plugin turns into
+# `-DVIGIL_NO_PREVIEWS`, which compiles the previews out and runs everything else — see the branch
+# below and README §"Building on a Mac without Xcode".
+#
 # `Scripts/build-app.sh` needs neither: it builds `-c release`, where every `#if DEBUG` block — and
 # so every `#Preview` — is compiled out before the compiler sees it. That is why `Scripts/run.sh`
 # succeeds on a Mac where this script cannot, and why debug-only code reaches a compiler for the
@@ -50,17 +54,8 @@ printf '#if canImport(SwiftUI)\nimport SwiftUI\n#Preview { Text(verbatim: "probe
     > "$probe_dir/preview.swift"
 swiftc -typecheck "$probe_dir/preview.swift" >/dev/null 2>&1 || has_previews=no
 
-if [ "$has_testing" = no ] || [ "$has_previews" = no ]; then
-    echo "test-macos.sh: this toolchain cannot build the debug configuration." >&2
-    echo >&2
-    echo "  swift --version  ->  $(swift --version 2>&1 | head -1)" >&2
-    echo "  xcode-select -p  ->  $(xcode-select -p 2>/dev/null || echo '(nothing)')" >&2
-    [ "$has_testing"  = no ] && echo "  ✗ swift-testing: 'import Testing' does not resolve" >&2
-    [ "$has_previews" = no ] && echo "  ✗ #Preview: the PreviewsMacros plugin is not installed" >&2
-    [ "$has_testing"  = yes ] && echo "  ✓ swift-testing" >&2
-    [ "$has_previews" = yes ] && echo "  ✓ #Preview" >&2
-    echo >&2
-    echo "  Both ship inside Xcode.app rather than with the Command Line Tools." >&2
+say_where_the_plugins_live() {
+    echo "  These ship inside Xcode.app rather than with the Command Line Tools." >&2
     found=$(ls -d /Applications/Xcode*.app 2>/dev/null | head -5)
     if [ -n "$found" ]; then
         echo >&2
@@ -73,21 +68,55 @@ if [ "$has_testing" = no ] || [ "$has_previews" = no ]; then
         echo "  No Xcode.app was found in /Applications. Install it from the App Store, then:" >&2
         echo "      sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
     fi
+}
+
+# Word-split deliberately, and safe to: the value is either empty or two space-free tokens. An
+# array would be tidier but `${arr[@]}` under `set -u` is an error on the bash 3.2 macOS ships.
+preview_flags=""
+
+if [ "$has_testing" = no ]; then
+    echo "test-macos.sh: this toolchain cannot build the debug configuration." >&2
     echo >&2
-    echo "  Meanwhile Scripts/run.sh still builds and launches the app: a release build compiles" >&2
-    echo "  no previews and imports no test module. What it cannot check is debug-only code —" >&2
-    echo "  the #if DEBUG fixtures behind every preview — which is exactly what this script is for." >&2
+    echo "  swift --version  ->  $(swift --version 2>&1 | head -1)" >&2
+    echo "  xcode-select -p  ->  $(xcode-select -p 2>/dev/null || echo '(nothing)')" >&2
+    echo "  ✗ swift-testing: 'import Testing' does not resolve" >&2
+    [ "$has_previews" = no ] && echo "  ✗ #Preview: the PreviewsMacros plugin is not installed" >&2
+    [ "$has_previews" = yes ] && echo "  ✓ #Preview" >&2
+    echo >&2
+    say_where_the_plugins_live
+    echo >&2
+    echo "  There is no flag for this one: without swift-testing there is no test suite to run." >&2
+    echo "  Scripts/run.sh still builds and launches the app — a release build imports no test" >&2
+    echo "  module — but it runs none of the 688 tests, which is the point of this script." >&2
     exit 2
+fi
+
+# ⚠️ A missing preview plugin is survivable and a missing test framework is not, which is why they
+# stopped being one branch. Every `#Preview` in VigilUI sits inside `#if DEBUG && !VIGIL_NO_PREVIEWS`
+# precisely so this script can compile the debug configuration — fixtures, `#if DEBUG` helpers and
+# all 688 tests — on a Mac that has only the Command Line Tools. What is skipped is the previews
+# themselves, and previews are checked by eye in Xcode's canvas, which such a Mac does not have
+# either.
+if [ "$has_previews" = no ]; then
+    preview_flags="-Xswiftc -DVIGIL_NO_PREVIEWS"
+    echo "test-macos.sh: the PreviewsMacros plugin is not installed, so #Preview cannot expand." >&2
+    echo "  Building with -DVIGIL_NO_PREVIEWS: everything compiles and every test runs, but the" >&2
+    echo "  #Preview blocks are compiled out and nothing here checks them." >&2
+    echo >&2
+    say_where_the_plugins_live
+    echo >&2
 fi
 
 fail=0
 echo "== build =="
-swift build || fail=1
+# shellcheck disable=SC2086
+swift build $preview_flags || fail=1
 
 echo
 echo "== test =="
 if [ "$coverage" -eq 1 ]; then
-    swift test --parallel --enable-code-coverage || fail=1
+    # shellcheck disable=SC2086
+    swift test --parallel --enable-code-coverage $preview_flags || fail=1
     echo
     echo "== coverage =="
     # Reported, not gated. docs/API_CONTRACT.md §5 sets floors of 90 % pure / 70 % macOS for a
@@ -104,7 +133,8 @@ if [ "$coverage" -eq 1 ]; then
         echo "no profile written at $prof"
     fi
 else
-    swift test --parallel || fail=1
+    # shellcheck disable=SC2086
+    swift test --parallel $preview_flags || fail=1
 fi
 
 echo

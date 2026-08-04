@@ -140,7 +140,7 @@ package struct DegradedBanner: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Video chrome") {
     let camera = LiveCameraIdentity(id: UUID(), name: "Front Door", host: "192.168.1.64")
     return VStack(spacing: VTheme.Space.md) {

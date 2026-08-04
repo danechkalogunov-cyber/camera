@@ -14,7 +14,7 @@
 //
 
 #if os(macOS)
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 import Foundation
 import SwiftUI
@@ -216,5 +216,5 @@ private enum VTimelineSample {
         .background(VTheme.Color.Layer.canvas)
 }
 
-#endif  // DEBUG
+#endif  // DEBUG && !VIGIL_NO_PREVIEWS
 #endif  // os(macOS)

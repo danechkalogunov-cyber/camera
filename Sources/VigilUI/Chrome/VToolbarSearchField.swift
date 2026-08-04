@@ -340,7 +340,7 @@ struct VToolbarPaletteButton: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VToolbarView — sidebar shown") {
     VToolbarView(isSidebarVisible: true,
                  isInspectorVisible: true,

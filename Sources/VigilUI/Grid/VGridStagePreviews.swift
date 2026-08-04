@@ -21,7 +21,7 @@
 //
 
 #if os(macOS)
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 import Foundation
 import SwiftUI
@@ -146,5 +146,5 @@ private struct GridStagePreviewHost: View {
     GridStagePreviewHost(layout: .grid2x2, cameraCount: 7)
 }
 
-#endif  // DEBUG
+#endif  // DEBUG && !VIGIL_NO_PREVIEWS
 #endif  // os(macOS)

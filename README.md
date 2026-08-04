@@ -114,6 +114,31 @@ open Vigil.xcodeproj
 `Vigil.xcodeproj` is git-ignored. **Never commit a hand-written `.pbxproj`** — regenerate it from
 `project.yml` instead.
 
+### Building on a Mac without Xcode
+
+The Command Line Tools ship the compiler and the macOS SDK, so everything in this package compiles
+under them — with one exception. `#Preview` is an *external macro*, and the plugin that expands it
+(`PreviewsMacros`) lives in Xcode's toolchain, not in the CLT:
+
+```
+error: external macro implementation type 'PreviewsMacros.SwiftUIView' could not be found
+       for macro 'Preview(_:body:)'; plugin for module 'PreviewsMacros' not found
+```
+
+`xcode-select -p` printing `/Library/Developer/CommandLineTools` is the tell. Two ways out:
+
+```
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer   # if Xcode is installed
+swift build -Xswiftc -DVIGIL_NO_PREVIEWS                          # if it is not
+swift test  -Xswiftc -DVIGIL_NO_PREVIEWS
+```
+
+Every `#Preview` in `VigilUI` sits inside `#if DEBUG && !VIGIL_NO_PREVIEWS`, so that flag compiles
+the app and its tests without them. It is an escape hatch, not a mode: previews are how the design
+gets checked against `design/mockups/`, and they are on by default in Xcode and in CI.
+`Scripts/lint.py` (`preview-guard`) keeps new preview files on the same guard, since one file with a
+bare `#if DEBUG` puts the whole module back out of reach.
+
 ### Building on Linux
 
 ```

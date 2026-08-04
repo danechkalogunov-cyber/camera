@@ -287,7 +287,7 @@ private struct VSidebarRowDropDelegate: DropDelegate {
     }
 }
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 /// A stand-in picture, so the previews read as camera frames rather than as black boxes.
 @MainActor

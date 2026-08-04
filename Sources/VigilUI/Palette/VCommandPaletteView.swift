@@ -463,7 +463,7 @@ package struct VPaletteKeyCap: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 /// The catalogue the previews rank against. Titles are plain strings because ``VCommand/title`` is
 /// resolved by the caller — see that property's note.

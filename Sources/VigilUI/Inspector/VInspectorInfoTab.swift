@@ -282,7 +282,7 @@ package struct VInspectorInfoTab: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Info — populated") {
     ScrollView {
         VInspectorInfoTab(state: .previewHealthy, actions: VInspectorActions())

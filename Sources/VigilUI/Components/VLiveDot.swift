@@ -278,7 +278,7 @@ package struct VStatusTriangle: Shape {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VLiveDot") {
     VPulseClock {
         HStack(spacing: VTheme.Space.md) {

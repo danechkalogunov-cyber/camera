@@ -391,7 +391,7 @@ package struct VTextField<FocusValue: Hashable>: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 
 /// A preview host. `@State` cannot live in a `#Preview` body on the macOS 14 SDK, so the states
 /// are held by a small view rather than by the `@Previewable` macro, which is newer.

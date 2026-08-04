@@ -247,7 +247,7 @@ package struct VInspectorStreamTab: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Stream — healthy") {
     ScrollView {
         VInspectorStreamTab(state: .previewHealthy, actions: VInspectorActions())

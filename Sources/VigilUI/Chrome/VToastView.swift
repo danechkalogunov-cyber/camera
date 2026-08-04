@@ -337,7 +337,7 @@ package struct VToastView: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VToastView — warning") {
     // The approved mockup's stage banner: one line, sized to its content, with one inline action.
     // The camera name is verbatim and the measured figure is verbatim; only the sentence around

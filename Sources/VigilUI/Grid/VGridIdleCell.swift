@@ -147,7 +147,7 @@ package struct VGridIdleCell: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Idle cell") {
     HStack(spacing: 2) {
         VGridIdleCell(camera: LiveCameraIdentity(id: UUID(),

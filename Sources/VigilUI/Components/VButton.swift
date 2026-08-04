@@ -455,7 +455,7 @@ package struct VButtonBody: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("VButton") {
     VStack(alignment: .leading, spacing: VTheme.Space.sm) {
         VButton("Connect", style: .primary, size: .lg) {}

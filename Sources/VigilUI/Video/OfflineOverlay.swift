@@ -162,7 +162,7 @@ package struct OfflineOverlay: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("OfflineOverlay — reconnecting") {
     OfflineOverlay(camera: LiveCameraIdentity(id: UUID(), name: "Front Door",
                                               host: "192.168.1.64"),

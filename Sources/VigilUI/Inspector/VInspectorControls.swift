@@ -371,7 +371,7 @@ package struct VInspectorSkeletonValue: View {
 
 // MARK: - Previews
 
-#if DEBUG
+#if DEBUG && !VIGIL_NO_PREVIEWS
 #Preview("Inspector controls") {
     VStack(alignment: .leading, spacing: 0) {
         VInspectorSectionHeader("Transport health")
