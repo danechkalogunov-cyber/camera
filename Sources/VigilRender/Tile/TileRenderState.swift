@@ -110,6 +110,16 @@ public final class TileRenderState {
         lastDropReason = reason
     }
 
+    /// A frame reached the screen on the Metal path.
+    ///
+    /// The sample-buffer path sets the same flag through ``absorb(_:)``, which carries counters this
+    /// path does not have: the Metal backend hands its frames straight to a drawable and keeps no
+    /// queue, so there is no "accepted" or "refused because not ready" to count. What both paths
+    /// share is the one fact the status line needs — something is on the glass.
+    func markDrawn() {
+        isReceivingFrames = true
+    }
+
     /// The stream was reset or the layer was flushed: nothing has been shown since.
     func markIdle() {
         isReceivingFrames = false

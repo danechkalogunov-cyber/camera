@@ -69,8 +69,14 @@ extension VideoTileView: VideoSink {
     /// pipeline sent compressed samples to a tile that had no sample-buffer renderer, and every
     /// frame of a healthy stream was dropped behind one `noRenderer` line.
     public nonisolated func enqueuePixelBuffer(_ pixelBuffer: CVPixelBuffer, generation: UInt32) {
-        guard let refusal = metalFrames.enqueue(pixelBuffer) else { return }
-        reportUpstreamDrop(1, reason: refusal.rawValue)
+        let outcome = metalFrames.enqueue(pixelBuffer)
+        if let refusal = outcome.refusal {
+            reportUpstreamDrop(1, reason: refusal.rawValue)
+            return
+        }
+        // One main-actor hop per *stream*, not per frame: only the first frame after a flush
+        // changes anything a status line shows.
+        if outcome.isFirstSinceFlush { publishFirstDrawnFrame() }
     }
 
     public nonisolated func enqueueJPEG(_ image: CGImage) {

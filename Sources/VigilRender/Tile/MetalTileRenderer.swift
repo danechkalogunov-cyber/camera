@@ -7,6 +7,7 @@
 
 #if os(macOS)
 
+import CoreGraphics
 import CoreVideo
 import Metal
 import QuartzCore
@@ -70,6 +71,19 @@ public final class MetalTileRenderer: @unchecked Sendable {
     public var adjustments = TileColorAdjustments()
     public var motionZones: [NormalizedVideoRect] = []
 
+    /// How the frame is fitted to the tile.
+    ///
+    /// ⛔ WITHOUT THIS THE PICTURE IS STRETCHED, and nothing says so. The shader draws one quad over
+    /// the whole drawable, so a 16:9 frame in a tile of any other shape is distorted — the first
+    /// live camera in this app came up visibly squeezed. `AVSampleBufferDisplayLayer` applies
+    /// `videoGravity` itself, which is why the other backend never needed this and why the option
+    /// existed for a year without ever reaching the Metal path.
+    ///
+    /// Both non-stretch modes are handled on the CPU side, so the generated shader is untouched:
+    /// `.fit` centres a viewport and leaves the cleared black around it, `.fill` trims the sampled
+    /// rectangle to the tile's aspect.
+    public var gravity: VideoGravity = .fit
+
     private let device: any MTLDevice
     private let queue: any MTLCommandQueue
     private let pipeline: any MTLRenderPipelineState
@@ -119,7 +133,13 @@ public final class MetalTileRenderer: @unchecked Sendable {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         guard let command = queue.makeCommandBuffer(),
               let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
-        var uniforms = TileShaderUniforms(crop: crop, adjustments: adjustments,
+        let fitted = Self.fit(gravity: gravity, crop: crop,
+                              source: CGSize(width: CVPixelBufferGetWidth(pixelBuffer),
+                                             height: CVPixelBufferGetHeight(pixelBuffer)),
+                              target: CGSize(width: drawable.texture.width,
+                                             height: drawable.texture.height))
+        if let viewport = fitted.viewport { encoder.setViewport(viewport) }
+        var uniforms = TileShaderUniforms(crop: fitted.crop, adjustments: adjustments,
                                           overlayCount: min(motionZones.count, 16))
         // `let`: `withUnsafeBytes` on an array only reads, unlike the `&uniforms` above, which
         // hands the encoder an inout pointer.
@@ -136,6 +156,60 @@ public final class MetalTileRenderer: @unchecked Sendable {
         encoder.endEncoding()
         command.present(drawable)
         command.commit()
+    }
+
+    /// Where to draw, and what to sample, so that a frame is not distorted.
+    ///
+    /// Pure arithmetic over four numbers, `internal` and `static` so it can be tested without a GPU
+    /// — which matters here, because every other line of this file needs a Metal device and none of
+    /// it runs in CI.
+    ///
+    /// - Returns: the crop to sample, and a viewport when the frame must be inset. `nil` means the
+    ///   whole drawable, which is what `.stretch` and an exactly-matching aspect both want.
+    static func fit(gravity: VideoGravity,
+                    crop: NormalizedVideoRect,
+                    source: CGSize,
+                    target: CGSize) -> (crop: NormalizedVideoRect, viewport: MTLViewport?) {
+        let sourceWidth = Double(source.width) * Double(crop.width)
+        let sourceHeight = Double(source.height) * Double(crop.height)
+        let targetWidth = Double(target.width)
+        let targetHeight = Double(target.height)
+        guard gravity != .stretch,
+              sourceWidth > 0, sourceHeight > 0, targetWidth > 0, targetHeight > 0 else {
+            return (crop, nil)
+        }
+        let sourceAspect = sourceWidth / sourceHeight
+        let targetAspect = targetWidth / targetHeight
+        // A pixel of slack: a 1920×1080 frame in a 16:9 tile is not exactly 16:9 after rounding to
+        // backing pixels, and insetting by a third of a pixel is worse than not insetting at all.
+        guard abs(sourceAspect - targetAspect) > 0.001 else { return (crop, nil) }
+
+        switch gravity {
+        case .fit:
+            // Letterbox. The bars are the pass's clear colour, which is black by contract
+            // (DESIGN.md §3.6): the tile is never transparent behind the picture.
+            let scale = min(targetWidth / sourceWidth, targetHeight / sourceHeight)
+            let width = sourceWidth * scale
+            let height = sourceHeight * scale
+            return (crop, MTLViewport(originX: (targetWidth - width) / 2,
+                                      originY: (targetHeight - height) / 2,
+                                      width: width, height: height, znear: 0, zfar: 1))
+        case .fill:
+            // Trim the sampled rectangle instead of the viewport, so the drawable stays fully
+            // covered and no pixel of it is left showing the clear colour.
+            if sourceAspect > targetAspect {
+                let kept = Float(targetAspect / sourceAspect)
+                let width = crop.width * kept
+                return (NormalizedVideoRect(x: crop.x + (crop.width - width) / 2, y: crop.y,
+                                            width: width, height: crop.height), nil)
+            }
+            let kept = Float(sourceAspect / targetAspect)
+            let height = crop.height * kept
+            return (NormalizedVideoRect(x: crop.x, y: crop.y + (crop.height - height) / 2,
+                                        width: crop.width, height: height), nil)
+        case .stretch:
+            return (crop, nil)
+        }
     }
 }
 

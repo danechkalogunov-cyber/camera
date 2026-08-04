@@ -319,6 +319,11 @@ public final class VideoTileView: NSView {
         logger.debug(.render, "stream reset: pending samples dropped, displayed picture kept",
                      ["camera": cameraID.short])
         sampleBuffers.flushKeepingLastImage(reason: .streamReset)
+        // Both backends, because either may be the one that has been drawing. The Metal backend has
+        // nothing queued to discard — it hands each frame straight to a drawable — so this only
+        // resets its "has anything been drawn since" flag, which is what makes the next frame
+        // publish and the status line come back to life.
+        metalFrames.markFlushed()
         publishIdle()
     }
 
@@ -402,7 +407,8 @@ public final class VideoTileView: NSView {
                                            anchorX: options.zoomAnchorX,
                                            anchorY: options.zoomAnchorY),
             adjustments: options.adjustments,
-            motionZones: options.motionZones
+            motionZones: options.motionZones,
+            gravity: options.gravity
         )
     }
 
@@ -431,6 +437,17 @@ public final class VideoTileView: NSView {
             guard let self else { return }
             state.absorbUpstreamDrop(count, reason: reason)
             onFramesDropped?(count, reason)
+        }
+    }
+
+    /// The Metal path's half of `publishIfNoteworthy`: a picture is now on the glass.
+    ///
+    /// Called for the first frame after each flush and no other, so this stays one hop per stream.
+    /// `AppSessionModel.isDisplayingPicture` reads the flag this sets, and `liveState` will not
+    /// leave `.connecting(.waitingForKeyframe)` without it.
+    nonisolated func publishFirstDrawnFrame() {
+        Task { @MainActor [weak self] in
+            self?.state.markDrawn()
         }
     }
 
