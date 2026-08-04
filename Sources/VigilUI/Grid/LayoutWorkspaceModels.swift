@@ -87,6 +87,15 @@
         package private(set) var offset: CGSize = .zero
         package static let maximumScale: CGFloat = 8
 
+        /// ⚠️ Spelled out, because Swift never synthesises a memberwise initialiser above
+        /// `internal` — and `internal` stops at this module's edge. The app target holds one of
+        /// these in `MainWindowState`, so a synthesised initialiser leaves the type visible and
+        /// uninstantiable, which is the error `'VDigitalViewport' initializer is inaccessible due
+        /// to 'internal' protection level`. Identity is the only meaningful starting state:
+        /// ``scale`` and ``offset`` are `private(set)` and move only through ``zoom(by:)`` and
+        /// ``pan(by:)``, which is what keeps the clamping invariant true.
+        package init() {}
+
         package mutating func zoom(by factor: CGFloat) {
             guard factor.isFinite, factor > 0 else { return }
             scale = min(Self.maximumScale, max(1, scale * factor))

@@ -28,7 +28,12 @@ extension MainWindowView {
             VStack(spacing: 8) {
                 ForEach(sidebarCameras) { camera in
                     Button {
-                        selectCamera(camera.id)
+                        // Activate, not select. The rail is the whole camera list in a window too
+                        // narrow for the sidebar, so its one gesture has to be the one that means
+                        // *show me this camera* — selecting alone would leave the stage on the old
+                        // picture with a different name lit, which `activateInSidebar` exists to
+                        // avoid.
+                        activateInSidebar(.camera(camera.id))
                     } label: {
                         Text(String(camera.name.prefix(1)).uppercased())
                             .font(.system(size: 13, weight: .semibold))

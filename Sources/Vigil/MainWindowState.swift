@@ -14,6 +14,7 @@ import Foundation
 import Observation
 import SwiftUI
 
+import VigilCore
 import VigilProtocols
 import VigilUI
 

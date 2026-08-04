@@ -70,6 +70,14 @@ struct StageTimelineOverlay: View {
     let onRate: (TimelinePlaybackRate) -> Void
     let onActivateMarker: (TimelineMarkerCluster) -> Void
 
+    /// Hold and single-frame stepping, forwarded to `VTimelineView`'s transport buttons.
+    ///
+    /// The same caveat as ``rate`` applies and for the same reason: the hand-written initialiser
+    /// below is the only way in, so these are parameters or they are nothing.
+    let isPaused: Bool
+    let onTogglePause: () -> Void
+    let onFrameStep: (Bool) -> Void
+
     /// Steps the playhead by a number of seconds, positive or negative.
     let onStep: (Double) -> Void
 
@@ -127,6 +135,9 @@ struct StageTimelineOverlay: View {
          onDismiss: @escaping () -> Void,
          rate: TimelinePlaybackRate = .normal,
          isRateAdjustable: Bool = false,
+         isPaused: Bool = false,
+         onTogglePause: @escaping () -> Void = {},
+         onFrameStep: @escaping (Bool) -> Void = { _ in },
          onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.archive = archive
         self.clock = clock
@@ -146,6 +157,9 @@ struct StageTimelineOverlay: View {
         self.onDismiss = onDismiss
         self.rate = rate
         self.isRateAdjustable = isRateAdjustable
+        self.isPaused = isPaused
+        self.onTogglePause = onTogglePause
+        self.onFrameStep = onFrameStep
         self.onRate = onRate
     }
 
@@ -258,6 +272,9 @@ struct StageTimelineOverlay: View {
                               onActivateMarker: onActivateMarker,
                               rate: rate,
                               isRateAdjustable: isRateAdjustable,
+                              isPaused: isPaused,
+                              onTogglePause: onTogglePause,
+                              onFrameStep: onFrameStep,
                               onRate: onRate)
             }
             .padding(.horizontal, VTheme.Space.lg)
