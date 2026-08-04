@@ -168,7 +168,7 @@ struct MainWindowView: View {
 
     // MARK: - Body
 
-    /// ⛔ FOUR PIECES, DELIBERATELY. As one expression this is
+    /// ⛔ FIVE PIECES, DELIBERATELY. As one expression this is
     ///
     ///     error: the compiler is unable to type-check this expression in reasonable time;
     ///            try breaking up the expression into distinct sub-expressions
@@ -179,13 +179,20 @@ struct MainWindowView: View {
     /// superlinearly in that chain, so it does not fail gently — it compiles for minutes and then
     /// gives up.
     ///
-    /// Splitting is the whole fix. `windowChrome`, `windowTasks` and `windowReactions` each take a
-    /// view and return one, so the type checker gets three small problems in place of one
-    /// intractable one, and each `let` below pins an opaque type that the next call starts from
-    /// rather than re-deriving. Adding a modifier back into `body` directly is how this returns.
+    /// Splitting is the whole fix, and it took two goes: a first cut into three still left a
+    /// `windowChrome` the solver could not finish, because eleven modifiers with four
+    /// `@ViewBuilder` overlays is already too much for one expression. The rule this settled on is
+    /// four or five modifiers per function, with any overlay whose content is more than a single
+    /// property lifted out too — `cinemaBar` is here for that reason and no other.
+    ///
+    /// Each function takes a view and returns one, so the type checker gets five small problems in
+    /// place of one intractable one, and each `let` below pins an opaque type that the next call
+    /// starts from rather than re-deriving. Adding a modifier back into `body` brings this back.
     var body: some View {
-        let chromed = windowChrome(windowStack)
-        let live = windowTasks(chromed)
+        let surfaced = windowSurface(windowStack)
+        let overlaid = windowOverlays(surfaced)
+        let presented = windowPresentations(overlaid)
+        let live = windowTasks(presented)
         return windowReactions(live)
     }
 
@@ -281,9 +288,8 @@ struct MainWindowView: View {
                        onShowDegraded: { window.isInspectorVisible = true })
     }
 
-    /// Everything painted on or around the stack: the canvas, the width probe, the overlays, the
-    /// sheet and the window-wide shortcuts.
-    private func windowChrome(_ content: some View) -> some View {
+    /// The surface the stack sits on: the canvas, the width probe, the title-bar inset.
+    private func windowSurface(_ content: some View) -> some View {
         content
         .background(window.isCinemaMode ? SwiftUI.Color.black : VTheme.Color.Layer.canvas)
         // What decides whether the two side panels fit (DESIGN.md §11.2). Measured rather than read
@@ -305,25 +311,39 @@ struct MainWindowView: View {
         // by the title bar's safe area — which left the lights stranded in an empty strip above the
         // toolbar instead of sitting in it. `VToolbarView` already reserves the 79 pt they need.
         .ignoresSafeArea(.container, edges: .top)
+    }
+
+    /// What floats over the window: the toast, the cinema-mode bar, the overflow menu, the palette.
+    private func windowOverlays(_ content: some View) -> some View {
+        content
         .overlay(alignment: .bottom) { toastOverlay }
-        .overlay(alignment: .bottom) {
-            if window.isCinemaMode {
-                HStack {
-                    Text(identity.name).lineLimit(1)
-                    Spacer()
-                    Button("Exit Cinema Mode", bundle: .vigilUI) {
-                        window.isCinemaMode = false
-                    }
-                    .keyboardShortcut(.cancelAction)
-                }
-                .padding(.horizontal, 18)
-                .frame(height: 56)
-                .background(.ultraThinMaterial)
-                .padding(12)
-            }
-        }
+        .overlay(alignment: .bottom) { cinemaBar }
         .overlay(alignment: .topTrailing) { overflowMenu }
         .overlay { paletteOverlay }
+    }
+
+    /// The name and the way out, while the chrome is gone.
+    @ViewBuilder
+    private var cinemaBar: some View {
+        if window.isCinemaMode {
+            HStack {
+                Text(identity.name).lineLimit(1)
+                Spacer()
+                Button("Exit Cinema Mode", bundle: .vigilUI) {
+                    window.isCinemaMode = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 56)
+            .background(.ultraThinMaterial)
+            .padding(12)
+        }
+    }
+
+    /// The sheet, and the window-wide keyboard shortcuts.
+    private func windowPresentations(_ content: some View) -> some View {
+        content
         // A zero-sized button is how a window-wide shortcut is declared in pure SwiftUI. It carries
         // no label and cannot be reached by the pointer or by focus; only ⌘K triggers it.
         .background { windowShortcuts }

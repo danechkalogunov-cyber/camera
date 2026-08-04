@@ -11,6 +11,7 @@ import Foundation
 import UserNotifications
 
 import VigilCore
+import VigilProtocols
 
 /// User-controlled notification policy. Quiet hours may cross midnight.
 struct CameraWatchPolicy: Sendable, Equatable {

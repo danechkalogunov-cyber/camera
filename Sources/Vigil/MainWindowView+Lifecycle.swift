@@ -11,8 +11,10 @@
 //      error: the compiler is unable to type-check this expression in reasonable time
 //
 //  because SwiftUI folds every modifier into one nested generic type and each closure adds another
-//  batch of inference. Two functions that each take a view and return one give the solver two small
-//  problems instead of one intractable one. Chaining these back into `body` brings the error back.
+//  batch of inference. Functions that each take a view and return one give the solver a handful of
+//  small problems instead of one intractable one. The working budget is four or five modifiers per
+//  function: a first attempt at eleven still failed to type-check, so "it looks short enough" is not
+//  the test. Chaining these back together in `body` brings the error back.
 //
 //  ⚠️ `internal` rather than `private`: Swift scopes `private` to a file, so a member this type's
 //  own `body` calls from the file next door cannot be private however local it looks.
@@ -29,13 +31,22 @@ import VigilUI
 
 extension MainWindowView {
 
+    // MARK: - Tasks
+
     /// The window's own lifecycle: everything that starts work, polls, or follows a camera.
     ///
-    /// The two `isReceivingMedia` observers ride along rather than sitting with the other
-    /// `onChange`s below. They belong to the same story — a picture arriving is what files the
-    /// camera and what tells the feed it came back — and `.task` and `.onChange` are both plain
-    /// behaviour attachments, so where the chain is cut changes nothing about what runs.
+    /// Four groups, composed here rather than in `body` so the window's own body stays a list of
+    /// five names. Each `let` pins an opaque type the next call starts from.
     func windowTasks(_ content: some View) -> some View {
+        let started = windowStartupTasks(content)
+        let media = windowMediaTasks(started)
+        let recording = windowRecordingTasks(media)
+        return windowPanelTasks(recording)
+    }
+
+    /// What the window does once, when it appears: read the remembered chrome, ask AppKit about
+    /// Full Keyboard Access, manage the cinema-mode cursor, and start the reconnect monitor.
+    private func windowStartupTasks(_ content: some View) -> some View {
         content
         .task { window.showsVideoOverlay = session.remembersVideoOverlay }
         .task {
@@ -52,6 +63,23 @@ extension MainWindowView {
                 cinemaCursorHidden = false
             }
         }
+        .task {
+            streamLifecycle.start { session.reconnectImmediately() }
+            await withTaskCancellationHandler(operation: {
+                try? await Task.sleep(for: .seconds(60 * 60 * 24 * 365))
+            }, onCancel: {
+                Task { @MainActor in streamLifecycle.stop() }
+            })
+        }
+    }
+
+    /// What a picture arriving — or stopping — means.
+    ///
+    /// The two `isReceivingMedia` observers are `onChange` rather than `task` and sit here anyway:
+    /// they belong to this story, and both kinds are plain behaviour attachments, so which function
+    /// carries them changes nothing about what runs.
+    private func windowMediaTasks(_ content: some View) -> some View {
+        content
         // ⚠️ The library is *not* loaded here any more — `RootView` does it at launch, so the
         // connect form and the scan see it too. Loading it again on this view's appearance would
         // re-run the legacy import against a library that may have just been populated by it.
@@ -69,6 +97,11 @@ extension MainWindowView {
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
         .task(id: session.camera?.id) { loadDeviceInfo() }
+    }
+
+    /// Clips, telemetry, the poster frame and the event stream.
+    private func windowRecordingTasks(_ content: some View) -> some View {
+        content
         // Re-read whenever a clip finishes, so a recording appears in the list the moment it closes.
         .task(id: recording.completed.count) {
             vouchForFinishedClips()
@@ -83,14 +116,11 @@ extension MainWindowView {
         .task { await pollTelemetry() }
         .task(id: session.camera?.id) { await pollPoster() }
         .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
-        .task {
-            streamLifecycle.start { session.reconnectImmediately() }
-            await withTaskCancellationHandler(operation: {
-                try? await Task.sleep(for: .seconds(60 * 60 * 24 * 365))
-            }, onCancel: {
-                Task { @MainActor in streamLifecycle.stop() }
-            })
-        }
+    }
+
+    /// Work that only makes sense while a particular panel or screen is being looked at.
+    private func windowPanelTasks(_ content: some View) -> some View {
+        content
         // Looking at the feed is what marks it read. Anything else — a button, a per-row gesture —
         // leaves a badge that counts events the user has already seen, which is a badge nobody
         // believes after the first time.
@@ -106,27 +136,20 @@ extension MainWindowView {
         .task(id: archiveTrigger) { await loadArchive() }
     }
 
+    // MARK: - Reactions
+
     /// What the window does when something it does not own changes: a menu-bar counter, a
     /// coordinator's failure, a notice from the library.
     func windowReactions(_ content: some View) -> some View {
+        let menu = windowMenuReactions(content)
+        return windowFailureReactions(menu)
+    }
+
+    /// The menu bar's half of the bargain. `VigilCommands` is built above this window and cannot
+    /// reach the coordinators these need, so it bumps a counter and the work happens here. See
+    /// `MainWindowState.snapshotRequests` for why it is a counter and not a closure.
+    private func windowMenuReactions(_ content: some View) -> some View {
         content
-        // Fires on every day the user steps to, not just the first load. Stepping a day goes
-        // through `loadArchiveDay` rather than `loadArchive`, and an incomplete Tuesday must be
-        // announced even though Monday was already announced.
-        .onChange(of: archive.incompleteAfter) { _, _ in reportIncompleteDay() }
-        // ⛔ `AppLibraryModel` has been writing this on three paths — a list recovered from a backup,
-        // a list written by a newer Vigil and therefore read-only, and an add the store refused —
-        // and nothing has ever read it. That file's own header says why it matters: "a silent
-        // recovery is how a user discovers weeks later that half their cameras are gone and nothing
-        // ever mentioned it." That is precisely what has been happening.
-        //
-        // ⚠️ A toast is the right shape for a recovery and the wrong one for read-only, which is a
-        // condition rather than an event and outlasts any banner. Saying it once is still better
-        // than never, and a persistent read-only indicator belongs with the sidebar's own chrome
-        // rather than being faked with a toast that refuses to dismiss.
-        // The menu bar's half of the bargain. `VigilCommands` is built above this window and cannot
-        // reach the coordinators these four need, so it bumps a counter and this is where the work
-        // happens. See `MainWindowState.snapshotRequests` for why it is a counter and not a closure.
         // `initial: true` so a link that arrived during launch — before this window existed — is
         // performed the moment it does. That is §F-AUT-03 acceptance 5.
         .onChange(of: window.pendingDeepLink, initial: true) { _, _ in performPendingDeepLink() }
@@ -137,10 +160,28 @@ extension MainWindowView {
         .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
         .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
         .onChange(of: window.openRecordingsFolderRequests) { _, _ in openRecordingsFolder() }
+    }
+
+    /// Everything a coordinator learns the hard way, said out loud.
+    ///
+    /// ⛔ Each of these was already being recorded and none of it was being shown. `RecordingCoordinator`'s
+    /// own header puts it plainly: "A Record button that does nothing and says nothing is the exact
+    /// shape this project refuses" — and that was the shape, because nothing read `lastFailure`.
+    private func windowFailureReactions(_ content: some View) -> some View {
+        content
+        // Fires on every day the user steps to, not just the first load. Stepping a day goes
+        // through `loadArchiveDay` rather than `loadArchive`, and an incomplete Tuesday must be
+        // announced even though Monday was already announced.
+        .onChange(of: archive.incompleteAfter) { _, _ in reportIncompleteDay() }
         // The mirror the menu reads to say Start or Stop. One writer, here.
         .onChange(of: recording.isRecording, initial: true) { _, isRecording in
             window.isRecording = isRecording
         }
+        // ⚠️ A toast is the right shape for a recovery — a list rebuilt from a backup, an add the
+        // store refused — and the wrong one for read-only, which is a condition rather than an
+        // event and outlasts any banner. Saying it once is still better than never; a persistent
+        // read-only indicator belongs with the sidebar's own chrome rather than being faked with a
+        // toast that refuses to dismiss.
         .onChange(of: library.notice) { _, notice in
             guard let notice else { return }
             // The *Reveal in Finder* action FEATURES.md §F-INV-01 acceptance 3 names. Every notice
@@ -156,11 +197,8 @@ extension MainWindowView {
                     { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 })
         }
-        // ⛔ `RecordingCoordinator`'s own header says it: "Every failure becomes a logged, named
-        // outcome in `lastFailure`. A Record button that does nothing and says nothing is the exact
-        // shape this project refuses." It has been exactly that shape, because nothing read the
-        // property. A destination the sandbox will not write to, a disk with no room, a clip that
-        // closes without producing a file — all of them logged, none of them said.
+        // A destination the sandbox will not write to, a disk with no room, a clip that closes
+        // without producing a file — all of them logged, none of them said.
         .onChange(of: recording.lastFailure) { _, failure in
             guard let failure else { return }
             window.toast = MainWindowToast(
