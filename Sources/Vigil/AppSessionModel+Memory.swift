@@ -83,7 +83,12 @@ extension AppSessionModel {
     /// notices it has been overtaken, and the camera is never asked to hold two playback sessions
     /// for one viewer. On a camera that permits a handful of concurrent sessions, that mattered.
     func playArchive(_ locator: PlaybackLocator) async {
-        guard let camera, let activeRef else { return }
+        // ⚠️ `activeRef` is cleared by a teardown, so a seek made while the picture is stopped —
+        // after a pause, or after a terminal failure — would refuse on a camera whose password is
+        // in the Keychain under the record's own handle. The record is the fallback and it is the
+        // same handle in every case that matters.
+        guard let camera else { return }
+        let ref = activeRef ?? camera.credentialRef
         seekGeneration &+= 1
         let generation = seekGeneration
         var target = camera
@@ -91,6 +96,8 @@ extension AppSessionModel {
             ? locator.path
             : locator.path + "?" + locator.rawQuery
         playback = locator
+        // A seek is a picture starting to move again, whatever the button said a moment ago.
+        isPlaybackPaused = false
         seekStartedAt = dependencies.clock.now()
         dependencies.logger.info(.app, "seek: opening \(target.rtspPathOverride ?? "")")
         stopSession()
@@ -99,7 +106,7 @@ extension AppSessionModel {
             return
         }
         beginConnecting()
-        await stream(camera: target, ref: activeRef)
+        await stream(camera: target, ref: ref)
     }
 
     /// Streams a different camera from the library.
@@ -246,26 +253,34 @@ extension AppSessionModel {
         await playArchive(locator)
     }
 
-    /// Pauses without losing the archive locator, or resumes it with one fresh handshake.
+    /// Stops the picture where it is, or starts it again — on an archive **or on a live stream**.
+    ///
+    /// ⛔ IT USED TO REFUSE EVERYTHING BUT AN ARCHIVE. `guard let locator = playback` meant the
+    /// button did nothing at all on a live camera, which is the state the app is in almost all of
+    /// the time: the user pressed stop and the picture kept moving. Stopping a live stream is a
+    /// real act — the tile holds its last frame (R-36) and the socket goes away — and it is the
+    /// only meaning "pause" can have on something with no timeline.
+    ///
+    /// ⚠️ The credential is read from the camera record on the way back, not from `activeRef`:
+    /// tearing the session down clears that field, so a pause that remembered nothing else could
+    /// never resume. That was the second half of the same bug — the picture stopped and the button
+    /// then did nothing.
     func togglePlaybackPause() async {
-        guard let locator = playback else { return }
-        if isPlaybackPaused {
-            isPlaybackPaused = false
-            await playArchive(locator)
-        } else {
+        guard let camera else { return }
+        guard isPlaybackPaused else {
             isPlaybackPaused = true
+            dependencies.logger.info(.app, "playback paused")
             stopSession()
+            return
         }
-    }
-
-    /// Seeks by exactly one declared frame and remains paused after the seek.
-    func stepPlaybackFrame(forward: Bool, framesPerSecond: Double) async {
-        guard playback != nil else { return }
-        let fps = framesPerSecond.isFinite && framesPerSecond > 0 ? framesPerSecond : 25
-        let seconds = (forward ? 1 : -1) / fps
-        isPlaybackPaused = true
-        stopSession()
-        dependencies.logger.info(.app, "playback frame step \(seconds) s")
+        isPlaybackPaused = false
+        if let locator = playback {
+            await playArchive(locator)
+            return
+        }
+        dependencies.logger.info(.app, "resuming the live stream")
+        beginConnecting()
+        await stream(camera: camera, ref: activeRef ?? camera.credentialRef)
     }
 
     /// Returns the picture to the live stream.
@@ -273,7 +288,8 @@ extension AppSessionModel {
     /// Restores the override the camera had before playback rather than clearing it: a user who set
     /// an explicit RTSP path in the connect form must get that path back, not the probe ladder.
     func returnToLive() async {
-        guard playback != nil, let camera, let activeRef else { return }
+        guard playback != nil, let camera else { return }
+        let ref = activeRef ?? camera.credentialRef
         var target = camera
         target.rtspPathOverride = resolvedPath
         playback = nil
@@ -289,7 +305,7 @@ extension AppSessionModel {
         dependencies.logger.info(.app, "returning to the live stream")
         stopSession()
         beginConnecting()
-        await stream(camera: target, ref: activeRef)
+        await stream(camera: target, ref: ref)
     }
 
     /// Stores a renamed camera, so the name outlives the window.

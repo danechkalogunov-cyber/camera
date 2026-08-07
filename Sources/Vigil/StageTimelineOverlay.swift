@@ -56,7 +56,6 @@ struct StageTimelineOverlay: View {
 
     /// Forwarded to `VTimelineView`.
     let onScrub: (VTimelineScrubPhase, Date) -> Void
-    let onHoverInstant: (Date?) -> Void
     let onZoom: (TimelineZoom) -> Void
 
     /// The playback-speed stop in force, and whether one can be asked for at all.
@@ -125,7 +124,6 @@ struct StageTimelineOverlay: View {
          onSelectMonth: @escaping (Int, Int) -> Void,
          onGoToNow: @escaping () -> Void,
          onScrub: @escaping (VTimelineScrubPhase, Date) -> Void,
-         onHoverInstant: @escaping (Date?) -> Void,
          onZoom: @escaping (TimelineZoom) -> Void,
          onActivateMarker: @escaping (TimelineMarkerCluster) -> Void,
          onStep: @escaping (Double) -> Void,
@@ -147,7 +145,6 @@ struct StageTimelineOverlay: View {
         self.onSelectMonth = onSelectMonth
         self.onGoToNow = onGoToNow
         self.onScrub = onScrub
-        self.onHoverInstant = onHoverInstant
         self.onZoom = onZoom
         self.onActivateMarker = onActivateMarker
         self.onStep = onStep
@@ -171,6 +168,14 @@ struct StageTimelineOverlay: View {
             chrome
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        // ⛔ THE ANIMATION BELONGS TO THE CONTAINER, NOT TO THE CHROME. It was attached to the
+        // scrubber itself, inside the `if isVisible` that creates it — and a view that does not
+        // exist yet cannot animate its own arrival. SwiftUI animates an insertion only if the
+        // *parent* is animating when the condition changes, so the transition was declared,
+        // ignored, and the panel snapped in and out. Here it works, and it is the one place the
+        // timing lives.
+        .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: !motionEnabled),
+                   value: isVisible)
         .background { shortcuts }
     }
 
@@ -265,9 +270,7 @@ struct StageTimelineOverlay: View {
                               isScrubbing: archive.isScrubbing,
                               isLoading: archive.isLoading,
                               magnetismEnabled: archive.magnetismEnabled,
-                              preview: archive.preview,
                               onScrub: onScrub,
-                              onHoverInstant: onHoverInstant,
                               onZoom: onZoom,
                               onActivateMarker: onActivateMarker,
                               rate: rate,
@@ -289,9 +292,9 @@ struct StageTimelineOverlay: View {
                     .allowsHitTesting(false)
             }
             .onHover { isOverChrome = $0 }
+            // The timing is the container's, above: this only says *how* the panel enters and
+            // leaves. Both halves used to live here, which is why neither worked.
             .transition(.move(edge: .bottom).combined(with: .opacity))
-            .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: !motionEnabled),
-                       value: isVisible)
         }
     }
 

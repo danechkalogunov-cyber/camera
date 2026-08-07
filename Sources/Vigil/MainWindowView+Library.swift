@@ -229,7 +229,6 @@ extension MainWindowView {
             guard phase == .ended else { return }
             playArchive(from: instant)
         }
-        actions.onHoverInstant = { instant in archive.preview(at: instant) }
         actions.onZoom = { stop in archive.zoom(stop) }
         actions.onActivateMarker = { cluster in
             // A cluster is one or more markers at the same x; the earliest is the one the badge is

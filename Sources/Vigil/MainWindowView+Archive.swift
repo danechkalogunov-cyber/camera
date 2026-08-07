@@ -299,7 +299,6 @@
                         guard phase == .ended else { return }
                         playArchive(from: instant)
                     },
-                    onHoverInstant: { instant in archive.preview(at: instant) },
                     onZoom: { stop in archive.zoom(stop) },
                     onActivateMarker: { cluster in
                         // A cluster is one or more markers at the same x; the earliest
@@ -328,16 +327,15 @@
                     onTogglePause: {
                         Task { await session.togglePlaybackPause() }
                     },
+                    // ⛔ ONE ACTION, NOT TWO. This used to seek to the stepped instant and then
+                    // call `stepPlaybackFrame`, which stopped the session it had just started —
+                    // the two fought and the button did nothing visible. Stepping is a seek of one
+                    // frame's worth of time, and the seek is the whole of it.
                     onFrameStep: { forward in
                         let fps = session.format?.declaredFPS ?? 25
-                        let seconds = (forward ? 1 : -1) / max(fps, 1)
-                        archive.stepPlayhead(by: seconds)
+                        archive.stepPlayhead(by: (forward ? 1 : -1) / max(fps, 1))
                         guard let instant = archive.archive?.playhead else { return }
                         playArchive(from: instant)
-                        Task {
-                            await session.stepPlaybackFrame(
-                                forward: forward, framesPerSecond: fps)
-                        }
                     },
                     onRate: { stop in
                         Task { await session.setPlaybackRate(stop) }

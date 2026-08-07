@@ -15,7 +15,7 @@
 //  TimelineClock.swift).
 //
 //  WHAT THIS VIEW DOES NOT DO. It fetches nothing, owns no model, spawns no `Task` and reads no
-//  singleton. The window, the zoom stop, the playhead and the preview all arrive as values and every
+//  singleton. The window, the zoom stop and the playhead all arrive as values and every
 //  gesture leaves through a callback, so the supervisor wires it to `VigilCore` and a preview wires
 //  it to a literal.
 //
@@ -96,15 +96,8 @@ package struct VTimelineView: View {
     /// Whether release-time magnetism applies. `false` while ⌥ is held (UX.md §7.3).
     package let magnetismEnabled: Bool
 
-    /// The hover/scrub preview card, or `nil` to show none.
-    package let preview: VTimelinePreview?
-
     /// Called as a scrub progresses. Only ``VTimelineScrubPhase/ended`` should issue a seek.
     package let onScrub: (VTimelineScrubPhase, Date) -> Void
-
-    /// Called with the instant under the pointer, and with `nil` when the pointer leaves. Drives
-    /// the preview card's keyframe request.
-    package let onHoverInstant: (Date?) -> Void
 
     /// Called with a requested zoom stop. The caller re-anchors and clamps the window — this view
     /// never mutates the window it was given.
@@ -150,9 +143,7 @@ package struct VTimelineView: View {
                  isScrubbing: Bool = false,
                  isLoading: Bool = false,
                  magnetismEnabled: Bool = true,
-                 preview: VTimelinePreview? = nil,
                  onScrub: @escaping (VTimelineScrubPhase, Date) -> Void = { _, _ in },
-                 onHoverInstant: @escaping (Date?) -> Void = { _ in },
                  onZoom: @escaping (TimelineZoom) -> Void = { _ in },
                  onActivateMarker: @escaping (TimelineMarkerCluster) -> Void = { _ in },
                  rate: TimelinePlaybackRate = .normal,
@@ -170,9 +161,7 @@ package struct VTimelineView: View {
         self.isScrubbing = isScrubbing
         self.isLoading = isLoading
         self.magnetismEnabled = magnetismEnabled
-        self.preview = preview
         self.onScrub = onScrub
-        self.onHoverInstant = onHoverInstant
         self.onZoom = onZoom
         self.onActivateMarker = onActivateMarker
         self.rate = rate
@@ -242,20 +231,40 @@ package struct VTimelineView: View {
                 .lineLimit(1)
             Spacer(minLength: VTheme.Space.md)
             VTimelineLegend()
-            if isRateAdjustable {
-                VButton(symbol: isPaused ? VTheme.Symbol.play : VTheme.Symbol.pause,
-                        style: .ghost,
-                        accessibilityLabel: isPaused ? "Resume playback" : "Pause playback",
-                        action: onTogglePause)
-                VButton(symbol: VTheme.Symbol.frameBack, style: .ghost,
-                        accessibilityLabel: "Previous frame") { onFrameStep(false) }
-                VButton(symbol: VTheme.Symbol.frameForward, style: .ghost,
-                        accessibilityLabel: "Next frame") { onFrameStep(true) }
-            }
+            transport
             VTimelineSpeedControl(rate: rate, isEnabled: isRateAdjustable, onRate: onRate)
             VTimelineZoomControl(zoom: zoom, window: window, clock: clock, onZoom: onZoom)
         }
         .accessibilityHidden(true)
+    }
+
+    /// Pause and the two single-frame steps.
+    ///
+    /// ⛔ ALWAYS DRAWN, NEVER CONDITIONAL. These three used to appear only while an archive was
+    /// open, so opening or closing a recording changed how many controls the header held — the row
+    /// re-flowed, everything to its left moved, and a control the user was aiming at was somewhere
+    /// else by the time they clicked. A toolbar whose shape depends on state is a toolbar nobody
+    /// can build a habit with. Disabled is the right way to say "not now": same size, same
+    /// position, dimmed — exactly what ``VTimelineSpeedControl`` beside it already does.
+    ///
+    /// ⚠️ Pause is *not* gated on ``isRateAdjustable``. Speed is meaningless on a live stream —
+    /// `Scale: 4` asks for the next four seconds — but stopping one is not: it freezes the picture
+    /// on its last frame, which is the whole point of a stop button on a camera.
+    private var transport: some View {
+        HStack(spacing: VTheme.Space.xxs) {
+            VButton(symbol: isPaused ? VTheme.Symbol.play : VTheme.Symbol.pause,
+                    style: .ghost,
+                    accessibilityLabel: isPaused ? "Resume playback" : "Pause playback",
+                    action: onTogglePause)
+            VButton(symbol: VTheme.Symbol.frameBack, style: .ghost,
+                    accessibilityLabel: "Previous frame") { onFrameStep(false) }
+                .disabled(!isRateAdjustable)
+                .opacity(isRateAdjustable ? 1 : 0.55)
+            VButton(symbol: VTheme.Symbol.frameForward, style: .ghost,
+                    accessibilityLabel: "Next frame") { onFrameStep(true) }
+                .disabled(!isRateAdjustable)
+                .opacity(isRateAdjustable ? 1 : 0.55)
+        }
     }
 
     /// The first camera's name, or an empty string when the playback window has no camera yet.
@@ -271,7 +280,7 @@ package struct VTimelineView: View {
 
     // MARK: - Lanes
 
-    /// The ruler, the lanes, the playhead, the hover cursor and the preview card, all in one
+    /// The ruler, the lanes, the playhead and the hover cursor, all in one
     /// coordinate space so a pointer position means the same thing to every one of them.
     private func lanes(width: CGFloat) -> some View {
         let geometry = TimelineGeometry(window: window, width: Double(width))
@@ -307,13 +316,10 @@ package struct VTimelineView: View {
             switch phase {
             case .active(let point):
                 hoverX = point.x
-                onHoverInstant(resolve(x: point.x, in: geometry))
             case .ended:
                 hoverX = nil
-                onHoverInstant(nil)
             }
         }
-        .overlay(alignment: .topLeading) { previewCard(width: width) }
     }
 
     /// The 1 pt cursor line that follows the pointer (DESIGN.md §9.14, hover row). Suppressed
@@ -341,33 +347,6 @@ package struct VTimelineView: View {
                                   isScrubbing: isScrubbing)
                 .position(x: CGFloat(geometry.x(at: playhead)), y: stackHeight / 2)
         }
-    }
-
-    /// The preview card, floating `previewGap` above the whole control.
-    ///
-    /// The card is taller than the timeline strip, so it is placed by an alignment guide rather than
-    /// by a fixed offset: setting the child's `.top` guide to its own height plus the gap puts its
-    /// bottom edge exactly `previewGap` above the control's top edge, whatever the card measures.
-    /// The overlay is deliberately not clipped — the playback window decides how far it may rise.
-    @ViewBuilder
-    private func previewCard(width: CGFloat) -> some View {
-        // Hoisted: the guide closure escapes, and every `VTheme`-derived value is `@MainActor`.
-        let gap = VTimelineMetrics.previewGap
-        if let preview, let hoverX, width > 0 {
-            VTimelinePreviewCard(preview: preview, clock: clock)
-                .alignmentGuide(VerticalAlignment.top) { dimensions in
-                    dimensions[VerticalAlignment.bottom] + gap
-                }
-                .offset(x: cardX(hoverX: hoverX, width: width))
-        }
-    }
-
-    /// The card's leading edge, clamped so it never leaves the bar (UX.md §7.3: "clamped to the
-    /// window").
-    private func cardX(hoverX: CGFloat, width: CGFloat) -> CGFloat {
-        let ideal = hoverX - VTimelineMetrics.previewWidth / 2
-        let maximum = max(0, width - VTimelineMetrics.previewWidth)
-        return min(max(0, ideal), maximum)
     }
 
     // MARK: - Gestures

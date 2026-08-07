@@ -140,6 +140,10 @@ package struct VTimelineZoomControl: View {
     /// buttons and `⌘-`/`⌘=` are the precise path (UX.md §7.3).
     package static let sliderWidth: CGFloat = 74
 
+    /// The zoom read-out's fixed width: enough for the widest stop (`15 min`) at the mono size,
+    /// plus the horizontal padding it used to add.
+    package static let spanLabelWidth: CGFloat = 62
+
     /// The current stop.
     package let zoom: TimelineZoom
 
@@ -191,8 +195,13 @@ package struct VTimelineZoomControl: View {
                                                           locale: clock.locale))
                 .vType(VTheme.Typography.monoSmall.numeric)
                 .foregroundStyle(VTheme.Color.Text.secondary)
-                .padding(.horizontal, VTheme.Space.xs)
                 .padding(.vertical, VTheme.Space.hair)
+                // ⛔ A FIXED BOX, because this label is the width of its text — `15 min`, `3 h`,
+                // `24 h` — and it sits at the trailing end of a row. Every zoom step changed its
+                // width, which moved the two zoom buttons, the speed control and the legend that
+                // share the row: the user aimed at zoom-in, the control it re-flowed under their
+                // pointer. Widest string plus its padding, once, and the row stops moving.
+                .frame(width: Self.spanLabelWidth)
                 .overlay {
                     VTheme.Radius.shape(VTheme.Radius.sm)
                         .strokeBorder(VTheme.Color.Stroke.default,

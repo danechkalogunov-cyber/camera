@@ -101,9 +101,7 @@ package struct VRecordingsView: View {
                           isScrubbing: archive.isScrubbing,
                           isLoading: archive.isLoading,
                           magnetismEnabled: archive.magnetismEnabled,
-                          preview: archive.preview,
                           onScrub: actions.onScrub,
-                          onHoverInstant: actions.onHoverInstant,
                           onZoom: actions.onZoom,
                           onActivateMarker: actions.onActivateMarker)
                 .overlay(alignment: .top) {

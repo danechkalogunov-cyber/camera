@@ -260,24 +260,6 @@ final class ArchiveCoordinator {
         archive = current
     }
 
-    /// Shows what is under the pointer, without moving the playhead.
-    ///
-    /// `nil` when the pointer leaves. The preview carries the instant and what kind of recording is
-    /// there — continuous, motion, alarm — and **no image**: a thumbnail needs a decoded frame, and
-    /// this app's decode path is passthrough and never produces one. `VTimelinePreview` takes the
-    /// image as an optional for exactly this case, so the tooltip is honest rather than absent.
-    func preview(at instant: Date?) {
-        guard var current = archive else { return }
-        guard let instant else {
-            guard current.preview != nil else { return }
-            current.preview = nil
-            archive = current
-            return
-        }
-        current.preview = VTimelinePreview(instant: instant, kind: Self.kind(at: instant, in: current))
-        archive = current
-    }
-
     /// Steps the playhead, clamped to the day being shown.
     ///
     /// Clamped rather than wrapped or allowed to run past midnight: the index loaded is one day's,
@@ -319,13 +301,6 @@ final class ArchiveCoordinator {
     func moveToDayEdge(start: Bool) {
         guard let current = archive else { return }
         movePlayhead(to: start ? current.day.start : current.day.end, isScrubbing: false)
-    }
-
-    /// What kind of recording covers an instant, or `nil` when it lies in a gap.
-    private static func kind(at instant: Date, in archive: VLibraryArchive) -> VTimelineSegmentKind? {
-        guard let index = archive.tracks.first?.index,
-              let position = index.containing(instant) else { return nil }
-        return VTimelineSegmentKind(index.segments[position].recordType)
     }
 
     /// Changes the visible span, re-anchored on the playhead.
@@ -481,8 +456,7 @@ final class ArchiveCoordinator {
                                   playhead: Self.openingInstant(for: day,
                                                                 carrying: carried,
                                                                 clock: clock),
-                                  isLoading: false,
-                                  preview: nil)
+                                  isLoading: false)
     }
 
     /// The archive as it looks while a read is in flight.

@@ -175,9 +175,7 @@ private enum VTimelineSample {
                                          spanSeconds: 2 * 3_600),
                   zoom: TimelineZoom.threeHours,
                   clock: VTimelineSample.clock,
-                  playhead: VTimelineSample.now,
-                  preview: VTimelinePreview(instant: VTimelineSample.now,
-                                            kind: VTimelineSegmentKind.motion))
+                  playhead: VTimelineSample.now)
         .padding(.top, 140)
         .padding(VTheme.Space.md)
         .frame(width: 1_180)

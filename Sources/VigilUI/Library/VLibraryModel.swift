@@ -351,9 +351,6 @@ package struct VLibraryArchive {
     /// Whether release-time magnetism applies. `false` while ⌥ is held (UX.md §7.3).
     package var magnetismEnabled: Bool
 
-    /// The hover/scrub preview card, or `nil` to show none.
-    package var preview: VTimelinePreview?
-
     /// Creates an archive mount.
     package init(tracks: [VTimelineTrack],
                  day: TimelineDay,
@@ -362,8 +359,7 @@ package struct VLibraryArchive {
                  playhead: Date,
                  isScrubbing: Bool = false,
                  isLoading: Bool = false,
-                 magnetismEnabled: Bool = true,
-                 preview: VTimelinePreview? = nil) {
+                 magnetismEnabled: Bool = true) {
         self.tracks = tracks
         self.day = day
         self.window = window
@@ -372,7 +368,6 @@ package struct VLibraryArchive {
         self.isScrubbing = isScrubbing
         self.isLoading = isLoading
         self.magnetismEnabled = magnetismEnabled
-        self.preview = preview
     }
 }
 
@@ -458,7 +453,6 @@ package struct VLibraryActions {
     package var onScrub: (VTimelineScrubPhase, Date) -> Void = { _, _ in }
 
     /// The instant under the pointer, and `nil` when it leaves.
-    package var onHoverInstant: (Date?) -> Void = { _ in }
 
     /// A requested zoom stop. The caller re-anchors and clamps the window.
     package var onZoom: (TimelineZoom) -> Void = { _ in }
