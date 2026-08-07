@@ -141,6 +141,22 @@ public actor AlertStreamMonitor {
         states.stream()
     }
 
+    /// ``notifications()``, registered before this returns.
+    ///
+    /// ⛔ For the caller that also **starts** this monitor. `notifications()` is `nonisolated` and
+    /// therefore registers its consumer in a detached step, so an alert delivered between the
+    /// subscription and its registration goes to nobody — and a device with an alert already
+    /// waiting delivers one the instant the stream opens. Awaiting registration is the whole
+    /// difference, and it is why `EventMonitorService` uses this one.
+    public func registeredNotifications() async -> AsyncStream<EventNotificationAlert> {
+        await events.registeredStream()
+    }
+
+    /// ``stateChanges()``, registered before this returns. Same reason.
+    public func registeredStateChanges() async -> AsyncStream<AlertStreamState> {
+        await states.registeredStream()
+    }
+
     /// How many consumers of `notifications()` have finished registering.
     ///
     /// `Broadcaster.stream()` registers asynchronously by contract, so a test that starts the read

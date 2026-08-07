@@ -356,18 +356,29 @@ public actor EventMonitorService {
         guard let monitor, isCurrent(key: key, generation: generation) else { return }
         subscriptions[key]?.monitor = monitor
 
+        // ⛔ BOTH STREAMS ARE REGISTERED BEFORE THE DEVICE IS STARTED, and the order is the whole
+        // point. `notifications()` registers its consumer in a detached step, so subscribing inside
+        // the child task and then calling `restart` below left a window in which the monitor could
+        // deliver its first alert to a broadcaster with no consumers — and a device with an alert
+        // already waiting delivers one the instant the stream opens. The alert was not late, it was
+        // gone: no record, no retry, no complaint. CI found it as a test whose scripted camera
+        // sends exactly one alert and closes; a real camera hides it, because the next alert makes
+        // the loss look like nothing happened.
+        let alerts = await monitor.registeredNotifications()
+        let states = await monitor.registeredStateChanges()
+
         // The pump and the state watcher are children of this task, so one `cancel()` on the
         // supervisor stops both and nothing is left holding a broadcaster continuation.
         await withTaskGroup(of: Void.self) { group in
             group.addTask { [weak self] in
-                for await alert in monitor.notifications() {
+                for await alert in alerts {
                     guard let self else { return }
                     await self.handle(alert, key: key, generation: generation)
                 }
             }
             group.addTask { [weak self] in
                 guard let self else { return }
-                await self.watchStates(of: monitor, key: key, generation: generation)
+                await self.watchStates(states, of: monitor, key: key, generation: generation)
             }
             await self.restart(monitor)
             await group.waitForAll()
@@ -375,11 +386,15 @@ public actor EventMonitorService {
     }
 
     /// Consumes the monitor's state changes and applies the service's own restart policy.
-    private func watchStates(of monitor: AlertStreamMonitor, key: EventDeviceKey,
+    ///
+    /// The stream is passed in rather than opened here, so that it is registered before the device
+    /// is started — see the note in ``supervise(key:generation:)``.
+    private func watchStates(_ states: AsyncStream<AlertStreamState>,
+                             of monitor: AlertStreamMonitor, key: EventDeviceKey,
                              generation: Int) async {
         var attempt = 0
         var reprobes = 0
-        for await state in monitor.stateChanges() {
+        for await state in states {
             if Task.isCancelled { return }
             guard isCurrent(key: key, generation: generation) else { return }
             record(state: state, key: key, generation: generation)

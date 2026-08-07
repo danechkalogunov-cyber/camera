@@ -92,6 +92,76 @@ import VigilProtocols
         #expect(values.isEmpty)
     }
 
+    /// ⛔ The whole reason `registeredStream()` exists, written as the failure it prevents: an
+    /// element yielded immediately after subscribing must not be lost. With `stream()` this test is
+    /// a coin toss — every other test in this suite has to spin on `consumerCount` before yielding,
+    /// which is the same race spelled out by hand — and in `EventMonitorService` it was not a coin
+    /// toss but a dropped alert, because the code that subscribes is the code that starts the
+    /// device.
+    @Test func registeredStreamCannotMissAnElementYieldedRightAfterIt() async {
+        let broadcaster = Broadcaster<Int>()
+        let stream = await broadcaster.registeredStream()
+        // No wait, deliberately. Registration is complete or this test is pointless.
+        #expect(await broadcaster.consumerCount == 1)
+        await broadcaster.yield(7)
+        await broadcaster.finish()
+
+        var values: [Int] = []
+        for await value in stream { values.append(value) }
+        #expect(values == [7])
+    }
+
+    /// Registered consumers sit alongside the ones that arrived through `stream()`; one broadcaster,
+    /// one fan-out.
+    @Test func registeredAndUnregisteredConsumersBothReceive() async {
+        let broadcaster = Broadcaster<Int>()
+        let late = broadcaster.stream()
+        while await broadcaster.consumerCount < 1 { await Task.yield() }
+        let eager = await broadcaster.registeredStream()
+
+        await broadcaster.yield(1)
+        await broadcaster.finish()
+
+        var eagerValues: [Int] = []
+        for await value in eager { eagerValues.append(value) }
+        var lateValues: [Int] = []
+        for await value in late { lateValues.append(value) }
+        #expect(eagerValues == [1])
+        #expect(lateValues == [1])
+    }
+
+    /// A stream registered after `finish()` completes rather than hanging, exactly as `stream()`
+    /// does — shutdown is not a special case a caller should have to know about.
+    @Test func registeredStreamFinishesWhenTheBroadcasterAlreadyHas() async {
+        let broadcaster = Broadcaster<Int>()
+        await broadcaster.finish()
+
+        let stream = await broadcaster.registeredStream()
+        var values: [Int] = []
+        for await value in stream { values.append(value) }
+        #expect(values.isEmpty)
+        #expect(await broadcaster.consumerCount == 0)
+    }
+
+    /// `replaysLatest` works the same way through this door: a state-shaped broadcaster hands the
+    /// current value to a consumer that registers eagerly.
+    @Test func registeredStreamReplaysTheLatestState() async {
+        let broadcaster = Broadcaster<String>(replaysLatest: true)
+        let early = broadcaster.stream()
+        while await broadcaster.consumerCount < 1 { await Task.yield() }
+        await broadcaster.yield("streaming")
+
+        let eager = await broadcaster.registeredStream()
+        await broadcaster.finish()
+
+        var eagerValues: [String] = []
+        for await value in eager { eagerValues.append(value) }
+        var earlyValues: [String] = []
+        for await value in early { earlyValues.append(value) }
+        #expect(eagerValues == ["streaming"])
+        #expect(earlyValues == ["streaming"])
+    }
+
     @Test func broadcasterDeregistersAConsumerThatStopsListening() async {
         let broadcaster = Broadcaster<Int>()
         do {

@@ -52,6 +52,32 @@ public actor Broadcaster<Element: Sendable> {
         }
     }
 
+    /// A fresh stream that is **already registered** when this returns.
+    ///
+    /// ⛔ THE RACE THIS EXISTS FOR IS NOT HYPOTHETICAL. `stream()` is `nonisolated`, so it can only
+    /// hand the continuation to the actor in a detached step, and an element yielded in that window
+    /// reaches every consumer except the one still registering. `EventMonitorService` opened the
+    /// device's alert stream immediately after starting the task that consumes it, so a camera that
+    /// had an alert waiting — which Hikvision's `alertStream` does on connect — could deliver it
+    /// into a broadcaster with no consumers yet and lose it. It cost a CI run to find, as a test
+    /// whose scripted device sends exactly one alert and then closes: the monitor was built, the
+    /// counters were right, and the record never arrived.
+    ///
+    /// This method is actor-isolated, so registration happens *before* the caller resumes and
+    /// nothing yielded afterwards can be missed. Use it wherever the producer is started by the
+    /// same code that subscribes; ``stream()`` remains the right call for a consumer that attaches
+    /// to something already running.
+    public func registeredStream() -> AsyncStream<Element> {
+        let (stream, continuation) = AsyncStream<Element>.makeStream(of: Element.self,
+                                                                     bufferingPolicy: policy)
+        let id = UUID()
+        continuation.onTermination = { _ in
+            Task { await self.deregister(id) }
+        }
+        register(id, continuation)
+        return stream
+    }
+
     /// Delivers `element` to every registered consumer.
     public func yield(_ element: Element) {
         guard !isFinished else { return }
