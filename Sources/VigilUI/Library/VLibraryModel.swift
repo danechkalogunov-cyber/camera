@@ -296,6 +296,15 @@ package enum VLibraryMetrics {
     /// 56 pt. An event row (UX.md §9.1: "list (☰, 56 pt rows)").
     package static let eventRow: CGFloat = 56
 
+    /// 28 pt. The screen title's content box, before the header's own padding.
+    ///
+    /// ⛔ FIXED, BECAUSE THE THREE SCREENS DO NOT CARRY THE SAME CONTROLS. Recordings has a folder
+    /// button in the header, Events has a filter, Bookmarks has nothing at all — so the row was as
+    /// tall as whatever it held, and the *title* sat a few points higher on Bookmarks than on the
+    /// other two. Switching tabs made the heading jump. A title's baseline must not depend on what
+    /// happens to be beside it, and 28 pt clears both the 22 pt title line and the small controls.
+    package static let headerContent: CGFloat = 28
+
     /// The clip player's height inside the Recordings screen. Tall enough for a 16:9 picture at the
     /// panel's usual width without pushing the list off the bottom of a laptop display.
     package static let playerHeight: CGFloat = 360

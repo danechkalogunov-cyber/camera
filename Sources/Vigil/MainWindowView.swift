@@ -277,6 +277,17 @@ struct MainWindowView: View {
                 .onHover { hovering in
                     window.cycle = window.cycle.paused(hovering)
                 }
+                // ⛔ A CLICK ON THE PICTURE TAKES THE CARET OUT OF THE SEARCH FIELD. macOS keeps a
+                // text field first responder until something else asks for it, and nothing on the
+                // stage is focusable — so after typing in the toolbar's search box the only way out
+                // was to click a sidebar row, which also *did* something. Clicking the picture is
+                // the natural "never mind" gesture and it now performs it.
+                //
+                // ⚠️ `simultaneousGesture`, so the stage's own click handling — selecting a tile,
+                // scrubbing, double-click to fill — is untouched; and on the stage only, because a
+                // blanket window-wide version would resign the connect form's own field on the very
+                // click that focused it.
+                .simultaneousGesture(TapGesture().onEnded { resignSearchFocus() })
                 .vTileActions(tileActions)
                 .overlay { keyboardRegionRing(.stage) }
 
@@ -427,16 +438,37 @@ struct MainWindowView: View {
     ///
     /// An anchored overlay rather than a `.popover`: `VOverflowMenuView` carries its own E2 glass,
     /// and a popover would draw a second system chrome around it.
+    ///
+    /// ⛔ TWO THINGS A MENU MUST DO THAT THIS ONE DID NOT. It must close when you click away —
+    /// `Esc` and choosing an item were the only ways out, so a menu opened by accident stayed on
+    /// screen over the picture and read as a hung window. And it must hang **under its button**:
+    /// the trailing inset was one `lg`, while the "…" sits a whole inspector-toggle further in, so
+    /// the panel appeared offset from the control that opened it.
     @ViewBuilder
     private var overflowMenu: some View {
         if window.isOverflowMenuOpen {
-            VOverflowMenuView(disabledItems: unavailableOverflowItems,
-                              onSelect: { select($0) },
-                              onDismiss: { window.isOverflowMenuOpen = false })
-                .padding(.top, VTheme.Metrics.toolbarHeight)
-                .padding(.trailing, VTheme.Space.lg)
+            ZStack(alignment: .topTrailing) {
+                // The click-away target. Transparent, fills the window, and swallows the click that
+                // dismisses — which is what stops that click also hitting whatever is underneath.
+                SwiftUI.Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { window.isOverflowMenuOpen = false }
+                VOverflowMenuView(disabledItems: unavailableOverflowItems,
+                                  onSelect: { select($0) },
+                                  onDismiss: { window.isOverflowMenuOpen = false })
+                    .padding(.top, VTheme.Metrics.toolbarHeight)
+                    .padding(.trailing, Self.overflowMenuInset)
+            }
         }
     }
+
+    /// How far the "…" button's trailing edge sits from the window's.
+    ///
+    /// The toolbar's own trailing padding, plus the inspector toggle beside it, plus the gap
+    /// between the two — read off `VToolbarView`'s trailing group, which is the only thing that
+    /// decides it.
+    private static let overflowMenuInset: CGFloat =
+        VTheme.Space.md + VTheme.Metrics.md + VTheme.Space.sm
 
     // MARK: - Identity
 
@@ -452,6 +484,19 @@ struct MainWindowView: View {
     /// The camera's identifier, or the stable placeholder the tile keeps before the record exists.
     var cameraID: CameraID {
         session.camera?.id ?? RootView.pendingCameraID
+    }
+
+    /// Takes the keyboard out of whatever text field holds it.
+    ///
+    /// `makeFirstResponder(nil)` rather than a `@FocusState` write: the search field's focus lives
+    /// inside `VToolbarView`, and AppKit's first responder is the fact both it and SwiftUI's focus
+    /// are derived from — so this clears the caret wherever it is, including a field this view has
+    /// no binding to.
+    func resignSearchFocus() {
+        // Named `keyWindow` because `window` in this type is the window *state*, not an `NSWindow`.
+        guard let keyWindow = NSApp.keyWindow,
+              keyWindow.firstResponder is NSText else { return }
+        keyWindow.makeFirstResponder(nil)
     }
 
     // MARK: - Mapping

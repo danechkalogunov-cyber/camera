@@ -209,12 +209,15 @@ public actor CredentialStore {
         var status = keychain.add(attributes)
 
         if status == errSecDuplicateItem {
-            // The update dictionary MUST NOT carry kSecClass — the Keychain answers errSecParam if
-            // it does — and the access group belongs to the query, not to the update.
-            var update = attributes
-            update.removeValue(forKey: kSecClass as String)
-            update.removeValue(forKey: kSecAttrAccessGroup as String)
-            status = keychain.update(baseQuery(descriptor.ref), update)
+            // ⛔ REPLACED, NOT UPDATED, AND THE ACL IS THE REASON. `SecItemUpdate` cannot change an
+            // item's access control, so an item written before ``sharedAccess(label:)`` existed
+            // would keep prompting for the login password no matter how many times the user
+            // re-entered the camera's. Deleting and re-adding is what actually repairs it, and it
+            // is safe here in the way it would not be elsewhere: the secret being written is in
+            // hand, so a failure between the two steps loses nothing that cannot be written again
+            // by the same call that failed.
+            _ = keychain.delete(baseQuery(descriptor.ref))
+            status = keychain.add(attributes)
         }
         guard status == errSecSuccess else {
             let error = CredentialError.from(status: status, operation: "save")
@@ -370,7 +373,51 @@ public actor CredentialStore {
             kSecValueData as String: Data(credential.secret.utf8),
         ]
         if let accessGroup { attributes[kSecAttrAccessGroup as String] = accessGroup }
+        if let access = Self.sharedAccess(label: descriptor.label) {
+            attributes[kSecAttrAccess as String] = access
+        }
         return attributes
+    }
+
+    /// An ACL that every application on this Mac can read, so macOS never asks for the login
+    /// password to hand Vigil back its own item.
+    ///
+    /// ⛔ WHY THIS EXISTS, AND WHAT IT COSTS. A file-based Keychain item is bound by default to the
+    /// **exact binary** that created it. Rebuild Vigil — which is what happens on every `git pull`
+    /// here — and the signature no longer matches, so macOS puts up "Vigil wants to use your
+    /// confidential information" and asks for the account password, once per launch, forever.
+    /// "Always Allow" does not survive the next build either, because it trusts that binary and not
+    /// the next one. The result is a camera password typed into a system dialog every single time
+    /// the app starts, which is precisely the thing R1.4's zero-input relaunch promises not to ask
+    /// for.
+    ///
+    /// ⚠️ THE COST IS REAL AND IS NOT HIDDEN: the item becomes readable by any process running as
+    /// this user without a prompt. That is the same posture as most self-built apps and is a
+    /// deliberate trade for a camera password on a machine the owner builds the app on; it is not
+    /// the posture a signed, distributed build should ship with. When Vigil is signed with a stable
+    /// identity this should become the fallback rather than the rule, and the item's ACL can then
+    /// name that identity instead of naming everyone.
+    ///
+    /// `nil` on any failure, and the caller simply omits the attribute — a prompting item is a far
+    /// better outcome than no saved password at all.
+    private static func sharedAccess(label: String) -> SecAccess? {
+        var access: SecAccess?
+        guard SecAccessCreate(label as CFString, nil, &access) == errSecSuccess,
+              let access else { return nil }
+        var aclList: CFArray?
+        guard SecAccessCopyACLList(access, &aclList) == errSecSuccess,
+              let acls = aclList as? [SecACL] else { return access }
+        for acl in acls {
+            var applications: CFArray?
+            var description: CFString?
+            var prompt = SecKeychainPromptSelector()
+            guard SecACLCopyContents(acl, &applications, &description, &prompt) == errSecSuccess
+            else { continue }
+            // A `nil` application list is the documented way to say "every application is trusted";
+            // an *empty* array would say the opposite — nobody — and prompt every time.
+            _ = SecACLSetContents(acl, nil, description ?? "" as CFString, prompt)
+        }
+        return access
     }
 }
 

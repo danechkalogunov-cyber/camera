@@ -116,10 +116,25 @@ extension MainWindowView {
     /// always shares its account, and `admin` is the answer often enough that pre-filling it is
     /// worth more than the rare correction.
     func addCamera() {
-        session.disconnect()
+        // ⛔ THE PICTURE STAYS UP BEHIND THE FORM. This used to call `disconnect()`, which stopped
+        // the stream and left the user on a form with no way back to what they had been watching —
+        // the only exit was to connect *something*. Nothing about adding a camera requires
+        // stopping the one already running: `connect(_:)` stops the old session itself when the
+        // user submits, so the two paths end in the same place, and pressing Back is now free.
+        session.phase = .connect
         session.form.host = ""
         session.form.password = ""
         session.form.clearDiagnosis()
+    }
+
+    /// Leaves the connect form for the picture that is still running behind it.
+    ///
+    /// Offered only when there is something to go back to — see `RootView`, which passes this in
+    /// only while a stream is live.
+    func leaveConnectForm() {
+        session.form.isConnecting = false
+        session.form.clearDiagnosis()
+        session.phase = .live
     }
 
     /// Clears the stage's cell: the stream stops and the window goes back to the connect form.

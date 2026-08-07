@@ -160,7 +160,12 @@ struct RootView: View {
                             onConnect: { session.connect($0) },
                             onRemedy: { session.perform($0) },
                             onScan: { beginScan() },
-                            onTest: { session.testConnection($0) })
+                            onTest: { session.testConnection($0) },
+                            // ⚠️ Offered only when there is a picture to go back to. ⌘N leaves the
+                            // stream running behind this form, so Back is a return; on a first
+                            // launch there is nothing behind it and a Back button would be a
+                            // control that leads to an empty room.
+                            onBack: session.live.isActive ? { returnToStage() } : nil)
         case .live:
             // The full window — toolbar, camera list, stage, inspector, status bar — around the
             // same tile `liveVideo` mounts. To fall back to the bare picture, substitute
@@ -218,6 +223,16 @@ struct RootView: View {
     private func endAutoScan() {
         autoScan?.stop()
         autoScan = nil
+    }
+
+    /// Leaves the connect form for the picture that is still running behind it.
+    ///
+    /// The mirror of ⌘N: that puts the form up without stopping the stream, and this puts the
+    /// stream's window back. Nothing is reconnected — the session was never stopped.
+    private func returnToStage() {
+        session.form.isConnecting = false
+        session.form.clearDiagnosis()
+        session.phase = .live
     }
 
     /// Opens the scan sheet and starts a run.

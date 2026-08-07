@@ -57,6 +57,16 @@ package struct ConnectFormView: View {
     /// Runs the credential-free prefix of Stream Doctor against the values currently in the form.
     package let onTest: ((ConnectRequest) -> Void)?
 
+    /// Returns to whatever was on screen before this form, or `nil` when there is nothing behind
+    /// it.
+    ///
+    /// ⛔ Optional for the same reason ``onScan`` is: the control exists only where it leads
+    /// somewhere. On a first launch the form *is* the app and a Back button would promise a screen
+    /// that does not exist; with a camera already streaming, ⌘N puts this form up in front of it
+    /// and leaving without connecting has to be possible — before this, the only way out of the
+    /// form was to connect something.
+    package let onBack: (() -> Void)?
+
     @FocusState private var focus: ConnectField?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -70,12 +80,14 @@ package struct ConnectFormView: View {
                  onConnect: @escaping (ConnectRequest) -> Void,
                  onRemedy: @escaping (ConnectRemedy) -> Void = { _ in },
                  onScan: (() -> Void)? = nil,
-                 onTest: ((ConnectRequest) -> Void)? = nil) {
+                 onTest: ((ConnectRequest) -> Void)? = nil,
+                 onBack: (() -> Void)? = nil) {
         self._state = state
         self.onConnect = onConnect
         self.onRemedy = onRemedy
         self.onScan = onScan
         self.onTest = onTest
+        self.onBack = onBack
     }
 
     // MARK: - View
@@ -123,6 +135,7 @@ package struct ConnectFormView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
+            backRow
             hero
             Spacer().frame(height: VTheme.Space.xl)
             Text("Connect to a camera", bundle: .vigilUI)
@@ -151,6 +164,22 @@ package struct ConnectFormView: View {
     /// `vigil.aperture` symbol, and `VigilUI/Resources/Symbols.xcassets` does not exist yet. An
     /// unresolved `Image(systemName:)` renders as nothing, and a blank hero is the first thing the
     /// customer would see. Swap it back when the asset catalogue ships (DESIGN.md §8.5, §9.18).
+    /// `‹ Back`, above the hero, when there is something behind this form.
+    ///
+    /// Leading and ghost: it is a way out, not an action the form is asking for, and the primary
+    /// gesture on this screen is still Return.
+    @ViewBuilder
+    private var backRow: some View {
+        if let onBack {
+            HStack(spacing: 0) {
+                VButton("Back", symbol: VTheme.Symbol.stepBack, style: .ghost,
+                        size: .sm, action: onBack)
+                Spacer(minLength: 0)
+            }
+            .padding(.bottom, VTheme.Space.md)
+        }
+    }
+
     private var hero: some View {
         VTheme.Symbol.camera.image()
             .vIcon(size: VTheme.Icon.hero, weight: VTheme.Icon.Weight.hero)

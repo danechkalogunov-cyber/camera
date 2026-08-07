@@ -126,13 +126,20 @@ extension DeviceInfoService {
     /// will not say is not a partially-loaded panel — it is a camera whose clock we cannot check.
     /// The row simply does not appear, which `ClockAgreement.unknown` draws as nothing at all.
     ///
-    /// The session has already read this endpoint on the connect path and caches it for five
-    /// minutes, so this is normally free, and it is the same read that sets the device-local
-    /// playback quirk — which is why the two are reported together.
+    /// It is the same read that sets the device-local playback quirk, which is why the two are
+    /// reported together.
+    ///
+    /// ⛔ FORCED, AND THE CACHE IS EXACTLY WHY THE ROW WAS WRONG. `time()` answers from a
+    /// five-minute box, so this compared a reading taken up to five minutes ago against `Date()`
+    /// now — and the difference between those two is not the camera's clock error, it is the age of
+    /// the cache. The row therefore showed a **negative** skew that grew towards −5:00 and reset
+    /// whenever the box expired, on a camera whose clock was fine. A measurement of "how far out is
+    /// this clock" has to be a fresh sample by definition; one small `GET` per panel refresh is
+    /// what that costs.
     private func readClock(from session: ISAPIDeviceSession,
                            into identity: inout InspectorDeviceIdentity) async {
         do {
-            let time = try await session.time()
+            let time = try await session.time(force: true)
             let now = Date()
             identity.clockSkewSeconds = time.skew(against: now)
             identity.stampsLocalTimeAsUTC = time.stampsLocalTimeAsUTC(reference: now)

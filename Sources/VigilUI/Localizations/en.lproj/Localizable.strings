@@ -179,6 +179,7 @@
 "Current Layout" = "Current Layout";
 "Recordings" = "Recordings";
 "Events" = "Events";
+"Back" = "Back";
 "Bookmarks" = "Bookmarks";
 
 /* The muted row a section shows instead of disappearing (UX.md §4.1, §12.2). CAMERAS has

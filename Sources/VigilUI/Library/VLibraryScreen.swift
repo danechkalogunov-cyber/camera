@@ -152,6 +152,9 @@ package struct VLibraryHeader<Trailing: View>: View {
                 Spacer(minLength: VTheme.Space.md)
                 trailing()
             }
+            // The content box is the same on every screen whatever the trailing slot holds — see
+            // `VLibraryMetrics.headerContent`.
+            .frame(height: VLibraryMetrics.headerContent)
             .padding(.horizontal, VTheme.Space.xl)
             .padding(.top, VTheme.Space.xl)
             .padding(.bottom, VTheme.Space.lg)

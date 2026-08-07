@@ -157,14 +157,26 @@ package struct VInspectorSliderRow: View {
                     .foregroundStyle(VTheme.Color.Text.primary)
                     .vReserved(VTheme.Typography.Reserved.fps)
             }
-            //     init(value: Binding<V>, in bounds: ClosedRange<V>, step: V.Stride = 1,
+            // ⛔ NO `step:`, AND THAT IS NOT A LOSS OF PRECISION. AppKit draws a **tick mark per
+            // step** under a stepped slider, so `step: 1` over 0…100 put a hundred of them under
+            // every one of these rows — the dotted rule the panel appeared to grow for no reason.
+            // The whole numbers are kept by rounding in the binding, which is where the constraint
+            // actually belongs: the value is an integer because the camera's API takes an integer,
+            // not because the control should be drawn with a ruler under it.
+            //
+            //     init(value: Binding<V>, in bounds: ClosedRange<V>,
             //          onEditingChanged: @escaping (Bool) -> Void = { _ in })
-            Slider(value: $value, in: range, step: 1)
+            Slider(value: whole, in: range)
                 .tint(VTheme.Color.Semantic.accent)
                 .disabled(!isEnabled)
         }
         .padding(.vertical, VTheme.Space.xxs)
         .accessibilityElement(children: .combine)
+    }
+
+    /// The binding the slider actually drives: whole numbers, without a stepped control.
+    private var whole: Binding<Double> {
+        Binding(get: { value.rounded() }, set: { value = $0.rounded() })
     }
 }
 
@@ -197,6 +209,11 @@ package struct VInspectorToggleRow: View {
                 .foregroundStyle(VTheme.Color.Text.secondary)
         }
         .toggleStyle(.switch)
+        // ⚠️ Pinned, not inherited. A `.switch` at the ambient control size is drawn at AppKit's
+        // regular metrics — noticeably taller than the 32 × 18 pt track DESIGN.md §9.3 specifies —
+        // and beside this panel's small labels and thin sliders it reads as an oversized control
+        // that wandered in from another window. `.small` is the size the spec describes.
+        .controlSize(.small)
         .tint(VTheme.Color.Semantic.accentFill)
         .frame(minHeight: VInspectorMetrics.rowHeight)
     }
