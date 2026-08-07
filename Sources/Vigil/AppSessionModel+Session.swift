@@ -27,49 +27,39 @@ extension AppSessionModel {
     ///
     /// Leaves `phase` and the form alone, because both callers want something different afterwards
     /// — `disconnect` goes back to the form, `connect` starts another session immediately.
+    ///
+    /// ⚠️ `sessionTask` is cancelled here and nowhere else: it is the connect the *user* started,
+    /// one per application however many cameras are streaming, and stopping one camera must not
+    /// cancel a connect that another one is in the middle of.
     func stopSession() {
-        eventTask?.cancel()
-        eventTask = nil
-        tilePolicyTask?.cancel()
-        tilePolicyTask = nil
         sessionTask?.cancel()
         sessionTask = nil
-        // Finishing the continuation ends the decode task's loop after the frames already queued,
-        // so nothing is torn down under the pipeline mid-frame.
-        frameContinuation?.finish()
-        frameContinuation = nil
-        decodeTask = nil
-        let outgoing = controller
-        let outgoingPipeline = pipeline
-        controller = nil
-        pipeline = nil
-        activeRef = nil
-        isReceivingMedia = false
-        hasFirstPacket = false
-        streamState = .idle
-        retryInSeconds = nil
-        firstFrameLatency = nil
-        attemptStartedAt = nil
-        decodeFailures = 0
-        droppedByReason.removeAll()
-        guard outgoing != nil || outgoingPipeline != nil else { return }
+        stop(live)
+    }
+
+    /// Tears one camera's stream down, whichever camera it is.
+    ///
+    /// The state is cleared synchronously so the window reads the right thing on the next frame;
+    /// the two `async` stops happen off this path, because a polite socket teardown takes up to
+    /// 1.5 s and no click should wait for it.
+    func stop(_ stream: CameraStream) {
+        let outgoing = stream.teardown()
+        guard outgoing.controller != nil || outgoing.pipeline != nil else { return }
         // The tile keeps its last picture on purpose — no flush, no blanking (R-36, §4.9).
         Task {
-            await outgoingPipeline?.stop(reason: .stopped)
+            await outgoing.pipeline?.stop(reason: .stopped)
             // Graceful TEARDOWN, off the caller's path: `stop` is safe to await from a cancelled
             // task, and the UI must not wait 1.5 s for a socket to close politely.
-            await outgoing?.stop(reason: .userRequested)
+            await outgoing.controller?.stop(reason: .userRequested)
         }
     }
 
+    /// Moves the window to the video screen and puts the live stream into its connecting state.
+    ///
+    /// ⚠️ `phase` is the application's, the rest is the stream's — see `CameraStream.beginConnecting`.
     func beginConnecting() {
         phase = .live
-        streamState = .resolving
-        isReceivingMedia = false
-        hasFirstPacket = false
-        firstFrameLatency = nil
-        retryInSeconds = nil
-        attempt = 1
+        live.beginConnecting()
     }
 
     /// The form path: write the password to the Keychain, then stream.
@@ -206,10 +196,25 @@ extension AppSessionModel {
     /// This is the whole column, in the order the bytes travel: socket (`CoreDependencies`
     /// `makeRTSPSession`) → `StreamController` → `EncodedFrame` → `DecodePipeline` →
     /// `TileVideoSink` → `VideoTileView`'s `AVSampleBufferDisplayLayer`.
+    ///
+    /// Drives ``live``, which is what every existing caller means by "the stream". The work itself
+    /// is in ``start(_:camera:ref:)`` and knows nothing about which stream it is building.
     func stream(camera: Camera, ref: CredentialRef) async {
-        self.camera = camera
-        activeRef = ref
-        attemptStartedAt = Date()
+        await start(live, camera: camera, ref: ref)
+    }
+
+    /// Builds one camera's decode chain and controller, and starts it.
+    ///
+    /// ⛔ Every line here reads and writes the `stream` argument rather than `self`. That is the
+    /// whole of F-LIV-01's step 3: the same code that has driven one camera since the first frame
+    /// now drives whichever camera it is handed, so a second one is another call rather than a
+    /// second implementation. The four defects the first live camera exposed were all
+    /// two-implementation seams; this refactor exists to avoid adding a fifth.
+    func start(_ stream: CameraStream, camera: Camera, ref: CredentialRef) async {
+        stream.camera = camera
+        cameras.file(stream)
+        stream.activeRef = ref
+        stream.attemptStartedAt = Date()
         let store = credentials
         // Called by the controller on every connect attempt, so the password is read from the
         // Keychain each time and never captured in the closure (docs/spec-core.md §2).
@@ -218,22 +223,25 @@ extension AppSessionModel {
         }
         let logger = dependencies.logger
         let pipeline = DecodePipeline(
-            sink: tileSink,
+            sink: stream.tileSink,
             pacing: .live,
-            requestKeyframe: { [weak self] in
-                Task { @MainActor in self?.recoverStalledPicture() }
+            requestKeyframe: { [weak self, weak stream] in
+                Task { @MainActor in
+                    guard let self, let stream else { return }
+                    self.recoverStalledPicture(on: stream)
+                }
             },
             onError: { error in
                 // Never swallowed: "no video, no error" is the worst failure we could ship.
                 logger.error(.video, "decode: \(error)")
             })
-        self.pipeline = pipeline
+        stream.pipeline = pipeline
         // One ordered hop from the controller's isolation to the pipeline actor. A `Task` per frame
         // would preserve neither order nor allocation budget; a single-consumer stream does both,
         // and its bounded buffer drops the oldest frames rather than growing without limit (R-27).
         let (frameStream, continuation) = AsyncStream<EncodedFrame>.makeStream(
             of: EncodedFrame.self, bufferingPolicy: .bufferingNewest(64))
-        frameContinuation = continuation
+        stream.frameContinuation = continuation
         // ⛔ `Task.detached`, and it must stay detached. `Task { }` carries
         // `@_inheritActorContext`, so a plain `Task` started from this `@MainActor` method would run
         // its `for await` loop **on the main actor** — every access unit would hop onto the UI
@@ -249,12 +257,12 @@ extension AppSessionModel {
         // this loop does, so the loop cannot capture a recorder that does not exist yet — and it must
         // not capture `self`, which is `@MainActor`. Reading it costs one uncontended lock per frame,
         // and answers `nil` whenever nothing is being written.
-        let recordingTap = self.recordingTap
-        let telemetry = self.telemetry
-        let backlog = self.backlog
+        let recordingTap = stream.recordingTap
+        let telemetry = stream.telemetry
+        let backlog = stream.backlog
         let mediaClock = dependencies.clock
         backlog.reset()
-        decodeTask = Task.detached {
+        stream.decodeTask = Task.detached {
             for await frame in frameStream {
                 // Counted before the hop into the pipeline, so the measurement is of what arrived
                 // rather than of what the decoder got round to. Two integer additions under one
@@ -284,18 +292,19 @@ extension AppSessionModel {
                                           // Normal speed sends no `Scale:` at all, so a live
                                           // stream is byte-identical to what it was before speed
                                           // existed. Only archive playback ever sets one.
-                                          playbackScale: playback == nil || playbackRate == .normal
+                                          playbackScale: stream.playback == nil
+                                              || stream.playbackRate == .normal
                                               ? nil
-                                              : playbackRate.scale)
-        self.controller = controller
-        startTilePolicy(controller: controller)
+                                              : stream.playbackRate.scale)
+        stream.controller = controller
+        startTilePolicy(on: stream, controller: controller)
         // `events()` is `nonisolated` and returns a fresh bounded stream per call (R-27), so the
         // subscription is established before `start()` and cannot miss the first transition.
-        eventTask = Task { [weak self] in
+        stream.eventTask = Task { [weak self, weak stream] in
             for await event in controller.events() {
-                guard let self else { return }
-                self.telemetry.ingest(event, at: self.dependencies.clock.now())
-                self.apply(event)
+                guard let self, let stream else { return }
+                stream.telemetry.ingest(event, at: self.dependencies.clock.now())
+                self.apply(event, to: stream)
             }
         }
         await controller.start()
@@ -304,21 +313,21 @@ extension AppSessionModel {
     /// Samples the renderer's authoritative backing-pixel size and applies the policy's dwell.
     /// A quality handoff restarts only the network session; the mounted tile and its last drawable
     /// remain in place, so resize-driven promotion never inserts a synthetic black frame.
-    private func startTilePolicy(controller: StreamController) {
-        tilePolicyTask?.cancel()
-        tilePolicyTask = Task { [weak self] in
+    private func startTilePolicy(on stream: CameraStream, controller: StreamController) {
+        stream.tilePolicyTask?.cancel()
+        stream.tilePolicyTask = Task { [weak stream] in
             var selector = TilePolicySelector()
             let clock = ContinuousClock()
             let origin = clock.now
             while !Task.isCancelled {
-                guard let self else { return }
+                guard let stream else { return }
                 let context = TileContext(
-                    pixelSize: self.renderState?.pixelSize ?? Resolution(width: 0, height: 0),
-                    isVisible: self.renderState != nil,
-                    isRecording: self.recordingTap.recorder() != nil,
+                    pixelSize: stream.renderState?.pixelSize ?? Resolution(width: 0, height: 0),
+                    isVisible: stream.renderState != nil,
+                    isRecording: stream.recordingTap.recorder() != nil,
                     subStreamHeight: nil,
                     deviceSupportsSubStream: true,
-                    qualityOverride: self.camera?.preferredQuality)
+                    qualityOverride: stream.camera?.preferredQuality)
                 if case .stream(let quality)? = selector.ingest(context, at: origin.duration(to: clock.now)) {
                     await controller.setQuality(quality)
                 }
@@ -332,14 +341,23 @@ extension AppSessionModel {
     /// The `default` arm is deliberate: the slice reacts to seven of `StreamEvent`'s cases and must
     /// keep consuming the rest rather than leave them to fill the stream's bounded buffer. It also
     /// means a case added in W4 cannot stop this file compiling.
-    func apply(_ event: StreamEvent) {
+    ///
+    /// ⛔ WHAT IS THE CAMERA'S AND WHAT IS THE APPLICATION'S. Everything that describes the stream —
+    /// its state, its attempt count, its diagnosis, its format — goes on `stream`, so sixteen of
+    /// them can be in sixteen different states at once. Four things do not: the connect form, the
+    /// remembered connection, the failure screen and the Keychain deletion belong to the user's one
+    /// connect attempt, and they are gated on `stream === live`. Without that gate, camera nine
+    /// getting its first frame would clear the form under a user who is typing camera ten's
+    /// password, and camera three failing would throw the window off camera one.
+    func apply(_ event: StreamEvent, to stream: CameraStream) {
+        let isLive = stream === live
         switch event {
         case .stateChanged(_, let to, let detail):
-            streamState = to
-            attempt = max(1, detail.attempt)
-            retryInSeconds = Self.seconds(until: detail.nextRetryAt)
-            if let underlying = detail.underlying, let camera {
-                diagnosis = ConnectDiagnosis.from(underlying, camera: camera)
+            stream.streamState = to
+            stream.attempt = max(1, detail.attempt)
+            stream.retryInSeconds = Self.seconds(until: detail.nextRetryAt)
+            if let underlying = detail.underlying, let camera = stream.camera {
+                stream.diagnosis = ConnectDiagnosis.from(underlying, camera: camera)
             }
         case .connectAttemptStarted:
             // The decode pipeline outlives the socket, so a reconnect must tell it to forget the old
@@ -358,20 +376,22 @@ extension AppSessionModel {
             //
             // The attempt number is deliberately not read here: `.stateChanged` owns that property
             // and carries the same value, and two writers for one number is how they drift apart.
-            resetDecodePipeline()
+            resetDecodePipeline(on: stream)
         case .firstPacketReceived:
-            hasFirstPacket = true
+            stream.hasFirstPacket = true
         case .firstFrameAssembled(let afterStart):
-            isReceivingMedia = true
-            form.isConnecting = false
-            firstFrameLatency = afterStart
-            lastSeen = Date()
-            diagnosis = nil
-            form.clearDiagnosis()
-            // The Keychain has the password now, so the copy in memory — and in the form's secure
-            // field — has no reason to exist.
-            form.password = ""
-            rememberThisCamera()
+            stream.isReceivingMedia = true
+            stream.firstFrameLatency = afterStart
+            stream.lastSeen = Date()
+            stream.diagnosis = nil
+            if isLive {
+                form.isConnecting = false
+                form.clearDiagnosis()
+                // The Keychain has the password now, so the copy in memory — and in the form's
+                // secure field — has no reason to exist.
+                form.password = ""
+                rememberThisCamera()
+            }
             // The R1.7 number, in the log where the acceptance checklist can read it.
             dependencies.logger.info(.app, "first frame assembled after \(afterStart)")
             // For an archive seek, the same number split at the point Vigil hands over. `afterStart`
@@ -379,38 +399,47 @@ extension AppSessionModel {
             // difference is Vigil's own: tearing the old session down and building the new one.
             // Printed as two numbers because they have different owners and different fixes, and a
             // single "one second" tells you which to work on only by accident.
-            if let seekStartedAt {
-                let total = dependencies.clock.now() - seekStartedAt
+            if let startedAt = stream.seekStartedAt {
+                let total = dependencies.clock.now() - startedAt
                 dependencies.logger.info(.app, "seek complete: \(total) total, "
                     + "\(afterStart) of it after the socket opened")
-                self.seekStartedAt = nil
+                stream.seekStartedAt = nil
             }
         case .pathResolved(let candidate, _):
             // Remembered at the first frame, not here: a path that answers `DESCRIBE` but never
             // delivers video is not the one to start from next time.
-            resolvedPath = candidate.path
+            stream.resolvedPath = candidate.path
         case .statistics(let latest):
-            statistics = latest
-            if streamState.isActive { lastSeen = Date() }
+            stream.statistics = latest
+            if stream.streamState.isActive { stream.lastSeen = Date() }
         case .reconnectScheduled(let attempt, let delay, let cause):
-            self.attempt = attempt
-            retryInSeconds = Int(delay.components.seconds)
-            if let camera { diagnosis = ConnectDiagnosis.from(cause, camera: camera) }
+            stream.attempt = attempt
+            stream.retryInSeconds = Int(delay.components.seconds)
+            if let camera = stream.camera {
+                stream.diagnosis = ConnectDiagnosis.from(cause, camera: camera)
+            }
         case .error(let error, let isFatal):
-            guard let camera else { return }
+            guard let camera = stream.camera else { return }
             let named = ConnectDiagnosis.from(error, camera: camera)
-            diagnosis = named
+            stream.diagnosis = named
             guard !named.allowsAutomaticRetry || isFatal else { return }
             // Terminal. Back to the form with the cause and its remedies, and stop remembering a
             // password the camera rejects — retrying it at every launch is precisely how a
             // Hikvision account gets locked out (R-25, R1.5 "Account locked").
-            let rejected = error.code == .authenticationFailed ? activeRef : nil
-            stopSession()
+            let rejected = error.code == .authenticationFailed ? stream.activeRef : nil
+            // ⚠️ Only this camera stops. `stopSession()` also cancels the application's connect
+            // task, which belongs to whatever the user asked for last — a camera dying in a corner
+            // of a sixteen-tile wall must not cancel the connect the user started a moment ago.
+            if isLive { stopSession() } else { stop(stream) }
+            // The Keychain deletion is this camera's, whichever camera it is: a password the device
+            // rejects is what walks an account into a thirty-minute lockout, and it does that from a
+            // background tile exactly as fast as from the one on screen.
+            if let rejected { deleteRejectedCredential(rejected) }
+            guard isLive else { return }
             if !named.allowsAutomaticRetry { LastConnection.clear(in: defaults) }
             present(named)
-            if let rejected { deleteRejectedCredential(rejected) }
         case .formatResolved(let resolved):
-            format = resolved
+            stream.format = resolved
         default:
             break
         }
@@ -422,176 +451,16 @@ extension AppSessionModel {
     /// samples it is holding **without** clearing the picture — the frozen last frame stays on screen
     /// under the reconnecting overlay, which is the no-black-flash rule (API_CONTRACT §4.9, R-36).
     func resetDecodePipeline() {
-        decodeFailures = 0
-        droppedByReason.removeAll()
-        guard let pipeline else { return }
+        resetDecodePipeline(on: live)
+    }
+
+    /// The same, for whichever camera reconnected.
+    func resetDecodePipeline(on stream: CameraStream) {
+        stream.decodeFailures = 0
+        stream.droppedByReason.removeAll()
+        guard let pipeline = stream.pipeline else { return }
         Task { await pipeline.reset() }
     }
-
-    // MARK: - Display-path reports
-
-    /// A sample the video renderer refused to decode.
-    ///
-    /// `VigilRender` hands over a diagnostic string rather than an error, because `any Error` is not
-    /// `Sendable` and the report crosses a thread boundary from whatever queue AVFoundation posts on.
-    /// The decision about what to *do* is here rather than there, which is why the tile only reports.
-    ///
-    /// One failure is not a fault: a truncated access unit after packet loss produces exactly this
-    /// and the next keyframe fixes it. A run of them means the decoder cannot make progress from the
-    /// parameter sets it has, and the only escape is a fresh keyframe — which is what
-    /// ``AppSessionModel/recoverStalledPicture()`` asks for, rate-limited so a decoder that keeps
-    /// failing cannot put the session into a restart loop.
-    func handleDecodeFailure(_ diagnostic: String) {
-        decodeFailures += 1
-        dependencies.logger.error(.video, "renderer failed to decode: \(diagnostic)")
-        guard decodeFailures >= Self.decodeFailuresBeforeRecovery else { return }
-        decodeFailures = 0
-        recoverStalledPicture()
-    }
-
-    /// Frames that never reached the screen, from either end of the display path.
-    ///
-    /// Two origins arrive here through one callback: `VigilVideo`'s pipeline dropping an access unit
-    /// before it became a sample buffer, and the tile's own renderer refusing one it was handed. The
-    /// reason string keeps them apart, and the tile's ``VigilRender/TileRenderState`` already carries
-    /// the running counts for the status line, so this method's job is the part no view can do —
-    /// putting the fact in the log, and acting on the one reason that never resolves by itself.
-    ///
-    /// **`noFormat` is the case this exists for.** It means no parameter sets have arrived, so every
-    /// frame is being discarded and the tile is black with nothing wrong anywhere else. Left alone it
-    /// stays that way forever. Hikvision re-sends SPS/PPS immediately before every IDR, so asking
-    /// for a keyframe is precisely the right remedy — the recovery that looks like it is about a
-    /// stalled picture is really about getting the format.
-    ///
-    /// Logging is thresholded, not per frame: at 25 fps an unresolved `noFormat` would otherwise
-    /// write 1,500 lines a minute and bury the line that matters.
-    func handleFramesDropped(_ count: Int, reason: String) {
-        droppedByReason[reason, default: 0] += count
-        let total = droppedByReason[reason] ?? count
-        if total.isMultiple(of: Self.dropLogInterval) || total == count {
-            dependencies.logger.notice(.video, "dropped \(total) frame(s), reason: \(reason)")
-        }
-        guard reason == FrameDropReason.noFormat.rawValue,
-              total >= Self.noFormatDropsBeforeRecovery
-        else { return }
-        droppedByReason[reason] = 0
-        dependencies.logger.notice(.video, "no parameter sets after \(total) frames; asking for a "
-            + "keyframe so the camera re-sends them")
-        recoverStalledPicture()
-    }
-
-    /// A failure before the controller existed: a bad address, or a Keychain that would not answer.
-    func fail(with error: any Error, host: String) {
-        present(Self.diagnosis(for: error, host: host))
-        dependencies.logger.error(.app, "connect failed: \(error)")
-    }
-
-    /// Shows a named cause on the connect form.
-    ///
-    /// `ConnectFormState.fail` also clears the in-flight flag and bumps the failure counter that
-    /// drives the form's one-per-failure shake, so this is the only way a diagnosis reaches it.
-    func present(_ named: ConnectDiagnosis) {
-        diagnosis = named
-        phase = .connect
-        form.fail(named)
-    }
-
-    /// Turns an error raised on the app's own half of the connect path into a named cause.
-    ///
-    /// `StreamError` never reaches here — the controller reports those through its event stream —
-    /// so this covers exactly two sources: the address the user typed, and the Keychain.
-    static func diagnosis(for error: any Error, host: String) -> ConnectDiagnosis {
-        switch error {
-        case is CameraValidationError:
-            // `CameraValidationError.description` is a redacted log line, not a sentence for a
-            // person, so the user-facing copy is written here.
-            return .undiagnosed(host: host,
-                                detail: "That is not an address Vigil can use. Type just the "
-                                    + "address — no rtsp://, no user name and no path.")
-        case let failure as any VigilFailure:
-            return .undiagnosed(host: host,
-                                detail: [failure.userMessage, failure.userRemedy]
-                                    .compactMap { $0 }.joined(separator: " "))
-        default:
-            return .undiagnosed(host: host, detail: "Vigil could not start the connection.")
-        }
-    }
-
-    /// What we already know about this host and account: its Keychain handle, and the RTSP path
-    /// that worked last time.
-    ///
-    /// Reusing the handle matters because `save` updates an item in place, whereas a fresh
-    /// `CredentialRef` would leave the old item behind as an orphan on every retry. Reusing the
-    /// path is R1.2's "the probe happens exactly once per device, ever".
-    func knownHandle(for request: ConnectRequest) -> (ref: CredentialRef, rtspPath: String?) {
-        guard let remembered = LastConnection.load(from: defaults),
-              remembered.host.caseInsensitiveCompare(request.host) == .orderedSame,
-              remembered.account == request.username
-        else {
-            return (CredentialRef(), nil)
-        }
-        return (remembered.credentialRef, remembered.rtspPath)
-    }
-
-    /// Removes a password the camera has rejected.
-    ///
-    /// Fire-and-forget on purpose: the user is already looking at the form, and a Keychain that
-    /// refuses the delete changes nothing they can act on. The failure is logged, not shown.
-    func deleteRejectedCredential(_ ref: CredentialRef) {
-        let store = credentials
-        let logger = dependencies.logger
-        Task {
-            do {
-                try await store.delete(ref)
-            } catch {
-                logger.warning(.app, "could not remove the rejected credential: \(error)")
-            }
-        }
-    }
-
-    /// Opens the camera's own web page, where every device-side setting the diagnoses point at
-    /// lives — including activation for a factory-fresh camera.
-    func openCameraWebPage() {
-        let host = camera?.host ?? form.request.host
-        let port = camera?.httpPort ?? 80
-        let authority = host.contains(":") ? "[\(host)]" : host   // bare IPv6 needs brackets
-        guard !host.isEmpty, let url = URL(string: "http://\(authority):\(port)/") else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    /// Reports a remedy the slice cannot perform, in place of doing nothing.
-    func unavailable(_ sentence: String) {
-        let host = camera?.host ?? form.request.host
-        present(.undiagnosed(host: host, detail: sentence))
-        dependencies.logger.notice(.ui, sentence)
-    }
-
-    /// Whole seconds from now until `date`, or `nil` when there is no countdown.
-    static func seconds(until date: Date?) -> Int? {
-        guard let date else { return nil }
-        return max(0, Int(date.timeIntervalSinceNow.rounded()))
-    }
-
-    /// The port Hikvision devices use when 554 is taken or disabled (R1.5 "RTSP port closed").
-    static let alternateRTSPPort = 8554
-
-    /// The shortest gap between two forced keyframe recoveries.
-    static let recoveryInterval: TimeInterval = 10
-
-    /// How many renderer decode failures in a row before forcing a keyframe.
-    ///
-    /// Three, because one is packet loss and two can be the same GOP; three means the parameter sets
-    /// the decoder is working from cannot decode what the camera is sending.
-    static let decodeFailuresBeforeRecovery = 3
-
-    /// How many frames may be dropped for want of parameter sets before asking for a keyframe.
-    ///
-    /// Fifty is about two seconds at 25 fps — long enough that a normal startup, where the first
-    /// access units precede the first SPS by a few frames, resolves on its own without a restart.
-    static let noFormatDropsBeforeRecovery = 50
-
-    /// One log line per this many dropped frames of the same reason.
-    static let dropLogInterval = 100
 }
 
 #endif  // os(macOS)

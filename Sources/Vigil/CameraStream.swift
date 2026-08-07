@@ -184,6 +184,64 @@ final class CameraStream {
 
     /// Creates an idle stream with no camera.
     init() {}
+
+    // MARK: - Transitions
+
+    /// Clears what a new connect attempt invalidates.
+    ///
+    /// ⚠️ Per **stream**, and the split from `AppSessionModel.beginConnecting()` is the point: that
+    /// method also moved the window to the video screen, which is a fact about the application and
+    /// must not happen once per camera when sixteen of them start together.
+    func beginConnecting() {
+        streamState = .resolving
+        isReceivingMedia = false
+        hasFirstPacket = false
+        firstFrameLatency = nil
+        retryInSeconds = nil
+        attempt = 1
+    }
+
+    /// Cancels this stream's tasks, clears its per-session state, and hands back the controller and
+    /// the pipeline so the caller can stop them off its own path.
+    ///
+    /// ⛔ The two objects are returned rather than stopped here, because stopping them is `async`
+    /// and takes up to 1.5 s of polite socket teardown. A window that awaited that would freeze on
+    /// every disconnect. The caller starts a detached `Task` for it; this method is synchronous so
+    /// the state the window reads is already correct when it returns.
+    ///
+    /// ⚠️ `decodeTask` is dropped, not cancelled. Finishing ``frameContinuation`` ends its
+    /// `for await` after the frames already queued, so the pipeline is never torn down under a
+    /// half-submitted access unit. Cancelling would do exactly that.
+    ///
+    /// ⛔ The tile keeps its last picture: nothing here flushes the renderer (R-36, API_CONTRACT
+    /// §4.9). A black rectangle where a frozen frame should be is how a stopped stream comes to look
+    /// like a broken one.
+    @discardableResult
+    func teardown() -> (controller: StreamController?, pipeline: DecodePipeline?) {
+        eventTask?.cancel()
+        eventTask = nil
+        tilePolicyTask?.cancel()
+        tilePolicyTask = nil
+        frameContinuation?.finish()
+        frameContinuation = nil
+        decodeTask = nil
+        let outgoing = (controller: controller, pipeline: pipeline)
+        controller = nil
+        pipeline = nil
+        activeRef = nil
+        isReceivingMedia = false
+        hasFirstPacket = false
+        streamState = .idle
+        retryInSeconds = nil
+        firstFrameLatency = nil
+        attemptStartedAt = nil
+        decodeFailures = 0
+        droppedByReason.removeAll()
+        return outgoing
+    }
+
+    /// Whether this stream owns anything that has to be stopped.
+    var isRunning: Bool { controller != nil || pipeline != nil }
 }
 
 // MARK: - CameraStreamSet

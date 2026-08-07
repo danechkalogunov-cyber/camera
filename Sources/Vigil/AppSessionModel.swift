@@ -498,12 +498,22 @@ final class AppSessionModel {
     /// so it is rate-limited: a decoder that asks continuously must not put the session into a
     /// restart loop, and the controller's own `noKeyframe` watchdog is already trying.
     func recoverStalledPicture() {
+        recoverStalledPicture(on: live)
+    }
+
+    /// The same, for whichever tile reported the stall.
+    ///
+    /// ⚠️ The rate limit is per **stream**, because it protects a session rather than the app: two
+    /// cameras that both lose their keyframes are two independent problems, and a shared timer would
+    /// let the first one's recovery silence the second one's for thirty seconds.
+    func recoverStalledPicture(on stream: CameraStream) {
         let now = Date()
-        if let lastRecoveryAt, now.timeIntervalSince(lastRecoveryAt) < Self.recoveryInterval {
+        if let lastRecoveryAt = stream.lastRecoveryAt,
+           now.timeIntervalSince(lastRecoveryAt) < Self.recoveryInterval {
             return
         }
-        lastRecoveryAt = now
-        guard let controller else { return }
+        stream.lastRecoveryAt = now
+        guard let controller = stream.controller else { return }
         dependencies.logger.notice(.video, "no keyframe; restarting the session to recover")
         Task { await controller.restart() }
     }
