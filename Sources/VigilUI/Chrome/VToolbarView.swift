@@ -163,6 +163,15 @@ package struct VToolbarView: View {
     /// palette handing over. Any change moves focus; the value itself means nothing.
     package let focusSearchRequests: Int
 
+    /// The opposite, and it exists for the same reason: `@FocusState` cannot be lifted out of this
+    /// view, so the window asks for the cursor to *leave* by incrementing this.
+    ///
+    /// ⛔ A counter and not a `Bool` binding. Focus is owned here — the user can click straight into
+    /// the field — and a binding the window also wrote would fight that on every body evaluation. A
+    /// request is a fact ("something asked the caret to leave") that cannot go stale the way a
+    /// mirrored flag can.
+    package let blurSearchRequests: Int
+
     /// The search query.
     @Binding package var searchText: String
 
@@ -208,6 +217,7 @@ package struct VToolbarView: View {
                  canShowSidebar: Bool = true,
                  canShowInspector: Bool = true,
                  focusSearchRequests: Int = 0,
+                 blurSearchRequests: Int = 0,
                  onToggleSidebar: @escaping () -> Void = {},
                  onToggleInspector: @escaping () -> Void = {},
                  onSelectLayout: @escaping (VGridLayout) -> Void = { _ in },
@@ -226,6 +236,7 @@ package struct VToolbarView: View {
         self.canShowSidebar = canShowSidebar
         self.canShowInspector = canShowInspector
         self.focusSearchRequests = focusSearchRequests
+        self.blurSearchRequests = blurSearchRequests
         self.onToggleSidebar = onToggleSidebar
         self.onToggleInspector = onToggleInspector
         self.onSelectLayout = onSelectLayout
@@ -265,6 +276,7 @@ package struct VToolbarView: View {
         .background { header }
         .overlay(alignment: .bottom) { separator }
         .onChange(of: focusSearchRequests) { _, _ in isSearchFocused = true }
+        .onChange(of: blurSearchRequests) { _, _ in isSearchFocused = false }
     }
 
     // MARK: - Surface
@@ -366,6 +378,40 @@ package struct VToolbarView: View {
                 accessibilityLabel: "More",
                 action: onShowMore)
             .help(Text("More", bundle: .vigilUI))
+            // ⛔ The button publishes where it *is*, because the menu it opens is drawn by the
+            // window and the window was placing it by arithmetic — one padding token that happened
+            // to be wrong, so the panel hung offset from the control that summoned it. A measured
+            // frame cannot be wrong, and it survives every future change to this row's contents.
+            .background {
+                GeometryReader { proxy in
+                    SwiftUI.Color.clear.preference(key: VToolbarAnchorKey.self,
+                                                   value: proxy.frame(in: .named(VToolbarAnchor.space)))
+                }
+            }
+    }
+}
+
+// MARK: - VToolbarAnchor
+
+/// The named coordinate space the toolbar reports its anchors in.
+///
+/// Declared here rather than in the app so both halves cannot drift: the window marks its content
+/// with ``space`` and the toolbar measures against the same name.
+package enum VToolbarAnchor {
+
+    /// The window content's coordinate space.
+    package static let space = "vigil.window"
+}
+
+/// Where the "…" button sits, in ``VToolbarAnchor/space``.
+package struct VToolbarAnchorKey: PreferenceKey {
+
+    package static let defaultValue: CGRect = .zero
+
+    /// Last writer wins: there is exactly one overflow button in a window.
+    package static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 

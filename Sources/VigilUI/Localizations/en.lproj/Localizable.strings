@@ -31,6 +31,7 @@
 "Address" = "Address";
 "User name" = "User name";
 "Password" = "Password";
+"Paused" = "Paused";
 "The camera's password" = "The camera's password";
 "Connect" = "Connect";
 "192.168.1.64" = "192.168.1.64";

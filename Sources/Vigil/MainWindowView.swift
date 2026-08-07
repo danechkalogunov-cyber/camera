@@ -240,6 +240,7 @@ struct MainWindowView: View {
                      canShowInspector: window.contentWidth == 0
                          || window.contentWidth >= MainWindowState.inspectorMinimumWidth,
                      focusSearchRequests: window.focusSearchRequests,
+                     blurSearchRequests: window.blurSearchRequests,
                      onToggleSidebar: { window.isSidebarVisible.toggle() },
                      onToggleInspector: { window.isInspectorVisible.toggle() },
                      onSelectLayout: { selectLayout($0) },
@@ -329,6 +330,12 @@ struct MainWindowView: View {
                     }
             }
         }
+        // The space the toolbar reports the "…" button's frame in, and the frame itself. Both
+        // halves name `VToolbarAnchor.space` so they cannot drift apart.
+        .coordinateSpace(name: VToolbarAnchor.space)
+        .onPreferenceChange(VToolbarAnchorKey.self) { frame in
+            window.overflowAnchor = frame
+        }
         // The toolbar *is* the title bar. `WindowChrome` sets `.fullSizeContentView` and nudges the
         // traffic lights down 10 pt so they centre in a 52 pt bar, but SwiftUI still insets content
         // by the title bar's safe area — which left the lights stranded in an empty strip above the
@@ -341,7 +348,7 @@ struct MainWindowView: View {
         content
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay(alignment: .bottom) { cinemaBar }
-        .overlay(alignment: .topTrailing) { overflowMenu }
+        .overlay(alignment: .topLeading) { overflowMenu }
         .overlay { paletteOverlay }
     }
 
@@ -447,7 +454,7 @@ struct MainWindowView: View {
     @ViewBuilder
     private var overflowMenu: some View {
         if window.isOverflowMenuOpen {
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .topLeading) {
                 // The click-away target. Transparent, fills the window, and swallows the click that
                 // dismisses — which is what stops that click also hitting whatever is underneath.
                 SwiftUI.Color.clear
@@ -456,19 +463,14 @@ struct MainWindowView: View {
                 VOverflowMenuView(disabledItems: unavailableOverflowItems,
                                   onSelect: { select($0) },
                                   onDismiss: { window.isOverflowMenuOpen = false })
-                    .padding(.top, VTheme.Metrics.toolbarHeight)
-                    .padding(.trailing, Self.overflowMenuInset)
+                    // Hung from the button's own measured frame: right edges aligned, `xs` below
+                    // it. Arithmetic over the toolbar's padding tokens is what put it in the wrong
+                    // place, and any future change to that row would have moved it again.
+                    .offset(x: window.overflowAnchor.maxX - VOverflowMetrics.width,
+                            y: window.overflowAnchor.maxY + VTheme.Space.xs)
             }
         }
     }
-
-    /// How far the "…" button's trailing edge sits from the window's.
-    ///
-    /// The toolbar's own trailing padding, plus the inspector toggle beside it, plus the gap
-    /// between the two — read off `VToolbarView`'s trailing group, which is the only thing that
-    /// decides it.
-    private static let overflowMenuInset: CGFloat =
-        VTheme.Space.md + VTheme.Metrics.md + VTheme.Space.sm
 
     // MARK: - Identity
 
@@ -493,10 +495,7 @@ struct MainWindowView: View {
     /// are derived from — so this clears the caret wherever it is, including a field this view has
     /// no binding to.
     func resignSearchFocus() {
-        // Named `keyWindow` because `window` in this type is the window *state*, not an `NSWindow`.
-        guard let keyWindow = NSApp.keyWindow,
-              keyWindow.firstResponder is NSText else { return }
-        keyWindow.makeFirstResponder(nil)
+        window.blurSearchRequests += 1
     }
 
     // MARK: - Mapping
@@ -536,6 +535,10 @@ struct MainWindowView: View {
             case .switchedToTCP:
                 return .degraded(.switchedToTCP)
             }
+        case .paused:
+            // The list says "not running", which is what a stopped camera is. `.offline` would put
+            // a countdown and a retry on a row nothing is retrying.
+            return .disabled
         case .offline:
             return .offline(retryInSeconds: nil)
         }

@@ -113,6 +113,9 @@ public actor CredentialStore {
     ///   - logger: structured log sink. Nothing logged here contains a secret.
     ///   - accessGroup: `kSecAttrAccessGroup`. `nil` for a normally signed app, which is what Vigil
     ///     ships; a value is only needed when items are shared with a helper.
+    /// Handles whose ACL this process has already tried to widen. See ``repairAccess(for:)``.
+    private var repairedAccess: Set<CredentialRef> = []
+
     public init(keychain: any KeychainProtocol,
                 logger: any LoggerProtocol = NullLogger(),
                 accessGroup: String? = nil) {
@@ -154,6 +157,9 @@ public actor CredentialStore {
             }
             let credential = Credential(ref: ref, account: account, secret: secret)
             cache[ref] = credential
+            // The read succeeded — which on a rebuilt binary means the user has just answered a
+            // system prompt. Widen the item's ACL now so they do not answer it again.
+            repairAccess(for: ref)
             return credential
 
         case errSecItemNotFound:
@@ -172,6 +178,44 @@ public actor CredentialStore {
     /// The credential for a camera. The convenience every connect path uses.
     public func credential(for camera: Camera) throws -> Credential? {
         try credential(for: camera.credentialRef)
+    }
+
+    /// Widens an existing item's ACL so a rebuilt binary can read it without a system prompt.
+    ///
+    /// ⛔ THE HALF THAT WAS MISSING. Writing new items with a permissive ACL fixes nothing for the
+    /// item that is already there, and that item is the one the user has — a password typed weeks
+    /// ago is not typed again just because Vigil was rebuilt. `SecItemUpdate` cannot change an
+    /// access control at all, so the only repair is at the item level, and this is the
+    /// non-destructive way to do it: no delete, no re-add, nothing lost if it fails.
+    ///
+    /// One attempt per handle per process, successful or not: a device whose Keychain refuses this
+    /// must not be asked again on every read.
+    ///
+    /// The trade is the one ``sharedAccess(label:)`` documents, and it is the same trade — this
+    /// only applies it to items written before that existed.
+    private func repairAccess(for ref: CredentialRef) {
+        guard !repairedAccess.contains(ref) else { return }
+        repairedAccess.insert(ref)
+        var query = baseQuery(ref)
+        query[kSecReturnRef as String] = NSNumber(value: true)
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var found: CFTypeRef?
+        guard keychain.copyMatching(query, &found) == errSecSuccess,
+              let found,
+              CFGetTypeID(found) == SecKeychainItemGetTypeID(),
+              let access = Self.sharedAccess(label: "Vigil camera credential")
+        else { return }
+        // `CFGetTypeID` above is the only way to ask a `CFTypeRef` what it is; the conditional cast
+        // then costs nothing and keeps the file free of force-unwraps.
+        guard let item = found as? SecKeychainItem else { return }
+        let status = SecKeychainItemSetAccess(item, access)
+        guard status == errSecSuccess else {
+            logger.debug(.core, "could not widen the keychain item's access",
+                         ["ref": "\(ref)", "status": String(status)])
+            return
+        }
+        logger.info(.core, "keychain item's access widened so a rebuild does not re-prompt",
+                    ["ref": "\(ref)"])
     }
 
     /// True when a password is stored for `ref`, without decrypting it.

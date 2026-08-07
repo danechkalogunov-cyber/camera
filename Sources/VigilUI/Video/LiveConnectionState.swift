@@ -38,6 +38,16 @@ package enum LiveConnectionState: Sendable, Hashable {
     /// to a retry, and why we are here.
     case offline(OfflineDetail)
 
+    /// Stopped by the user. The last frame is on the glass and nothing is being asked of the
+    /// camera.
+    ///
+    /// ⛔ ITS OWN CASE, BECAUSE THE THREE IT WOULD OTHERWISE BORROW ARE ALL LIES. A stopped session
+    /// has `StreamState.idle`, which mapped to `.connecting(.resolving)` — so pressing stop showed
+    /// a spinner that never resolved, on a picture that was exactly where the user left it.
+    /// `.offline` claims a connection was lost and offers to retry; `.live` claims new frames are
+    /// arriving. Stopping is a thing the user did, and the interface has to say so.
+    case paused
+
     /// Whether the connect choreography's timers should be running.
     package var isConnecting: Bool {
         if case .connecting = self { return true }
@@ -48,7 +58,9 @@ package enum LiveConnectionState: Sendable, Hashable {
     /// ``LiveVideoView`` — but only these two are showing new frames.
     package var isShowingVideo: Bool {
         switch self {
-        case .live, .degraded: return true
+        // `paused` is included: the tile is still showing the frame it was stopped on, and the
+        // failure overlays must not cover it.
+        case .live, .degraded, .paused: return true
         case .connecting, .offline: return false
         }
     }
@@ -59,6 +71,7 @@ package enum LiveConnectionState: Sendable, Hashable {
         case .connecting: return .connecting
         case .live: return .live
         case .degraded: return .degraded
+        case .paused: return .offline
         case .offline(let detail):
             // A credential failure gets its own dot — red with a slash — because it is the one
             // offline state Vigil will never retry out of on its own (UX.md §12.7).
@@ -74,6 +87,7 @@ package enum LiveConnectionState: Sendable, Hashable {
         case .connecting: return "Connecting"
         case .live: return "Live"
         case .degraded: return "Degraded"
+        case .paused: return "Paused"
         case .offline: return "Offline"
         }
     }

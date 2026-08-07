@@ -156,7 +156,9 @@ package struct LiveVideoView<Video: View>: View {
                                detail: detail,
                                onRetryNow: { onRetry() },
                                onRemedy: { onRemedy($0) })
-            case .live, .degraded:
+            // Nothing over the picture: the frame the user stopped on is the whole message, and
+            // the status chip beside the camera's name says `Paused`.
+            case .live, .degraded, .paused:
                 SwiftUI.Color.clear
             }
         }
@@ -284,7 +286,7 @@ package struct LiveVideoView<Video: View>: View {
         switch state {
         case .connecting: return .connecting
         case .offline: return .offline
-        case .live, .degraded: return .none
+        case .live, .degraded, .paused: return .none
         }
     }
 

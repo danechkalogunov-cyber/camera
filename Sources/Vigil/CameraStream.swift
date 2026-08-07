@@ -263,6 +263,11 @@ final class CameraStream {
     /// camera** and a wall of sixteen needs sixteen of them. It read `self.streamState` on the
     /// session object for as long as there was only ever one camera to be wrong about.
     var liveState: LiveConnectionState {
+        // ⛔ BEFORE EVERYTHING ELSE. A stopped session reports `StreamState.idle`, which the ladder
+        // below reads as "resolving" — so pressing stop put a spinner over a picture that was
+        // exactly where the user left it and never resolved, because nothing was connecting. The
+        // user's own act is the first thing to check.
+        if isPlaybackPaused { return .paused }
         switch streamState {
         case .idle, .resolving:
             return .connecting(.resolving)

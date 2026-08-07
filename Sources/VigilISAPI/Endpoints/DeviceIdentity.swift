@@ -358,6 +358,38 @@ public struct DeviceTime: Sendable, Hashable, Codable {
         guard utcOffsetSeconds != 0 else { return false }
         return abs(skew(against: reference) - Double(utcOffsetSeconds)) <= toleranceSeconds
     }
+
+    /// Whether this device sends **UTC** wearing its local offset — the mirror of
+    /// ``stampsLocalTimeAsUTC(reference:toleranceSeconds:)``.
+    ///
+    /// ⛔ FOUND ON REAL HARDWARE, AS "the clock row is always negative". A camera in UTC+3 that
+    /// writes `<localTime>2026-08-07T19:35:00+03:00</localTime>` when the wall clock beside it says
+    /// 22:35 has told two different lies in one field: the *value* is UTC and the *label* says
+    /// local. Parsed correctly — which is the only thing a parser can do — that instant is three
+    /// hours behind real time, so the panel reported a camera three hours slow, every time, on a
+    /// device whose clock was right.
+    ///
+    /// The discriminator is the same shape as its mirror and just as approximate: a gap that
+    /// matches the declared offset almost exactly, in the other direction. A camera that is
+    /// genuinely three hours slow in a UTC+3 zone is indistinguishable and will be read as quirky —
+    /// and that is again the safe way round, because the correction it implies is the one that makes
+    /// timestamps agree with the footage.
+    public func reportsUTCWithLocalOffset(reference: Date, toleranceSeconds: Double = 300) -> Bool {
+        guard utcOffsetSeconds != 0 else { return false }
+        return abs(skew(against: reference) + Double(utcOffsetSeconds)) <= toleranceSeconds
+    }
+
+    /// The clock error left once a mislabelled zone has been accounted for.
+    ///
+    /// This is what a "how far out is this camera's clock" row must show: the raw skew is the sum of
+    /// the real error and the labelling defect, and reporting the sum sends the user to fix a clock
+    /// that is already correct.
+    public func correctedSkew(against reference: Date) -> Double {
+        let raw = skew(against: reference)
+        if stampsLocalTimeAsUTC(reference: reference) { return raw - Double(utcOffsetSeconds) }
+        if reportsUTCWithLocalOffset(reference: reference) { return raw + Double(utcOffsetSeconds) }
+        return raw
+    }
 }
 
 // MARK: - NetworkInterfaceWire

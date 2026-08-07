@@ -141,8 +141,13 @@ extension DeviceInfoService {
         do {
             let time = try await session.time(force: true)
             let now = Date()
-            identity.clockSkewSeconds = time.skew(against: now)
+            // ⛔ CORRECTED, NOT RAW. A device that labels its time with the wrong zone — in either
+            // direction — makes the raw difference the sum of its clock error and its labelling
+            // defect. Reporting that sum is what made this row read "−3:00:00" for ever on a camera
+            // whose clock was right, and would send the user to fix something that is not broken.
+            identity.clockSkewSeconds = time.correctedSkew(against: now)
             identity.stampsLocalTimeAsUTC = time.stampsLocalTimeAsUTC(reference: now)
+                || time.reportsUTCWithLocalOffset(reference: now)
             if let skew = identity.clockSkewSeconds,
                abs(skew) > InspectorDeviceIdentity.clockToleranceSeconds,
                !identity.stampsLocalTimeAsUTC {

@@ -235,6 +235,15 @@ final class MainWindowState {
     /// means nothing — `VToolbarView` watches it for a change.
     var focusSearchRequests = 0
 
+    /// Bumped to take the cursor *out* of the search field.
+    ///
+    /// ⛔ Clicking the picture has to end a search, and until this existed nothing could make it.
+    /// macOS keeps a text field first responder until something else claims it, and nothing on the
+    /// stage is focusable — so after typing a filter the only way to get the caret out was to click
+    /// a sidebar row, which also selected a camera. An AppKit `makeFirstResponder(nil)` was tried
+    /// first and is the wrong tool: SwiftUI owns this focus, and the two disagree about who has it.
+    var blurSearchRequests = 0
+
     // MARK: - Menu requests
 
     /// Counters the menu bar bumps and the window acts on.
@@ -319,6 +328,14 @@ final class MainWindowState {
 
     /// Whether the overflow menu is up.
     var isOverflowMenuOpen = false
+
+    /// Where the toolbar's "…" button is, in the window's own coordinate space.
+    ///
+    /// Reported by `VToolbarView` through `VToolbarAnchorKey` and read by the overlay that draws the
+    /// menu. Measured rather than derived: the menu used to be placed by adding up the toolbar's
+    /// padding tokens, which was both wrong and fragile — every change to that row's contents would
+    /// have moved the panel again.
+    var overflowAnchor: CGRect = .zero
 
     // MARK: - Cycle
 
