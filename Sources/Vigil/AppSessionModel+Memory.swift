@@ -161,6 +161,27 @@ extension AppSessionModel {
         return true
     }
 
+    /// Retries one camera now, cancelling whatever backoff it was waiting out.
+    ///
+    /// ⛔ The tile that asks is the tile that retries. `perform(.retry)` reconnects the *form's*
+    /// request, which is the bound camera's — pressing Retry on camera three's offline card would
+    /// have restarted camera one and left camera three exactly as it was, waiting out a timer with
+    /// a button that appeared to do nothing.
+    ///
+    /// A stream that still owns a controller is restarted through it, which is what makes this
+    /// immediate rather than another scheduled attempt. One that was torn down — a terminal failure
+    /// — is built again from the stored record.
+    func retryCamera(_ id: CameraID) {
+        guard let stream = cameras.stream(for: id), stream !== live else { return perform(.retry) }
+        if let controller = stream.controller {
+            Task { await controller.restart() }
+            return
+        }
+        guard let camera = stream.camera else { return }
+        stream.beginConnecting()
+        Task { await start(stream, camera: camera, ref: stream.activeRef ?? camera.credentialRef) }
+    }
+
     /// Stops one camera's stream without touching the rest.
     ///
     /// The entry stays in ``cameras``, because the tile that remains is drawn from it — a stopped

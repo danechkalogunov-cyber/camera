@@ -370,8 +370,8 @@
                 // The empty cell's "+" is the same act as the sidebar's.
                 onAddCamera: { _ in addCamera() },
                 onCloseCell: { _ in closeStageCell() },
-                onRetry: { _ in session.perform(.retry) },
-                onRemedy: { _, remedy in session.perform(remedy) },
+                onRetry: { id in session.retryCamera(id) },
+                onRemedy: { id, remedy in applyRemedy(remedy, to: id) },
                 onShowOverflow: { showOverflowCameras() },
                 // Clicking an idle cell is the same act as opening its sidebar row: connect
                 // this camera. `switchTo` refuses a no-op switch, so clicking the cell that
@@ -411,6 +411,27 @@
                     kind: .warning,
                     message: MainWindowView.localized(
                         "Vigil streams four cameras at once. Close one to open another."))
+            }
+        }
+
+        /// A remedy chosen from one tile's failure card, applied to that tile's camera.
+        ///
+        /// ⚠️ Only the two that mean "try again" are per camera, and the split is honest rather than
+        /// lazy. Retrying is a fact about one stream. The rest — *Check the address*, *Update the
+        /// password*, *Open the camera's web page* — put the user in front of the **connect form**,
+        /// which the application has exactly one of, and it is the bound camera's. Routing those
+        /// through a background tile would open the form for camera one while the user was looking
+        /// at camera three's card. `F-LIV-01`'s remaining step is what makes the form follow the
+        /// selection; until then this is where the line honestly falls.
+        func applyRemedy(_ remedy: ConnectRemedy, to id: CameraID) {
+            // The bound camera keeps every remedy exactly as it had it, including the log lines
+            // `perform` writes for the ones that are really a reconnect.
+            guard id != cameraID else { return session.perform(remedy) }
+            switch remedy {
+            case .retry, .switchToTCP:
+                session.retryCamera(id)
+            default:
+                session.perform(remedy)
             }
         }
 
