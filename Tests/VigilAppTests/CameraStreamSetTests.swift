@@ -162,6 +162,28 @@ struct CameraStreamSetTests {
         #expect(set.count == 0)
     }
 
+    // MARK: - The budget's counter
+
+    /// ⛔ What a concurrency budget has to count is streams that are *being driven*, not streams
+    /// that exist. A filed but stopped camera holds no socket and no decoder; counting it would
+    /// spend the budget on cameras that are doing nothing, and the fifth click would be refused
+    /// while three of the four were idle.
+    @Test func activeCountIgnoresStreamsThatAreNotBeingDriven() {
+        let set = CameraStreamSet()
+        let front = set.stream(for: camera("Front door"))
+        _ = set.stream(for: camera("Yard", host: "192.168.1.11"))
+
+        #expect(set.count == 2)
+        #expect(set.activeCount == 0)
+
+        front.beginConnecting()
+        #expect(set.activeCount == 1)
+
+        front.teardown()
+        #expect(set.activeCount == 0)
+        #expect(set.count == 2, "a stopped camera keeps its entry — the offline card is drawn from it")
+    }
+
     /// Forgetting one leaves the others alone.
     @Test func forgettingOneLeavesTheRest() {
         let set = CameraStreamSet()
