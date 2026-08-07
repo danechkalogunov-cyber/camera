@@ -61,13 +61,13 @@ extension MainWindowView {
                                   groupID: groups.group(for: camera.id),
                                   identityIndex: camera.colorTag.paletteIndex,
                                   isEnabled: camera.isEnabled,
-                                  // ⚠️ `.disabled` for every stored row, including enabled ones.
-                                  // `.offline` claims a connection was tried and lost, and
-                                  // `.connecting` claims one is in flight; neither is true — this
-                                  // build runs one stream, so a camera that is not it has had
-                                  // nothing attempted. Saying "not running" is the only honest
-                                  // option until a second stream exists to say otherwise.
-                                  status: .disabled)
+                                  // ⚠️ `.disabled` means "not running", and it is the honest answer
+                                  // only for a camera nothing has dialled — `.offline` claims a
+                                  // connection was tried and lost, `.connecting` claims one is in
+                                  // flight. A second stream can now say otherwise, so the row reads
+                                  // that camera's own stream and falls back to "not running" when
+                                  // there is none.
+                                  status: storedRowStatus(of: camera))
         }
         // The live camera may not be in the library yet — it is not, until the legacy import lands
         // or the user adds it — and it must still appear.
@@ -75,6 +75,19 @@ extension MainWindowView {
             rows.insert(sidebarCamera, at: 0)
         }
         return rows
+    }
+
+    /// What one stored row says about itself: its own stream's status, or "not running".
+    ///
+    /// ⚠️ Disabled wins over everything. A camera the user switched off is not offline and not
+    /// connecting — it is a camera Vigil has been told to leave alone, and a row that showed it
+    /// reconnecting would be reporting on a session that must not exist.
+    private func storedRowStatus(of camera: Camera) -> VSidebarStatus {
+        guard camera.isEnabled else { return .disabled }
+        guard let stream = session.cameras.stream(for: camera.id), stream.isActive else {
+            return .disabled
+        }
+        return Self.sidebarStatus(for: stream.liveState)
     }
 
     /// The session camera as a sidebar row.
@@ -312,11 +325,29 @@ extension MainWindowView {
         }
     }
 
-    /// The status bar's counters.
+    /// The status bar's counters, over every camera Vigil is driving.
+    ///
+    /// ⚠️ The throughput is the **sum**, because the footer answers "what is this app pulling off
+    /// the network" — a wall of four cameras at 4 Mb/s each is 16 Mb/s of traffic, and reporting one
+    /// of them would make the number useless for the thing anyone reads it for.
+    ///
+    /// A stream that has not been filed yet is still connecting, so it shows no video and adds no
+    /// bits: it cannot change either count, and needs no special case here.
     var chromeStatus: VChromeStatus {
-        VChromeStatus(liveCount: session.liveState.isShowingVideo ? 1 : 0,
-                      degradedCount: Self.isDegraded(session.liveState) ? 1 : 0,
-                      throughput: telemetry.throughput)
+        var live = 0
+        var degraded = 0
+        var bitsPerSecond: Double = 0
+        for stream in session.cameras.all where stream.isActive {
+            let state = stream.liveState
+            if state.isShowingVideo { live += 1 }
+            if Self.isDegraded(state) { degraded += 1 }
+            if let id = stream.camera?.id, let measured = measuredTelemetry[id]?.bitsPerSecond {
+                bitsPerSecond += measured
+            }
+        }
+        return VChromeStatus(liveCount: live,
+                             degradedCount: degraded,
+                             throughput: VThroughput(bitsPerSecond: bitsPerSecond))
     }
 }
 
