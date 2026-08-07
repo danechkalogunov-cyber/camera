@@ -373,13 +373,10 @@
                 onRetry: { _ in session.perform(.retry) },
                 onRemedy: { _, remedy in session.perform(remedy) },
                 onShowOverflow: { showOverflowCameras() },
-                onConnectCamera: { id in
-                    guard let target = library.cameras.first(where: { $0.id == id }) else {
-                        return
-                    }
-                    window.sidebarSelection.select(.camera(id))
-                    Task { await session.switchTo(target) }
-                },
+                // Clicking an idle cell is the same act as opening its sidebar row: connect
+                // this camera. `switchTo` refuses a no-op switch, so clicking the cell that
+                // is already live costs nothing.
+                onConnectCamera: { id in connectStageCell(id) },
                 supportsPosition3D: { id in
                     id == cameraID && ptz.capability.supportsPosition3D
                 },
@@ -387,23 +384,59 @@
                     guard id == cameraID else { return }
                     ptz.position3D(rect: rect, viewSize: size)
                 },
-                // Clicking an idle cell is the same act as opening its sidebar row: stop
-                // what is playing and stream this one. `switchTo` refuses a no-op switch, so
-                // clicking the cell that is already live costs nothing.
-                video: { _ in
-                    VideoTile(
-                        cameraID: cameraID,
-                        frames: session.frames,
-                        // `updateNSView` retargets the layer's gravity in place, so
-                        // toggling this does not rebuild the view or interrupt the
-                        // picture — it is the one tile option that is free to change.
-                        options: TileRenderOptions(
-                            gravity: window.fillsTile ? .fill : .fit),
-                        logger: session.dependencies.logger,
-                        onKeyframeNeeded: { session.recoverStalledPicture() },
-                        onDecodeFailure: { session.handleDecodeFailure($0) },
-                        onFramesDropped: { session.handleFramesDropped($0, reason: $1) })
-                })
+                // One renderer per mounted tile, each attached to **its own** camera's frame
+                // handle. The stage calls this once per tile and keys the view by camera, so
+                // a layout change re-uses the renderer rather than rebuilding it.
+                video: { id in stageVideo(for: id) })
+        }
+
+        /// Clicking an idle cell: select that camera, and start it **beside** whatever is already
+        /// playing.
+        ///
+        /// ⛔ This used to be `switchTo`, which stopped the picture the user was watching in order
+        /// to show the one they clicked — the only thing a build with one `StreamController` could
+        /// do, and the thing F-LIV-01 exists to end. A second cell now becomes a second picture.
+        ///
+        /// The budget refusal is said out loud. A click that quietly does nothing reads as a broken
+        /// app, and "four at once" is a limit the user can work with once they know it.
+        func connectStageCell(_ id: CameraID) {
+            guard let target = library.cameras.first(where: { $0.id == id }) else { return }
+            window.sidebarSelection.select(.camera(id))
+            Task {
+                guard await session.connectAlongside(target) == false else { return }
+                // ⚠️ The number is spelled out in the sentence rather than formatted into it, so
+                // that the Russian translation can decline it. It is tied to
+                // `AppSessionModel.maxConcurrentStreams`, which says so; changing one changes both.
+                window.toast = MainWindowToast(
+                    kind: .warning,
+                    message: MainWindowView.localized(
+                        "Vigil streams four cameras at once. Close one to open another."))
+            }
+        }
+
+        /// The renderer for one cell, attached to that camera's own frame source.
+        ///
+        /// ⛔ The `?? session.live` fallback is not a shrug. The stage only calls this for a tile
+        /// it decided to mount, which means `stageCamera(_:)` found an active stream a moment
+        /// ago; the fallback covers the frame in which a camera is filed and the map has not been
+        /// read yet, and attaching to the bound camera's handle for that frame is strictly better
+        /// than mounting a renderer with no source, which would show a black rectangle and never
+        /// recover.
+        func stageVideo(for id: CameraID) -> VideoTile {
+            let stream = session.cameras.stream(for: id) ?? session.live
+            return VideoTile(
+                cameraID: id,
+                frames: stream.frames,
+                // `updateNSView` retargets the layer's gravity in place, so toggling this
+                // does not rebuild the view or interrupt the picture — it is the one tile
+                // option that is free to change.
+                options: TileRenderOptions(gravity: window.fillsTile ? .fill : .fit),
+                logger: session.dependencies.logger,
+                // Each report names the stream that made it, so a recovery restarts the camera
+                // that stalled rather than whichever one the window happens to be bound to.
+                onKeyframeNeeded: { session.recoverStalledPicture(on: stream) },
+                onDecodeFailure: { session.handleDecodeFailure($0, on: stream) },
+                onFramesDropped: { session.handleFramesDropped($0, reason: $1, on: stream) })
         }
     }
 

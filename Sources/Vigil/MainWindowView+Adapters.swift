@@ -128,28 +128,54 @@ extension MainWindowView {
 
     /// One tile payload per camera on the stage.
     ///
-    /// ⚠️ Exactly one of them carries a session. `isStreaming` is false for every other camera, so
-    /// the stage draws `VGridIdleCell` rather than a tile whose `LiveConnectionState` would have to
-    /// lie — `.offline` claims an attempt was made and failed, and nothing has been attempted for a
-    /// camera this build has not dialled. Clicking one switches the session to it, which is the
-    /// honest meaning of "show me this camera" while there is one decode pipeline.
+    /// ⚠️ A camera with no stream is not `.offline`, and the distinction is the whole of this
+    /// method's care. `.offline` claims an attempt was made and failed; a camera nobody has dialled
+    /// has had nothing attempted, so it is drawn as `VGridIdleCell` — name, address, and a click
+    /// that connects it — rather than as a tile wearing a failure it never had. `isStreaming` is
+    /// what the stage keys that on, and it answers from the camera's **own** stream now rather than
+    /// from "is this the one camera the app is driving".
     var stageCameras: [VStageCamera] {
-        stageOrder.map { id in
-            guard id == cameraID else {
-                let stored = library.cameras.first { $0.id == id }
-                return VStageCamera(camera: LiveCameraIdentity(id: id.rawValue,
-                                                               name: stored?.displayName ?? "",
-                                                               host: stored?.host ?? ""),
-                                    state: .offline(OfflineDetail()),
-                                    isStreaming: false)
-            }
-            return VStageCamera(camera: identity,
-                                state: session.liveState,
-                                attemptStartedAt: session.attemptStartedAt,
-                                isRecording: recording.isRecording,
-                                recordingElapsed: recording.elapsed(now: recordingTick),
-                                stats: tileStats)
+        stageOrder.map { id in stageCamera(id) }
+    }
+
+    /// One camera's tile payload, read from its own stream.
+    ///
+    /// ⚠️ The bound camera is looked up as ``AppSessionModel/live`` rather than through the map, and
+    /// that is not a shortcut — it is the connecting window. A first connect writes `resolving` on
+    /// the stream *before* it has a camera record to file it under, so between the Return key and
+    /// the record there is no map entry to find, and a tile drawn from the map alone would show
+    /// *Not connected* over a session that is connecting. `cameraID` is the placeholder identity the
+    /// tile already uses for exactly that gap.
+    private func stageCamera(_ id: CameraID) -> VStageCamera {
+        let stored = library.cameras.first { $0.id == id }
+        let isBound = id == cameraID
+        let stream = isBound ? session.live : session.cameras.stream(for: id)
+        guard let stream, stream.isActive else {
+            return VStageCamera(camera: LiveCameraIdentity(id: id.rawValue,
+                                                           name: stored?.displayName ?? "",
+                                                           host: stored?.host ?? "",
+                                                           identityIndex: stored?.colorTag
+                                                               .paletteIndex),
+                                state: .offline(OfflineDetail()),
+                                isStreaming: false)
         }
+        // Recording is still the window's one recorder, so the badge belongs to the bound camera
+        // and to no other — `F-CAP-03` is what makes it per camera.
+        return VStageCamera(camera: isBound ? identity : streamIdentity(stream, stored: stored),
+                            state: stream.liveState,
+                            attemptStartedAt: stream.attemptStartedAt,
+                            isRecording: isBound && recording.isRecording,
+                            recordingElapsed: isBound ? recording.elapsed(now: recordingTick) : nil,
+                            stats: tileStats(of: stream))
+    }
+
+    /// The name and colour a non-bound camera's tile carries.
+    private func streamIdentity(_ stream: CameraStream, stored: Camera?) -> LiveCameraIdentity {
+        let camera = stream.camera ?? stored
+        return LiveCameraIdentity(id: (camera?.id ?? CameraID()).rawValue,
+                                  name: camera?.displayName ?? "",
+                                  host: camera?.host ?? "",
+                                  identityIndex: camera?.colorTag.paletteIndex)
     }
 
     /// What the Stream tab's header describes.
@@ -182,21 +208,29 @@ extension MainWindowView {
     /// frame rate need `StreamStatisticsCollector`, which is written but not yet fed. `nil` before
     /// the DESCRIBE lands, which also hides the pill's REC badge, so the badge is not the only
     /// signal that a clip is running: the elapsed counter at the bottom of the tile is unconditional.
-    var tileStats: VTileStats? {
-        guard let format = session.format else { return nil }
+    var tileStats: VTileStats? { tileStats(of: session.live) }
+
+    /// The same pill, for whichever camera's tile is asking.
+    func tileStats(of stream: CameraStream) -> VTileStats? {
+        guard let format = stream.format else { return nil }
         let dimensions = format.resolution.map {
             FrameDimensions(width: $0.width, height: $0.height)
         }
         // Measured values win where they exist; the negotiated format fills the rest. A declared
         // frame rate is what the camera promised, a measured one is what arrived, and the tile
         // should show the second whenever it has been observed.
+        let measured = stream.camera.flatMap { measuredTelemetry[$0.id] }
         return VTileStats(codec: format.videoCodec.rawValue.uppercased(),
-                          dimensions: telemetry.resolution ?? dimensions,
-                          framesPerSecond: telemetry.framesPerSecond ?? format.declaredFPS,
+                          dimensions: measured?.resolution ?? dimensions,
+                          framesPerSecond: measured?.framesPerSecond ?? format.declaredFPS,
                           isHardwareDecode: true)
     }
 
-    /// Reads the collector once a second for as long as the window is on screen.
+    /// Reads every stream's collector once a second for as long as the window is on screen.
+    ///
+    /// ⚠️ Every stream, not the bound one. A tile's stats pill is a claim about the camera it is
+    /// drawn over, and with a wall of them the pill on tile nine reporting tile one's frame rate
+    /// would be worse than showing nothing.
     func pollTelemetry() async {
         while !Task.isCancelled {
             let now = session.dependencies.clock.now()
@@ -205,6 +239,7 @@ extension MainWindowView {
             session.telemetry.noteDecodeQueueDepth(session.backlog.takePeak())
             session.telemetry.tick(at: now)
             telemetry = session.telemetry.telemetry(at: now)
+            measuredTelemetry = sampleStreamTelemetry(at: now)
             sampleProcessResources()
             do {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -212,6 +247,24 @@ extension MainWindowView {
                 return
             }
         }
+    }
+
+    /// One snapshot per camera with a stream, keyed by identity.
+    ///
+    /// The bound camera's collector has already been ticked by ``pollTelemetry()`` — it is the one
+    /// the status bar reads — so it is sampled here but not ticked twice, which would halve every
+    /// per-second rate it reports.
+    private func sampleStreamTelemetry(at now: MediaInstant) -> [CameraID: StreamTelemetrySnapshot] {
+        var snapshots: [CameraID: StreamTelemetrySnapshot] = [:]
+        for stream in session.cameras.all {
+            guard let id = stream.camera?.id else { continue }
+            if stream !== session.live {
+                stream.telemetry.noteDecodeQueueDepth(stream.backlog.takePeak())
+                stream.telemetry.tick(at: now)
+            }
+            snapshots[id] = stream.telemetry.telemetry(at: now)
+        }
+        return snapshots
     }
 
     /// Reads this process's CPU and memory, and logs them once a minute.

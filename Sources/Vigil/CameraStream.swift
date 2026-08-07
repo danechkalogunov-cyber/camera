@@ -242,6 +242,79 @@ final class CameraStream {
 
     /// Whether this stream owns anything that has to be stopped.
     var isRunning: Bool { controller != nil || pipeline != nil }
+
+    /// Whether the app is driving this camera at all.
+    ///
+    /// ⚠️ Wider than ``isRunning`` by one state, and the difference is a tile that narrates. A
+    /// stream that is resolving an address has no controller yet, and the cell for it must show
+    /// "Connecting…" rather than the *Not connected* card — the card offers to start a session that
+    /// is already starting.
+    var isActive: Bool { isRunning || streamState != .idle }
+
+    // MARK: - What the tile says
+
+    /// What a tile bound to this camera shows, in the vocabulary the views speak.
+    ///
+    /// The eleven `StreamState` cases collapse into four, exactly as `LiveConnectionState`
+    /// documents: five transient states become one `connecting` phase ladder, and `failed`,
+    /// `reconnecting` and `stopped` become `offline` carrying the diagnosis that tells them apart.
+    ///
+    /// ⚠️ On `CameraStream` and not on `AppSessionModel`, because it is a statement about **one
+    /// camera** and a wall of sixteen needs sixteen of them. It read `self.streamState` on the
+    /// session object for as long as there was only ever one camera to be wrong about.
+    var liveState: LiveConnectionState {
+        switch streamState {
+        case .idle, .resolving:
+            return .connecting(.resolving)
+        case .connecting:
+            return .connecting(.connecting)
+        case .authenticating:
+            return .connecting(.authenticating)
+        case .describing:
+            return .connecting(.negotiating)
+        case .settingUp:
+            return .connecting(.opening)
+        case .playing:
+            // `isDisplayingPicture`, not `isReceivingMedia`: `Live` is a claim about the screen.
+            if isDisplayingPicture { return .live }
+            return .connecting(hasFirstPacket ? .waitingForKeyframe : .waitingForVideo)
+        case .degraded:
+            return .degraded(degradedCause)
+        case .reconnecting, .failed, .stopped:
+            return .offline(OfflineDetail(attempt: attempt,
+                                          retryInSeconds: retryInSeconds,
+                                          lastSeen: lastSeen,
+                                          isPersistent: attempt >= 5,
+                                          diagnosis: diagnosis))
+        }
+    }
+
+    /// Whether a picture is actually on the glass.
+    ///
+    /// `TileRenderState.isReceivingFrames` goes true when a sample buffer reaches the display layer
+    /// and false again on a flush, which is exactly the fact the status line needs.
+    ///
+    /// The fallback is deliberate and is the safe direction: with no tile mounted there is no render
+    /// state to ask, so we fall back to the assembled-access-unit fact rather than narrating
+    /// "connecting" over a stream that is running. A tile that *is* mounted and is not showing
+    /// anything is the case worth catching, and this reports it.
+    var isDisplayingPicture: Bool {
+        renderState?.isReceivingFrames ?? isReceivingMedia
+    }
+
+    /// The measured reason the stream is degraded.
+    ///
+    /// Every case carries a number the user can act on, so this reports whichever measurement is
+    /// actually non-zero rather than guessing (UX.md §14.1 rule 4).
+    private var degradedCause: DegradedCause {
+        if statistics.lossFraction > 0 {
+            return .packetLoss(fraction: statistics.lossFraction)
+        }
+        if statistics.jitterMilliseconds > 0 {
+            return .jitter(milliseconds: statistics.jitterMilliseconds)
+        }
+        return .decodeQueue(frames: statistics.decodeQueueDepth)
+    }
 }
 
 // MARK: - CameraStreamSet
@@ -325,6 +398,13 @@ final class CameraStreamSet {
 
     /// How many cameras have a media path. Drives the decoder budget in `F-DEC-06`.
     var count: Int { streams.count }
+
+    /// How many of them are actually being driven — connecting counts, stopped does not.
+    ///
+    /// This is what a concurrency budget has to count: a stream that is resolving an address is
+    /// already holding a socket and is about to hold a decoder, and a budget that only counted
+    /// playing streams would let a click storm start sixteen of them at once.
+    var activeCount: Int { streams.values.filter(\.isActive).count }
 }
 
 #endif  // os(macOS)

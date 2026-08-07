@@ -753,6 +753,7 @@
 "Import" = "Импортировать";
 "Import finished — added %lld, already here %lld" = "Импорт завершён — добавлено %lld, уже было %lld";
 "That file listed no cameras." = "В файле нет ни одной камеры.";
+"Vigil streams four cameras at once. Close one to open another." = "Vigil показывает четыре камеры одновременно. Закройте одну, чтобы открыть другую.";
 "The export lists cameras and groups. It holds no passwords." = "В экспорт попадают камеры и группы. Паролей в нём нет.";
 "no host column in the header row" = "в строке заголовка нет колонки host";
 "row %lld has the wrong number of columns" = "в строке %lld неверное число колонок";

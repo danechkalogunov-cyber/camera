@@ -279,64 +279,15 @@ final class AppSessionModel {
 
     // MARK: - Computed Properties
 
-    /// What the video screen shows, in its own vocabulary.
+    /// What the video screen shows for the camera it is bound to, in its own vocabulary.
     ///
-    /// The eleven `StreamState` cases collapse into four here, exactly as `LiveConnectionState`
-    /// documents: five transient states become one `connecting` phase ladder, and `failed`,
-    /// `reconnecting` and `stopped` become `offline` carrying the diagnosis that tells them apart.
-    var liveState: LiveConnectionState {
-        switch streamState {
-        case .idle, .resolving:
-            return .connecting(.resolving)
-        case .connecting:
-            return .connecting(.connecting)
-        case .authenticating:
-            return .connecting(.authenticating)
-        case .describing:
-            return .connecting(.negotiating)
-        case .settingUp:
-            return .connecting(.opening)
-        case .playing:
-            // `isDisplayingPicture`, not `isReceivingMedia`: `Live` is a claim about the screen.
-            if isDisplayingPicture { return .live }
-            return .connecting(hasFirstPacket ? .waitingForKeyframe : .waitingForVideo)
-        case .degraded:
-            return .degraded(degradedCause)
-        case .reconnecting, .failed, .stopped:
-            return .offline(OfflineDetail(attempt: attempt,
-                                          retryInSeconds: retryInSeconds,
-                                          lastSeen: lastSeen,
-                                          isPersistent: attempt >= 5,
-                                          diagnosis: diagnosis))
-        }
-    }
+    /// The rule itself is `CameraStream.liveState` — it is a fact about one camera and nothing
+    /// about the application, which is why it moved. This is the forwarder the window already
+    /// calls.
+    var liveState: LiveConnectionState { live.liveState }
 
-    /// Whether a picture is actually on the glass.
-    ///
-    /// `TileRenderState.isReceivingFrames` goes true when a sample buffer reaches the display layer
-    /// and false again on a flush, which is exactly the fact the status line needs.
-    ///
-    /// The fallback is deliberate and is the safe direction: with no tile mounted there is no render
-    /// state to ask, so we fall back to the assembled-access-unit fact rather than narrating
-    /// "connecting" over a stream that is running. A tile that *is* mounted and is not showing
-    /// anything is the case worth catching, and this reports it.
-    var isDisplayingPicture: Bool {
-        renderState?.isReceivingFrames ?? isReceivingMedia
-    }
-
-    /// The measured reason the stream is degraded.
-    ///
-    /// Every case carries a number the user can act on, so this reports whichever measurement is
-    /// actually non-zero rather than guessing (UX.md §14.1 rule 4).
-    private var degradedCause: DegradedCause {
-        if statistics.lossFraction > 0 {
-            return .packetLoss(fraction: statistics.lossFraction)
-        }
-        if statistics.jitterMilliseconds > 0 {
-            return .jitter(milliseconds: statistics.jitterMilliseconds)
-        }
-        return .decodeQueue(frames: statistics.decodeQueueDepth)
-    }
+    /// Whether a picture is actually on the glass for the bound camera.
+    var isDisplayingPicture: Bool { live.isDisplayingPicture }
 
     // MARK: - Initialisation
 
@@ -432,12 +383,18 @@ final class AppSessionModel {
         }
     }
 
-    /// Tears the session down and returns to the form. Idempotent.
+    /// Tears **every** session down and returns to the form. Idempotent.
+    ///
+    /// ⛔ Every one of them, and this is not tidiness. The window goes back to the connect form, so
+    /// nothing on screen is showing the other cameras — and a stream nobody can see is a socket, a
+    /// decoder and a camera session that the user has no way to stop. Leaving them running was the
+    /// obvious shape of this method for as long as there could only be one.
     ///
     /// - Parameter forget: when `true`, the remembered connection is cleared so the next launch
     ///   shows the form rather than reconnecting.
     func disconnect(forget: Bool = false) {
         stopSession()
+        for stream in cameras.all where stream !== live { stop(stream) }
         phase = .connect
         form.isConnecting = false
         if forget {
@@ -519,8 +476,19 @@ final class AppSessionModel {
     }
 
     /// Bypasses retry timers after the network returns or the Mac wakes.
+    ///
+    /// ⚠️ Every stream, not the bound one. A Mac that slept with four cameras up wakes with four
+    /// dead sockets, and three of them waiting out a backoff nobody can see is the same bug as one.
     func reconnectImmediately() {
-        guard let controller else { return }
+        var reachedLive = false
+        for stream in cameras.all {
+            if stream === live { reachedLive = true }
+            guard let controller = stream.controller else { continue }
+            Task { await controller.restart() }
+        }
+        // `live` is filed only once it has a camera record, so a session still connecting is not in
+        // the map yet and would otherwise be the one stream this misses.
+        guard !reachedLive, let controller = live.controller else { return }
         Task { await controller.restart() }
     }
 }

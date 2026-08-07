@@ -201,6 +201,23 @@ extension AppSessionModel {
 
     /// One log line per this many dropped frames of the same reason.
     static let dropLogInterval = 100
+
+    /// How many cameras Vigil will stream at once.
+    ///
+    /// ⚠️ A NUMBER, HONESTLY LABELLED, NOT A BUDGET. `F-DEC-06` specifies a decoder pool that
+    /// measures what the machine can actually sustain and admits streams against it; this is the
+    /// placeholder that keeps a click storm from starting sixteen sessions before that exists.
+    ///
+    /// Four, and the reason is the device rather than the Mac: the Hikvision this app was first
+    /// proven against refuses a fourth concurrent RTSP session, and an NVR's per-device ceiling is
+    /// the same shape. A wall wider than this needs the sub-stream ladder and the admission policy
+    /// together, which is exactly what `F-DEC-06` is.
+    ///
+    /// ⚠️ The number is also written out in the sentence the stage shows when the budget is spent
+    /// — "Vigil streams four cameras at once" — because Russian declines it and a formatted `%lld`
+    /// would need a `.stringsdict` for a number that never varies. Change this and change that
+    /// string, in both translations.
+    static let maxConcurrentStreams = 4
 }
 
 #endif  // os(macOS)

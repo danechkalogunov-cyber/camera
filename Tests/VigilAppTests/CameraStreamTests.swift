@@ -16,6 +16,8 @@ import Foundation
 import Testing
 @testable import Vigil
 import VigilCore
+import VigilProtocols
+import VigilUI
 
 @Suite("Camera stream transitions")
 @MainActor
@@ -125,6 +127,105 @@ struct CameraStreamTests {
         #expect(second.controller == nil)
         #expect(second.pipeline == nil)
         #expect(stream.streamState == .idle)
+    }
+
+    // MARK: - Being driven
+
+    /// ⛔ A stream that is resolving an address has no controller yet, and the stage must still draw
+    /// it as connecting. `isRunning` answers "is there something to stop"; this answers "is the app
+    /// driving this camera", and a tile that asked the first question would offer to connect a
+    /// camera that is already connecting.
+    @Test func aStreamIsActiveFromTheMomentItStartsResolving() {
+        let stream = CameraStream()
+        #expect(!stream.isActive)
+        #expect(!stream.isRunning)
+
+        stream.beginConnecting()
+        #expect(stream.isActive)
+        #expect(!stream.isRunning)
+
+        stream.teardown()
+        #expect(!stream.isActive)
+    }
+
+    // MARK: - What the tile says
+
+    /// `Live` is a claim about pixels. With a tile mounted, the tile's own render state decides.
+    @Test func liveIsClaimedOnlyWhenSomethingIsOnTheGlass() {
+        let stream = CameraStream()
+        stream.streamState = .playing
+        stream.isReceivingMedia = true
+
+        // No tile mounted: the assembled-access-unit fact is the safe fallback.
+        #expect(stream.isDisplayingPicture)
+        #expect(stream.liveState == .live)
+    }
+
+    /// Media arriving is not a picture: before the first frame is drawn the tile narrates, and which
+    /// sentence it uses depends on whether any RTP has arrived at all.
+    @Test func theConnectingNarrationSplitsOnTheFirstPacket() {
+        let stream = CameraStream()
+        stream.streamState = .playing
+
+        #expect(stream.liveState == .connecting(.waitingForVideo))
+        stream.hasFirstPacket = true
+        #expect(stream.liveState == .connecting(.waitingForKeyframe))
+    }
+
+    /// The five transient states collapse into the connecting ladder, in order.
+    @Test func everyTransientStateHasItsOwnRungOfTheLadder() {
+        let stream = CameraStream()
+        let expected: [(StreamState, LiveConnectionState)] = [
+            (.idle, .connecting(.resolving)),
+            (.resolving, .connecting(.resolving)),
+            (.connecting, .connecting(.connecting)),
+            (.authenticating, .connecting(.authenticating)),
+            (.describing, .connecting(.negotiating)),
+            (.settingUp, .connecting(.opening)),
+        ]
+        for (state, narration) in expected {
+            stream.streamState = state
+            #expect(stream.liveState == narration)
+        }
+    }
+
+    /// Offline carries the numbers the card is drawn from, and turns persistent at the fifth
+    /// attempt.
+    @Test func offlineCarriesTheAttemptAndTheRetry() {
+        let stream = CameraStream()
+        let seen = Date(timeIntervalSince1970: 3_000)
+        stream.streamState = .reconnecting
+        stream.attempt = 5
+        stream.retryInSeconds = 8
+        stream.lastSeen = seen
+
+        guard case let .offline(detail) = stream.liveState else {
+            Issue.record("a reconnecting stream is offline")
+            return
+        }
+        #expect(detail.attempt == 5)
+        #expect(detail.retryInSeconds == 8)
+        #expect(detail.lastSeen == seen)
+        #expect(detail.isPersistent)
+    }
+
+    /// ⚠️ The degraded cause reports whichever measurement is actually non-zero, in the order loss,
+    /// jitter, queue — every case carries a number the user can act on, so guessing is not allowed.
+    @Test func degradedNamesTheMeasurementThatIsActuallyNonZero() {
+        let stream = CameraStream()
+        stream.streamState = .degraded
+        var statistics = StreamStatistics()
+        statistics.decodeQueueDepth = 12
+        stream.statistics = statistics
+        #expect(stream.liveState == .degraded(.decodeQueue(frames: 12)))
+
+        statistics.jitterMilliseconds = 40
+        stream.statistics = statistics
+        #expect(stream.liveState == .degraded(.jitter(milliseconds: 40)))
+
+        statistics.lossFraction = 0.03
+        stream.statistics = statistics
+        #expect(stream.liveState == .degraded(.packetLoss(fraction: 0.03)))
     }
 }
 

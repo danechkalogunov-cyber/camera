@@ -127,6 +127,13 @@ struct MainWindowView: View {
     /// forbids. One read per second is what the Stream tab's `LAST 60 S` sparkline needs and no more.
     @State var telemetry = StreamTelemetrySnapshot.unmeasured
 
+    /// The same snapshot per camera, for the tiles' stats pills.
+    ///
+    /// ⚠️ Separate from ``telemetry`` rather than replacing it: the status bar and the Stream tab
+    /// describe the *selected* camera and read the one above, while a tile's pill describes the
+    /// camera it is drawn over. One dictionary lookup per tile per second is the whole cost.
+    @State var measuredTelemetry: [CameraID: StreamTelemetrySnapshot] = [:]
+
     /// Balanced with `NSCursor.unhide()` when cinema mode ends.
     ///
     /// ⚠️ `internal`: the `.task` that hides and unhides it lives in

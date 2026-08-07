@@ -129,6 +129,48 @@ extension AppSessionModel {
         await stream(camera: target, ref: target.credentialRef)
     }
 
+    /// Streams another camera **beside** the one already playing, rather than instead of it.
+    ///
+    /// ⛔ THIS IS WHAT F-LIV-01 IS FOR. ``switchTo(_:)`` stops one session and starts another,
+    /// which is the only thing a build with one `StreamController` could do; this starts a second
+    /// controller, a second decode pipeline and a second frame handle, and the tile for that camera
+    /// attaches to it. Neither call replaces the other: switching is still what selecting a camera
+    /// in the sidebar means, and this is what clicking an idle cell on the stage means — "show me
+    /// this one **as well**".
+    ///
+    /// ⚠️ The bound camera is never started this way. `live` is the stream the connect form, the
+    /// remembered connection and the inspector all address, and it is driven by the connect path;
+    /// asking for it here would build a second session for a camera that already has one.
+    ///
+    /// The credential is the stored record's, exactly as in ``switchTo(_:)``: a camera that has
+    /// never been given a password fails with a named diagnosis on its own tile, which is the
+    /// honest outcome and does not touch the form.
+    ///
+    /// - Returns: `false` when the budget is spent, so the caller can say so rather than leave a
+    ///   click looking ignored.
+    @discardableResult
+    func connectAlongside(_ target: Camera) async -> Bool {
+        guard target.id != camera?.id else { return true }
+        let stream = cameras.stream(for: target)
+        guard !stream.isActive else { return true }
+        guard cameras.activeCount < Self.maxConcurrentStreams else { return false }
+        dependencies.logger.info(.app, "adding a camera to the stage", ["host": target.host])
+        stream.resolvedPath = target.capabilities?.resolvedRTSPPath
+        stream.beginConnecting()
+        await start(stream, camera: target, ref: target.credentialRef)
+        return true
+    }
+
+    /// Stops one camera's stream without touching the rest.
+    ///
+    /// The entry stays in ``cameras``, because the tile that remains is drawn from it — a stopped
+    /// stream still knows its camera, when it was last seen and why it stopped.
+    func disconnect(_ id: CameraID) {
+        guard let stream = cameras.stream(for: id) else { return }
+        guard stream !== live else { return disconnect() }
+        stop(stream)
+    }
+
     /// Makes the library and the session agree about the camera that is streaming: files it if it
     /// is new, and adopts its stored identity if it is not.
     ///
