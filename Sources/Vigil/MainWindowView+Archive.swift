@@ -369,7 +369,7 @@
                 onToggleFullscreen: { id in focusCamera(id) },
                 // The empty cell's "+" is the same act as the sidebar's.
                 onAddCamera: { _ in addCamera() },
-                onCloseCell: { _ in closeStageCell() },
+                onCloseCell: { index in closeStageCell(index) },
                 onRetry: { id in session.retryCamera(id) },
                 onRemedy: { id, remedy in applyRemedy(remedy, to: id) },
                 onShowOverflow: { showOverflowCameras() },

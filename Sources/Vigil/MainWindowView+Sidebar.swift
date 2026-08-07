@@ -137,6 +137,27 @@ extension MainWindowView {
         session.disconnect()
     }
 
+    /// Closes **one** cell: that camera's stream stops and the others keep playing.
+    ///
+    /// ⛔ The note above used to end "it will stop being the same one the moment a second stream
+    /// exists", and this is that moment. Closing camera three with `disconnect()` would stop all
+    /// four pictures and put the window back on the connect form — for a button whose glyph says it
+    /// closes a tile.
+    ///
+    /// The bound camera still takes the whole-session path, because closing it is what returns the
+    /// user to the form: it is the camera the form, the remembered connection and the inspector are
+    /// about, and leaving the window on a stage whose bound camera is gone would be a state with no
+    /// name.
+    func closeStageCell(_ index: Int) {
+        window.stageFocusIndex = nil
+        let cells = stageAssignment.cells
+        guard cells.indices.contains(index), let id = cells[index], id != cameraID else {
+            session.disconnect()
+            return
+        }
+        session.disconnect(id)
+    }
+
     /// Shows the cameras the current layout could not fit.
     ///
     /// ⚠️ The sidebar, not a popover, and UX.md §5.1 asks for the popover. The list is where every
@@ -231,8 +252,9 @@ extension MainWindowView {
                 // ⚠️ Reached only if a tile is drawn without going through `VGridStageView` — the
                 // stage rebinds this case to its own per-cell `onClose` (see `GridTileView`'s
                 // `barActions`), because the stage-wide bag cannot say *which* cell was pressed.
-                // Same destination either way, and it will stop being the same one the moment a
-                // second stream exists.
+                // Not the same destination any more: the stage's per-cell close stops that
+                // camera's stream, while this fallback — reached only by a tile drawn outside the
+                // stage — has no cell to name and therefore means the whole session.
                 closeStageCell()
             case .mute:
                 break
