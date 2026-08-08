@@ -121,9 +121,11 @@ public enum SyncedPlaybackPolicy {
     ///   - playhead: where the review is.
     ///   - hasCoverage: whether this camera recorded anything at the playhead. Asked of the
     ///     camera's own index, because coverage is a fact about one device's card.
-    public static func correction(position: Date?,
-                                  playhead: SyncedPlayhead,
-                                  hasCoverage: Bool) -> PlaybackCorrection {
+    public static func correction(
+        position: Date?,
+        playhead: SyncedPlayhead,
+        hasCoverage: Bool
+    ) -> PlaybackCorrection {
         guard hasCoverage else { return .awaitCoverage }
         guard let position else { return .seek(to: playhead.instant) }
         // ⚠️ Paused is not "no correction". A held review is exactly when a drifted camera should be
@@ -146,9 +148,10 @@ public enum SyncedPlaybackPolicy {
     ) -> [PlaybackCorrection] {
         cameras.enumerated().map { index, camera in
             guard index < maximumCameras else { return .awaitCoverage }
-            return correction(position: camera.position,
-                              playhead: playhead,
-                              hasCoverage: camera.hasCoverage)
+            return correction(
+                position: camera.position,
+                playhead: playhead,
+                hasCoverage: camera.hasCoverage)
         }
     }
 

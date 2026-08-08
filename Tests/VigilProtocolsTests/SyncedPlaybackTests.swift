@@ -26,9 +26,11 @@ struct SyncedPlaybackTests {
 
     private func at(_ offset: TimeInterval) -> Date { origin.addingTimeInterval(offset) }
 
-    private func playhead(_ offset: TimeInterval = 0,
-                          rate: Double = 1,
-                          paused: Bool = false) -> SyncedPlayhead {
+    private func playhead(
+        _ offset: TimeInterval = 0,
+        rate: Double = 1,
+        paused: Bool = false
+    ) -> SyncedPlayhead {
         SyncedPlayhead(instant: at(offset), rate: rate, isPaused: paused)
     }
 

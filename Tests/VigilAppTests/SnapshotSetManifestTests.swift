@@ -25,8 +25,7 @@ struct SnapshotSetManifestTests {
 
     // MARK: - Fixtures
 
-    private func entry(_ name: String, at seconds: Double?, failure: String? = nil)
-        -> SnapshotSetEntry {
+    private func entry(_ name: String, at seconds: Double?, failure: String? = nil) -> SnapshotSetEntry {
         SnapshotSetEntry(
             camera: name,
             cameraID: UUID(),

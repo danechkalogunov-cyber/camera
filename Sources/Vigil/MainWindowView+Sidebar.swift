@@ -53,10 +53,11 @@ extension MainWindowView {
         focusCamera(cameraID)
         window.showsTimeline = true
         window.timelineRevealRequests += 1
-        archive.load(day: clock.day(containing: lead),
-                     clock: clock,
-                     localClips: timelineLocalClips,
-                     markers: timelineMarkers)
+        archive.load(
+            day: clock.day(containing: lead),
+            clock: clock,
+            localClips: timelineLocalClips,
+            markers: timelineMarkers)
         archive.movePlayhead(to: lead, isScrubbing: false)
     }
 
@@ -219,7 +220,8 @@ extension MainWindowView {
     func bumpStage(_ direction: VGridDirection) {
         guard motionEnabled else { return }
         let distance = CGFloat(direction.sign) * Self.stageBumpDistance
-        let offset = direction.isHorizontal
+        let offset =
+            direction.isHorizontal
             ? CGSize(width: distance, height: 0)
             : CGSize(width: 0, height: distance)
         withAnimation(VTheme.Motion.micro) { window.stageBumpOffset = offset }
@@ -268,12 +270,12 @@ extension MainWindowView {
         actions.perform = { action in
             switch action {
             case .snapshot: takeSnapshot()
-            case .record:   toggleRecording()
+            case .record: toggleRecording()
             case .ptz:
                 window.isInspectorVisible = true
                 window.inspectorTab = .ptz
-            case .quality:  cycleStreamQuality()
-            case .fit:      window.fillsTile.toggle()
+            case .quality: cycleStreamQuality()
+            case .fit: window.fillsTile.toggle()
             case .timeline:
                 // Brings the window to the same one-camera shape first: a scrubber over a 4 × 4
                 // grid would be a control for a camera the user has not said they are looking at.
@@ -305,53 +307,66 @@ extension MainWindowView {
     /// would refuse the write in silence.
     func cameraMenu(_ camera: VSidebarCamera) -> [VSidebarMenuItem] {
         var items: [VSidebarMenuItem] = [
-            VSidebarMenuItem(id: "camera.rename",
-                             title: Self.localized("Rename…"),
-                             symbol: .rename,
-                             isEnabled: !library.isReadOnly,
-                             action: { window.sheet = .cameraSettings }),
-            VSidebarMenuItem(id: "camera.duplicate",
-                             title: Self.localized("Duplicate for Another Channel…"),
-                             symbol: .copy,
-                             isEnabled: !library.isReadOnly,
-                             action: { duplicateCamera(camera.id) }),
-            .submenu(id: "camera.group",
-                     title: Self.localized("Add to Group"),
-                     symbol: .group,
-                     groupMembershipItems(for: camera.id)),
-            VSidebarMenuItem(id: "camera.bookmark",
-                             title: Self.localized("Bookmark This Moment…"),
-                             symbol: .bookmark,
-                             action: { window.sheet = .newBookmark(markableInstant) }),
+            VSidebarMenuItem(
+                id: "camera.rename",
+                title: Self.localized("Rename…"),
+                symbol: .rename,
+                isEnabled: !library.isReadOnly,
+                action: { window.sheet = .cameraSettings }),
+            VSidebarMenuItem(
+                id: "camera.duplicate",
+                title: Self.localized("Duplicate for Another Channel…"),
+                symbol: .copy,
+                isEnabled: !library.isReadOnly,
+                action: { duplicateCamera(camera.id) }),
+            .submenu(
+                id: "camera.group",
+                title: Self.localized("Add to Group"),
+                symbol: .group,
+                groupMembershipItems(for: camera.id)),
+            VSidebarMenuItem(
+                id: "camera.bookmark",
+                title: Self.localized("Bookmark This Moment…"),
+                symbol: .bookmark,
+                action: { window.sheet = .newBookmark(markableInstant) }),
             .separator(id: "camera.rule1"),
-            VSidebarMenuItem(id: "camera.copyAddress",
-                             title: Self.localized("Copy Address"),
-                             symbol: .copy,
-                             action: { copyToPasteboard(camera.host) }),
+            VSidebarMenuItem(
+                id: "camera.copyAddress",
+                title: Self.localized("Copy Address"),
+                symbol: .copy,
+                action: { copyToPasteboard(camera.host) }),
         ]
         let serial = deviceInfo.identity.serialNumber
-        items.append(VSidebarMenuItem(id: "camera.copySerial",
-                                      title: Self.localized("Copy Serial Number"),
-                                      symbol: .copy,
-                                      isEnabled: !serial.isEmpty,
-                                      action: { copySerial() }))
-        items.append(VSidebarMenuItem(id: "camera.web",
-                                      title: Self.localized("Open in Browser"),
-                                      symbol: .info,
-                                      isEnabled: !camera.host.isEmpty,
-                                      action: { openDeviceWebPage() }))
+        items.append(
+            VSidebarMenuItem(
+                id: "camera.copySerial",
+                title: Self.localized("Copy Serial Number"),
+                symbol: .copy,
+                isEnabled: !serial.isEmpty,
+                action: { copySerial() }))
+        items.append(
+            VSidebarMenuItem(
+                id: "camera.web",
+                title: Self.localized("Open in Browser"),
+                symbol: .info,
+                isEnabled: !camera.host.isEmpty,
+                action: { openDeviceWebPage() }))
         items.append(.separator(id: "camera.rule2"))
-        items.append(VSidebarMenuItem(id: "camera.settings",
-                                      title: Self.localized("Camera Settings…"),
-                                      symbol: .settings,
-                                      action: { window.sheet = .cameraSettings }))
+        items.append(
+            VSidebarMenuItem(
+                id: "camera.settings",
+                title: Self.localized("Camera Settings…"),
+                symbol: .settings,
+                action: { window.sheet = .cameraSettings }))
         items.append(.separator(id: "camera.rule3"))
-        items.append(VSidebarMenuItem(id: "camera.remove",
-                                      title: Self.localized("Remove Camera"),
-                                      symbol: .delete,
-                                      role: .destructive,
-                                      isEnabled: !library.isReadOnly,
-                                      action: { removeCamera(camera.id) }))
+        items.append(
+            VSidebarMenuItem(
+                id: "camera.remove",
+                title: Self.localized("Remove Camera"),
+                symbol: .delete,
+                role: .destructive,
+                isEnabled: !library.isReadOnly,
+                action: { removeCamera(camera.id) }))
         return items
     }
 
@@ -412,58 +427,70 @@ extension MainWindowView {
         if !items.isEmpty {
             items.append(VSidebarMenuItem.separator(id: "camera.group.rule"))
             let clear: () -> Void = { groups.setGroup(nil, for: camera) }
-            items.append(VSidebarMenuItem(id: "camera.group.none",
-                                          title: Self.localized("None"),
-                                          isEnabled: current != nil,
-                                          action: clear))
+            items.append(
+                VSidebarMenuItem(
+                    id: "camera.group.none",
+                    title: Self.localized("None"),
+                    isEnabled: current != nil,
+                    action: clear))
         }
-        items.append(VSidebarMenuItem(id: "camera.group.new",
-                                      title: Self.localized("New Group…"),
-                                      symbol: .newGroup,
-                                      action: { window.sheet = .newGroup }))
+        items.append(
+            VSidebarMenuItem(
+                id: "camera.group.new",
+                title: Self.localized("New Group…"),
+                symbol: .newGroup,
+                action: { window.sheet = .newGroup }))
         return items
     }
 
     /// One group's row in the membership submenu.
     ///
     /// Split out of ``groupMembershipItems(for:)`` for the type checker's sake, not for tidiness.
-    private func membershipRow(_ group: CameraGroupRecord,
-                               camera: CameraID,
-                               current: GroupID?) -> VSidebarMenuItem {
+    private func membershipRow(
+        _ group: CameraGroupRecord,
+        camera: CameraID,
+        current: GroupID?
+    ) -> VSidebarMenuItem {
         // Choosing the group a camera is already in takes it out again, which is what a ticked
         // menu item means everywhere else.
         let target: GroupID? = group.id == current ? nil : group.id
         let toggle: () -> Void = { groups.setGroup(target, for: camera) }
-        return VSidebarMenuItem(id: "camera.group.\(group.id)",
-                                title: group.name,
-                                isOn: group.id == current,
-                                action: toggle)
+        return VSidebarMenuItem(
+            id: "camera.group.\(group.id)",
+            title: group.name,
+            isOn: group.id == current,
+            action: toggle)
     }
 
     /// The right-click menu on a group row.
     func groupMenu(_ group: VSidebarGroup) -> [VSidebarMenuItem] {
-        [
-            VSidebarMenuItem(id: "group.snapshot",
-                             title: Self.localized("Snapshot Group"),
-                             symbol: .snapshotAll,
-                             action: { snapshotGroup(group.id) }),
-            VSidebarMenuItem(id: "group.mute",
-                             title: Self.localized(groups.mutedGroups.contains(group.id)
-                                 ? "Unmute Group" : "Mute Group"),
-                             symbol: .mute,
-                             isOn: groups.mutedGroups.contains(group.id),
-                             action: { groups.toggleMuted(group.id) }),
+        let isMuted = groups.mutedGroups.contains(group.id)
+        let muteKey = isMuted ? "Unmute Group" : "Mute Group"
+        return [
+            VSidebarMenuItem(
+                id: "group.snapshot",
+                title: Self.localized("Snapshot Group"),
+                symbol: .snapshotAll,
+                action: { snapshotGroup(group.id) }),
+            VSidebarMenuItem(
+                id: "group.mute",
+                title: Self.localized(muteKey),
+                symbol: .mute,
+                isOn: isMuted,
+                action: { groups.toggleMuted(group.id) }),
             .separator(id: "group.actions.rule"),
-            VSidebarMenuItem(id: "group.rename",
-                             title: Self.localized("Rename…"),
-                             symbol: .rename,
-                             action: { window.sheet = .renameGroup(group.id) }),
+            VSidebarMenuItem(
+                id: "group.rename",
+                title: Self.localized("Rename…"),
+                symbol: .rename,
+                action: { window.sheet = .renameGroup(group.id) }),
             .separator(id: "group.rule"),
-            VSidebarMenuItem(id: "group.delete",
-                             title: Self.localized("Delete Group"),
-                             symbol: .delete,
-                             role: .destructive,
-                             action: { deleteGroup(group.id) }),
+            VSidebarMenuItem(
+                id: "group.delete",
+                title: Self.localized("Delete Group"),
+                symbol: .delete,
+                role: .destructive,
+                action: { deleteGroup(group.id) }),
         ]
     }
 
@@ -488,21 +515,20 @@ extension MainWindowView {
     /// says the same thing.
     func snapshotCameras(_ cameras: [Camera]) {
         guard !cameras.isEmpty, !snapshotSets.isRunning else { return }
+        let credentials = session.credentials
         Task {
-            switch await snapshotSets.capture(cameras: cameras,
-                                              credentials: session.credentials) {
+            switch await snapshotSets.capture(cameras: cameras, credentials: credentials) {
             case let .written(_, succeeded, total):
+                let template = Self.localized("Cameras captured: %lld of %lld")
                 window.toast = MainWindowToast(
                     kind: succeeded == total ? .success : .warning,
-                    message: String(format: Self.localized("Cameras captured: %lld of %lld"),
-                                    succeeded, total),
+                    message: String(format: template, succeeded, total),
                     actionTitle: "Show in Finder",
                     action: { revealLastSnapshotSet() })
             case let .cancelled(_, succeeded):
-                window.toast = MainWindowToast(
-                    kind: .info,
-                    message: String(format: Self.localized("Stopped — cameras captured: %lld"),
-                                    succeeded))
+                let template = Self.localized("Stopped — cameras captured: %lld")
+                let message = String(format: template, succeeded)
+                window.toast = MainWindowToast(kind: .info, message: message)
             case let .failed(reason):
                 session.dependencies.logger.error(.storage, "snapshot set failed: \(reason)")
                 window.toast = MainWindowToast(

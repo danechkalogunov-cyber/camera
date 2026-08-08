@@ -118,9 +118,11 @@ final class SnapshotSetCoordinator {
 
     // MARK: - Initialisation
 
-    init(logger: any LoggerProtocol,
-         clock: any MonotonicClock,
-         fileSystem: any RecordingFileSystem = SystemRecordingFileSystem()) {
+    init(
+        logger: any LoggerProtocol,
+        clock: any MonotonicClock,
+        fileSystem: any RecordingFileSystem = SystemRecordingFileSystem()
+    ) {
         self.logger = logger
         self.clock = clock
         self.fileSystem = fileSystem
@@ -141,9 +143,11 @@ final class SnapshotSetCoordinator {
     ///   - credentials: where each camera's password is read from, once per camera.
     ///   - requestedAt: the one instant the whole set is named and measured from.
     /// - Returns: the named outcome, for the toast.
-    func capture(cameras: [Camera],
-                 credentials: CredentialStore,
-                 requestedAt: Date = Date()) async -> SnapshotSetOutcome {
+    func capture(
+        cameras: [Camera],
+        credentials: CredentialStore,
+        requestedAt: Date = Date()
+    ) async -> SnapshotSetOutcome {
         guard !cameras.isEmpty else { return .failed("no cameras to capture") }
         completed = 0
         total = cameras.count
@@ -163,11 +167,12 @@ final class SnapshotSetCoordinator {
         }
         lastFolder = destination.directory
 
-        let service = SnapshotService(destination: destination,
-                                      fileSystem: fileSystem,
-                                      clock: clock,
-                                      wallClock: SystemWallClock(),
-                                      logger: logger)
+        let service = SnapshotService(
+            destination: destination,
+            fileSystem: fileSystem,
+            clock: clock,
+            wallClock: SystemWallClock(),
+            logger: logger)
         var entries: [SnapshotSetEntry] = []
         var wasCancelled = false
         for camera in cameras {
@@ -186,9 +191,10 @@ final class SnapshotSetCoordinator {
         if wasCancelled {
             return .cancelled(folder: destination.directory, succeeded: succeeded)
         }
-        return .written(folder: destination.directory,
-                        succeeded: succeeded,
-                        total: cameras.count)
+        return .written(
+            folder: destination.directory,
+            succeeded: succeeded,
+            total: cameras.count)
     }
 
     // MARK: - One camera
@@ -199,9 +205,11 @@ final class SnapshotSetCoordinator {
     /// failures write fourteen files and a manifest naming the two. A set that stopped at the first
     /// unreachable camera would be useless in exactly the situation somebody takes a set — a
     /// building where something has gone wrong.
-    private func capture(_ camera: Camera,
-                         service: SnapshotService,
-                         credentials: CredentialStore) async -> SnapshotSetEntry {
+    private func capture(
+        _ camera: Camera,
+        service: SnapshotService,
+        credentials: CredentialStore
+    ) async -> SnapshotSetEntry {
         var entry = SnapshotSetEntry(camera: camera.displayName, cameraID: camera.id.rawValue)
         let client: ISAPIClient
         do {
@@ -210,8 +218,8 @@ final class SnapshotSetCoordinator {
                 return entry
             }
             client = ISAPIClient(
-                endpoint: ISAPIEndpoint(host: camera.host, port: camera.httpPort,
-                                        useTLS: camera.useTLS),
+                endpoint: ISAPIEndpoint(
+                    host: camera.host, port: camera.httpPort, useTLS: camera.useTLS),
                 credential: credential,
                 transport: URLSessionHTTPTransport(logger: logger),
                 clock: clock,
@@ -226,8 +234,8 @@ final class SnapshotSetCoordinator {
         options.deviceMake = "Hikvision"
         do {
             let result = try await service.capture(
-                camera: RecordingCameraInfo(id: camera.id, slug: camera.slug,
-                                            name: camera.displayName),
+                camera: RecordingCameraInfo(
+                    id: camera.id, slug: camera.slug, name: camera.displayName),
                 channel: camera.channel,
                 // No displayed-frame provider exists — the decode path is passthrough and produces
                 // no readable buffer. `SnapshotCoordinator` explains this at length.
@@ -252,18 +260,22 @@ final class SnapshotSetCoordinator {
     /// `nonisolated`, and that is a statement about the function rather than a convenience for its
     /// callers: it reads nothing but its arguments. A pure function that demands the main actor is
     /// claiming a dependency it does not have, and the first thing that notices is a test.
-    nonisolated static func manifest(requestedAt: Date,
-                                     entries: [SnapshotSetEntry]) -> SnapshotSetManifest {
+    nonisolated static func manifest(
+        requestedAt: Date,
+        entries: [SnapshotSetEntry]
+    ) -> SnapshotSetManifest {
         let instants = entries.compactMap(\.capturedAt).map(\.timeIntervalSince1970)
-        let spread: Double? = instants.count > 1
+        let spread: Double? =
+            instants.count > 1
             ? ((instants.max() ?? 0) - (instants.min() ?? 0)) * 1_000
             : nil
         let succeeded = entries.filter { $0.failure == nil }.count
-        return SnapshotSetManifest(requestedAt: requestedAt,
-                                   spreadMilliseconds: spread,
-                                   succeeded: succeeded,
-                                   failed: entries.count - succeeded,
-                                   entries: entries)
+        return SnapshotSetManifest(
+            requestedAt: requestedAt,
+            spreadMilliseconds: spread,
+            succeeded: succeeded,
+            failed: entries.count - succeeded,
+            entries: entries)
     }
 
     /// Writes `manifest.json` beside the images.
