@@ -164,6 +164,7 @@
 
 /* Единственная строка раздела LIVE и три ссылки раздела LIBRARY */
 "Current Layout" = "Текущая раскладка";
+"Reading this camera's recordings…" = "Читаю записи камеры…";
 "Recordings" = "Записи";
 "Events" = "События";
 "Back" = "Назад";

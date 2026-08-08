@@ -107,6 +107,19 @@ struct StageTimelineOverlay: View {
     /// scrubber down with it the instant the pointer entered the very control it opened.
     @State private var showsCalendar = false
 
+    /// Whether the user has taken the scrubber up on being here yet.
+    ///
+    /// ⛔ THE PANEL HAS TO BE VISIBLE WHEN IT IS ASKED FOR. Visibility was `isNearBottom ||
+    /// isOverChrome || showsCalendar` and nothing else, so opening the timeline — from the tile's
+    /// button, from an event, from a bookmark — put a scrubber on screen that appeared only if the
+    /// pointer already happened to be within a strip of the bottom edge. Anywhere else, the command
+    /// did nothing visible, and the second attempt looked like a broken feature rather than a
+    /// gesture the user had not discovered.
+    ///
+    /// So it starts pinned and unpins the first time the pointer *leaves* it. After that §6.6's
+    /// rule takes over exactly as before: approach the bottom and it returns.
+    @State private var hasEngaged = false
+
     @Environment(\.vMotionEnabled) private var motionEnabled
 
     // MARK: - Initialisation
@@ -254,11 +267,46 @@ struct StageTimelineOverlay: View {
             .contentShape(Rectangle())
             .onHover { isNearBottom = $0 }
             .allowsHitTesting(!isVisible)
+            // Approaching the bottom edge also counts as having found it, so a user who never
+            // moves the pointer onto the panel still gets the hide-on-leave behaviour afterwards.
+            .onChange(of: isNearBottom) { _, near in
+                if near { hasEngaged = true }
+            }
     }
 
     @ViewBuilder
     private var chrome: some View {
-        if isVisible, let archive {
+        if isVisible {
+            panel
+        }
+    }
+
+    /// The scrubber, or a sentence saying why there is not one yet.
+    ///
+    /// ⛔ NEVER NOTHING. This used to be `if isVisible, let archive` — so a timeline opened on a
+    /// camera whose index has not arrived drew no panel at all, and the command looked like it had
+    /// failed. The index takes a round trip on a good day and never arrives on firmware that does
+    /// not implement the endpoint; both are facts worth one line of text, and neither is worth an
+    /// empty screen the user has to guess about.
+    @ViewBuilder
+    private var panel: some View {
+        if let archive {
+            scrubber(archive)
+        } else {
+            Text("Reading this camera's recordings…", bundle: .vigilUI)
+                .vType(VTheme.Typography.body)
+                .foregroundStyle(VTheme.Color.Text.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .modifier(TimelinePanelSurface(isVisible: isVisible))
+                .onHover { hovering in
+                    isOverChrome = hovering
+                    if !hovering { hasEngaged = true }
+                }
+        }
+    }
+
+    private func scrubber(_ archive: VLibraryArchive) -> some View {
+        Group {
             VStack(alignment: .leading, spacing: VTheme.Space.xs) {
                 dayStepper(archive.day)
                 VTimelineView(tracks: archive.tracks,
@@ -280,21 +328,13 @@ struct StageTimelineOverlay: View {
                               onFrameStep: onFrameStep,
                               onRate: onRate)
             }
-            .padding(.horizontal, VTheme.Space.lg)
-            .padding(.vertical, VTheme.Space.md)
-            .background {
-                // E2 glass, with the solid fallback under Reduce Transparency — the treatment
-                // DESIGN.md §2.4 gives every floating surface.
-                VVisualEffect(material: .hudWindow,
-                              blending: .withinWindow,
-                              state: .active)
-                    .overlay(VTheme.Color.Layer.scrim.opacity(0.25))
-                    .allowsHitTesting(false)
+            .modifier(TimelinePanelSurface(isVisible: isVisible))
+            .onHover { hovering in
+                isOverChrome = hovering
+                // Leaving the panel is the moment it stops being pinned: the user has seen it,
+                // used it or decided not to, and from here it behaves like chrome again.
+                if !hovering { hasEngaged = true }
             }
-            .onHover { isOverChrome = $0 }
-            // The timing is the container's, above: this only says *how* the panel enters and
-            // leaves. Both halves used to live here, which is why neither worked.
-            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -385,7 +425,7 @@ struct StageTimelineOverlay: View {
     /// key-press-anywhere hook without an AppKit responder, and a responder that swallowed keys
     /// would take ⌘R and Escape with it. Pointer approach only, and said so rather than pretended.
     private var isVisible: Bool {
-        isNearBottom || isOverChrome || showsCalendar
+        !hasEngaged || isNearBottom || isOverChrome || showsCalendar
     }
 }
 
@@ -402,6 +442,37 @@ private enum StageTimelineChrome {
         formatter.timeStyle = .none
         return formatter
     }()
+}
+
+// MARK: - TimelinePanelSurface
+
+/// The floating panel both timeline states share: E2 glass, the same insets, the same transition.
+///
+/// A modifier rather than a copied block, because the two branches — the scrubber and the
+/// "still reading" line — must be the same object as far as the eye is concerned. Two hand-copied
+/// backgrounds are two things to keep in step, and the one that gets forgotten is the one the user
+/// sees least often.
+private struct TimelinePanelSurface: ViewModifier {
+
+    let isVisible: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, VTheme.Space.lg)
+            .padding(.vertical, VTheme.Space.md)
+            .background {
+                // E2 glass, with the solid fallback under Reduce Transparency — the treatment
+                // DESIGN.md §2.4 gives every floating surface.
+                VVisualEffect(material: .hudWindow,
+                              blending: .withinWindow,
+                              state: .active)
+                    .overlay(VTheme.Color.Layer.scrim.opacity(0.25))
+                    .allowsHitTesting(false)
+            }
+            // The timing is the container's: this only says *how* the panel enters and leaves.
+            // Both halves used to live on the panel, which is why neither worked.
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
 }
 
 // MARK: - StageTimelineMetrics

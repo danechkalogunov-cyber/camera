@@ -330,17 +330,19 @@ struct MainWindowView: View {
                     }
             }
         }
-        // The space the toolbar reports the "…" button's frame in, and the frame itself. Both
-        // halves name `VToolbarAnchor.space` so they cannot drift apart.
-        .coordinateSpace(name: VToolbarAnchor.space)
-        .onPreferenceChange(VToolbarAnchorKey.self) { frame in
-            window.overflowAnchor = frame
-        }
         // The toolbar *is* the title bar. `WindowChrome` sets `.fullSizeContentView` and nudges the
         // traffic lights down 10 pt so they centre in a 52 pt bar, but SwiftUI still insets content
         // by the title bar's safe area — which left the lights stranded in an empty strip above the
         // toolbar instead of sitting in it. `VToolbarView` already reserves the 79 pt they need.
         .ignoresSafeArea(.container, edges: .top)
+        // ⛔ AFTER `ignoresSafeArea`, AND THAT ORDER IS THE WHOLE FIX. Naming the space before it
+        // measured the *inset* view, while the overlay that draws the menu is attached to the
+        // expanded one — so every anchor was reported a title bar's height too low and the menu
+        // hung that far below the button that opened it. One view, one origin, both halves.
+        .coordinateSpace(name: VToolbarAnchor.space)
+        .onPreferenceChange(VToolbarAnchorKey.self) { frame in
+            window.overflowAnchor = frame
+        }
     }
 
     /// What floats over the window: the toast, the cinema-mode bar, the overflow menu, the palette.

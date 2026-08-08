@@ -295,8 +295,15 @@ package struct VLibraryEmptyState: View {
             }
         }
         .frame(maxWidth: VLibraryMetrics.emptyStateWidth)
-        .padding(VTheme.Space.xxl)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, VTheme.Space.xxl)
+        .padding(.top, VLibraryMetrics.emptyStateTopInset)
+        // ⛔ TOP-ANCHORED, NOT CENTRED, AND THE CENTRING WAS THE BUG. This block is a hero, a
+        // title, a sentence and — on one screen out of three — a button. Centred, the extra
+        // control pushes everything above it *up*, so the title sat at a different height on
+        // Events than on Bookmarks and switching between them made the heading jump. A constant
+        // distance from the top puts every screen's first line in the same place, whatever is
+        // underneath it, and puts it where the eye lands rather than halfway down an empty page.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain)
     }
 

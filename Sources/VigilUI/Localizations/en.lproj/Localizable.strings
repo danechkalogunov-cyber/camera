@@ -178,6 +178,7 @@
 
 /* The LIVE section's single row, and the three LIBRARY links */
 "Current Layout" = "Current Layout";
+"Reading this camera's recordings…" = "Reading this camera’s recordings…";
 "Recordings" = "Recordings";
 "Events" = "Events";
 "Back" = "Back";

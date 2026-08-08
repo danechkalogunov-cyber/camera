@@ -76,22 +76,20 @@ package struct VInspectorInfoTab: View {
         }
     }
 
-    /// How far the camera's clock is from this Mac's — and, when it applies, that Vigil is already
-    /// correcting for a firmware that labels local time as UTC.
+    /// How far the camera's clock is from this Mac's — shown **only when it is out**.
     ///
-    /// ⛔ This row earns its place by explaining *other* symptoms. A camera an hour out puts events
-    /// at the wrong minute, sends an archive search for the wrong day, and leaves a bookmark
-    /// pointing at footage that is not there — and every one of those looks like a bug in Vigil
-    /// until you know the clock is wrong. `DeviceTime.skew(against:)` has computed this since it
-    /// was written and its own documentation says "beyond ±60 s the UI warns"; nothing warned.
+    /// ⛔ A CLOCK IN STEP IS NOT NEWS. The row was drawn whenever a reading existed, so a camera
+    /// keeping perfect time printed `−0:00` in a panel of facts about the device — a number that
+    /// looks like a defect, changes as you watch it, and means nothing. The row earns its place only
+    /// by explaining *other* symptoms: a camera an hour out puts events at the wrong minute, sends
+    /// an archive search for the wrong day, and leaves a bookmark pointing at footage that is not
+    /// there, and every one of those looks like a bug in Vigil until you know the clock is wrong.
+    /// That is worth a warned row. Agreement is worth nothing, and is now silent.
     @ViewBuilder
     private var clockRow: some View {
         switch state.identity.clockAgreement {
-        case .unknown:
-            // Nothing read yet is not the same as "in step", and must not be drawn as it.
+        case .unknown, .inStep:
             EmptyView()
-        case .inStep(let seconds):
-            VInspectorRow("Clock") { clockValue(seconds, isOut: false) }
         case .out(let seconds):
             VInspectorRow("Clock") { clockValue(seconds, isOut: true) }
         }

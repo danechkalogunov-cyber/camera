@@ -287,6 +287,12 @@ package enum VLibraryMetrics {
     /// 380 pt. The empty state's maximum width (DESIGN.md §9.18).
     package static let emptyStateWidth: CGFloat = 380
 
+    /// 96 pt. How far below the header an empty state's hero begins, on every screen.
+    ///
+    /// A constant, because the three screens' empty states are different heights and centring them
+    /// put their titles at three different y positions — see `VLibraryEmptyState`.
+    package static let emptyStateTopInset: CGFloat = 96
+
     /// 96 pt. The event row's thumbnail box (UX.md §9.1: "96×54 thumbnails").
     package static let thumbnailWidth: CGFloat = 96
 
