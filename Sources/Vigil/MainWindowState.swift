@@ -337,6 +337,12 @@ final class MainWindowState {
     /// have moved the panel again.
     var overflowAnchor: CGRect = .zero
 
+    /// Where the toolbar's search field is, in the same space.
+    ///
+    /// The one exception to "a click anywhere dismisses the caret": a click *on* the field is how
+    /// the caret gets there. See `MainWindowView.dismissTransientChrome(at:)`.
+    var searchFieldAnchor: CGRect = .zero
+
     // MARK: - Cycle
 
     /// Automatic page advance. A value type — every mutator returns a new one — so the window's

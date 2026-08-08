@@ -72,6 +72,15 @@ struct VToolbarSearchField: View {
                 .allowsHitTesting(false)
         }
         .onHover { isHovering = $0 }
+        // Where this control is, so the window's "click anywhere to dismiss the caret" rule can
+        // make an exception for the one place a click means the opposite.
+        .background {
+            GeometryReader { proxy in
+                SwiftUI.Color.clear
+                    .preference(key: VToolbarSearchAnchorKey.self,
+                                value: proxy.frame(in: .named(VToolbarAnchor.space)))
+            }
+        }
         .onExitCommand { escape() }
         .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: !motionEnabled),
                    value: isFocused)

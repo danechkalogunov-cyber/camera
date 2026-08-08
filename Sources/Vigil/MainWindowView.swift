@@ -247,7 +247,7 @@ struct MainWindowView: View {
                      onToggleCycle: { window.cycle = window.cycle.toggledRunning() },
                      onSelectCycleInterval: { window.cycle = window.cycle.withInterval($0) },
                      onOpenPalette: { openPalette() },
-                     onShowMore: { window.isOverflowMenuOpen = true })
+                     onShowMore: { window.isOverflowMenuOpen.toggle() })
     }
 
     /// Camera list, stage, inspector.
@@ -278,17 +278,6 @@ struct MainWindowView: View {
                 .onHover { hovering in
                     window.cycle = window.cycle.paused(hovering)
                 }
-                // ⛔ A CLICK ON THE PICTURE TAKES THE CARET OUT OF THE SEARCH FIELD. macOS keeps a
-                // text field first responder until something else asks for it, and nothing on the
-                // stage is focusable — so after typing in the toolbar's search box the only way out
-                // was to click a sidebar row, which also *did* something. Clicking the picture is
-                // the natural "never mind" gesture and it now performs it.
-                //
-                // ⚠️ `simultaneousGesture`, so the stage's own click handling — selecting a tile,
-                // scrubbing, double-click to fill — is untouched; and on the stage only, because a
-                // blanket window-wide version would resign the connect form's own field on the very
-                // click that focused it.
-                .simultaneousGesture(TapGesture().onEnded { resignSearchFocus() })
                 .vTileActions(tileActions)
                 .overlay { keyboardRegionRing(.stage) }
 
@@ -343,6 +332,41 @@ struct MainWindowView: View {
         .onPreferenceChange(VToolbarAnchorKey.self) { frame in
             window.overflowAnchor = frame
         }
+        .onPreferenceChange(VToolbarSearchAnchorKey.self) { frame in
+            window.searchFieldAnchor = frame
+        }
+        // ⛔ THE WHOLE WINDOW, AND THE LOCATION IS WHY IT CAN BE. A plain tap gesture cannot say
+        // *where* it landed, so the earlier version had to be confined to the stage — clicking the
+        // list, the inspector or the status bar left the caret sitting in the search field. A
+        // `SpatialTapGesture` reports the point, so the rule can be "everywhere except the two
+        // controls where a click means something else", which is what the user actually expects.
+        //
+        // ⚠️ `simultaneousGesture`: every control underneath keeps its own click. This observes,
+        // it does not consume.
+        .simultaneousGesture(
+            SpatialTapGesture(coordinateSpace: .named(VToolbarAnchor.space))
+                .onEnded { tap in dismissTransientChrome(at: tap.location) }
+        )
+    }
+
+    /// A click landed somewhere in the window: put away anything that is only up because it was
+    /// asked for a moment ago.
+    ///
+    /// Two exceptions, both because a click there means the opposite: the search field itself, and
+    /// the overflow menu's own panel.
+    private func dismissTransientChrome(at point: CGPoint) {
+        if !window.searchFieldAnchor.contains(point) {
+            window.blurSearchRequests += 1
+        }
+        // ⚠️ The "…" button is the exception, and it has to be. This fires on the same mouse-up
+        // that the button's own action does, in an order SwiftUI does not define — so without the
+        // exception a click on "…" could close the menu it had just opened, and the control would
+        // look dead. The button toggles instead, which is what closing it from there means.
+        //
+        // A click on the menu's own rows is deliberately *not* excepted: choosing an item dismisses
+        // the menu anyway, and the row's action still runs.
+        guard window.isOverflowMenuOpen, !window.overflowAnchor.contains(point) else { return }
+        window.isOverflowMenuOpen = false
     }
 
     /// What floats over the window: the toast, the cinema-mode bar, the overflow menu, the palette.
@@ -488,16 +512,6 @@ struct MainWindowView: View {
     /// The camera's identifier, or the stable placeholder the tile keeps before the record exists.
     var cameraID: CameraID {
         session.camera?.id ?? RootView.pendingCameraID
-    }
-
-    /// Takes the keyboard out of whatever text field holds it.
-    ///
-    /// `makeFirstResponder(nil)` rather than a `@FocusState` write: the search field's focus lives
-    /// inside `VToolbarView`, and AppKit's first responder is the fact both it and SwiftUI's focus
-    /// are derived from — so this clears the caret wherever it is, including a field this view has
-    /// no binding to.
-    func resignSearchFocus() {
-        window.blurSearchRequests += 1
     }
 
     // MARK: - Mapping

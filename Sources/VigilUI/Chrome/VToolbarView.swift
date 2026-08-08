@@ -415,4 +415,20 @@ package struct VToolbarAnchorKey: PreferenceKey {
     }
 }
 
+/// Where the search field sits, in ``VToolbarAnchor/space``.
+///
+/// ⛔ Published for one reason: the window wants "a click anywhere takes the caret out of the
+/// search field", and *anywhere* has to exclude the field itself or the click that focuses it would
+/// blur it in the same breath. Geometry is the only honest way to make that exception — the window
+/// cannot ask SwiftUI what a click landed on.
+package struct VToolbarSearchAnchorKey: PreferenceKey {
+
+    package static let defaultValue: CGRect = .zero
+
+    package static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
 #endif  // os(macOS)
