@@ -113,9 +113,6 @@ public actor CredentialStore {
     ///   - logger: structured log sink. Nothing logged here contains a secret.
     ///   - accessGroup: `kSecAttrAccessGroup`. `nil` for a normally signed app, which is what Vigil
     ///     ships; a value is only needed when items are shared with a helper.
-    /// Handles whose ACL this process has already tried to widen. See ``repairAccess(for:)``.
-    private var repairedAccess: Set<CredentialRef> = []
-
     public init(keychain: any KeychainProtocol,
                 logger: any LoggerProtocol = NullLogger(),
                 accessGroup: String? = nil) {
@@ -157,9 +154,6 @@ public actor CredentialStore {
             }
             let credential = Credential(ref: ref, account: account, secret: secret)
             cache[ref] = credential
-            // The read succeeded — which on a rebuilt binary means the user has just answered a
-            // system prompt. Widen the item's ACL now so they do not answer it again.
-            repairAccess(for: ref)
             return credential
 
         case errSecItemNotFound:
@@ -178,47 +172,6 @@ public actor CredentialStore {
     /// The credential for a camera. The convenience every connect path uses.
     public func credential(for camera: Camera) throws -> Credential? {
         try credential(for: camera.credentialRef)
-    }
-
-    /// Widens an existing item's ACL so a rebuilt binary can read it without a system prompt.
-    ///
-    /// ⛔ THE HALF THAT WAS MISSING. Writing new items with a permissive ACL fixes nothing for the
-    /// item that is already there, and that item is the one the user has — a password typed weeks
-    /// ago is not typed again just because Vigil was rebuilt. `SecItemUpdate` cannot change an
-    /// access control at all, so the only repair is at the item level, and this is the
-    /// non-destructive way to do it: no delete, no re-add, nothing lost if it fails.
-    ///
-    /// One attempt per handle per process, successful or not: a device whose Keychain refuses this
-    /// must not be asked again on every read.
-    ///
-    /// The trade is the one ``sharedAccess(label:)`` documents, and it is the same trade — this
-    /// only applies it to items written before that existed.
-    private func repairAccess(for ref: CredentialRef) {
-        guard !repairedAccess.contains(ref) else { return }
-        repairedAccess.insert(ref)
-        var query = baseQuery(ref)
-        query[kSecReturnRef as String] = NSNumber(value: true)
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var found: CFTypeRef?
-        guard keychain.copyMatching(query, &found) == errSecSuccess,
-              let found,
-              CFGetTypeID(found) == SecKeychainItemGetTypeID(),
-              let access = Self.sharedAccess(label: "Vigil camera credential")
-        else { return }
-        // ⚠️ `unsafeBitCast`, and it is the only spelling that compiles. A conditional cast to a
-        // CoreFoundation type is rejected outright — "will always succeed" — and `as!` is banned in
-        // this tree. The guard above is the real check and it is the one the C API documents:
-        // `CFGetTypeID` is how you ask a `CFTypeRef` what it is, and this line runs only when the
-        // answer was `SecKeychainItem`.
-        let item = unsafeBitCast(found, to: SecKeychainItem.self)
-        let status = SecKeychainItemSetAccess(item, access)
-        guard status == errSecSuccess else {
-            logger.debug(.core, "could not widen the keychain item's access",
-                         ["ref": "\(ref)", "status": String(status)])
-            return
-        }
-        logger.info(.core, "keychain item's access widened so a rebuild does not re-prompt",
-                    ["ref": "\(ref)"])
     }
 
     /// True when a password is stored for `ref`, without decrypting it.
@@ -244,7 +197,8 @@ public actor CredentialStore {
     /// Creates or replaces the item for `descriptor.ref`.
     ///
     /// An existing item is updated in place rather than deleted and re-added, so its creation date
-    /// and any user-granted access control survive a password change.
+    /// and any user-granted access control survive a password change. A **new** item is created
+    /// with the ACL ``sharedAccess(label:)`` builds; see that method for what that costs and why.
     ///
     /// - Precondition: `credential.ref == descriptor.ref`. Filing a password under another
     ///   credential's handle is a programmer error that would silently orphan the original.
@@ -256,15 +210,20 @@ public actor CredentialStore {
         var status = keychain.add(attributes)
 
         if status == errSecDuplicateItem {
-            // ⛔ REPLACED, NOT UPDATED, AND THE ACL IS THE REASON. `SecItemUpdate` cannot change an
-            // item's access control, so an item written before ``sharedAccess(label:)`` existed
-            // would keep prompting for the login password no matter how many times the user
-            // re-entered the camera's. Deleting and re-adding is what actually repairs it, and it
-            // is safe here in the way it would not be elsewhere: the secret being written is in
-            // hand, so a failure between the two steps loses nothing that cannot be written again
-            // by the same call that failed.
-            _ = keychain.delete(baseQuery(descriptor.ref))
-            status = keychain.add(attributes)
+            // ⛔ UPDATED IN PLACE, AND A DELETE-THEN-ADD WAS TRIED AND REVERTED. Replacing the item
+            // does refresh its ACL — but it also throws away every grant the *user* has made
+            // against it, and "Always Allow" is exactly such a grant. So the one thing that
+            // rewriting was meant to fix, it broke: the user clicked Always Allow, the next connect
+            // recreated the item, and macOS asked again. An item's access control is the user's,
+            // and a password save must not be a way to reset it.
+            //
+            // The update dictionary MUST NOT carry kSecClass — the Keychain answers errSecParam if
+            // it does — and the access group belongs to the query, not to the update.
+            var update = attributes
+            update.removeValue(forKey: kSecClass as String)
+            update.removeValue(forKey: kSecAttrAccessGroup as String)
+            update.removeValue(forKey: kSecAttrAccess as String)
+            status = keychain.update(baseQuery(descriptor.ref), update)
         }
         guard status == errSecSuccess else {
             let error = CredentialError.from(status: status, operation: "save")
@@ -444,6 +403,15 @@ public actor CredentialStore {
     /// the posture a signed, distributed build should ship with. When Vigil is signed with a stable
     /// identity this should become the fallback rather than the rule, and the item's ACL can then
     /// name that identity instead of naming everyone.
+    ///
+    /// ⛔ IT APPLIES TO **NEW ITEMS ONLY**, AND THAT LIMIT IS NOT AN OVERSIGHT. An ACL can be
+    /// attached when an item is created and changed afterwards only by `SecKeychainItemSetAccess`,
+    /// which macOS guards with its own dialog — "Vigil wants to change the owner of the … item",
+    /// asking for the login password. That was tried and reverted: it replaced one prompt with a
+    /// worse one. An item written before this existed keeps its narrow ACL until the user removes
+    /// it in Keychain Access and types the camera's password once more, and there is no way for an
+    /// application to do that on their behalf without asking for exactly the authorisation the
+    /// exercise is trying to avoid.
     ///
     /// `nil` on any failure, and the caller simply omits the attribute — a prompting item is a far
     /// better outcome than no saved password at all.
