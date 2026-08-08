@@ -214,17 +214,24 @@ extension AppSessionModel {
     /// first also matches what the device can take: a DS-I256 permits three concurrent sessions, and
     /// overlapping two pages would spend them on cameras the user has already been shown.
     ///
-    /// The lead is the bound camera when the page contains it, because ``live`` is the stream the
-    /// connect form, the inspector and the remembered connection all address, and re-pointing it at
-    /// another member of the same page would cost that camera a reconnect for no visible gain. It is
-    /// also the order the stage itself uses — the streaming camera leads (`stageOrder`).
+    /// The lead is the bound camera when the page contains it **and it is streaming**, because
+    /// ``live`` is the stream the connect form, the inspector and the remembered connection all
+    /// address, and re-pointing it at another member of the same page would cost that camera a
+    /// reconnect for no visible gain. It is also the order the stage itself uses — the streaming
+    /// camera leads (`stageOrder`).
+    ///
+    /// ⚠️ "And it is streaming" is not a detail. ``switchTo(_:)`` refuses a camera that is already
+    /// bound — correct for a switch, and useless for a page that has just been asked to appear — so
+    /// preferring a *stopped* bound camera as the lead would leave the page's first cell dark while
+    /// the rest of it opened. Falling back to the page's own first camera keeps this no worse than
+    /// the one-camera behaviour it replaces, which took `range.first` unconditionally.
     ///
     /// An empty page does nothing at all rather than tearing the stage down: a library that has just
     /// been emptied by a filter is not an instruction to stop streaming.
     func showOnStage(_ page: [Camera]) async {
         guard !page.isEmpty else { return }
         for stream in streamsToStop(forPage: page.map(\.id)) { stop(stream) }
-        let lead = page.first { $0.id == camera?.id } ?? page[0]
+        let lead = page.first { $0.id == camera?.id && live.isActive } ?? page[0]
         await switchTo(lead)
         for member in page where member.id != lead.id {
             // The budget's refusal ends the page rather than skipping one camera: the cells are
