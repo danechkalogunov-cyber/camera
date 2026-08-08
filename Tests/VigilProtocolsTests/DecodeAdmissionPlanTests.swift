@@ -29,8 +29,8 @@ struct DecodeAdmissionPlanTests {
     /// `theEstimatorChargesCodedPixels` is where the real geometry is asserted.
     private func oneUnit() -> DecodeCost {
         DecodeCost.estimate(
-            geometry: FrameGeometry(codedWidth: 1920, codedHeight: 1080, cropWidth: 1920,
-                                    cropHeight: 1080),
+            geometry: FrameGeometry(
+                codedWidth: 1920, codedHeight: 1080, cropWidth: 1920, cropHeight: 1080),
             codec: .h264, fps: 30, mode: .full)
     }
 
@@ -69,8 +69,8 @@ struct DecodeAdmissionPlanTests {
     /// allocates: a real 1080p SPS codes 1088 lines and costs a quarter unit more for them.
     @Test func theEstimatorChargesCodedPixels() {
         let coded = DecodeCost.estimate(
-            geometry: FrameGeometry(codedWidth: 1920, codedHeight: 1088, cropWidth: 1920,
-                                    cropHeight: 1080),
+            geometry: FrameGeometry(
+                codedWidth: 1920, codedHeight: 1088, cropWidth: 1920, cropHeight: 1080),
             codec: .h264, fps: 30, mode: .full)
 
         #expect(coded.units == 1.25)
@@ -218,8 +218,8 @@ struct DecodeAdmissionPlanTests {
     /// previews take none — the honest outcome, and the opposite of what "recordings are exempt"
     /// would suggest if it were read as exemption from everything.
     @Test func aRecordingTakesTheSessionAndThePreviewsGoWithout() {
-        let recording = demand(.recording, order: 0, cost: DecodeCost(units: 0.25),
-                               preemptible: false)
+        let recording = demand(
+            .recording, order: 0, cost: DecodeCost(units: 0.25), preemptible: false)
         let previews = (0..<3).map {
             demand(.visibleSmall, order: $0, cost: DecodeCost(units: 0.25))
         }
