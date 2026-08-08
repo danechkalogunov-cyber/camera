@@ -775,7 +775,7 @@
 "Import" = "Import";
 "Import finished — added %lld, already here %lld" = "Import finished — added %lld, already here %lld";
 "That file listed no cameras." = "That file listed no cameras.";
-"Vigil streams four cameras at once. Close one to open another." = "Vigil streams four cameras at once. Close one to open another.";
+"This Mac is already decoding all it can. Close a camera to open another." = "This Mac is already decoding as much as it can. Close a camera to open another.";
 "The export lists cameras and groups. It holds no passwords." = "The export lists cameras and groups. It holds no passwords.";
 "no host column in the header row" = "no host column in the header row";
 "row %lld has the wrong number of columns" = "row %lld has the wrong number of columns";

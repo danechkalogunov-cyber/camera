@@ -202,22 +202,80 @@ extension AppSessionModel {
     /// One log line per this many dropped frames of the same reason.
     static let dropLogInterval = 100
 
-    /// How many cameras Vigil will stream at once.
+    /// What this Mac will decode at once, and who gets it (`F-DEC-06`).
     ///
-    /// ⚠️ A NUMBER, HONESTLY LABELLED, NOT A BUDGET. `F-DEC-06` specifies a decoder pool that
-    /// measures what the machine can actually sustain and admits streams against it; this is the
-    /// placeholder that keeps a click storm from starting sixteen sessions before that exists.
+    /// ⛔ THIS REPLACED `maxConcurrentStreams = 4`, which was labelled a placeholder in its own doc
+    /// comment and was the wrong shape of answer twice over: four 4K cameras are sixteen times the
+    /// work of four D1 cameras, and a machine that could carry ten sub-streams was told it may have
+    /// four. Cost is what varies, so cost is what is counted.
     ///
-    /// Four, and the reason is the device rather than the Mac: the Hikvision this app was first
-    /// proven against refuses a fourth concurrent RTSP session, and an NVR's per-device ceiling is
-    /// the same shape. A wall wider than this needs the sub-stream ladder and the admission policy
-    /// together, which is exactly what `F-DEC-06` is.
+    /// Computed on each ask rather than cached, because the override can change under a running
+    /// process — a `defaults write` today, the Settings pane when `F-PLT-04` lands — and the two
+    /// `sysctl` reads behind it cost less than the staleness would. It reads `defaults`, which is
+    /// this model's own suite, so a test gets the budget it chose rather than the one belonging to
+    /// whoever is running the tests.
+    var decodeBudget: DecodeBudget { DecodeBudget.detected(defaults: defaults) }
+
+    /// What a camera is assumed to cost before anything has measured it.
     ///
-    /// ⚠️ The number is also written out in the sentence the stage shows when the budget is spent
-    /// — "Vigil streams four cameras at once" — because Russian declines it and a formatted `%lld`
-    /// would need a `.stringsdict` for a number that never varies. Change this and change that
-    /// string, in both translations.
-    static let maxConcurrentStreams = 4
+    /// ⚠️ AN ASSUMPTION, AND IT HAS TO BE ONE. `DecodeCost` answers zero for a format nobody has
+    /// resolved, which is the honest fact — but admission happens *before* the first frame, so an
+    /// honest zero would admit every camera in the library and the budget would never refuse
+    /// anything. 1080p25 is the assumption: it is what a Hikvision main stream almost always is, and
+    /// it is replaced by the measured cost the moment `formatResolved` arrives.
+    static let assumedCost = DecodeCost(size: Resolution(width: 1920, height: 1080), fps: 25)
+
+    /// What every stream currently being driven is asking of the budget.
+    ///
+    /// The bound camera is the focused tile — it is the one the window's panels describe and the one
+    /// the user is looking at — and every other running stream is a visible tile. `orderIndex` is
+    /// the filing order of `cameras.all`, which is unordered, so identity breaks the tie inside
+    /// `DecodeBudget`: the plan stays deterministic without inventing a stage order this layer does
+    /// not know.
+    func decodeRequests() -> [DecodeRequest] {
+        cameras.all.filter(\.isActive).compactMap { stream in
+            guard let camera = stream.camera else { return nil }
+            return DecodeRequest(
+                id: camera.id,
+                priority: stream === live ? .focusedTile : .visibleTile,
+                isRecording: stream.recordingTap.recorder() != nil,
+                main: Self.cost(of: stream),
+                sub: nil)
+        }
+    }
+
+    /// Whether the budget has room for one more camera at a decodable quality.
+    ///
+    /// ⚠️ The candidate is asked for **last**, and that is the policy rather than an accident of the
+    /// loop: a camera the user has just clicked must not push a camera they are already watching
+    /// down to a JPEG poll. It joins at the back of the queue and pays its own way in.
+    func canAdmit(_ target: Camera) -> Bool {
+        var requests = decodeRequests()
+        requests.append(DecodeRequest(
+            id: target.id,
+            priority: .prewarm,
+            orderIndex: requests.count,
+            main: Self.assumedCost,
+            sub: nil))
+        return decodeBudget.plan(for: requests).admission(for: target.id)?.isDecoding ?? false
+    }
+
+    /// What one running stream costs, measured where possible and assumed where not.
+    ///
+    /// ⚠️ The two halves come from different places and only one of them is usually there. The
+    /// picture size is authoritative once the SPS has been parsed; the frame rate is whatever the
+    /// SDP declared, which on Hikvision is frequently nothing at all — `StreamFormat.declaredFPS` is
+    /// documented as "never a measurement". So a resolved stream with no declared rate is costed at
+    /// ``assumedFPS`` rather than being treated as free, which is the same direction of caution the
+    /// rest of this policy takes.
+    static func cost(of stream: CameraStream) -> DecodeCost {
+        guard let resolution = stream.format?.resolution else { return assumedCost }
+        return DecodeCost(size: resolution, fps: stream.format?.declaredFPS ?? Self.assumedFPS)
+    }
+
+    /// The frame rate assumed for a stream that never declared one. PAL, which is what these
+    /// devices run at in the regions this app was built for.
+    static let assumedFPS = 25.0
 }
 
 #endif  // os(macOS)

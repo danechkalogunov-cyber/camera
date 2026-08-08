@@ -160,7 +160,7 @@ extension AppSessionModel {
         guard target.id != camera?.id else { return true }
         let stream = cameras.stream(for: target)
         guard !stream.isActive else { return true }
-        guard cameras.activeCount < Self.maxConcurrentStreams else { return false }
+        guard canAdmit(target) else { return false }
         dependencies.logger.info(.app, "adding a camera to the stage", ["host": target.host])
         stream.resolvedPath = target.capabilities?.resolvedRTSPPath
         stream.beginConnecting()
@@ -207,12 +207,12 @@ extension AppSessionModel {
     /// on their placeholders. The cycle was honest about it — `showCyclePage` said so in its own doc
     /// — and it is what `F-LIV-06`'s open item names. A page is now a page.
     ///
-    /// ⚠️ THE STOPS COME FIRST, AND THAT ORDER IS LOAD-BEARING. `maxConcurrentStreams` is four, and
-    /// a page turn that started before it stopped would be asking for the fifth, sixth and seventh
-    /// stream while the *previous* page's cameras were still holding the budget — every camera on the
-    /// new page would be refused, and after one turn the patrol would show nothing new. Stopping
-    /// first also matches what the device can take: a DS-I256 permits three concurrent sessions, and
-    /// overlapping two pages would spend them on cameras the user has already been shown.
+    /// ⚠️ THE STOPS COME FIRST, AND THAT ORDER IS LOAD-BEARING. A page turn that started before it
+    /// stopped would be asking the decode budget for the new page while the *previous* page's
+    /// cameras were still holding it — every camera on the new page would be refused, and after one
+    /// turn the patrol would show nothing new. Stopping first also matches what the device can take:
+    /// a DS-I256 permits three concurrent sessions, and overlapping two pages would spend them on
+    /// cameras the user has already been shown.
     ///
     /// The lead is the bound camera when the page contains it **and it is streaming**, because
     /// ``live`` is the stream the connect form, the inspector and the remembered connection all

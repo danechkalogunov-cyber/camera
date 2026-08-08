@@ -487,10 +487,10 @@ extension MainWindowView {
     /// means holding two pages of sessions at once, which is what the device's own session limit
     /// refuses (three on a DS-I256) and what `VCycleModel`'s 2 s floor exists to keep away from.
     ///
-    /// The page can be wider than the concurrency budget — a 4 × 4 layout names sixteen cameras and
-    /// `maxConcurrentStreams` is four — and `showOnStage` fills the cells in order until the budget
-    /// is spent. That is a placeholder's behaviour, and it is `F-DEC-06` that replaces the number
-    /// with a measured admission policy.
+    /// The page can be wider than the decode budget — a 4 × 4 layout names sixteen cameras — and
+    /// `showOnStage` fills the cells in order until `F-DEC-06`'s admission policy refuses the next
+    /// one. What that policy admits depends on the machine and on what the cameras actually cost,
+    /// so the same page fills further on a Mac Studio than on a MacBook Air, which is the point.
     private func showCyclePage() async {
         let cameras = library.cameras
         let range = window.cycle.visibleRange(cameraCount: cameras.count, layout: window.layout)

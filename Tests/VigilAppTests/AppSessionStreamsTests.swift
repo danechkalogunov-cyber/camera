@@ -135,19 +135,60 @@ struct AppSessionStreamsTests {
 
     // MARK: - The concurrency budget
 
-    /// ⛔ The fifth camera is refused rather than started, and the refusal is reported so the caller
-    /// can say so — a click that appears to be ignored is the worse failure.
+    /// ⛔ One camera too many is refused rather than started, and the refusal is reported so the
+    /// caller can say so — a click that appears to be ignored is the worse failure.
+    ///
+    /// The budget is set explicitly rather than detected: what this machine would suggest is not
+    /// something a test can know, and a test that read it would pass or fail by the runner's core
+    /// count. Two decode units is two 1080p30 cameras, so the third is the one too many.
     @Test func theBudgetRefusesOneCameraTooMany() async {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        _ = fillStage(harness, count: AppSessionModel.maxConcurrentStreams)
+        DecodeBudget.setOverrideUnits(2, in: harness.defaults)
+        _ = fillStage(harness, count: 2)
         let extra = harness.camera(host: "192.168.1.200", name: "One too many")
 
         let started = await harness.model.connectAlongside(extra)
 
         #expect(started == false)
-        #expect(harness.model.cameras.activeCount == AppSessionModel.maxConcurrentStreams)
+        #expect(harness.model.cameras.activeCount == 2)
         #expect(harness.model.cameras.stream(for: extra.id)?.isActive == false)
+    }
+
+    /// A generous budget admits what a stingy one refused. The same click, the same cameras, a
+    /// different machine — which is the whole of why the count became a budget.
+    @Test func aBiggerBudgetAdmitsTheSameCamera() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        _ = fillStage(harness, count: 2)
+        let extra = harness.camera(host: "192.168.1.200", name: "One more")
+
+        DecodeBudget.setOverrideUnits(2, in: harness.defaults)
+        #expect(harness.model.canAdmit(extra) == false)
+
+        DecodeBudget.setOverrideUnits(24, in: harness.defaults)
+        #expect(harness.model.canAdmit(extra))
+    }
+
+    /// ⚠️ A camera the user has just clicked joins at the back of the queue: it must not push a
+    /// camera they are already watching down to a JPEG poll to make room for itself.
+    @Test func aNewCameraDoesNotDemoteTheOnesAlreadyOnScreen() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        DecodeBudget.setOverrideUnits(2, in: harness.defaults)
+        let running = fillStage(harness, count: 2)
+        let extra = harness.camera(host: "192.168.1.200", name: "One too many")
+
+        var requests = harness.model.decodeRequests()
+        requests.append(DecodeRequest(
+            id: extra.id, priority: .prewarm, orderIndex: requests.count,
+            main: AppSessionModel.assumedCost, sub: nil))
+        let plan = harness.model.decodeBudget.plan(for: requests)
+
+        for camera in running {
+            #expect(plan.admission(for: camera.id) == .main, "already on screen, so already paid for")
+        }
+        #expect(plan.admission(for: extra.id)?.isDecoding == false)
     }
 
     /// A camera already on the stage is left alone: clicking its cell again must not build a second
