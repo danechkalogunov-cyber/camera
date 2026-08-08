@@ -202,22 +202,96 @@ extension AppSessionModel {
     /// One log line per this many dropped frames of the same reason.
     static let dropLogInterval = 100
 
-    /// How many cameras Vigil will stream at once.
+    /// What this Mac will decode at once (`F-DEC-06`).
     ///
-    /// ⚠️ A NUMBER, HONESTLY LABELLED, NOT A BUDGET. `F-DEC-06` specifies a decoder pool that
-    /// measures what the machine can actually sustain and admits streams against it; this is the
-    /// placeholder that keeps a click storm from starting sixteen sessions before that exists.
+    /// ⛔ THIS REPLACED `maxConcurrentStreams = 4`, which was labelled a placeholder in its own doc
+    /// comment. Four is the wrong shape of answer twice over: four 4K cameras are sixteen times the
+    /// work of four D1 cameras, and a machine that could carry ten small streams was told it may
+    /// have four. Cost is what varies, so cost is what is counted.
     ///
-    /// Four, and the reason is the device rather than the Mac: the Hikvision this app was first
-    /// proven against refuses a fourth concurrent RTSP session, and an NVR's per-device ceiling is
-    /// the same shape. A wall wider than this needs the sub-stream ladder and the admission policy
-    /// together, which is exactly what `F-DEC-06` is.
+    /// Computed on each ask rather than cached, because the override can change under a running
+    /// process. It reads `defaults` — this model's own suite — so a test gets the budget it chose
+    /// rather than the one belonging to whoever is running the tests.
+    var decodeBudget: DecodeCost { MachineDecodeBudget.detected(defaults: defaults) }
+
+    /// What one camera is assumed to cost before anything has measured it.
     ///
-    /// ⚠️ The number is also written out in the sentence the stage shows when the budget is spent
-    /// — "Vigil streams four cameras at once" — because Russian declines it and a formatted `%lld`
-    /// would need a `.stringsdict` for a number that never varies. Change this and change that
-    /// string, in both translations.
-    static let maxConcurrentStreams = 4
+    /// ⚠️ AN ASSUMPTION, AND IT HAS TO BE ONE. Admission happens *before* the first frame, so there
+    /// is no resolved format to price. 1080p25 H.264 is what a Hikvision main stream almost always
+    /// is, and the real cost takes over the moment `formatResolved` arrives.
+    static var assumedCost: DecodeCost {
+        DecodeCost.estimate(geometry: assumedGeometry, codec: .h264, fps: 25, mode: .full)
+    }
+
+    /// The geometry assumed for an unmeasured stream: 1080p, coded to the 1088 lines a real SPS
+    /// allocates, because the estimator charges coded pixels and pretending otherwise would
+    /// under-count every camera by a quarter unit.
+    static var assumedGeometry: FrameGeometry {
+        FrameGeometry(codedWidth: 1920, codedHeight: 1088, cropWidth: 1920, cropHeight: 1080)
+    }
+
+    /// What every stream currently being driven is asking of the budget.
+    ///
+    /// The bound camera is the focused tile — it is the one the window's panels describe — and every
+    /// other running stream is a visible tile. A stream being recorded is not preemptible, which is
+    /// what actually protects the file (`F-DEC-06` acceptance 5).
+    func decodeDemands() -> [DecodeDemand] {
+        cameras.all.filter(\.isActive).compactMap { stream in
+            guard let camera = stream.camera else { return nil }
+            let isRecording = stream.recordingTap.recorder() != nil
+            return DecodeDemand(
+                id: StreamKey(camera: camera.id, quality: .main),
+                priority: isRecording ? .recording : (stream === live ? .focused : .visibleLarge),
+                mode: .full,
+                cost: Self.cost(of: stream),
+                isPreemptible: !isRecording)
+        }
+    }
+
+    /// Whether the budget has room for one more camera at a mode that actually decodes.
+    ///
+    /// ⚠️ The candidate is asked for **last** and at the lowest priority, and that is the policy
+    /// rather than an accident: a camera the user has just clicked must not slow down a camera they
+    /// are already watching. It joins at the back of the queue and pays its own way in.
+    func canAdmit(_ target: Camera) -> Bool {
+        var demands = decodeDemands()
+        demands.append(DecodeDemand(
+            id: StreamKey(camera: target.id, quality: .main),
+            priority: .offscreen,
+            orderIndex: demands.count,
+            mode: .full,
+            cost: Self.assumedCost))
+        let plan = DecodeAdmissionPlanner.plan(
+            for: demands, budget: decodeBudget, maxSessions: MachineDecodeBudget.maximumSessions)
+        return plan.mode(for: StreamKey(camera: target.id, quality: .main))?
+            .opensDecodeSession ?? false
+    }
+
+    /// What one running stream costs, measured where possible and assumed where not.
+    ///
+    /// ⚠️ The two halves come from different places and only one is usually there. The picture size
+    /// is authoritative once the SPS has been parsed; the frame rate is whatever the SDP declared,
+    /// which on Hikvision is frequently nothing at all — `StreamFormat.declaredFPS` is documented as
+    /// "never a measurement". A resolved stream with no declared rate is therefore costed at
+    /// ``assumedFPS`` rather than treated as free, which is the same direction of caution the rest
+    /// of the policy takes.
+    static func cost(of stream: CameraStream) -> DecodeCost {
+        guard let format = stream.format, let resolution = format.resolution else {
+            return assumedCost
+        }
+        let geometry = FrameGeometry(codedWidth: resolution.width,
+                                     codedHeight: resolution.height,
+                                     cropWidth: resolution.width,
+                                     cropHeight: resolution.height)
+        return DecodeCost.estimate(geometry: geometry,
+                                   codec: format.videoCodec,
+                                   fps: format.declaredFPS ?? assumedFPS,
+                                   mode: .full)
+    }
+
+    /// The frame rate assumed for a stream that never declared one. PAL, which is what these devices
+    /// run at in the regions this app was built for.
+    static let assumedFPS = 25.0
 }
 
 #endif  // os(macOS)

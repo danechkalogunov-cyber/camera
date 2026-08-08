@@ -172,3 +172,21 @@ Reported by `impl:types-b` after finishing its own rows:
 
 `Identity/Identifiers.swift` was written by `impl:types-b` out of necessity — `StreamKey` needs
 `CameraID` — and is not a gap.
+
+## I7 — `F-DEC-06`'s worked examples contradict the quantum the tree implements (L — open)
+
+`docs/FEATURES.md` F-DEC-06 acceptance 1 defines decode cost as
+`(width × height × fps) / (1920 × 1080 × 30)`, "rounded up to 0.25 DU", and then gives three worked
+examples in the same sentence — 4K30 = 4.0 DU, 1080p25 = **0.85** DU, 704 × 576 @ 25 = **0.2** DU.
+Two of those three are not multiples of 0.25, so the sentence contradicts itself.
+
+`DecodeCost` in `Sources/VigilProtocols/Streams/DecodePolicy.swift` implements the **0.25** quantum,
+per `API_CONTRACT.md` §2 R-58, and adds three factors the FEATURES prose omits: a codec weight, a
+bit-depth weight, and **coded** rather than display pixels. Under it a real 1080p25 H.264 stream —
+coded at 1088 lines — is 1.0 DU, not 0.85.
+
+No code change is proposed: the contract is the authority and the tree already follows it.
+`FEATURES.md`'s three examples should be recomputed against R-58 so that a future reader does not
+take them for the rule, which is how this was noticed — an implementer costed streams from the
+examples and produced a second, incompatible `DecodeCost`.
+

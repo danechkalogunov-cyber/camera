@@ -135,19 +135,81 @@ struct AppSessionStreamsTests {
 
     // MARK: - The concurrency budget
 
-    /// ⛔ The fifth camera is refused rather than started, and the refusal is reported so the caller
-    /// can say so — a click that appears to be ignored is the worse failure.
+    /// ⛔ One camera too many is refused rather than started, and the refusal is reported so the
+    /// caller can say so — a click that appears to be ignored is the worse failure.
+    ///
+    /// The budget is set explicitly rather than detected: what this machine would suggest is not
+    /// something a test can know, and a test that read it would pass or fail by the runner's core
+    /// count. An unmeasured camera is assumed to be 1080p25 H.264, which the estimator prices at
+    /// 1 DU, so two of them fill a 2 DU budget exactly.
+    ///
+    /// ⚠️ "Refused" means the third camera would get **no decode session at all** — not that it
+    /// would get a slower one. The ladder demotes it to `.fpsCapped` and then `.keyframesOnly`
+    /// first, and either of those is a picture worth showing; only when the budget cannot even pay
+    /// for keyframes does the click have nothing to offer and the toast appear.
     @Test func theBudgetRefusesOneCameraTooMany() async {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        _ = fillStage(harness, count: AppSessionModel.maxConcurrentStreams)
+        MachineDecodeBudget.setOverrideUnits(2, in: harness.defaults)
+        _ = fillStage(harness, count: 2)
         let extra = harness.camera(host: "192.168.1.200", name: "One too many")
 
         let started = await harness.model.connectAlongside(extra)
 
         #expect(started == false)
-        #expect(harness.model.cameras.activeCount == AppSessionModel.maxConcurrentStreams)
+        #expect(harness.model.cameras.activeCount == 2)
         #expect(harness.model.cameras.stream(for: extra.id)?.isActive == false)
+    }
+
+    /// A bigger budget admits what a stingy one refused. The same click, the same cameras, a
+    /// different machine — which is the whole of why the count became a budget.
+    @Test func aBiggerBudgetAdmitsTheSameCamera() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        _ = fillStage(harness, count: 2)
+        let extra = harness.camera(host: "192.168.1.200", name: "One more")
+
+        MachineDecodeBudget.setOverrideUnits(2, in: harness.defaults)
+        #expect(harness.model.canAdmit(extra) == false)
+
+        MachineDecodeBudget.setOverrideUnits(24, in: harness.defaults)
+        #expect(harness.model.canAdmit(extra))
+    }
+
+    /// ⚠️ A camera the user has just clicked joins at the back of the queue: it must not slow down a
+    /// camera they are already watching to make room for itself.
+    @Test func aNewCameraDoesNotSlowTheOnesAlreadyOnScreen() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        MachineDecodeBudget.setOverrideUnits(2, in: harness.defaults)
+        let running = fillStage(harness, count: 2)
+        let extra = harness.camera(host: "192.168.1.200", name: "One too many")
+
+        var demands = harness.model.decodeDemands()
+        demands.append(DecodeDemand(
+            id: StreamKey(camera: extra.id, quality: .main), priority: .offscreen,
+            orderIndex: demands.count, mode: .full, cost: AppSessionModel.assumedCost))
+        let plan = DecodeAdmissionPlanner.plan(for: demands, budget: harness.model.decodeBudget)
+
+        for camera in running {
+            let key = StreamKey(camera: camera.id, quality: .main)
+            #expect(plan.mode(for: key) == .full, "already on screen, so already paid for")
+        }
+        #expect(plan.mode(for: StreamKey(camera: extra.id, quality: .main))?
+            .opensDecodeSession == false)
+    }
+
+    /// A stream being recorded is not preemptible, which is what actually protects the file.
+    @Test func aRecordingStreamIsNotPreemptible() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        let camera = fillStage(harness, count: 1)[0]
+
+        let demands = harness.model.decodeDemands()
+
+        #expect(demands.count == 1)
+        #expect(demands.first?.isPreemptible == true, "nothing is being written yet")
+        #expect(demands.first?.id == StreamKey(camera: camera.id, quality: .main))
     }
 
     /// A camera already on the stage is left alone: clicking its cell again must not build a second
