@@ -185,6 +185,51 @@ struct AppSessionStreamsTests {
         #expect(harness.model.cameras.count == 1)
     }
 
+    // MARK: - Turning a patrol page
+
+    /// ⛔ A page turn stops what the new page does not name, and stops it **before** anything
+    /// starts. The budget is four: a turn that started first would ask for the fifth stream while
+    /// the previous page still held the budget, every camera on the new page would be refused, and
+    /// the patrol would advance through pages the user never sees.
+    @Test func aPageTurnStopsTheCamerasTheNewPageDoesNotName() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        let cameras = fillStage(harness, count: 4)
+
+        let stopping = harness.model.streamsToStop(forPage: [cameras[2].id, cameras[3].id])
+
+        #expect(Set(stopping.compactMap { $0.camera?.id }) == Set([cameras[0].id, cameras[1].id]))
+    }
+
+    /// ⚠️ The bound stream is never in the list, whichever camera it is pointed at: the page turn
+    /// re-points it, and stopping it here would tear down the one session still on screen a moment
+    /// before rebuilding it.
+    @Test func aPageTurnNeverStopsTheBoundStreamItself() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        let model = harness.model
+        model.camera = harness.camera(host: "192.168.1.9", name: "Bound")
+        model.live.beginConnecting()
+        let cameras = fillStage(harness, count: 2)
+
+        let stopping = model.streamsToStop(forPage: [cameras[0].id])
+
+        #expect(stopping.count == 1)
+        #expect(stopping.first?.camera?.id == cameras[1].id)
+        #expect(stopping.contains { $0 === model.live } == false)
+    }
+
+    /// A camera already stopped is not stopped again — the list is what has to be acted on, not
+    /// every entry the set happens to hold.
+    @Test func aPageTurnIgnoresCamerasThatAreAlreadyStopped() {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        let cameras = fillStage(harness, count: 2)
+        harness.model.disconnect(cameras[0].id)
+
+        #expect(harness.model.streamsToStop(forPage: []).count == 1)
+    }
+
     // MARK: - Forced keyframe recovery
 
     /// ⛔ The rate limit is per **stream**, because it protects a session rather than the app: two

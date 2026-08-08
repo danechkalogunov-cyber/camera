@@ -199,6 +199,57 @@ extension AppSessionModel {
         stop(stream)
     }
 
+    /// Puts exactly one page of cameras on the stage and takes everything else off it.
+    ///
+    /// ⛔ THIS IS WHAT THE PATROL COULD NOT DO BEFORE F-LIV-01. With one `StreamController` per
+    /// application, "show page 2" could only mean `switchTo` the page's *first* camera, so a 2 × 2
+    /// patrol advanced through four-camera pages one picture at a time and the other three cells sat
+    /// on their placeholders. The cycle was honest about it — `showCyclePage` said so in its own doc
+    /// — and it is what `F-LIV-06`'s open item names. A page is now a page.
+    ///
+    /// ⚠️ THE STOPS COME FIRST, AND THAT ORDER IS LOAD-BEARING. `maxConcurrentStreams` is four, and
+    /// a page turn that started before it stopped would be asking for the fifth, sixth and seventh
+    /// stream while the *previous* page's cameras were still holding the budget — every camera on the
+    /// new page would be refused, and after one turn the patrol would show nothing new. Stopping
+    /// first also matches what the device can take: a DS-I256 permits three concurrent sessions, and
+    /// overlapping two pages would spend them on cameras the user has already been shown.
+    ///
+    /// The lead is the bound camera when the page contains it, because ``live`` is the stream the
+    /// connect form, the inspector and the remembered connection all address, and re-pointing it at
+    /// another member of the same page would cost that camera a reconnect for no visible gain. It is
+    /// also the order the stage itself uses — the streaming camera leads (`stageOrder`).
+    ///
+    /// An empty page does nothing at all rather than tearing the stage down: a library that has just
+    /// been emptied by a filter is not an instruction to stop streaming.
+    func showOnStage(_ page: [Camera]) async {
+        guard !page.isEmpty else { return }
+        for stream in streamsToStop(forPage: page.map(\.id)) { stop(stream) }
+        let lead = page.first { $0.id == camera?.id } ?? page[0]
+        await switchTo(lead)
+        for member in page where member.id != lead.id {
+            // The budget's refusal ends the page rather than skipping one camera: the cells are
+            // filled in order, and carrying on would leave a gap in the middle of the page while
+            // starting a camera further down it.
+            guard await connectAlongside(member) else { return }
+        }
+    }
+
+    /// Which streams a page turn has to stop: everything being driven that the page does not name.
+    ///
+    /// ⚠️ ``live`` is never in this list, whichever camera it is pointed at, because the page turn
+    /// re-points it: ``switchTo(_:)`` stops that session itself and opens the lead's. Stopping it
+    /// here as well would tear down a session a moment before rebuilding it, and — worse — would do
+    /// so for the one camera that is still on screen while the rest of the page opens.
+    ///
+    /// Separated from ``showOnStage(_:)`` because it is the decision, and the decision is the part
+    /// that can be wrong: everything else is a loop.
+    func streamsToStop(forPage page: [CameraID]) -> [CameraStream] {
+        cameras.all.filter { stream in
+            guard stream !== live, stream.isActive, let id = stream.camera?.id else { return false }
+            return !page.contains(id)
+        }
+    }
+
     /// Makes the library and the session agree about the camera that is streaming: files it if it
     /// is new, and adopts its stored identity if it is not.
     ///

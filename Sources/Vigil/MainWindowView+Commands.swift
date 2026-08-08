@@ -474,26 +474,29 @@ extension MainWindowView {
         }
     }
 
-    /// Brings the camera the cycle's current page names onto the stage.
+    /// Brings the cycle's current page onto the stage — the whole page, not its first camera.
     ///
-    /// ⚠️ A RECONNECT PER STEP, AND THAT IS WHAT A ONE-STREAM BUILD CAN HONESTLY DO. `switchTo`
-    /// stops the current session and opens another, so each advance costs the ~1.2 s this device
-    /// takes to reach a first frame (docs/PLAYBACK-LATENCY.md). At the 10 s default dwell that is a
-    /// tenth of the interval; at the 2 s floor `VCycleModel` clamps to, it would be most of it,
-    /// which is why that floor exists and why this does not try to pre-warm the next page. Pre-warm
-    /// means holding two sessions, and holding two sessions is the multi-camera work this build has
-    /// not done.
+    /// ⛔ IT USED TO TAKE `range.first` AND STOP THERE. That was the honest limit of a build with one
+    /// `StreamController`: a 2 × 2 patrol advanced through four-camera pages showing one picture and
+    /// three *Add camera* placeholders, and the ring in the toolbar reported progress through pages
+    /// the user never saw. `F-LIV-06`'s open item is exactly this, and `AppSessionModel.showOnStage`
+    /// is what F-LIV-01 made possible.
     ///
-    /// `.single` is the layout this matters in — one page per camera — but nothing here assumes it:
-    /// `visibleRange` is asked for the page's indices and the first is taken, so a 2 × 2 page of
-    /// four cameras streams the first of the four rather than silently doing nothing.
+    /// ⚠️ A reconnect per step is still what an advance costs — roughly 1.2 s to a first frame on
+    /// this device (docs/PLAYBACK-LATENCY.md) — and nothing here pre-warms the next page. Pre-warming
+    /// means holding two pages of sessions at once, which is what the device's own session limit
+    /// refuses (three on a DS-I256) and what `VCycleModel`'s 2 s floor exists to keep away from.
+    ///
+    /// The page can be wider than the concurrency budget — a 4 × 4 layout names sixteen cameras and
+    /// `maxConcurrentStreams` is four — and `showOnStage` fills the cells in order until the budget
+    /// is spent. That is a placeholder's behaviour, and it is `F-DEC-06` that replaces the number
+    /// with a measured admission policy.
     private func showCyclePage() async {
         let cameras = library.cameras
         let range = window.cycle.visibleRange(cameraCount: cameras.count, layout: window.layout)
-        guard let index = range.first, cameras.indices.contains(index) else { return }
-        let target = cameras[index]
-        guard target.id != session.camera?.id else { return }
-        await session.switchTo(target)
+        await session.showOnStage(range.compactMap { index in
+            cameras.indices.contains(index) ? cameras[index] : nil
+        })
     }
 }
 
