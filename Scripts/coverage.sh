@@ -47,17 +47,24 @@ done
 #     macOS layer  17.84 %      VigilCore 39.76, VigilUI 19.55, VigilVideo 17.60,
 #                               VigilRender 9.80, VigilTransport 4.55, Vigil 2.83
 #
+# Measured again on 2026-08-08, over 2883 passing tests, after the app target got a test seam:
+#
+#     pure layer   90.27 %      unchanged in substance
+#     macOS layer  19.16 %      VigilCore 40.51, VigilUI 19.63, VigilVideo 17.60,
+#                               VigilRender 9.92, Vigil 8.36, VigilTransport 4.55
+#
 # ⛔ `APPLE_FLOOR` IS A RATCHET, NOT A TARGET, AND THE DIFFERENCE MATTERS. docs/API_CONTRACT.md §5
-# asks for 70 %; the tree does 17.84 %. Seventeen is set here so that the number cannot go *down*
+# asks for 70 %; the tree does 19.16 %. Nineteen is set here so that the number cannot go *down*
 # unnoticed — which is the only thing a floor can do for a figure this far from its goal. Writing 70
 # here instead would fail every commit until someone lowered it, and the number that survives that
 # process means nothing at all; the script's header says so and this is that rule applied to itself.
 #
-# Raise it when tests raise it, in the same commit, so the floor is always evidence. The gap itself
-# is tracked in ЧТО-НЕ-СДЕЛАНО §22 — and it is a real gap, not an artefact of counting: the app
-# target is at 2.83 % of 9 114 lines and `VigilTransport` at 4.55 % of 2 374.
+# Raise it when tests raise it, in the same commit, so the floor is always evidence — which is what
+# 17 → 19 is. The gap itself is tracked in ЧТО-НЕ-СДЕЛАНО §22, and it is a real gap rather than
+# an artefact of counting: `VigilTransport` is still at 4.55 % of 2 374 lines, and the app target,
+# though it has nearly tripled, is at 8.36 % of 9 906.
 PURE_FLOOR=90
-APPLE_FLOOR=17
+APPLE_FLOOR=19
 
 if command -v xcrun >/dev/null 2>&1; then
     llvm_cov=(xcrun llvm-cov)
