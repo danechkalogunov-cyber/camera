@@ -408,12 +408,11 @@ struct MainWindowView: View {
     /// The sheet, and the window-wide keyboard shortcuts.
     private func windowPresentations(_ content: some View) -> some View {
         content
-        // A zero-sized button is how a window-wide shortcut is declared in pure SwiftUI. It carries
-        // no label and cannot be reached by the pointer or by focus; only ⌘K triggers it.
-        .background { windowShortcuts }
-        .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
+            // A zero-sized button is how a window-wide shortcut is declared in pure SwiftUI. It
+            // carries no label and cannot be reached by the pointer or by focus; only ⌘K fires it.
+            .background { windowShortcuts }
+            .sheet(item: $window.sheet) { sheet in sheetBody(sheet) }
     }
-
 
     /// Renames the camera and remembers the new name for the next launch.
     ///
@@ -461,11 +460,12 @@ struct MainWindowView: View {
     @ViewBuilder
     private var paletteOverlay: some View {
         if window.isPaletteOpen {
-            VCommandPaletteView(commands: commandCatalogue,
-                                query: $window.paletteQuery,
-                                selection: $window.paletteSelection,
-                                onRun: { run($0) },
-                                onDismiss: { window.isPaletteOpen = false })
+            VCommandPaletteView(
+                commands: commandCatalogue,
+                query: $window.paletteQuery,
+                selection: $window.paletteSelection,
+                onRun: { run($0) },
+                onDismiss: { window.isPaletteOpen = false })
         }
     }
 
@@ -488,14 +488,16 @@ struct MainWindowView: View {
                 SwiftUI.Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { window.isOverflowMenuOpen = false }
-                VOverflowMenuView(disabledItems: unavailableOverflowItems,
-                                  onSelect: { select($0) },
-                                  onDismiss: { window.isOverflowMenuOpen = false })
+                VOverflowMenuView(
+                    disabledItems: unavailableOverflowItems,
+                    onSelect: { select($0) },
+                    onDismiss: { window.isOverflowMenuOpen = false })
                     // Hung from the button's own measured frame: right edges aligned, `xs` below
                     // it. Arithmetic over the toolbar's padding tokens is what put it in the wrong
                     // place, and any future change to that row would have moved it again.
-                    .offset(x: window.overflowAnchor.maxX - VOverflowMetrics.width,
-                            y: window.overflowAnchor.maxY + VTheme.Space.xs)
+                    .offset(
+                        x: window.overflowAnchor.maxX - VOverflowMetrics.width,
+                        y: window.overflowAnchor.maxY + VTheme.Space.xs)
             }
         }
     }
@@ -505,10 +507,11 @@ struct MainWindowView: View {
     /// Name, address and identity colour for the one camera.
     var identity: LiveCameraIdentity {
         let camera = session.camera
-        return LiveCameraIdentity(id: cameraID.rawValue,
-                                  name: camera?.displayName ?? session.form.request.host,
-                                  host: camera?.host ?? session.form.request.host,
-                                  identityIndex: camera?.colorTag.paletteIndex)
+        return LiveCameraIdentity(
+            id: cameraID.rawValue,
+            name: camera?.displayName ?? session.form.request.host,
+            host: camera?.host ?? session.form.request.host,
+            identityIndex: camera?.colorTag.paletteIndex)
     }
 
     /// The camera's identifier, or the stable placeholder the tile keeps before the record exists.
