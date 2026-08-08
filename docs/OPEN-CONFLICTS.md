@@ -190,7 +190,7 @@ No code change is proposed: the contract is the authority and the tree already f
 take them for the rule, which is how this was noticed — an implementer costed streams from the
 examples and produced a second, incompatible `DecodeCost`.
 
-## I8 — the main window's toolbar order: `DESIGN.md` §11.3 against the mockup and the code (M — open)
+## I8 — the main window's toolbar order: `DESIGN.md` §11.3 against the mockup and the code (M — **ruled 2026-08-08**)
 
 `DESIGN.md` §11.3 specifies:
 
@@ -223,6 +223,8 @@ underneath the group beside it); and the three toolbar actions §11.3 lists were
 into the overflow menu, which is a decision that has already been made and implemented rather than
 one still open.
 
-Nothing is changed in code pending the ruling — the divergence is stable and visible, and silently
-rewriting one document to match the other is how a specification stops being evidence of anything.
+**Ruling: the mockup and the code stand.** Given by the repository owner on 2026-08-08. `DESIGN.md`
+§11.3 has been rewritten to describe the implemented toolbar, with a note recording all five
+differences and this ruling, so the amendment cannot later be mistaken for the original text. No code
+changed — that is the whole point of the ruling going this way.
 

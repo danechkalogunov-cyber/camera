@@ -2072,12 +2072,25 @@ position — the inset treatment is reserved for the main window, where it reads
 
 ### 11.3 Toolbar contents (main window)
 
-`[traffic lights] [sidebar toggle] | [layout picker (VSegmentedControl + VLayoutGlyphs)] [cycle]
-… flex … [progress chip "4 of 16 live"] [snapshot all] [record all] | [search] [⌘K] [inspector toggle]`
+`[traffic lights] [sidebar toggle] [selected camera or layout name] [search]
+… flex … [layout switcher (VSegmentedControl + VLayoutGlyphs)] … flex …
+[cycle] [⌘K] [overflow "…"] [inspector toggle]`
 
-Items are `VButton(.icon, .md)` in a `ToolbarItemGroup`; the layout picker is a
-`ToolbarItem(placement: .principal)`. On narrow windows the group collapses into an
-`ellipsis.circle` overflow (AppKit does this automatically for `ToolbarItemGroup`).
+Items are `VButton(.icon, .md)`. The switcher sits between **two flexible gaps** rather than in a
+centred overlay: that is the one arrangement in which it can never end up underneath the group beside
+it when the window narrows.
+
+The overflow menu — Video Wall, PiP, Discovery, Stream Doctor, Settings — is a deliberate item and
+not AppKit's automatic collapse.
+
+⚠️ **This section was amended on 2026-08-08 to match `design/mockups/01-main-window.html` and
+`VToolbarView`, which had always disagreed with it.** The disagreement was five things, not one:
+search was specified trailing and is leading; the layout picker was specified leading and is centred;
+cycle was specified beside the picker and is in the trailing group; a progress chip "4 of 16 live"
+with snapshot-all and record-all was specified in the toolbar and those three actions live in the
+overflow menu instead; and the leading title showing the selected camera's name was not specified at
+all. Recorded as I8 in `docs/OPEN-CONFLICTS.md`, ruled in favour of the mockup by the repository
+owner. No code changed.
 
 ### 11.4 Cinema mode
 
