@@ -99,6 +99,14 @@ struct StageTimelineOverlay: View {
     /// Puts the timeline away.
     let onDismiss: () -> Void
 
+    /// Bumped by the window every time the timeline is asked for.
+    ///
+    /// ⛔ A WAY BACK THAT DOES NOT DEPEND ON THE POINTER. `showsTimeline` is already `true` once the
+    /// scrubber has been opened, so asking again — the tile's button, an event, a bookmark —
+    /// changed nothing and looked like a dead control. Any change here re-pins the panel, which is
+    /// what "show me the timeline" has to mean when it is technically already open.
+    let revealRequests: Int
+
     /// Whether the pointer is near the bottom edge, and whether it is over the chrome itself.
     ///
     /// Two flags and not one: the chrome must stay up while the pointer is *on* it, and a single
@@ -152,6 +160,7 @@ struct StageTimelineOverlay: View {
          onStepToMarker: @escaping (Bool) -> Void,
          onGoToDayEdge: @escaping (Bool) -> Void,
          onDismiss: @escaping () -> Void,
+         revealRequests: Int = 0,
          rate: TimelinePlaybackRate = .normal,
          isRateAdjustable: Bool = false,
          isPaused: Bool = false,
@@ -174,6 +183,7 @@ struct StageTimelineOverlay: View {
         self.onStepToMarker = onStepToMarker
         self.onGoToDayEdge = onGoToDayEdge
         self.onDismiss = onDismiss
+        self.revealRequests = revealRequests
         self.rate = rate
         self.isRateAdjustable = isRateAdjustable
         self.isPaused = isPaused
@@ -198,6 +208,7 @@ struct StageTimelineOverlay: View {
         // timing lives.
         .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: !motionEnabled),
                    value: isVisible)
+        .onChange(of: revealRequests) { _, _ in hasEngaged = false }
         .background { shortcuts }
     }
 
@@ -274,12 +285,28 @@ struct StageTimelineOverlay: View {
         SwiftUI.Color.clear
             .frame(height: StageTimelineMetrics.approachHeight)
             .contentShape(Rectangle())
-            .onHover { isNearBottom = $0 }
-            .allowsHitTesting(!isVisible)
-            // Approaching the bottom edge also counts as having found it, so a user who never
-            // moves the pointer onto the panel still gets the hide-on-leave behaviour afterwards.
-            .onChange(of: isNearBottom) { _, near in
-                if near { hasEngaged = true }
+            // ⛔ CONTINUOUS, AND ALWAYS HIT-TESTABLE. Two bugs lived in the four lines this
+            // replaces, and together they are "it shows once and never again".
+            //
+            // `onHover` fires on a **boundary crossing**. `allowsHitTesting(!isVisible)` turned
+            // this strip off while the panel was up — so when the panel hid, the strip switched
+            // back on underneath a pointer that was already inside it, and no crossing was left to
+            // report. The user had to leave the bottom of the window entirely and come back, which
+            // nobody would guess. `onContinuousHover` reports *position*, so the next pixel of
+            // movement re-arms it.
+            //
+            // And the strip no longer switches off: it sits under the panel in the `ZStack`, so
+            // while the panel is up the panel gets the pointer and this sees nothing anyway.
+            .onContinuousHover { phase in
+                switch phase {
+                case .active:
+                    isNearBottom = true
+                    // Approaching the bottom edge counts as having found it, so a user who never
+                    // puts the pointer on the panel still gets hide-on-leave afterwards.
+                    hasEngaged = true
+                case .ended:
+                    isNearBottom = false
+                }
             }
     }
 

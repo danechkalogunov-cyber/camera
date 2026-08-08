@@ -384,6 +384,14 @@ final class MainWindowState {
     /// one gesture should not commit the user to the other.
     var showsTimeline = false
 
+    /// Bumped every time the user asks for the timeline, including when it is already open.
+    ///
+    /// ⛔ `showsTimeline` is a flag and "show me the timeline" is an **event**. Once the flag was
+    /// true, asking again set it true again — no change, nothing observed, nothing on screen if the
+    /// panel had since hidden itself. Every entry point bumps this, and the overlay re-pins on any
+    /// change.
+    var timelineRevealRequests = 0
+
     /// Whether the picture fills its tile rather than fitting inside it.
     ///
     /// Fitting is the default and stays it: surveillance video is evidence, and cropping the top

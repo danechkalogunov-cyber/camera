@@ -52,6 +52,7 @@ extension MainWindowView {
         let lead = instant.addingTimeInterval(-Self.eventLeadInSeconds)
         focusCamera(cameraID)
         window.showsTimeline = true
+        window.timelineRevealRequests += 1
         archive.load(day: clock.day(containing: lead),
                      clock: clock,
                      localClips: timelineLocalClips,
@@ -263,6 +264,7 @@ extension MainWindowView {
                 // grid would be a control for a camera the user has not said they are looking at.
                 focusCamera(cameraID)
                 window.showsTimeline = true
+                window.timelineRevealRequests += 1
             case .close:
                 // ⚠️ Reached only if a tile is drawn without going through `VGridStageView` — the
                 // stage rebinds this case to its own per-cell `onClose` (see `GridTileView`'s

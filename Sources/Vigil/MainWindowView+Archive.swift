@@ -321,6 +321,7 @@
                         // feature can produce: the picture looks live and is not.
                         returnToLive()
                     },
+                    revealRequests: window.timelineRevealRequests,
                     rate: session.playbackRate,
                     // Only while an archive is open. A live channel has no speed —
                     // `Scale: 4` on it asks for the next four seconds.
