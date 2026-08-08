@@ -205,9 +205,12 @@ public actor CredentialStore {
               CFGetTypeID(found) == SecKeychainItemGetTypeID(),
               let access = Self.sharedAccess(label: "Vigil camera credential")
         else { return }
-        // `CFGetTypeID` above is the only way to ask a `CFTypeRef` what it is; the conditional cast
-        // then costs nothing and keeps the file free of force-unwraps.
-        guard let item = found as? SecKeychainItem else { return }
+        // ⚠️ `unsafeBitCast`, and it is the only spelling that compiles. A conditional cast to a
+        // CoreFoundation type is rejected outright — "will always succeed" — and `as!` is banned in
+        // this tree. The guard above is the real check and it is the one the C API documents:
+        // `CFGetTypeID` is how you ask a `CFTypeRef` what it is, and this line runs only when the
+        // answer was `SecKeychainItem`.
+        let item = unsafeBitCast(found, to: SecKeychainItem.self)
         let status = SecKeychainItemSetAccess(item, access)
         guard status == errSecSuccess else {
             logger.debug(.core, "could not widen the keychain item's access",
