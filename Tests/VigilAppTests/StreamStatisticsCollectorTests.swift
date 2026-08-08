@@ -144,8 +144,9 @@ struct StreamStatisticsCollectorTests {
         collector.tick(at: at(1))
         #expect(collector.telemetry(at: at(1)).bitsPerSecond != nil)
 
-        collector.ingest(.stateChanged(from: .playing, to: .reconnecting,
-                                       detail: StateDetail(narration: "")), at: at(1))
+        collector.ingest(
+            .stateChanged(from: .playing, to: .reconnecting, detail: StateDetail(narration: "")),
+            at: at(1))
 
         #expect(collector.telemetry(at: at(1)).bitsPerSecond == nil)
     }
@@ -188,8 +189,8 @@ struct StreamStatisticsCollectorTests {
         collector.ingest(.statistics(sample(packetsReceived: 10, packetsLost: 0)), at: at(1))
         collector.ingest(.statistics(sample(packetsReceived: 1_010, packetsLost: 0)), at: at(3))
 
-        #expect(collector.telemetry(at: at(3)).lossFraction == 0,
-                "a clean window measures zero; the un-rebaselined bug measured a whole stream lost")
+        // The un-rebaselined bug measured a whole stream lost here.
+        #expect(collector.telemetry(at: at(3)).lossFraction == 0)
     }
 
     // MARK: - Frame rate, and the stall rule
@@ -213,8 +214,8 @@ struct StreamStatisticsCollectorTests {
         collector.ingest(.statistics(sample(framesDecoded: 10, framesPerSecond: 25)), at: at(2))
         #expect(collector.telemetry(at: at(2)).framesPerSecond == 25)
 
-        #expect(collector.telemetry(at: at(2 + StreamStatisticsRollup.stallSeconds + 1))
-            .framesPerSecond == nil)
+        let afterTheStall = collector.telemetry(at: at(2 + StreamStatisticsRollup.stallSeconds + 1))
+        #expect(afterTheStall.framesPerSecond == nil)
     }
 
     // MARK: - Keyframes
@@ -294,8 +295,8 @@ struct StreamStatisticsCollectorTests {
         let collector = StreamStatisticsCollector(historyWindow: .seconds(3))
 
         for second in 0..<6 {
-            collector.ingest(.statistics(sample(framesDecoded: UInt64(second))),
-                             at: at(Double(second)))
+            collector.ingest(
+                .statistics(sample(framesDecoded: UInt64(second))), at: at(Double(second)))
         }
 
         let history = collector.telemetry(at: at(5)).recentStatistics
@@ -308,12 +309,12 @@ struct StreamStatisticsCollectorTests {
         let collector = StreamStatisticsCollector(historyWindow: .seconds(3_600))
 
         for index in 0..<(StreamStatisticsRollup.historyCapacity + 25) {
-            collector.ingest(.statistics(sample(framesDecoded: UInt64(index))),
-                             at: at(Double(index)))
+            collector.ingest(
+                .statistics(sample(framesDecoded: UInt64(index))), at: at(Double(index)))
         }
 
-        #expect(collector.telemetry(at: at(100)).recentStatistics.count
-            == StreamStatisticsRollup.historyCapacity)
+        let kept = collector.telemetry(at: at(100)).recentStatistics.count
+        #expect(kept == StreamStatisticsRollup.historyCapacity)
     }
 
     // MARK: - Reconnects

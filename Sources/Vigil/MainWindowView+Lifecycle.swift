@@ -96,7 +96,7 @@ extension MainWindowView {
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
-        .task(id: session.camera?.id) { loadDeviceInfo() }
+        .task(id: selectedCamera?.id) { loadDeviceInfo() }
     }
 
     /// Clips, telemetry, the poster frame and the event stream.
@@ -114,8 +114,8 @@ extension MainWindowView {
             await tickWhileRecording()
         }
         .task { await pollTelemetry() }
-        .task(id: session.camera?.id) { await pollPoster() }
-        .task(id: session.camera?.id) { await eventFeed.follow(camera: session.camera) }
+        .task(id: selectedCamera?.id) { await pollPoster() }
+        .task(id: selectedCamera?.id) { await eventFeed.follow(camera: selectedCamera) }
     }
 
     /// Work that only makes sense while a particular panel or screen is being looked at.

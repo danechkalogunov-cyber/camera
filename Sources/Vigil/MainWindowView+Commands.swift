@@ -34,7 +34,7 @@ extension MainWindowView {
     /// the session storing the camera, and guessing an address there would send a request to the
     /// wrong host.
     func loadDeviceInfo() {
-        guard let camera = session.camera else { return }
+        guard let camera = selectedCamera else { return }
         deviceInfo.load(camera: camera, credentials: session.credentials)
     }
 

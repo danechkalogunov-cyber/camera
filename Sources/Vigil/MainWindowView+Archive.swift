@@ -38,7 +38,16 @@
                     message: Self.localized("Nothing was recorded at that moment"))
                 return
             }
-            Task { await session.playArchive(locator) }
+            // ⛔ THE SCRUBBER NOW SHOWS THE SELECTED CAMERA, SO THE SEEK HAS TO REACH IT. Playback
+            // runs on the bound stream — one archive session, one set of transport controls — so a
+            // seek on another camera's timeline first brings that camera to the front. Without this
+            // the user scrubs camera nine's index and camera one jumps, which is the exact confusion
+            // moving the panels onto the selection was meant to remove.
+            let target = selectedCamera
+            Task {
+                if let target, target.id != session.camera?.id { await session.switchTo(target) }
+                await session.playArchive(locator)
+            }
         }
 
         /// Puts the picture back on the live stream.
@@ -101,9 +110,13 @@
         }
 
         /// What decides the archive is worth reading: the screen being open, and for which camera.
+        ///
+        /// ⚠️ The **selected** camera. The scrubber is a panel like the rest of them, and a timeline
+        /// drawn from camera one's index under a heading naming camera nine would send a seek to a
+        /// moment that exists on neither.
         var archiveTrigger: String {
             let isOpen = window.showsTimeline
-            return "\(isOpen)/\(session.camera?.id.rawValue.uuidString ?? "-")"
+            return "\(isOpen)/\(selectedCamera?.id.rawValue.uuidString ?? "-")"
                 + "/\(deviceInfo.session == nil ? 0 : 1)"
         }
 
@@ -116,10 +129,10 @@
         /// opens would be nagging about a fact that has not changed.
         func loadArchive() async {
             archive.follow(
-                camera: session.camera?.id,
+                camera: selectedCamera?.id,
                 session: deviceInfo.session,
-                channel: session.camera?.channel,
-                name: identity.name)
+                channel: selectedCamera?.channel,
+                name: selectedIdentity.name)
             guard window.showsTimeline else { return }
             let clock = libraryClock
             let day = archive.archive?.day ?? clock.day(containing: clock.now)
@@ -246,7 +259,7 @@
             guard isEventsScreenOpen, eventFeed.unreadCount > 0 else { return }
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, isEventsScreenOpen else { return }
-            await eventFeed.markAllRead(camera: session.camera)
+            await eventFeed.markAllRead(camera: selectedCamera)
         }
 
         /// The recordings folder as a user would recognise it, for the empty state's "where would a clip

@@ -25,6 +25,58 @@ import VigilUI
 /// `private` reaches a type's extensions only within one file.
 extension MainWindowView {
 
+    // MARK: - The selected camera
+    //
+    // ⛔ THE PANELS DESCRIBE WHAT THE USER SELECTED, NOT WHAT `live` HAPPENS TO BE. Before
+    // F-LIV-01 those were the same camera by construction and every panel simply read `session`.
+    // With a wall of tiles they are routinely different, and an inspector that reported camera one's
+    // codec, bitrate and packet loss under a heading naming camera nine is worse than an empty
+    // panel: it is a confident wrong answer, and nothing on screen says so.
+    //
+    // ⚠️ The **bound** camera is still what the connect form, the remembered connection and the
+    // sidebar's live row mean, so `identity`, `cameraID` and `tileStats` are untouched. Only the
+    // panels move.
+
+    /// The stream the panels describe: the sidebar's focused camera, or the bound one when the
+    /// focus is on a row that is not a camera — "Current Layout", Events, Recordings.
+    ///
+    /// Falls back to ``AppSessionModel/live`` rather than to nothing, because the inspector is
+    /// always showing *something* and an empty panel while a camera is plainly streaming reads as a
+    /// fault.
+    var selectedStream: CameraStream {
+        guard let id = window.sidebarSelection.focus.selectedCamera,
+              let stream = session.cameras.stream(for: id)
+        else { return session.live }
+        return stream
+    }
+
+    /// The record behind ``selectedStream``, or the library's row for a camera that has never
+    /// streamed — selecting a camera that has never been connected must still fill the Info tab.
+    var selectedCamera: Camera? {
+        if let camera = selectedStream.camera { return camera }
+        guard let id = window.sidebarSelection.focus.selectedCamera else { return session.camera }
+        return library.cameras.first { $0.id == id } ?? session.camera
+    }
+
+    /// ``selectedCamera`` in the vocabulary the panels and the toolbar title take.
+    var selectedIdentity: LiveCameraIdentity {
+        let camera = selectedCamera
+        return LiveCameraIdentity(id: camera?.id.rawValue ?? cameraID.rawValue,
+                                  name: camera?.displayName ?? session.form.request.host,
+                                  host: camera?.host ?? session.form.request.host,
+                                  identityIndex: camera?.colorTag.paletteIndex)
+    }
+
+    /// The selected camera's telemetry.
+    ///
+    /// ``measuredTelemetry`` is sampled once a second for **every** filed stream, so this is a
+    /// lookup rather than a second measurement. The bound camera's own snapshot is the fallback,
+    /// which is what a selection on a non-camera row should show.
+    var selectedTelemetry: StreamTelemetrySnapshot {
+        guard let id = selectedCamera?.id, let sample = measuredTelemetry[id] else { return telemetry }
+        return sample
+    }
+
     /// The library as the sidebar sees it: every camera the user has added, and their groups.
     ///
     /// ⚠️ The live one is *substituted*, not appended. It carries the status, the codec, the frame
@@ -191,9 +243,9 @@ extension MainWindowView {
                                   identityIndex: camera?.colorTag.paletteIndex)
     }
 
-    /// What the Stream tab's header describes.
+    /// What the Stream tab's header describes — for the **selected** camera.
     var streamDescription: InspectorStreamDescription {
-        guard let format = session.format else { return InspectorStreamDescription() }
+        guard let format = selectedStream.format else { return InspectorStreamDescription() }
         return InspectorStreamDescription(
             codec: format.videoCodec.rawValue.uppercased(),
             pixelWidth: format.resolution?.width ?? 0,
@@ -302,7 +354,7 @@ extension MainWindowView {
     /// Five seconds, not one: this is an HTTP round trip to the device for a picture 40 pt wide, and
     /// asking faster would put load on the camera in exchange for nothing a viewer would notice.
     func pollPoster() async {
-        guard let channel = session.camera?.channel else { return }
+        guard let channel = selectedCamera?.channel else { return }
         while !Task.isCancelled {
             await deviceInfo.refreshPoster(channel: channel)
             do {

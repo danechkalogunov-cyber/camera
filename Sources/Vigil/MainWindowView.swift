@@ -226,7 +226,9 @@ struct MainWindowView: View {
         VToolbarView(isSidebarVisible: window.showsSidebar,
                      isInspectorVisible: window.showsInspector,
                      layout: window.layout,
-                     title: identity.name.isEmpty ? Self.layoutTitle(window.layout) : identity.name,
+                     title: selectedIdentity.name.isEmpty
+                         ? Self.layoutTitle(window.layout)
+                         : selectedIdentity.name,
                      searchText: $window.searchText,
                      isCycling: window.cycle.isRunning,
                      cycleInterval: window.cycle.interval,

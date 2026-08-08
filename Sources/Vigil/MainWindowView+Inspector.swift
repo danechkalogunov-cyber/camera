@@ -31,16 +31,16 @@ extension MainWindowView {
     /// panel renders its own "not available" treatment rather than a fabricated number — the same
     /// reason `stats:` is left off the stage tile above.
     var inspectorState: VInspectorState {
-        VInspectorState(camera: identity,
-                        connection: session.liveState,
+        VInspectorState(camera: selectedIdentity,
+                        connection: selectedStream.liveState,
                         now: Date(),
                         identity: deviceIdentity,
                         storage: deviceInfo.storage,
                         isDeviceLoading: deviceInfo.isLoading,
                         isDeviceUnavailable: deviceInfo.isUnavailable,
                         stream: streamDescription,
-                        statistics: telemetry.statistics,
-                        recentStatistics: telemetry.recentStatistics,
+                        statistics: selectedTelemetry.statistics,
+                        recentStatistics: selectedTelemetry.recentStatistics,
                         ptz: ptz.capability,
                         presets: ptz.presets,
                         patrols: ptz.patrols,
@@ -139,9 +139,13 @@ extension MainWindowView {
         return actions
     }
 
-    /// Takes a still and says where it went.
+    /// Takes a still of the **selected** camera and says where it went.
+    ///
+    /// Safe to point at any camera, unlike recording: a snapshot is one ISAPI request for a JPEG and
+    /// needs no session of its own. Recording does, which is why the Rec tab is still the bound
+    /// camera's — see `recordingState`.
     func takeSnapshot() {
-        guard let camera = session.camera else {
+        guard let camera = selectedCamera else {
             window.toast = MainWindowToast(kind: .warning,
                                            message: Self.localized("Connect a camera first"))
             return
@@ -177,7 +181,7 @@ extension MainWindowView {
         let stats = telemetry.statistics
         let lines = [
             "Vigil diagnostics",
-            "camera:     \(identity.name)",
+            "camera:     \(selectedIdentity.name)",
             "address:    \(device.host):\(device.httpPort) (RTSP \(device.rtspPort))",
             "model:      \(device.model.isEmpty ? "—" : device.model)",
             "firmware:   \(device.firmwareVersion.isEmpty ? "—" : device.firmwareVersion)",
@@ -201,16 +205,22 @@ extension MainWindowView {
     /// starts, so the only way to change it is to build a new session. The picture drops for as long
     /// as a normal reconnect takes, which is why this says so rather than appearing to stall.
     func cycleStreamQuality() {
-        guard var camera = session.camera else { return }
+        guard var camera = selectedCamera else { return }
         let next: StreamQuality = camera.preferredQuality == .sub ? .main : .sub
         camera.preferredQuality = next
-        session.camera = camera
+        // ⚠️ Written onto the stream that is actually showing this camera, which is `live` only when
+        // the selection is the bound camera. Writing `session.camera` unconditionally would have
+        // changed the quality of a different camera than the panel names, and then restarted that
+        // one — a control that visibly does the wrong thing to the wrong tile.
+        let stream = selectedStream
+        stream.camera = camera
+        session.cameras.file(stream)
         window.toast = MainWindowToast(
             kind: .info,
             message: next == .sub
                 ? Self.localized("Switching to the sub-stream — the picture will reconnect")
                 : Self.localized("Switching to the main stream — the picture will reconnect"))
-        session.perform(.retry)
+        session.retryCamera(camera.id)
     }
 
     /// Turns the pad's hold state into a movement command.
@@ -231,13 +241,18 @@ extension MainWindowView {
     /// Keyed on ``deviceInfoReady`` rather than on the camera: the ISAPI session is built by
     /// `DeviceInfoService.load`, so following the camera id would run this before there was
     /// anything to follow and the PTZ tab would stay empty until something else invalidated it.
+    ///
+    /// ⚠️ The **selected** camera's channel. The PTZ tab is part of the inspector, so it describes
+    /// and drives whatever the inspector is describing; pointing a pan command at the bound camera
+    /// while the panel above it names another one is the worst kind of wrong — it moves a real
+    /// motor on the wrong device.
     func followPTZ() {
-        ptz.follow(session: deviceInfo.session, channel: session.camera?.channel)
+        ptz.follow(session: deviceInfo.session, channel: selectedCamera?.channel)
     }
 
     /// What decides the PTZ probe is worth running: a session exists, and for which camera.
     var deviceInfoReady: String {
-        "\(session.camera?.id.rawValue.uuidString ?? "-")/\(deviceInfo.session == nil ? 0 : 1)"
+        "\(selectedCamera?.id.rawValue.uuidString ?? "-")/\(deviceInfo.session == nil ? 0 : 1)"
     }
 
     /// Puts the device's serial on the pasteboard.
@@ -257,7 +272,7 @@ extension MainWindowView {
     /// the value so the control follows the pointer, and schedules the write for once the control
     /// has stopped moving. Wrapping it here would only add a hop before that.
     func writeImage(_ settings: InspectorImageSettings) {
-        guard let channel = session.camera?.channel else { return }
+        guard let channel = selectedCamera?.channel else { return }
         deviceInfo.writeImage(channel: channel, settings)
     }
 
@@ -268,7 +283,7 @@ extension MainWindowView {
     /// at that moment. Every one of those used to be a log line and nothing else, which is why the
     /// button read as broken: the press produced no picture change and no explanation.
     func resetImage() {
-        guard let channel = session.camera?.channel else {
+        guard let channel = selectedCamera?.channel else {
             window.toast = MainWindowToast(kind: .warning,
                                            message: Self.localized("Connect a camera first"))
             return
