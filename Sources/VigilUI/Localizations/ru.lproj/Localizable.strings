@@ -770,3 +770,7 @@
 "Export the configuration" = "Экспортировать конфигурацию";
 "Overlays: name, stats, timecode, motion" = "Наложения: имя, статистика, таймкод, движение";
 "Check the camera's ports" = "Проверить порты камеры";
+"Cameras captured: %lld of %lld" = "Снято камер: %lld из %lld";
+"Stopped — cameras captured: %lld" = "Остановлено — снято камер: %lld";
+"Show in Finder" = "Показать в Finder";
+"The snapshot set could not be written" = "Набор снимков не удалось записать";

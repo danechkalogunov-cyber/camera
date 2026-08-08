@@ -148,6 +148,11 @@ CATEGORIES = {"ru": {"one", "few", "many", "other"}, "en": {"one", "other"}}
 # the plural audit fail closed: a new phrase containing an integer must either be moved to the
 # stringsdict or receive a reviewed explanation here.
 NON_PLURAL_INTEGER_KEYS = {
+    # Snapshot sets (F-CAP-02). Both counts are written *after* the noun — "Cameras captured: 14 of
+    # 16", "Снято камер: 14 из 16" — which is the construction both languages use precisely so the
+    # noun does not have to agree with the number. Identical at 1, at 4 and at 16.
+    "Cameras captured: %lld of %lld",
+    "Stopped — cameras captured: %lld",
     # Network endpoint numbers and the fixed protocol name do not inflect.
     "Vigil reached %@ on port %lld, but RTSP port %lld refused the connection.",
     # Abbreviated SI unit and parenthesised attempt metadata are intentionally noun-free.

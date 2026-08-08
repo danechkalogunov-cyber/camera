@@ -460,18 +460,47 @@ extension MainWindowView {
         snapshotCameras(cameras)
     }
 
-    /// Captures cameras sequentially so the single-session transport never overlaps credentials.
+    /// Captures a set of cameras at one moment, into one folder with a manifest (`F-CAP-02`).
+    ///
+    /// ⛔ THIS USED TO SWITCH THE LIVE STREAM TO EACH CAMERA IN TURN, sleep half a second and press
+    /// the single-camera snapshot button — sixteen full RTSP teardowns and rebuilds to take sixteen
+    /// JPEGs that the camera would have handed over without any of it. It also stopped being correct
+    /// the moment the panels moved onto the selection, because the button it pressed then captured
+    /// whatever was *selected* rather than what the loop had switched to.
+    ///
+    /// A second press while a set is running is ignored rather than queued: the first set is already
+    /// the answer to "capture everything now", and a second one would write a folder whose timestamp
+    /// says the same thing.
     func snapshotCameras(_ cameras: [Camera]) {
-        guard !cameras.isEmpty else { return }
+        guard !cameras.isEmpty, !snapshotSets.isRunning else { return }
         Task {
-            for camera in cameras {
-                if session.camera?.id != camera.id {
-                    await session.switchTo(camera)
-                    try? await Task.sleep(for: .milliseconds(500))
-                }
-                takeSnapshot()
+            switch await snapshotSets.capture(cameras: cameras,
+                                              credentials: session.credentials) {
+            case let .written(_, succeeded, total):
+                window.toast = MainWindowToast(
+                    kind: succeeded == total ? .success : .warning,
+                    message: String(format: Self.localized("Cameras captured: %lld of %lld"),
+                                    succeeded, total),
+                    actionTitle: "Show in Finder",
+                    action: { revealLastSnapshotSet() })
+            case let .cancelled(_, succeeded):
+                window.toast = MainWindowToast(
+                    kind: .info,
+                    message: String(format: Self.localized("Stopped — cameras captured: %lld"),
+                                    succeeded))
+            case let .failed(reason):
+                session.dependencies.logger.error(.storage, "snapshot set failed: \(reason)")
+                window.toast = MainWindowToast(
+                    kind: .error,
+                    message: Self.localized("The snapshot set could not be written"))
             }
         }
+    }
+
+    /// Opens the last set's folder in Finder.
+    func revealLastSnapshotSet() {
+        guard let folder = snapshotSets.lastFolder else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     /// Removes a group and steps the selection off it.

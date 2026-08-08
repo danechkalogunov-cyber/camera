@@ -103,6 +103,9 @@ struct MainWindowView: View {
     /// Stills written to the user's Pictures folder.
     @State var snapshots: SnapshotCoordinator
 
+    /// A whole set of cameras captured at one moment, with its manifest (`F-CAP-02`).
+    @State var snapshotSets: SnapshotSetCoordinator
+
     /// The camera's own recording index, which is what the timeline scrubs.
     @State var archive: ArchiveCoordinator
 
@@ -168,8 +171,10 @@ struct MainWindowView: View {
         _groups = State(initialValue: CameraGroupStore(logger: session.dependencies.logger))
         _bookmarks = State(initialValue: BookmarkStore(logger: session.dependencies.logger))
         _ptz = State(initialValue: PTZCoordinator(logger: session.dependencies.logger))
-        _snapshots = State(initialValue: SnapshotCoordinator(logger: session.dependencies.logger,
-                                                             clock: session.dependencies.clock))
+        _snapshots = State(initialValue: SnapshotCoordinator(
+            logger: session.dependencies.logger, clock: session.dependencies.clock))
+        _snapshotSets = State(initialValue: SnapshotSetCoordinator(
+            logger: session.dependencies.logger, clock: session.dependencies.clock))
         _archive = State(initialValue: ArchiveCoordinator(logger: session.dependencies.logger))
     }
 

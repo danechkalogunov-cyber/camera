@@ -787,3 +787,7 @@
 "Export the configuration" = "Export the configuration";
 "Overlays: name, stats, timecode, motion" = "Overlays: name, stats, timecode, motion";
 "Check the camera's ports" = "Check the camera's ports";
+"Cameras captured: %lld of %lld" = "Cameras captured: %lld of %lld";
+"Stopped — cameras captured: %lld" = "Stopped — cameras captured: %lld";
+"Show in Finder" = "Show in Finder";
+"The snapshot set could not be written" = "The snapshot set could not be written";
