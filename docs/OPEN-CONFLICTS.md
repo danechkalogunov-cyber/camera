@@ -190,3 +190,39 @@ No code change is proposed: the contract is the authority and the tree already f
 take them for the rule, which is how this was noticed — an implementer costed streams from the
 examples and produced a second, incompatible `DecodeCost`.
 
+## I8 — the main window's toolbar order: `DESIGN.md` §11.3 against the mockup and the code (M — open)
+
+`DESIGN.md` §11.3 specifies:
+
+```
+[traffic lights] [sidebar toggle] | [layout picker] [cycle] … flex … [progress chip "4 of 16 live"]
+[snapshot all] [record all] | [search] [⌘K] [inspector toggle]
+```
+
+`design/mockups/01-main-window.html` and `VToolbarView` both build:
+
+```
+[traffic lights] [sidebar toggle] [selected camera or layout name] [search] … flex …
+[layout switcher] … flex … [cycle] [⌘K] [overflow] [inspector toggle]
+```
+
+Five differences, not one:
+
+| Element | §11.3 | Mockup and code |
+|---|---|---|
+| Search | trailing group, before `⌘K` | leading, right after the title |
+| Layout picker | leading, beside the sidebar toggle | centred between two flexible gaps |
+| Cycle | leading, beside the layout picker | trailing group |
+| Progress chip, snapshot-all, record-all | in the toolbar | not present; the overflow menu carries Video Wall, PiP, Discovery, Stream Doctor and Settings instead |
+| Leading title | not mentioned | present, and deliberate — §21 of the ledger records it as intended |
+
+**Recommended ruling: take the mockup and the code, and amend §11.3.** The mockup is the artefact
+the visual design was actually checked against; the centred switcher carries its own argument in
+`VToolbarView` (two flexible gaps rather than a centred overlay, so the switcher can never end up
+underneath the group beside it); and the three toolbar actions §11.3 lists were deliberately moved
+into the overflow menu, which is a decision that has already been made and implemented rather than
+one still open.
+
+Nothing is changed in code pending the ruling — the divergence is stable and visible, and silently
+rewriting one document to match the other is how a specification stops being evidence of anything.
+
