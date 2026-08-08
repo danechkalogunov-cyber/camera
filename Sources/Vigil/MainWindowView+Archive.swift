@@ -116,6 +116,7 @@
         /// opens would be nagging about a fact that has not changed.
         func loadArchive() async {
             archive.follow(
+                camera: session.camera?.id,
                 session: deviceInfo.session,
                 channel: session.camera?.channel,
                 name: identity.name)
@@ -276,6 +277,7 @@
             if window.showsTimeline {
                 StageTimelineOverlay(
                     archive: archive.archive,
+                    availability: archive.tracks,
                     clock: libraryClock,
                     onSelectDay: { day in loadArchiveDay(day) },
                     month: archive.month,

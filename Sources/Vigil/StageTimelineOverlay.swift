@@ -35,6 +35,13 @@ struct StageTimelineOverlay: View {
     /// The day to scrub, or `nil` when the camera has no index to show.
     let archive: VLibraryArchive?
 
+    /// What the device said when asked whether it records anything.
+    ///
+    /// ⚠️ The panel needs this to tell three states apart that look identical from `archive == nil`:
+    /// the read is in flight, the camera offered nothing, and the camera refused to say. One of them
+    /// resolves on its own and two never will, so "still reading" is a lie for the last two.
+    let availability: ArchiveCoordinator.TrackAvailability
+
     /// The calendar and zone the ruler and the day label are rendered in.
     let clock: TimelineClock
 
@@ -130,6 +137,7 @@ struct StageTimelineOverlay: View {
     /// `private`, and Swift lowers a synthesised memberwise initialiser to the least accessible
     /// stored property it includes, which would make it unreachable from the window.
     init(archive: VLibraryArchive?,
+         availability: ArchiveCoordinator.TrackAvailability = .unknown,
          clock: TimelineClock,
          onSelectDay: @escaping (TimelineDay) -> Void,
          month: TimelineMonthGrid?,
@@ -151,6 +159,7 @@ struct StageTimelineOverlay: View {
          onFrameStep: @escaping (Bool) -> Void = { _ in },
          onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.archive = archive
+        self.availability = availability
         self.clock = clock
         self.onSelectDay = onSelectDay
         self.month = month
@@ -293,7 +302,7 @@ struct StageTimelineOverlay: View {
         if let archive {
             scrubber(archive)
         } else {
-            Text("Reading this camera's recordings…", bundle: .vigilUI)
+            Text(absentReason, bundle: .vigilUI)
                 .vType(VTheme.Typography.body)
                 .foregroundStyle(VTheme.Color.Text.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -302,6 +311,22 @@ struct StageTimelineOverlay: View {
                     isOverChrome = hovering
                     if !hovering { hasEngaged = true }
                 }
+        }
+    }
+
+    /// Which of the three "no scrubber" sentences applies.
+    ///
+    /// The refusal's own reason is deliberately not printed here: it is an ISAPI diagnostic, it is
+    /// already in the toast and in the log, and a panel one line tall is not where a user reads a
+    /// status code.
+    private var absentReason: LocalizedStringKey {
+        switch availability {
+        case .unknown, .present:
+            return "Reading this camera's recordings…"
+        case .none:
+            return "This camera did not list any recordings to scrub."
+        case .refused:
+            return "This camera would not list its recordings."
         }
     }
 

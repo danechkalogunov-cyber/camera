@@ -111,6 +111,10 @@ final class ArchiveCoordinator {
     var session: ISAPIDeviceSession?
     private var channel: ChannelID?
 
+    /// Whose index is loaded. See ``follow(camera:session:channel:name:)`` for why this exists and
+    /// what went wrong without it.
+    private var cameraID: CameraID?
+
     /// The load in flight, cancelled when the day or the camera changes.
     private var task: Task<Void, Never>?
 
@@ -163,14 +167,34 @@ final class ArchiveCoordinator {
 
     /// Points the coordinator at a device, or clears it.
     ///
+    /// ⛔ A REBUILT TRANSPORT IS NOT A NEW CAMERA, AND CONFUSING THE TWO EMPTIED THE TIMELINE. The
+    /// guard used to be `session !== session || channel != channel`, so **any** new
+    /// `ISAPIDeviceSession` object threw away the day's index, the loaded day, the month cache and
+    /// the availability answer. `DeviceInfoService` builds a fresh session whenever its key changes
+    /// — a reconnect, a port change, a re-read credential — none of which is a different camera and
+    /// none of which invalidates a recording index that was read from that camera minutes ago. The
+    /// window then reloaded only if `archiveTrigger` happened to change; when it did not, the
+    /// scrubber sat empty with nothing on its way, which is the "timeline opens once and then never
+    /// again" everyone was looking at.
+    ///
+    /// Identity is the **camera**, and it is passed in rather than inferred: a channel number does
+    /// not identify a device — every single-camera Hikvision on the network is channel 1.
+    ///
     /// - Parameters:
+    ///   - camera: which camera's index this is. A change here is what clears everything.
     ///   - session: the ISAPI session to ask, or `nil` to clear.
     ///   - channel: the channel the camera streams on.
     ///   - name: what to label the lane. The camera's name and not a track's: the lane is one
     ///     camera's footage however many device tracks the firmware filed it across.
-    func follow(session: ISAPIDeviceSession?, channel: ChannelID?, name: String) {
+    func follow(camera: CameraID?, session: ISAPIDeviceSession?, channel: ChannelID?, name: String) {
         cameraName = name
-        guard self.session !== session || self.channel != channel else { return }
+        let isSameCamera = camera != nil && camera == cameraID && channel == self.channel
+        guard !isSameCamera else {
+            // Adopt the new transport and keep everything read through the old one.
+            self.session = session
+            return
+        }
+        cameraID = camera
         task?.cancel()
         task = nil
         monthTask?.cancel()

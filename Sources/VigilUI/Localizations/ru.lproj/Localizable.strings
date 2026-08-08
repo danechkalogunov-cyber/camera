@@ -59,6 +59,8 @@
 "%@ locked this account after too many failed sign-ins. It unlocks on its own, or immediately if you reboot the camera." = "Устройство %@ заблокировало эту учётную запись после нескольких неудачных попыток входа. Блокировка снимется сама или сразу после перезагрузки камеры.";
 "Vigil reached %@ on port %lld, but RTSP port %lld refused the connection." = "Vigil связался с %1$@ по порту %2$lld, но порт RTSP %3$lld отклонил подключение.";
 "%@ answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, with fewer features." = "Устройство %@ ответило, но не поддерживает ISAPI. Vigil может подключиться по ONVIF — с меньшим набором функций.";
+"This camera would not list its recordings." = "Камера отказалась перечислить свои записи.";
+"This camera did not list any recordings to scrub." = "Камера не сообщила ни одной записи для прокрутки.";
 "This camera streams %@. Vigil plays H.265, H.264 and MJPEG." = "Камера передаёт %@. Vigil воспроизводит H.265, H.264 и MJPEG.";
 "%@ started the stream but sent no video. Something on the network is blocking UDP." = "Устройство %@ запустило поток, но не отправило видео. Что-то в сети блокирует UDP.";
 "%@ is sending data but no complete picture yet. Vigil has asked it for a new keyframe." = "Устройство %@ передаёт данные, но полного изображения пока нет. Vigil запросил новый ключевой кадр.";

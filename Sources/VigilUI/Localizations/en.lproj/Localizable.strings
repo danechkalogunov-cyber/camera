@@ -66,6 +66,8 @@
 "%@ locked this account after too many failed sign-ins. It unlocks on its own, or immediately if you reboot the camera." = "%@ locked this account after too many failed sign-ins. It unlocks on its own, or immediately if you reboot the camera.";
 "Vigil reached %@ on port %lld, but RTSP port %lld refused the connection." = "Vigil reached %@ on port %lld, but RTSP port %lld refused the connection.";
 "%@ answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, with fewer features." = "%@ answered, but it doesn't speak ISAPI. Vigil can still try ONVIF, with fewer features.";
+"This camera would not list its recordings." = "This camera would not list its recordings.";
+"This camera did not list any recordings to scrub." = "This camera did not list any recordings to scrub.";
 "This camera streams %@. Vigil plays H.265, H.264 and MJPEG." = "This camera streams %@. Vigil plays H.265, H.264 and MJPEG.";
 "%@ started the stream but sent no video. Something on the network is blocking UDP." = "%@ started the stream but sent no video. Something on the network is blocking UDP.";
 "%@ is sending data but no complete picture yet. Vigil has asked it for a new keyframe." = "%@ is sending data but no complete picture yet. Vigil has asked it for a new keyframe.";
