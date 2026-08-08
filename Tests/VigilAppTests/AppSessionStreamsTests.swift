@@ -71,10 +71,7 @@ struct AppSessionStreamsTests {
     @Test func disconnectingKeepsTheRememberedCamera() {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember()
 
         harness.model.disconnect()
 
@@ -85,10 +82,7 @@ struct AppSessionStreamsTests {
     @Test func disconnectingWithForgetClearsTheRememberedCamera() {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember()
 
         harness.model.disconnect(forget: true)
 
@@ -300,8 +294,8 @@ struct AppSessionStreamsTests {
         let stream = try #require(harness.model.cameras.stream(for: camera.id))
         let reason = FrameDropReason.noFormat.rawValue
 
-        harness.model.handleFramesDropped(AppSessionModel.noFormatDropsBeforeRecovery,
-                                          reason: reason, on: stream)
+        harness.model.handleFramesDropped(
+            AppSessionModel.noFormatDropsBeforeRecovery, reason: reason, on: stream)
 
         #expect(stream.lastRecoveryAt != nil)
         #expect(stream.droppedByReason[reason] == 0, "the count restarts after a recovery")
@@ -331,9 +325,8 @@ struct AppSessionStreamsTests {
         let camera = fillStage(harness, count: 1)[0]
         let stream = try #require(harness.model.cameras.stream(for: camera.id))
 
-        harness.model.apply(.stateChanged(from: .connecting,
-                                          to: .describing,
-                                          detail: StateDetail(narration: "", attempt: 3)),
+        let detail = StateDetail(narration: "", attempt: 3)
+        harness.model.apply(.stateChanged(from: .connecting, to: .describing, detail: detail),
                             to: stream)
 
         #expect(stream.streamState == .describing)
@@ -395,10 +388,7 @@ struct AppSessionStreamsTests {
         model.camera = camera
         model.activeRef = CredentialRef()
         model.phase = .live
-        LastConnection(host: camera.host,
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember(host: camera.host)
 
         model.apply(.error(StreamError(code: .authenticationFailed), isFatal: true), to: model.live)
 
@@ -421,10 +411,7 @@ struct AppSessionStreamsTests {
         model.phase = .live
         let other = fillStage(harness, count: 1)[0]
         let stream = try #require(model.cameras.stream(for: other.id))
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember()
 
         model.apply(.error(StreamError(code: .authenticationFailed), isFatal: true), to: stream)
 
@@ -460,9 +447,8 @@ struct AppSessionStreamsTests {
         let camera = fillStage(harness, count: 1)[0]
         let stream = try #require(harness.model.cameras.stream(for: camera.id))
 
-        harness.model.apply(.reconnectScheduled(attempt: 4,
-                                                delay: .seconds(8),
-                                                cause: StreamError(code: .connectTimeout)),
+        let cause = StreamError(code: .connectTimeout)
+        harness.model.apply(.reconnectScheduled(attempt: 4, delay: .seconds(8), cause: cause),
                             to: stream)
 
         #expect(stream.attempt == 4)

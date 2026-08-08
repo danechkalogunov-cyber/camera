@@ -163,6 +163,49 @@ struct AppSessionHarness {
     func camera(host: String = "192.168.1.64", name: String = "Front door") -> Camera {
         Camera(name: name, host: host)
     }
+
+    /// A remembered connection, with everything a test does not name defaulted.
+    ///
+    /// The record has seven fields and most tests care about one or two of them, so building it
+    /// inline made every arrangement four lines of noise around the field under test. The defaults
+    /// are the ones a first successful connect would leave behind.
+    func remembered(
+        host: String = "192.168.1.64",
+        account: String = "admin",
+        ref: CredentialRef = CredentialRef(),
+        path: String? = nil,
+        name: String? = nil,
+        id: CameraID? = nil,
+        overlay: Bool = true
+    ) -> LastConnection {
+        LastConnection(
+            host: host,
+            account: account,
+            credentialRef: ref,
+            rtspPath: path,
+            name: name,
+            cameraID: id,
+            showsVideoOverlay: overlay)
+    }
+
+    /// The same, already stored — which is what a test that starts from "a camera is remembered"
+    /// actually wants.
+    @discardableResult
+    func remember(
+        host: String = "192.168.1.64",
+        account: String = "admin",
+        ref: CredentialRef = CredentialRef(),
+        path: String? = nil,
+        name: String? = nil,
+        id: CameraID? = nil,
+        overlay: Bool = true
+    ) -> LastConnection {
+        let record = remembered(
+            host: host, account: account, ref: ref, path: path, name: name, id: id,
+            overlay: overlay)
+        record.save(to: defaults)
+        return record
+    }
 }
 
 // MARK: - VirtualTestClock

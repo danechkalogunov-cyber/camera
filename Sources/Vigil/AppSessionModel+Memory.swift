@@ -38,10 +38,11 @@ extension AppSessionModel {
         if let existing = LastConnection.load(from: defaults), existing.host == camera.host {
             record = existing
         } else {
-            record = LastConnection(host: camera.host,
-                                    account: form.request.username,
-                                    credentialRef: activeRef,
-                                    rtspPath: resolvedPath)
+            record = LastConnection(
+                host: camera.host,
+                account: form.request.username,
+                credentialRef: activeRef,
+                rtspPath: resolvedPath)
         }
         record.host = camera.host
         // `form.request.username`, not `form.username`: the request is the trimmed form, and it is
@@ -92,9 +93,8 @@ extension AppSessionModel {
         seekGeneration &+= 1
         let generation = seekGeneration
         var target = camera
-        target.rtspPathOverride = locator.rawQuery.isEmpty
-            ? locator.path
-            : locator.path + "?" + locator.rawQuery
+        let query = locator.rawQuery
+        target.rtspPathOverride = query.isEmpty ? locator.path : locator.path + "?" + query
         playback = locator
         // A seek is a picture starting to move again, whatever the button said a moment ago.
         isPlaybackPaused = false
@@ -281,8 +281,8 @@ extension AppSessionModel {
         // finished. `rememberThisCamera()` then persists the adopted id, so the next launch resumes
         // as this camera and never needs adopting again.
         guard stored.id != camera.id else { return }
-        dependencies.logger.info(.app, "adopting the library's identity for this camera",
-                                 ["host": camera.host])
+        dependencies.logger.info(
+            .app, "adopting the library's identity for this camera", ["host": camera.host])
         self.camera?.id = stored.id
         rememberThisCamera()
     }

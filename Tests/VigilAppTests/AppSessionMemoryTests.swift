@@ -38,14 +38,9 @@ struct AppSessionMemoryTests {
         let identity = CameraID()
         let ref = CredentialRef()
 
-        let record = LastConnection(host: "192.168.1.64",
-                                    account: "operator",
-                                    credentialRef: ref,
-                                    rtspPath: "/Streaming/Channels/101",
-                                    name: "Front door",
-                                    cameraID: identity,
-                                    showsVideoOverlay: false)
-        record.save(to: harness.defaults)
+        let record = harness.remember(
+            account: "operator", ref: ref, path: "/Streaming/Channels/101", name: "Front door",
+            id: identity, overlay: false)
 
         let loaded = LastConnection.load(from: harness.defaults)
         #expect(loaded == record)
@@ -55,11 +50,7 @@ struct AppSessionMemoryTests {
     @Test func aRecordWithoutAnIdentityStillLoads() {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        let record = LastConnection(host: "192.168.1.64",
-                                    account: "admin",
-                                    credentialRef: CredentialRef(),
-                                    rtspPath: nil)
-        record.save(to: harness.defaults)
+        harness.remember()
 
         let loaded = LastConnection.load(from: harness.defaults)
         #expect(loaded?.cameraID == nil)
@@ -85,10 +76,7 @@ struct AppSessionMemoryTests {
         defer { harness.tearDown() }
         #expect(harness.model.remembersVideoOverlay)
 
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember()
 
         #expect(LastConnection.load(from: harness.defaults)?.showsVideoOverlay == true)
     }
@@ -97,13 +85,8 @@ struct AppSessionMemoryTests {
     @Test func clearingRemovesEveryField() {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: "/Streaming/Channels/101",
-                       name: "Front door",
-                       cameraID: CameraID(),
-                       showsVideoOverlay: false).save(to: harness.defaults)
+        harness.remember(
+            path: "/Streaming/Channels/101", name: "Front door", id: CameraID(), overlay: false)
 
         LastConnection.clear(in: harness.defaults)
 
@@ -119,10 +102,7 @@ struct AppSessionMemoryTests {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
         let ref = CredentialRef()
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: ref,
-                       rtspPath: "/Streaming/Channels/101").save(to: harness.defaults)
+        harness.remember(ref: ref, path: "/Streaming/Channels/101")
 
         harness.model.form.host = "192.168.1.64"
         harness.model.form.username = "admin"
@@ -138,10 +118,7 @@ struct AppSessionMemoryTests {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
         let ref = CredentialRef()
-        LastConnection(host: "Front-Door.local",
-                       account: "admin",
-                       credentialRef: ref,
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember(host: "Front-Door.local", ref: ref)
 
         harness.model.form.host = "front-door.local"
         #expect(harness.model.knownHandle(for: harness.model.form.request).ref == ref)
@@ -153,10 +130,7 @@ struct AppSessionMemoryTests {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
         let ref = CredentialRef()
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: ref,
-                       rtspPath: "/Streaming/Channels/101").save(to: harness.defaults)
+        harness.remember(ref: ref, path: "/Streaming/Channels/101")
 
         harness.model.form.host = "192.168.1.64"
         harness.model.form.username = "operator"
@@ -172,10 +146,7 @@ struct AppSessionMemoryTests {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
         let ref = CredentialRef()
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: ref,
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember(ref: ref)
 
         harness.model.form.host = " 192.168.1.64 "
         harness.model.form.username = "admin "
@@ -259,10 +230,7 @@ struct AppSessionMemoryTests {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
         let ref = CredentialRef()
-        LastConnection(host: "192.168.1.64",
-                       account: "operator",
-                       credentialRef: ref,
-                       rtspPath: "/Streaming/Channels/101").save(to: harness.defaults)
+        harness.remember(account: "operator", ref: ref, path: "/Streaming/Channels/101")
 
         harness.model.rememberCameraName("Back gate")
 
@@ -293,10 +261,7 @@ struct AppSessionMemoryTests {
         defer { harness.tearDown() }
         harness.model.resumeOrPrompt()
 
-        LastConnection(host: "192.168.1.64",
-                       account: "admin",
-                       credentialRef: CredentialRef(),
-                       rtspPath: nil).save(to: harness.defaults)
+        harness.remember()
         harness.model.resumeOrPrompt()
 
         #expect(harness.model.sessionTask == nil)
@@ -309,10 +274,7 @@ struct AppSessionMemoryTests {
     @Test func aRememberedCameraWithNoStoredPasswordFallsBackToTheForm() async {
         let harness = AppSessionHarness()
         defer { harness.tearDown() }
-        LastConnection(host: "192.168.1.64",
-                       account: "operator",
-                       credentialRef: CredentialRef(),
-                       rtspPath: "/Streaming/Channels/101").save(to: harness.defaults)
+        harness.remember(account: "operator", path: "/Streaming/Channels/101")
 
         harness.model.resumeOrPrompt()
         await harness.model.sessionTask?.value

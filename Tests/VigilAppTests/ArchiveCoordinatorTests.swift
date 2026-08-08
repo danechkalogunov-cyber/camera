@@ -32,33 +32,39 @@ import VigilProtocols
 /// An `ISAPIRequesting` that refuses everything. See the file header for why refusing is the point.
 private struct RefusingRequests: ISAPIRequesting {
 
-    func getDocument(_ resource: String, query: [URLQueryItem],
-                     lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument {
+    func getDocument(
+        _ resource: String, query: [URLQueryItem], lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument {
         throw ISAPIError.notConnected(resource)
     }
 
-    func getBytes(_ resource: String, query: [URLQueryItem],
-                  lane: HTTPLane) async throws(ISAPIError) -> Data {
+    func getBytes(
+        _ resource: String, query: [URLQueryItem], lane: HTTPLane
+    ) async throws(ISAPIError) -> Data {
         throw ISAPIError.notConnected(resource)
     }
 
-    func putDocument(_ resource: String, body: Data?, query: [URLQueryItem],
-                     lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument? {
+    func putDocument(
+        _ resource: String, body: Data?, query: [URLQueryItem], lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument? {
         throw ISAPIError.notConnected(resource)
     }
 
-    func postDocument(_ resource: String, body: Data?, query: [URLQueryItem],
-                      lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument {
+    func postDocument(
+        _ resource: String, body: Data?, query: [URLQueryItem], lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument {
         throw ISAPIError.notConnected(resource)
     }
 
-    func deleteDocument(_ resource: String, query: [URLQueryItem],
-                        lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument? {
+    func deleteDocument(
+        _ resource: String, query: [URLQueryItem], lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument? {
         throw ISAPIError.notConnected(resource)
     }
 
-    func openStream(_ resource: String, query: [URLQueryItem],
-                    headers: [String: String]) async throws(ISAPIError) -> ISAPIByteStream {
+    func openStream(
+        _ resource: String, query: [URLQueryItem], headers: [String: String]
+    ) async throws(ISAPIError) -> ISAPIByteStream {
         throw ISAPIError.notConnected(resource)
     }
 }
@@ -92,11 +98,13 @@ struct ArchiveCoordinatorTests {
     @Test func aRebuiltSessionForTheSameCameraKeepsTheIndex() {
         let archive = coordinator()
         let camera = CameraID()
-        archive.follow(camera: camera, session: session(), channel: ChannelID(1), name: "Front door")
+        archive.follow(
+            camera: camera, session: session(), channel: ChannelID(1), name: "Front door")
         seed(archive)
 
         let rebuilt = session()
-        archive.follow(camera: camera, session: rebuilt, channel: ChannelID(1), name: "Front door")
+        archive.follow(
+            camera: camera, session: rebuilt, channel: ChannelID(1), name: "Front door")
 
         #expect(archive.myTracks == [TrackID(101), TrackID(103)])
         #expect(archive.visibleMonth == ArchiveCoordinator.MonthSlot(year: 2026, month: 8))
@@ -108,10 +116,12 @@ struct ArchiveCoordinatorTests {
         let archive = coordinator()
         let camera = CameraID()
         let transport = session()
-        archive.follow(camera: camera, session: transport, channel: ChannelID(1), name: "Front door")
+        archive.follow(
+            camera: camera, session: transport, channel: ChannelID(1), name: "Front door")
         seed(archive)
 
-        archive.follow(camera: camera, session: transport, channel: ChannelID(1), name: "Back gate")
+        archive.follow(
+            camera: camera, session: transport, channel: ChannelID(1), name: "Back gate")
 
         #expect(archive.myTracks.count == 2)
     }
