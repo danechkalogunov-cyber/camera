@@ -172,29 +172,3 @@ Reported by `impl:types-b` after finishing its own rows:
 
 `Identity/Identifiers.swift` was written by `impl:types-b` out of necessity — `StreamKey` needs
 `CameraID` — and is not a gap.
-
-## I7 — `F-DEC-06`'s decode-unit quantum contradicts its own worked examples (M — open)
-
-`docs/FEATURES.md` F-DEC-06 acceptance 1 defines the cost of decoding a stream as
-`(width × height × fps) / (1920 × 1080 × 30)`, "**rounded up to 0.25 DU**", and then gives three
-worked examples in the same sentence:
-
-| Stream | Raw ratio | Stated cost | A 0.25 quantum would give |
-|---|---|---|---|
-| 4K30 | 4.0 | 4.0 DU | 4.0 DU ✓ |
-| 1080p25 | 0.8333… | **0.85 DU** | 1.0 DU ✗ |
-| 704 × 576 @ 25 | 0.1629… | **0.2 DU** | 0.25 DU ✗ |
-
-Two of the three examples are not multiples of 0.25, and both are exactly what the formula yields
-when rounded up to **0.05**. So the prose and the examples cannot both be followed.
-
-Implemented as **0.05**, because the examples are the half of the specification that can be checked
-against arithmetic rather than against intent, and because the finer quantum is the one that
-discriminates: at 0.25 DU every sub-stream Vigil is likely to meet — 704 × 576, 640 × 360, D1 —
-costs the same 0.25, and a budget cannot tell four of them from four 1080p streams. That defeats the
-purpose of costing streams at all.
-
-The constant is `DecodeCost.quantum` in `Sources/VigilProtocols/Streams/DecodeBudget.swift`, and it
-is the only line that changes if the ruling goes the other way. `DecodeBudgetTests` asserts all three
-worked examples, so a ruling for 0.25 will be caught by the suite rather than by a reviewer.
-

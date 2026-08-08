@@ -399,22 +399,19 @@
         /// do, and the thing F-LIV-01 exists to end. A second cell now becomes a second picture.
         ///
         /// The budget refusal is said out loud. A click that quietly does nothing reads as a broken
-        /// app, and a limit the user can see is one they can work with.
+        /// app, and "four at once" is a limit the user can work with once they know it.
         func connectStageCell(_ id: CameraID) {
             guard let target = library.cameras.first(where: { $0.id == id }) else { return }
             window.sidebarSelection.select(.camera(id))
             Task {
                 guard await session.connectAlongside(target) == false else { return }
-                // ⚠️ No number in the sentence, and that is the change `F-DEC-06` forces. The limit
-                // used to be four cameras and could be written out — Russian declines it, so a
-                // formatted `%lld` would have needed a `.stringsdict` for a constant. It is now a
-                // decode budget: what it admits depends on the machine and on what these particular
-                // cameras cost, so there is no number to name and claiming one would be a lie on
-                // most machines.
+                // ⚠️ The number is spelled out in the sentence rather than formatted into it, so
+                // that the Russian translation can decline it. It is tied to
+                // `AppSessionModel.maxConcurrentStreams`, which says so; changing one changes both.
                 window.toast = MainWindowToast(
                     kind: .warning,
                     message: MainWindowView.localized(
-                        "This Mac is already decoding all it can. Close a camera to open another."))
+                        "Vigil streams four cameras at once. Close one to open another."))
             }
         }
 
