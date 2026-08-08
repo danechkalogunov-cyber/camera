@@ -99,6 +99,12 @@ public actor AlertStreamMonitor {
     private var currentState: AlertStreamState = .idle
     private var attempt = 0
 
+    /// Decoded alerts waiting to be handed to ``events``, in arrival order. See ``publish(_:)``.
+    ///
+    /// ⚠️ Named for what it holds, because `AlertPartAssembler` in this same file has a `pending`
+    /// of its own meaning something else entirely — the one event holding a slot open for a JPEG.
+    private var pendingAlerts: [EventNotificationAlert] = []
+
     /// Counters the test suite reads instead of measuring wall-clock behaviour.
     public private(set) var connectionAttempts = 0
     public private(set) var suppressedHeartbeats = 0
@@ -278,12 +284,16 @@ public actor AlertStreamMonitor {
                     parser = fresh
                     sniffBuffer = Data()
                     deliveredAPart = deliver(outputs, into: &assembler) || deliveredAPart
+                // In order, and before the next read: an alert decoded is an alert delivered.
+                await drain()
                     continue
                 }
                 guard var live = parser else { continue }
                 let outputs = try live.ingest(chunk)
                 parser = live
                 deliveredAPart = deliver(outputs, into: &assembler) || deliveredAPart
+                // In order, and before the next read: an alert decoded is an alert delivered.
+                await drain()
                 // A connection that has carried a part and lasted long enough is healthy; forget
                 // the previous failures so the next one starts at the bottom of the ladder.
                 if deliveredAPart,
@@ -293,13 +303,16 @@ public actor AlertStreamMonitor {
             }
         } catch let error as ISAPIError {
             flush(&assembler)
+            await drain()
             throw error
         } catch {
             flush(&assembler)
+            await drain()
             throw ISAPIError.streamEnded(afterBytes: 0)
         }
         if var live = parser { deliver(live.finish(), into: &assembler); parser = live }
         flush(&assembler)
+        await drain()
     }
 
     /// Feeds parser outputs into the assembler and publishes whatever completed.
@@ -328,15 +341,34 @@ public actor AlertStreamMonitor {
         for ready in assembler.flushAll() { publish(ready) }
     }
 
-    /// Emits one decoded event, unless it is a heartbeat.
+    /// Queues one decoded event, unless it is a heartbeat. ``drain()`` is what delivers it.
+    ///
+    /// ⛔ IT USED TO BE `Task { await broadcaster.yield(alert) }`, ONE TASK PER ALERT, AND THAT LOST
+    /// EVENTS. Two ways: thirty tasks racing each other deliver in whatever order the executor
+    /// feels like, and — worse — a task that has not run yet when the stream closes finds a
+    /// finished broadcaster and its element is discarded in silence. On an idle machine they all
+    /// landed first; on a loaded CI runner a scripted device that sent thirty alarms produced a row
+    /// counting twenty-one, and no log line anywhere said nine were gone.
+    ///
+    /// Queue here, deliver in order from the read loop, and *await* the delivery — so the stream
+    /// cannot be finished out from under an event that has already been decoded.
     private func publish(_ alert: EventNotificationAlert) {
         guard !alert.isHeartbeat else {
             suppressedHeartbeats += 1
             return
         }
         emittedEvents += 1
-        let broadcaster = events
-        Task { await broadcaster.yield(alert) }
+        pendingAlerts.append(alert)
+    }
+
+    /// Hands everything ``publish(_:)`` has queued to the broadcaster, in the order it arrived.
+    private func drain() async {
+        guard !pendingAlerts.isEmpty else { return }
+        let batch = pendingAlerts
+        pendingAlerts.removeAll(keepingCapacity: true)
+        for alert in batch {
+            await events.yield(alert)
+        }
     }
 
     /// Advances the ladder, publishes `.failed`, and waits.
