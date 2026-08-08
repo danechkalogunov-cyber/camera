@@ -326,8 +326,8 @@ struct AppSessionStreamsTests {
         let stream = try #require(harness.model.cameras.stream(for: camera.id))
 
         let detail = StateDetail(narration: "", attempt: 3)
-        harness.model.apply(.stateChanged(from: .connecting, to: .describing, detail: detail),
-                            to: stream)
+        harness.model.apply(
+            .stateChanged(from: .connecting, to: .describing, detail: detail), to: stream)
 
         #expect(stream.streamState == .describing)
         #expect(stream.attempt == 3)
@@ -448,8 +448,8 @@ struct AppSessionStreamsTests {
         let stream = try #require(harness.model.cameras.stream(for: camera.id))
 
         let cause = StreamError(code: .connectTimeout)
-        harness.model.apply(.reconnectScheduled(attempt: 4, delay: .seconds(8), cause: cause),
-                            to: stream)
+        harness.model.apply(
+            .reconnectScheduled(attempt: 4, delay: .seconds(8), cause: cause), to: stream)
 
         #expect(stream.attempt == 4)
         #expect(stream.retryInSeconds == 8)

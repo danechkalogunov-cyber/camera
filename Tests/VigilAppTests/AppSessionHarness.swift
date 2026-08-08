@@ -229,8 +229,8 @@ final class VirtualTestClock: MonotonicClock, @unchecked Sendable {
 
     /// Records the delay and returns at once: a test that waited would be measuring the machine.
     func sleep(for duration: Duration) async throws {
-        advance(by: Int64(duration.components.seconds * 1_000_000_000
-                          + duration.components.attoseconds / 1_000_000_000))
+        let parts = duration.components
+        advance(by: parts.seconds * 1_000_000_000 + parts.attoseconds / 1_000_000_000)
         try Task.checkCancellation()
     }
 
