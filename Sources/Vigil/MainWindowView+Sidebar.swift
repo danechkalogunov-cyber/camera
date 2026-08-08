@@ -190,6 +190,21 @@ extension MainWindowView {
     func showOverflowCameras() {
         window.isSidebarVisible = true
         window.searchText = ""
+        // ⛔ AND IT BRINGS THEM ON. Revealing the list was all this could do while the stage held one
+        // camera; it named the cameras that did not fit and left the user to click each one. With N
+        // streams and a decode budget there is a principled answer to "show me those as well", and
+        // `showOnStage` is it — the same call the patrol makes when it turns a page.
+        //
+        // ⚠️ The layout's worth, not the whole overflow. Putting nine cameras on a four-cell stage
+        // would refuse five of them on the budget and leave the user with the same chip and no
+        // explanation; one page is what the cells can actually hold.
+        let perPage = max(1, window.layout.tileCount)
+        let waiting = stageOrder.dropFirst(perPage)
+        guard !waiting.isEmpty else { return }
+        let page = waiting.prefix(perPage)
+            .compactMap { id in library.cameras.first { $0.id == id } }
+        guard !page.isEmpty else { return }
+        Task { await session.showOnStage(page) }
     }
 
     /// Plays the 3 pt nudge when an ⌥-arrow runs out of grid (UX.md §5.7).
