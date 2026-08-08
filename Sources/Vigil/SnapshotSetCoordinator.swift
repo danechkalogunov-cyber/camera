@@ -248,7 +248,12 @@ final class SnapshotSetCoordinator {
     // MARK: - The manifest
 
     /// Builds the manifest, including the spread criterion 2 asks to be recorded.
-    static func manifest(requestedAt: Date, entries: [SnapshotSetEntry]) -> SnapshotSetManifest {
+    ///
+    /// `nonisolated`, and that is a statement about the function rather than a convenience for its
+    /// callers: it reads nothing but its arguments. A pure function that demands the main actor is
+    /// claiming a dependency it does not have, and the first thing that notices is a test.
+    nonisolated static func manifest(requestedAt: Date,
+                                     entries: [SnapshotSetEntry]) -> SnapshotSetManifest {
         let instants = entries.compactMap(\.capturedAt).map(\.timeIntervalSince1970)
         let spread: Double? = instants.count > 1
             ? ((instants.max() ?? 0) - (instants.min() ?? 0)) * 1_000
@@ -284,7 +289,7 @@ final class SnapshotSetCoordinator {
     /// why the time is hyphenated. Fixed `en_US_POSIX` and the current time zone: the folder is a
     /// name a person reads on their own machine, so it is local time, but it must not change shape
     /// with the system's date-format preferences.
-    static func folderName(for instant: Date) -> String {
+    nonisolated static func folderName(for instant: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"

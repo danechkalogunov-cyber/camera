@@ -160,8 +160,8 @@ struct SnapshotSetManifestTests {
         encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let restored = try decoder.decode(SnapshotSetManifest.self,
-                                          from: try encoder.encode(manifest))
+        let encoded = try encoder.encode(manifest)
+        let restored = try decoder.decode(SnapshotSetManifest.self, from: encoded)
 
         #expect(restored == manifest)
     }
