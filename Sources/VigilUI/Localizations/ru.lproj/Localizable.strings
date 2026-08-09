@@ -768,6 +768,16 @@
 "No recording at this time" = "В это время записи нет";
 "Synchronized playback" = "Синхронное воспроизведение";
 "Archive unavailable" = "Архив недоступен";
+"Set I" = "Точка I";
+"Set O" = "Точка O";
+"Cancel export" = "Отменить экспорт";
+"Export selected clip" = "Экспортировать выбранный клип";
+"Clip in point" = "Начальная точка клипа";
+"Clip out point" = "Конечная точка клипа";
+"The camera returned no video for the selected range." = "Камера не вернула видео для выбранного диапазона.";
+"The camera changed video format during export." = "Во время экспорта камера изменила формат видео.";
+"The camera ended the export before the selected range was complete." = "Камера завершила экспорт до конца выбранного диапазона.";
+"Export cancelled." = "Экспорт отменён.";
 "Vigil needs microphone access to talk to your cameras" = "Vigil нужен доступ к микрофону для разговора через камеры";
 "Open Settings" = "Открыть настройки";
 "Two-way audio failed: %@" = "Ошибка двустороннего звука: %@";

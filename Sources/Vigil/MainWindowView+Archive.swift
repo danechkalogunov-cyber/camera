@@ -412,6 +412,22 @@
                         : nil,
                     isSyncEnabled: session.synchronizedPlayback.isEnabled,
                     onToggleSync: { toggleSynchronizedPlayback() },
+                    exportRange: currentExportRange,
+                    exportProgress: session.clipExport.isExporting
+                        ? session.clipExport.progress : nil,
+                    exportFailure: session.clipExport.lastFailure,
+                    onSetIn: { setClipExportInPoint() },
+                    onSetOut: { setClipExportOutPoint() },
+                    onExport: { exportSelectedClip() },
+                    onCancelExport: { session.clipExport.cancel() },
+                    onMoveExportBoundary: { isStart, instant in
+                        guard let camera = selectedCamera else { return }
+                        if isStart {
+                            session.clipExport.setIn(instant, camera: camera.id)
+                        } else {
+                            session.clipExport.setOut(instant, camera: camera.id)
+                        }
+                    },
                     onRate: { stop in
                         Task {
                             if session.synchronizedPlayback.isEnabled {

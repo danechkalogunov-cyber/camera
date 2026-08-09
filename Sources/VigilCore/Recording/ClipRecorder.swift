@@ -75,6 +75,9 @@ public actor ClipRecorder {
         /// on the camera's card must remain ten seconds of empty time, not be collapsed or split.
         public var preservesSourceGaps: Bool
 
+        /// False for archive export, whose compressed samples are not arriving in real time.
+        public var expectsMediaDataInRealTime: Bool
+
         public init(container: RecordingContainer = .mp4,
                     trigger: String = "manual",
                     nameTemplate: String = RecordingNaming.defaultClipTemplate,
@@ -84,7 +87,8 @@ public actor ClipRecorder {
                     fragmentIntervalSeconds: Double = 2,
                     stopBelowFreeBytes: Int64 = 512 << 20,
                     freeSpaceCheckEveryBytes: Int64 = 64 << 20,
-                    preservesSourceGaps: Bool = false) {
+                    preservesSourceGaps: Bool = false,
+                    expectsMediaDataInRealTime: Bool = true) {
             self.container = container
             self.trigger = trigger
             self.nameTemplate = nameTemplate
@@ -95,6 +99,7 @@ public actor ClipRecorder {
             self.stopBelowFreeBytes = stopBelowFreeBytes
             self.freeSpaceCheckEveryBytes = freeSpaceCheckEveryBytes
             self.preservesSourceGaps = preservesSourceGaps
+            self.expectsMediaDataInRealTime = expectsMediaDataInRealTime
         }
     }
 

@@ -166,7 +166,7 @@ extension ClipRecorder {
         let configuration = RecordingClipWriter.Configuration(
             container: options.container,
             fragmentIntervalSeconds: options.fragmentIntervalSeconds,
-            expectsMediaDataInRealTime: true)
+            expectsMediaDataInRealTime: options.expectsMediaDataInRealTime)
         do {
             writer = try RecordingClipWriter(outputURL: partialURL, formatDescription: format,
                                             configuration: configuration)

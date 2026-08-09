@@ -785,6 +785,16 @@
 "No recording at this time" = "No recording at this time";
 "Synchronized playback" = "Synchronized playback";
 "Archive unavailable" = "Archive unavailable";
+"Set I" = "Set I";
+"Set O" = "Set O";
+"Cancel export" = "Cancel export";
+"Export selected clip" = "Export selected clip";
+"Clip in point" = "Clip in point";
+"Clip out point" = "Clip out point";
+"The camera returned no video for the selected range." = "The camera returned no video for the selected range.";
+"The camera changed video format during export." = "The camera changed video format during export.";
+"The camera ended the export before the selected range was complete." = "The camera ended the export before the selected range was complete.";
+"Export cancelled." = "Export cancelled.";
 "Vigil needs microphone access to talk to your cameras" = "Vigil needs microphone access to talk to your cameras";
 "Open Settings" = "Open Settings";
 "Two-way audio failed: %@" = "Two-way audio failed: %@";

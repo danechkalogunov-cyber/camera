@@ -89,6 +89,14 @@ struct StageTimelineOverlay: View {
     let syncLabel: String?
     let isSyncEnabled: Bool
     let onToggleSync: () -> Void
+    let exportRange: Range<Date>?
+    let exportProgress: Double?
+    let exportFailure: String?
+    let onSetIn: () -> Void
+    let onSetOut: () -> Void
+    let onExport: () -> Void
+    let onCancelExport: () -> Void
+    let onMoveExportBoundary: (Bool, Date) -> Void
 
     /// Steps the playhead by a number of seconds, positive or negative.
     let onStep: (Double) -> Void
@@ -175,6 +183,14 @@ struct StageTimelineOverlay: View {
          syncLabel: String? = nil,
          isSyncEnabled: Bool = false,
          onToggleSync: @escaping () -> Void = {},
+         exportRange: Range<Date>? = nil,
+         exportProgress: Double? = nil,
+         exportFailure: String? = nil,
+         onSetIn: @escaping () -> Void = {},
+         onSetOut: @escaping () -> Void = {},
+         onExport: @escaping () -> Void = {},
+         onCancelExport: @escaping () -> Void = {},
+         onMoveExportBoundary: @escaping (Bool, Date) -> Void = { _, _ in },
          onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.archive = archive
         self.availability = availability
@@ -201,6 +217,14 @@ struct StageTimelineOverlay: View {
         self.syncLabel = syncLabel
         self.isSyncEnabled = isSyncEnabled
         self.onToggleSync = onToggleSync
+        self.exportRange = exportRange
+        self.exportProgress = exportProgress
+        self.exportFailure = exportFailure
+        self.onSetIn = onSetIn
+        self.onSetOut = onSetOut
+        self.onExport = onExport
+        self.onCancelExport = onCancelExport
+        self.onMoveExportBoundary = onMoveExportBoundary
         self.onRate = onRate
     }
 
@@ -265,6 +289,9 @@ struct StageTimelineOverlay: View {
             Button("", action: { onGoToDayEdge(false) })
                 .keyboardShortcut(KeyEquivalent.end, modifiers: [])
             zoomShortcuts
+            Button("", action: onSetIn).keyboardShortcut("i", modifiers: [])
+            Button("", action: onSetOut).keyboardShortcut("o", modifiers: [])
+            Button("", action: onExport).keyboardShortcut("e", modifiers: .command)
         }
         .hidden()
     }
@@ -390,6 +417,8 @@ struct StageTimelineOverlay: View {
                               isPaused: isPaused,
                               onTogglePause: onTogglePause,
                               onFrameStep: onFrameStep,
+                              exportRange: exportRange,
+                              onMoveExportBoundary: onMoveExportBoundary,
                               onRate: onRate)
             }
             .modifier(TimelinePanelSurface(isVisible: isVisible))
@@ -420,6 +449,7 @@ struct StageTimelineOverlay: View {
                 // walks into an empty future is a control that only produces empty screens.
                 .disabled(clock.day(containing: clock.now).start <= day.start)
             Spacer(minLength: 0)
+            exportControls
             if syncLabel != nil {
                 VButton(symbol: .synchronisedPlayback,
                         style: isSyncEnabled ? .primary : .icon,

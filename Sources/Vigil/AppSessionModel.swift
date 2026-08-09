@@ -102,6 +102,7 @@ final class AppSessionModel {
     let pictureInPicture = PictureInPictureCoordinator()
     let twoWayAudio = TwoWayAudioCoordinator()
     let synchronizedPlayback = SynchronizedPlaybackCoordinator()
+    let clipExport = ClipExportCoordinator()
 
     /// The launch-time resume, and the connect the form submits. Application-scoped: there is one
     /// user pressing Return, however many cameras are streaming.

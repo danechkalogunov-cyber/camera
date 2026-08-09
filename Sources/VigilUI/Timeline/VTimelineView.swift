@@ -118,6 +118,10 @@ package struct VTimelineView: View {
     package let onTogglePause: () -> Void
     package let onFrameStep: (Bool) -> Void
 
+    /// The selected export range, highlighted behind every lane.
+    package let exportRange: Range<Date>?
+    package let onMoveExportBoundary: (Bool, Date) -> Void
+
     @Environment(\.vMotionEnabled) private var motionEnabled
 
     @State private var hoverX: CGFloat?
@@ -151,6 +155,8 @@ package struct VTimelineView: View {
                  isPaused: Bool = false,
                  onTogglePause: @escaping () -> Void = {},
                  onFrameStep: @escaping (Bool) -> Void = { _ in },
+                 exportRange: Range<Date>? = nil,
+                 onMoveExportBoundary: @escaping (Bool, Date) -> Void = { _, _ in },
                  onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.tracks = tracks
         self.day = day
@@ -169,6 +175,8 @@ package struct VTimelineView: View {
         self.isPaused = isPaused
         self.onTogglePause = onTogglePause
         self.onFrameStep = onFrameStep
+        self.exportRange = exportRange
+        self.onMoveExportBoundary = onMoveExportBoundary
         self.onRate = onRate
     }
 
@@ -285,6 +293,7 @@ package struct VTimelineView: View {
     private func lanes(width: CGFloat) -> some View {
         let geometry = TimelineGeometry(window: window, width: Double(width))
         return ZStack(alignment: .topLeading) {
+            exportHighlight(geometry: geometry)
             VStack(alignment: .leading, spacing: VTheme.Space.hair) {
                 VTimelineRulerView(geometry: geometry,
                                    day: day,
@@ -320,6 +329,51 @@ package struct VTimelineView: View {
                 hoverX = nil
             }
         }
+    }
+
+    @ViewBuilder
+    private func exportHighlight(geometry: TimelineGeometry) -> some View {
+        if let exportRange {
+            let start = max(exportRange.lowerBound, window.start)
+            let end = min(exportRange.upperBound, window.end)
+            if start < end {
+                let x1 = CGFloat(geometry.x(at: start))
+                let x2 = CGFloat(geometry.x(at: end))
+                Rectangle()
+                    .fill(VTheme.Color.Semantic.accent.opacity(0.18))
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(VTheme.Color.Semantic.accent)
+                            .frame(width: VTheme.Border.focus)
+                    }
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(VTheme.Color.Semantic.accent)
+                            .frame(width: VTheme.Border.focus)
+                    }
+                    .frame(width: max(1, x2 - x1), height: stackHeight)
+                    .position(x: (x1 + x2) / 2, y: stackHeight / 2)
+                    .allowsHitTesting(false)
+                exportHandle(at: x1, isStart: true, geometry: geometry)
+                exportHandle(at: x2, isStart: false, geometry: geometry)
+            }
+        }
+    }
+
+    private func exportHandle(at x: CGFloat, isStart: Bool,
+                              geometry: TimelineGeometry) -> some View {
+        Capsule()
+            .fill(VTheme.Color.Semantic.accent)
+            .frame(width: 10, height: 28)
+            .frame(width: 24, height: 36)
+            .contentShape(Rectangle())
+            .position(x: x, y: stackHeight / 2)
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                onMoveExportBoundary(
+                    isStart,
+                    geometry.clampedInstant(atX: Double(x + value.translation.width)))
+            })
+            .accessibilityLabel(isStart
+                ? Text("Clip in point", bundle: .vigilUI)
+                : Text("Clip out point", bundle: .vigilUI))
     }
 
     /// The 1 pt cursor line that follows the pointer (DESIGN.md §9.14, hover row). Suppressed
