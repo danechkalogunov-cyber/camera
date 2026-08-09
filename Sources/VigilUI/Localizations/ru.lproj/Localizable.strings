@@ -772,6 +772,8 @@
 "Check the camera's ports" = "Проверить порты камеры";
 "Cameras captured: %lld of %lld" = "Снято камер: %lld из %lld";
 "Stopped — cameras captured: %lld" = "Остановлено — снято камер: %lld";
+"Arm Motion Recording" = "Включить запись по движению";
+"Disarm Motion Recording" = "Отключить запись по движению";
 "Mute All Audio" = "Заглушить весь звук";
 "Show in Finder" = "Показать в Finder";
 "The snapshot set could not be written" = "Набор снимков не удалось записать";

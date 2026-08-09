@@ -66,6 +66,10 @@ final class RecordingTap: Sendable {
         }
     }
 
+    func configurePreRoll(seconds: Double) {
+        state.withLock { $0.preRoll.targetSeconds = seconds }
+    }
+
     /// Drains frames that arrived while older pre-roll was appended. Returns `nil` only after the
     /// recorder has been installed atomically, at which point new frames route straight to it.
     func handOffPending(to recorder: ClipRecorder) -> [EncodedFrame]? {
@@ -176,6 +180,10 @@ final class RecordingCoordinator {
     }
 
     // MARK: - API
+
+    func configurePreRoll(seconds: Double) {
+        tap.configurePreRoll(seconds: seconds)
+    }
 
     /// Starts writing a clip from the oldest retained pre-roll keyframe.
     ///

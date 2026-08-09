@@ -43,6 +43,10 @@ final class EventCoordinator {
     /// How many have not been looked at. Feeds the sidebar's badge.
     private(set) var unreadCount = 0
 
+    /// Changes whenever one or more device events are queued for recording. The queue prevents
+    /// SwiftUI observation coalescing several alerts into only the final property value.
+    private(set) var recordingTriggerRevision: UInt64 = 0
+
     // MARK: - Stored Properties
 
     private let store: EventStore
@@ -52,12 +56,16 @@ final class EventCoordinator {
     private let notifications = CameraNotificationCenter()
     private var drain: Task<Void, Never>?
     private var publishedEventIDs: Set<EventID> = []
+    private var recordingEventLastAt: [EventID: Date] = [:]
     private var hasNotificationBaseline = false
+    private var monitoredCameras: [Camera] = []
+    private var displayedCameraID: CameraID?
+    private var pendingRecordingTriggers: [MotionRecordingTrigger] = []
 
     /// The camera the factory builds credentials for. `CredentialStore` looks a password up by
     /// `Camera`, while `EventMonitorFactory` is handed only a device key, so the current camera has
     /// to be reachable from inside the closure.
-    private let followed = OSAllocatedUnfairLock<Camera?>(initialState: nil)
+    private let followed = OSAllocatedUnfairLock<[EventDeviceKey: Camera]>(initialState: [:])
 
     // MARK: - Initialisation
 
@@ -85,8 +93,7 @@ final class EventCoordinator {
             random: random,
             logger: logger,
             makeMonitor: { [credentials, followed] key in
-                guard let camera = followed.withLock({ $0 }),
-                      EventDeviceKey(camera: camera) == key,
+                guard let camera = followed.withLock({ $0[key] }),
                       let credential = try? await credentials.credential(for: camera) else {
                     // No password yet, or the key is for a camera we are no longer following.
                     // `EventMonitorService` reads `nil` as "not buildable yet" and retries.
@@ -116,17 +123,35 @@ final class EventCoordinator {
     /// Idempotent: `reconcile` refreshes an existing subscription's channel map rather than building
     /// a second one, which is what stops every event arriving twice.
     func follow(camera: Camera?) async {
-        followed.withLock { $0 = camera }
+        await follow(cameras: camera.map { [$0] } ?? [], displaying: camera?.id)
+    }
+
+    /// Keeps event monitors alive for the displayed camera and every motion-armed background
+    /// camera. The feed still renders only `displaying`; recording triggers are published for all.
+    func follow(cameras: [Camera], displaying cameraID: CameraID?) async {
+        var unique: [CameraID: Camera] = [:]
+        for camera in cameras { unique[camera.id] = camera }
+        monitoredCameras = unique.values.sorted {
+            $0.id.rawValue.uuidString < $1.id.rawValue.uuidString
+        }
+        displayedCameraID = cameraID
+        followed.withLock { state in
+            state.removeAll(keepingCapacity: true)
+            for camera in monitoredCameras where state[EventDeviceKey(camera: camera)] == nil {
+                state[EventDeviceKey(camera: camera)] = camera
+            }
+        }
         publishedEventIDs.removeAll()
+        recordingEventLastAt.removeAll()
         hasNotificationBaseline = false
-        guard let camera else {
+        guard !monitoredCameras.isEmpty else {
             await service.stopAll()
             events = []
             unreadCount = 0
             return
         }
-        await service.reconcile(cameras: [camera])
-        startDraining(camera: camera)
+        await service.reconcile(cameras: monitoredCameras)
+        startDraining()
     }
 
     /// Enables/disables the explicit “watch this camera” mode and applies optional quiet hours.
@@ -145,6 +170,11 @@ final class EventCoordinator {
     func cameraLost(_ camera: Camera?) async {
         guard let camera else { return }
         await notifications.postCameraLost(camera)
+    }
+
+    func takeRecordingTriggers() -> [MotionRecordingTrigger] {
+        defer { pendingRecordingTriggers.removeAll(keepingCapacity: true) }
+        return pendingRecordingTriggers
     }
 
     /// Forgets one event.
@@ -179,28 +209,77 @@ final class EventCoordinator {
     /// Driven by the service's own event stream rather than a timer: the store only changes when an
     /// alert lands, and polling it once a second would burn a hop for nothing on a camera that is
     /// quiet — which is most cameras, most of the time.
-    private func startDraining(camera: Camera) {
+    private func startDraining() {
         drain?.cancel()
         let service = service
         drain = Task { [weak self] in
-            await self?.refresh(camera: camera)
+            await self?.refreshMonitoredCameras()
             for await _ in service.events() {
                 guard let self else { return }
-                await self.refresh(camera: camera)
+                await self.refreshMonitoredCameras()
             }
         }
+    }
+
+    private func refreshMonitoredCameras() async {
+        var rows: [CameraID: [EventRecord]] = [:]
+        for camera in monitoredCameras {
+            rows[camera.id] = await store.recent(cameraID: camera.id, limit: 200)
+        }
+        if !hasNotificationBaseline {
+            let baseline = rows.values.flatMap { $0 }
+            publishedEventIDs.formUnion(baseline.map(\.id))
+            for record in baseline { recordingEventLastAt[record.id] = record.lastAt }
+            hasNotificationBaseline = true
+        } else {
+            for camera in monitoredCameras {
+                for record in rows[camera.id, default: []] {
+                    if publishedEventIDs.insert(record.id).inserted {
+                        await notifications.post(event: record, camera: camera)
+                    }
+                    if recordingEventLastAt[record.id].map({ record.lastAt > $0 }) ?? true {
+                        recordingEventLastAt[record.id] = record.lastAt
+                        enqueueRecordingTrigger(MotionRecordingTrigger(
+                            cameraID: camera.id, eventID: record.id, kind: record.kind,
+                            occurredAt: record.lastAt))
+                    }
+                }
+            }
+        }
+        unreadCount = await store.unreadCount()
+        guard let displayedCameraID,
+              let camera = monitoredCameras.first(where: { $0.id == displayedCameraID }) else {
+            events = []
+            return
+        }
+        events = Self.present(rows[camera.id, default: []], camera: camera)
     }
 
     /// Reads the store into the screen's shape.
     private func refresh(camera: Camera) async {
         let records = await store.recent(cameraID: camera.id, limit: 200)
         let incoming = hasNotificationBaseline ? records.filter { !publishedEventIDs.contains($0.id) } : []
+        let recordingUpdates = hasNotificationBaseline ? records.filter { record in
+            recordingEventLastAt[record.id].map { record.lastAt > $0 } ?? true
+        } : []
         publishedEventIDs.formUnion(records.map(\.id))
+        for record in records { recordingEventLastAt[record.id] = record.lastAt }
         hasNotificationBaseline = true
         for record in incoming { await notifications.post(event: record, camera: camera) }
+        for record in recordingUpdates {
+            enqueueRecordingTrigger(MotionRecordingTrigger(cameraID: camera.id,
+                                                            eventID: record.id,
+                                                            kind: record.kind,
+                                                            occurredAt: record.lastAt))
+        }
         let unread = await store.unreadCount()
+        events = Self.present(records, camera: camera)
+        unreadCount = unread
+    }
+
+    private static func present(_ records: [EventRecord], camera: Camera) -> [VLibraryEvent] {
         let source = VLibraryCamera(id: camera.id, name: camera.displayName)
-        events = records.map { record in
+        return records.map { record in
             VLibraryEvent(id: record.id.rawValue,
                           camera: source,
                           // The device's own instant, not when Vigil heard about it: the two differ
@@ -213,7 +292,11 @@ final class EventCoordinator {
                               ? record.lastAt.timeIntervalSince(record.firstAt) : nil,
                           isUnread: !record.isRead)
         }
-        unreadCount = unread
+    }
+
+    private func enqueueRecordingTrigger(_ trigger: MotionRecordingTrigger) {
+        pendingRecordingTriggers.append(trigger)
+        recordingTriggerRevision &+= 1
     }
 
     /// Maps a device event onto the shared marker vocabulary the timeline and inspector already use.

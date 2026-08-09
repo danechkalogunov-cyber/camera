@@ -115,7 +115,20 @@ extension MainWindowView {
         }
         .task { await pollTelemetry() }
         .task(id: selectedCamera?.id) { await pollPoster() }
-        .task(id: selectedCamera?.id) { await eventFeed.follow(camera: selectedCamera) }
+        .task(id: motionMonitorKey) {
+            for camera in motionMonitoredCameras where isMotionRecordingArmed(camera.id) {
+                await session.setMotionRecordingArmed(
+                    true, for: camera,
+                    preRollSeconds: motionRecordingConfiguration(camera.id).preRollSeconds)
+            }
+            await eventFeed.follow(cameras: motionMonitoredCameras,
+                                   displaying: selectedCamera?.id)
+        }
+        .onChange(of: eventFeed.recordingTriggerRevision) { _, _ in
+            for trigger in eventFeed.takeRecordingTriggers() {
+                handleMotionRecordingTrigger(trigger)
+            }
+        }
     }
 
     /// Work that only makes sense while a particular panel or screen is being looked at.

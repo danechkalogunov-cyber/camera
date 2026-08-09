@@ -116,6 +116,12 @@ struct MainWindowView: View {
     /// sit frozen. Ticking only while recording keeps the window idle the rest of the time.
     @State var recordingTick = Date()
 
+    /// Pure device-event hysteresis and one independent post-roll deadline per camera.
+    @State var motionRecordingPolicy = MotionRecordingPolicy()
+    @State var motionRecordingDeadlines: [CameraID: Task<Void, Never>] = [:]
+    @State var motionOwnedRecordings: Set<CameraID> = []
+    @State var motionArmRevision = 0
+
     /// Whether decorative motion is allowed, which is `!reduceMotion` resolved by `VigilUI`.
     ///
     /// Read here rather than inside the stage because the one thing the window animates on its own
@@ -162,9 +168,7 @@ struct MainWindowView: View {
         self.onFindCameras = onFindCameras
         _deviceInfo = State(initialValue: DeviceInfoService(logger: session.dependencies.logger,
                                                             clock: session.dependencies.clock))
-        _recording = State(initialValue: RecordingCoordinator(tap: session.recordingTap,
-                                                              logger: session.dependencies.logger,
-                                                              clock: session.dependencies.clock))
+        _recording = State(initialValue: session.recordingCoordinator(for: session.live))
         _manifest = State(initialValue: ClipManifest(logger: session.dependencies.logger))
         _eventFeed = State(initialValue: EventCoordinator(dependencies: session.dependencies,
                                                           credentials: session.credentials))

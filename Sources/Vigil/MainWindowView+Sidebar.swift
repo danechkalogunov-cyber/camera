@@ -330,6 +330,13 @@ extension MainWindowView {
                 title: Self.localized("Bookmark This Moment…"),
                 symbol: .bookmark,
                 action: { window.sheet = .newBookmark(markableInstant) }),
+            VSidebarMenuItem(
+                id: "camera.motionRecording",
+                title: Self.localized(isMotionRecordingArmed(camera.id)
+                    ? "Disarm Motion Recording" : "Arm Motion Recording"),
+                symbol: .recording,
+                isOn: isMotionRecordingArmed(camera.id),
+                action: { toggleMotionRecordingArmed(camera.id) }),
             .separator(id: "camera.rule1"),
             VSidebarMenuItem(
                 id: "camera.copyAddress",

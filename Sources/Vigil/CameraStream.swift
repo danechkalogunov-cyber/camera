@@ -105,6 +105,12 @@ final class CameraStream {
     /// The recorder's inlet into this camera's encoded-frame path.
     let recordingTap = RecordingTap()
 
+    /// Created lazily and shared by manual and device-triggered recording for this camera.
+    var recordingCoordinator: RecordingCoordinator?
+
+    /// Keeps the compressed stream and pre-roll alive even when no tile currently displays it.
+    var isMotionRecordingArmed = false
+
     // MARK: - What the window says about it
 
     /// The controller's last reported state.

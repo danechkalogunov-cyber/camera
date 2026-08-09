@@ -274,12 +274,14 @@ extension AppSessionModel {
     func decodeDemands() -> [DecodeDemand] {
         cameras.all.filter(\.isActive).compactMap { stream in
             guard let camera = stream.camera else { return nil }
-            let isRecording = stream.recordingTap.recorder() != nil
+            let isRecording = stream.recordingCoordinator?.ownsClipFiles == true
+            let compressedOnly = stream.isMotionRecordingArmed && stream.renderState == nil
             return DecodeDemand(
                 id: StreamKey(camera: camera.id, quality: .main),
-                priority: isRecording ? .recording : (stream === live ? .focused : .visibleLarge),
-                mode: .full,
-                cost: Self.cost(of: stream),
+                priority: isRecording || stream.isMotionRecordingArmed
+                    ? .recording : (stream === live ? .focused : .visibleLarge),
+                mode: compressedOnly ? .paused : .full,
+                cost: compressedOnly ? .zero : Self.cost(of: stream),
                 isPreemptible: !isRecording)
         }
     }
