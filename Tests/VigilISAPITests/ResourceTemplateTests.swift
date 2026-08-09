@@ -35,6 +35,7 @@ import VigilProtocols
     @Test func resourcePathsMatchTheEndpointIndex() {
         // Spot-checks against docs/spec-isapi.md Appendix A.
         #expect(ISAPIResource.deviceInfo == "/System/deviceInfo")
+        #expect(ISAPIResource.activate == "/System/activate")
         #expect(ISAPIResource.userCheck == "/Security/userCheck")
         #expect(ISAPIResource.alertStream == "/Event/notification/alertStream")
         #expect(ISAPIResource.contentSearch == "/ContentMgmt/search")

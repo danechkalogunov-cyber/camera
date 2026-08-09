@@ -679,6 +679,18 @@
 "Graphite" = "Графитовый";
 "Not activated — set a password before use" = "Не активировано — задайте пароль перед использованием";
 "Activate" = "Активировать";
+"Activate camera" = "Активировать камеру";
+"Set the first admin password for %@." = "Задайте первый пароль администратора для %@.";
+"New camera password" = "Новый пароль камеры";
+"Confirm password" = "Подтвердите пароль";
+"The passwords do not match." = "Пароли не совпадают.";
+"Password must be 8–16 characters long." = "Пароль должен содержать от 8 до 16 символов.";
+"Password must use at least two of: lowercase, uppercase, digits, symbols." = "Пароль должен включать хотя бы две категории: строчные, прописные, цифры, символы.";
+"Password must not contain “admin”." = "Пароль не должен содержать «admin».";
+"Activating camera…" = "Камера активируется…";
+"Camera activated. You can add it now." = "Камера активирована. Теперь её можно добавить.";
+"Could not activate camera: %@" = "Не удалось активировать камеру: %@";
+"Could not activate camera." = "Не удалось активировать камеру.";
 
 "HTTP port" = "HTTP-порт";
 

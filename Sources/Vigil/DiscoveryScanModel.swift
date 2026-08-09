@@ -102,6 +102,20 @@ final class DiscoveryScanModel: Identifiable {
 
     /// Starts a run, replacing any that is still going.
     func start() {
+        start(configuration: .default)
+    }
+
+    /// Rechecks exactly one IPv4 address after an operation that changes its discovery state.
+    func start(address: String) {
+        guard let address = IPv4Address(address) else {
+            start()
+            return
+        }
+        start(configuration: .single(address: address))
+    }
+
+    /// Starts a run with an explicit discovery plan, replacing any that is still going.
+    private func start(configuration: DiscoveryConfiguration) {
         stop()
         let environment = LiveDiscoveryEnvironment.make(logger: logger)
         if !environment.entitlements.multicastEntitlementPresent {
@@ -112,7 +126,8 @@ final class DiscoveryScanModel: Identifiable {
             notice = vigilUIString("This build cannot use multicast, so only a direct sweep of "
                                    + "this subnet runs. Cameras on other subnets will not answer.")
         }
-        let coordinator = DiscoveryCoordinator(environment: environment)
+        let coordinator = DiscoveryCoordinator(environment: environment,
+                                               configuration: configuration)
         self.coordinator = coordinator
         cameras = []
         progress = nil
@@ -151,6 +166,11 @@ final class DiscoveryScanModel: Identifiable {
     /// Stop if running, start if not — the sheet's one button.
     func toggle() {
         if isScanning { stop() } else { start() }
+    }
+
+    /// Shows a short operation result in the sheet without exposing writable discovery state.
+    func reportNotice(_ message: String?) {
+        notice = message
     }
 
     // MARK: - Private Helpers

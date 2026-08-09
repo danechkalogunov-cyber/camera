@@ -37,6 +37,8 @@ public enum ISAPIResource {
     public static let users = "/Security/users"
     /// `PUT` — reboot, empty body. A lost connection after this counts as success.
     public static let reboot = "/System/reboot"
+    /// `PUT` — sets the first administrator password on an unactivated device.
+    public static let activate = "/System/activate"
 
     // MARK: Channel inventory (docs/spec-isapi.md §11)
 

@@ -9,11 +9,14 @@
 
 #if os(macOS)
 
+import AppKit
 import SwiftUI
 
 import VigilCore
+import VigilISAPI
 import VigilProtocols
 import VigilRender
+import VigilTransport
 import VigilUI
 
 // MARK: - RootView
@@ -265,9 +268,80 @@ struct RootView: View {
                         isScanning: model.isScanning,
                         notice: model.notice,
                         onChoose: { chose($0, from: model) },
-                        onActivate: { chose($0, from: model) },
+                        onActivate: { activate($0, in: model) },
                         onToggleScan: { model.toggle() },
                         onClose: { endScan(model) })
+    }
+
+    /// Prompts for and sends the first administrator password, then rechecks only this address.
+    private func activate(_ camera: VDiscoveredCamera, in model: DiscoveryScanModel) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = vigilUIString("Activate camera")
+        alert.informativeText = String(format: vigilUIString("Set the first admin password for %@."),
+                                       camera.address)
+        alert.addButton(withTitle: vigilUIString("Activate"))
+        alert.addButton(withTitle: vigilUIString("Cancel"))
+
+        let password = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        password.placeholderString = vigilUIString("New camera password")
+        let confirmation = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        confirmation.placeholderString = vigilUIString("Confirm password")
+        let fields = NSStackView(views: [password, confirmation])
+        fields.orientation = .vertical
+        fields.spacing = 8
+        fields.frame = NSRect(x: 0, y: 0, width: 360, height: 56)
+        alert.accessoryView = fields
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard password.stringValue == confirmation.stringValue else {
+            model.reportNotice(vigilUIString("The passwords do not match."))
+            return
+        }
+        let proposed = password.stringValue
+        if let failure = ActivationPasswordPolicy.validate(proposed) {
+            model.reportNotice(activationPasswordMessage(for: failure))
+            return
+        }
+
+        model.reportNotice(vigilUIString("Activating camera…"))
+        Task { @MainActor in
+            let configuration = ISAPIClient.Configuration()
+            let client = ISAPIClient(
+                endpoint: ISAPIEndpoint(host: camera.address),
+                credential: Credential(account: "admin", secret: proposed),
+                configuration: configuration,
+                transport: URLSessionHTTPTransport(configuration: configuration,
+                                                   logger: session.dependencies.logger),
+                clock: session.dependencies.clock,
+                logger: session.dependencies.logger)
+            do {
+                try await DeviceActivation.activate(password: proposed, using: client)
+                model.start(address: camera.address)
+                model.reportNotice(vigilUIString("Camera activated. You can add it now."))
+            } catch let error as ISAPIError {
+                session.dependencies.logger.notice(.discovery, "device activation failed",
+                                                   ["reason": error.userMessage,
+                                                    "code": error.diagnosticCode])
+                model.reportNotice(String(format: vigilUIString("Could not activate camera: %@"),
+                                          vigilUIString(error.userMessage)))
+            } catch {
+                session.dependencies.logger.notice(.discovery, "device activation failed")
+                model.reportNotice(vigilUIString("Could not activate camera."))
+            }
+        }
+    }
+
+    /// Localised explanation of one first-password policy failure.
+    private func activationPasswordMessage(for failure: ActivationPasswordPolicy.Failure) -> String {
+        switch failure {
+        case .length:
+            vigilUIString("Password must be 8–16 characters long.")
+        case .complexity:
+            vigilUIString("Password must use at least two of: lowercase, uppercase, digits, symbols.")
+        case .containsUsername:
+            vigilUIString("Password must not contain “admin”.")
+        }
     }
 
     /// A device was picked: put its address in the form and leave the password to the user.

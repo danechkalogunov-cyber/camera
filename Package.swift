@@ -204,6 +204,7 @@ let package = Package(
                 "VigilUI",
                 "VigilCore",
                 "VigilProtocols",
+                "VigilISAPI",
                 "VigilRender",
                 "VigilVideo",
                 // `DiscoveryScanModel` imports both: the engine for its coordinator and events, and

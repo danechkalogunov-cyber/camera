@@ -696,6 +696,18 @@
 "Graphite" = "Graphite";
 "Not activated — set a password before use" = "Not activated — set a password before use";
 "Activate" = "Activate";
+"Activate camera" = "Activate camera";
+"Set the first admin password for %@." = "Set the first admin password for %@.";
+"New camera password" = "New camera password";
+"Confirm password" = "Confirm password";
+"The passwords do not match." = "The passwords do not match.";
+"Password must be 8–16 characters long." = "Password must be 8–16 characters long.";
+"Password must use at least two of: lowercase, uppercase, digits, symbols." = "Password must use at least two of: lowercase, uppercase, digits, symbols.";
+"Password must not contain “admin”." = "Password must not contain “admin”.";
+"Activating camera…" = "Activating camera…";
+"Camera activated. You can add it now." = "Camera activated. You can add it now.";
+"Could not activate camera: %@" = "Could not activate camera: %@";
+"Could not activate camera." = "Could not activate camera.";
 
 "HTTP port" = "HTTP port";
 
