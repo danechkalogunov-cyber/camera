@@ -14,22 +14,47 @@ import Foundation
 import Security
 import VigilCore
 import VigilProtocols
+import VigilUI
 
 // MARK: - Configuration archive
 
+/// Persisted workspace choices that belong in a portable configuration, unlike transient focus,
+/// sheets and search text.
+struct VigilWorkspaceSettings: Codable, Sendable, Equatable {
+    var layout: VGridLayout
+    var watchedCameraIDs: [CameraID]
+    var fillsTile: Bool
+    var showsVideoOverlay: Bool
+    var isSidebarVisible: Bool
+    var prefersSidebarRail: Bool
+    var isInspectorVisible: Bool
+}
+
 struct VigilConfigurationArchive: Codable, Sendable, Equatable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     var version: Int
     var exportedAt: Date
     var cameras: [Camera]
     var groups: [CameraGroupRecord]
+    var bookmarks: [BookmarkRecord]?
+    var layoutPresets: VLayoutPresetCollection?
+    var videoWall: VVideoWallConfiguration?
+    var settings: VigilWorkspaceSettings?
 
-    init(exportedAt: Date = Date(), cameras: [Camera], groups: [CameraGroupRecord]) {
+    init(exportedAt: Date = Date(), cameras: [Camera], groups: [CameraGroupRecord],
+         bookmarks: [BookmarkRecord]? = nil,
+         layoutPresets: VLayoutPresetCollection? = nil,
+         videoWall: VVideoWallConfiguration? = nil,
+         settings: VigilWorkspaceSettings? = nil) {
         version = Self.currentVersion
         self.exportedAt = exportedAt
         self.cameras = cameras
         self.groups = groups
+        self.bookmarks = bookmarks
+        self.layoutPresets = layoutPresets
+        self.videoWall = videoWall
+        self.settings = settings
     }
 }
 
@@ -37,7 +62,13 @@ enum ConfigurationArchiveCodec {
     enum Failure: Error, Equatable {
         case unsupportedVersion(Int)
         case duplicateCameraID(CameraID)
+        case duplicateGroupID(GroupID)
         case danglingGroupMember(CameraID)
+        case duplicateBookmarkID(UUID)
+        case danglingBookmarkCamera(CameraID)
+        case duplicateLayoutPresetID(UUID)
+        case danglingLayoutCamera(String)
+        case danglingWatchedCamera(CameraID)
     }
 
     static func encode(_ archive: VigilConfigurationArchive) throws -> Data {
@@ -51,17 +82,50 @@ enum ConfigurationArchiveCodec {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let archive = try decoder.decode(VigilConfigurationArchive.self, from: data)
-        guard archive.version == VigilConfigurationArchive.currentVersion else {
+        try validate(archive)
+        return archive
+    }
+
+    static func validate(_ archive: VigilConfigurationArchive) throws {
+        guard (1...VigilConfigurationArchive.currentVersion).contains(archive.version) else {
             throw Failure.unsupportedVersion(archive.version)
         }
         var identifiers: Set<CameraID> = []
         for camera in archive.cameras where !identifiers.insert(camera.id).inserted {
             throw Failure.duplicateCameraID(camera.id)
         }
-        for member in archive.groups.flatMap(\.members) where !identifiers.contains(member) {
-            throw Failure.danglingGroupMember(member)
+        var groupIDs: Set<GroupID> = []
+        for group in archive.groups {
+            guard groupIDs.insert(group.id).inserted else {
+                throw Failure.duplicateGroupID(group.id)
+            }
+            for member in group.members where !identifiers.contains(member) {
+                throw Failure.danglingGroupMember(member)
+            }
         }
-        return archive
+        var bookmarkIDs: Set<UUID> = []
+        for bookmark in archive.bookmarks ?? [] {
+            guard bookmarkIDs.insert(bookmark.id).inserted else {
+                throw Failure.duplicateBookmarkID(bookmark.id)
+            }
+            guard identifiers.contains(bookmark.cameraID) else {
+                throw Failure.danglingBookmarkCamera(bookmark.cameraID)
+            }
+        }
+        var presetIDs: Set<UUID> = []
+        for preset in archive.layoutPresets?.presets ?? [] {
+            guard presetIDs.insert(preset.id).inserted else {
+                throw Failure.duplicateLayoutPresetID(preset.id)
+            }
+            for raw in preset.cameraIDs {
+                guard let uuid = UUID(uuidString: raw), identifiers.contains(CameraID(uuid)) else {
+                    throw Failure.danglingLayoutCamera(raw)
+                }
+            }
+        }
+        for watched in archive.settings?.watchedCameraIDs ?? [] where !identifiers.contains(watched) {
+            throw Failure.danglingWatchedCamera(watched)
+        }
     }
 }
 
@@ -133,6 +197,7 @@ enum EncryptedConfigurationCodec {
         do {
             let payload = try JSONDecoder.vigilBackup.decode(EncryptedConfigurationPayload.self,
                                                               from: plaintext)
+            try ConfigurationArchiveCodec.validate(payload.archive)
             let cameras = Dictionary(uniqueKeysWithValues: payload.archive.cameras.map { ($0.id, $0) })
             var credentialCameras: Set<CameraID> = []
             for stored in payload.credentials {

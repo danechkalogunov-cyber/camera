@@ -32,6 +32,10 @@ private extension UTType {
     static let vigilLibraryJSON = UTType(exportedAs: "com.vigil.library-json", conformingTo: .json)
 }
 
+private enum ConfigurationRestoreChoice: Equatable {
+    case merge, replace
+}
+
 extension MainWindowView {
 
     // MARK: - ⇧⌘I, import
@@ -85,10 +89,8 @@ extension MainWindowView {
             reportImportFailure(error)
             return
         }
-        guard confirmRestore(cameraCount: archive.cameras.count, includesCredentials: false) else {
-            return
-        }
-        Task { await applyRestoredArchive(archive, credentials: []) }
+        guard let choice = chooseRestore(archive, includesCredentials: false) else { return }
+        Task { await applyRestoredArchive(archive, credentials: [], choice: choice) }
     }
 
     private func restoreEncryptedConfiguration(from url: URL) {
@@ -113,33 +115,59 @@ extension MainWindowView {
                 let payload = try await Task.detached(priority: .userInitiated) {
                     try EncryptedConfigurationCodec.decode(container, passphrase: passphrase)
                 }.value
-                guard confirmRestore(cameraCount: payload.archive.cameras.count,
-                                     includesCredentials: true) else { return }
-                await applyRestoredArchive(payload.archive, credentials: payload.credentials)
+                guard let choice = chooseRestore(payload.archive,
+                                                 includesCredentials: true) else { return }
+                await applyRestoredArchive(payload.archive, credentials: payload.credentials,
+                                           choice: choice)
             } catch {
                 reportImportFailure(error)
             }
         }
     }
 
-    private func confirmRestore(cameraCount: Int, includesCredentials: Bool) -> Bool {
+    /// Shows the complete merge plan before either mode can touch the library.
+    private func chooseRestore(_ imported: VigilConfigurationArchive,
+                               includesCredentials: Bool) -> ConfigurationRestoreChoice? {
+        let plan = ConfigurationMergePlan.make(current: portableArchive(), imported: imported)
         let alert = NSAlert()
-        alert.messageText = Self.localized("Replace the current configuration?")
+        alert.messageText = Self.localized("Review configuration changes")
         let detail = includesCredentials
             ? Self.localized("Camera settings, groups, and saved passwords will be restored.")
             : Self.localized("Camera settings and groups will be restored. Passwords are not in this file.")
-        alert.informativeText = "\(cameraCount) "
-            + Self.localized("cameras will replace the current configuration. ") + detail
+        alert.informativeText = Self.localized("Cameras in import: ")
+            + "\(imported.cameras.count). " + Self.localized("Proposed changes: ")
+            + "\(plan.changeCount). " + detail + " "
+            + Self.localized("Merge keeps local-only items; Replace removes them.")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 220))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let text = NSTextView(frame: scroll.bounds)
+        text.isEditable = false
+        text.isSelectable = true
+        text.backgroundColor = .textBackgroundColor
+        text.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        text.string = mergePreviewText(plan)
+        scroll.documentView = text
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: Self.localized("Merge Configuration"))
         alert.addButton(withTitle: Self.localized("Replace Configuration"))
         alert.addButton(withTitle: Self.localized("Cancel"))
-        return alert.runModal() == .alertFirstButtonReturn
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .merge
+        case .alertSecondButtonReturn: return .replace
+        default: return nil
+        }
     }
 
     private func applyRestoredArchive(
         _ archive: VigilConfigurationArchive,
-        credentials: [EncryptedConfigurationPayload.StoredCredential]
+        credentials: [EncryptedConfigurationPayload.StoredCredential],
+        choice: ConfigurationRestoreChoice
     ) async {
         do {
+            let resolved = choice == .merge
+                ? ConfigurationMergePlan.make(current: portableArchive(), imported: archive).archive
+                : archive
             // Write credentials first: camera records are not made active until every Keychain
             // item succeeds. A failure therefore leaves the current configuration untouched.
             let byID = Dictionary(uniqueKeysWithValues: archive.cameras.map { ($0.id, $0) })
@@ -153,13 +181,89 @@ extension MainWindowView {
                     credential, descriptor: CredentialDescriptor(camera: camera,
                                                                   account: stored.account))
             }
-            try await library.replace(with: archive.cameras)
-            groups.replace(with: archive.groups)
+            try await library.replace(with: resolved.cameras)
+            let validCameras = Set(resolved.cameras.map(\.id))
+            groups.replaceForImport(with: resolved.groups, validCameras: validCameras)
+            if let imported = resolved.bookmarks {
+                bookmarks.replaceForImport(with: imported, validCameras: validCameras)
+            }
+            if let restoredLayouts = resolved.layoutPresets { window.layoutPresets = restoredLayouts }
+            if let videoWall = resolved.videoWall { window.videoWall = videoWall }
+            if let settings = resolved.settings { apply(settings) }
             window.toast = MainWindowToast(kind: .success,
                                            message: Self.localized("Configuration restored."))
         } catch {
             reportImportFailure(error)
         }
+    }
+
+    private func portableArchive(cameras: [Camera]? = nil,
+                                 groups importedGroups: [CameraGroupRecord]? = nil)
+        -> VigilConfigurationArchive {
+        let selectedCameras = cameras ?? library.cameras
+        let validCameras = Set(selectedCameras.map(\.id))
+        let validCameraStrings = Set(validCameras.map { $0.rawValue.uuidString })
+        let selectedGroups = (importedGroups ?? groups.groups).map { group in
+            var repaired = group
+            repaired.members.removeAll { !validCameras.contains($0) }
+            return repaired
+        }
+        let selectedLayouts = VLayoutPresetCollection(window.layoutPresets.presets.map { layout in
+            VLayoutPreset(id: layout.id, name: layout.name, layout: layout.layout,
+                          cameraIDs: layout.cameraIDs.filter(validCameraStrings.contains))
+        })
+        return VigilConfigurationArchive(
+            cameras: selectedCameras,
+            groups: selectedGroups,
+            bookmarks: bookmarks.bookmarks.filter { validCameras.contains($0.cameraID) },
+            layoutPresets: selectedLayouts,
+            videoWall: window.videoWall,
+            settings: VigilWorkspaceSettings(
+                layout: window.layout,
+                watchedCameraIDs: window.watchedCameraIDs.filter(validCameras.contains).sorted {
+                    $0.rawValue.uuidString < $1.rawValue.uuidString
+                },
+                fillsTile: window.fillsTile,
+                showsVideoOverlay: window.showsVideoOverlay,
+                isSidebarVisible: window.isSidebarVisible,
+                prefersSidebarRail: window.prefersSidebarRail,
+                isInspectorVisible: window.isInspectorVisible))
+    }
+
+    private func apply(_ settings: VigilWorkspaceSettings) {
+        window.chooseLayout(settings.layout)
+        window.watchedCameraIDs = Set(settings.watchedCameraIDs)
+        window.fillsTile = settings.fillsTile
+        window.showsVideoOverlay = settings.showsVideoOverlay
+        window.isSidebarVisible = settings.isSidebarVisible
+        window.prefersSidebarRail = settings.prefersSidebarRail
+        window.isInspectorVisible = settings.isInspectorVisible
+        session.rememberVideoOverlay(settings.showsVideoOverlay)
+    }
+
+    private func mergePreviewText(_ plan: ConfigurationMergePlan) -> String {
+        var lines: [String] = []
+        func append(_ heading: String, _ values: [String], marker: String) {
+            guard !values.isEmpty else { return }
+            lines.append("\(Self.localized(heading)) (\(values.count))")
+            lines.append(contentsOf: values.map { "  \(marker) \($0)" })
+        }
+        append("Added cameras", plan.addedCameras, marker: "+")
+        append("Updated cameras (conflicts use imported values)", plan.updatedCameras, marker: "~")
+        if plan.retainedCameraCount > 0 {
+            lines.append(Self.localized("Kept local cameras: ")
+                         + String(plan.retainedCameraCount))
+        }
+        append("Added groups", plan.addedGroups, marker: "+")
+        append("Updated groups", plan.updatedGroups, marker: "~")
+        append("Added bookmarks", plan.addedBookmarks, marker: "+")
+        append("Updated bookmarks", plan.updatedBookmarks, marker: "~")
+        append("Added layout presets", plan.addedPresets, marker: "+")
+        append("Updated layout presets", plan.updatedPresets, marker: "~")
+        if plan.replacesWorkspaceSettings { lines.append(Self.localized("~ Workspace settings")) }
+        if plan.replacesVideoWall { lines.append(Self.localized("~ Video wall settings")) }
+        return lines.isEmpty ? Self.localized("No changes; the documents already match.")
+            : lines.joined(separator: "\n")
     }
 
     private func reportImportFailure(_ error: any Error) {
@@ -304,7 +408,7 @@ extension MainWindowView {
         default:
             return
         }
-        let archive = VigilConfigurationArchive(cameras: library.cameras, groups: groups.groups)
+        let archive = portableArchive()
         let data: Data
         do {
             data = try ConfigurationArchiveCodec.encode(archive)
@@ -319,7 +423,8 @@ extension MainWindowView {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.vigilLibraryJSON]
         panel.nameFieldStringValue = "vigil-configuration.vigiljson"
-        panel.message = Self.localized("The export lists cameras and groups. It holds no passwords.")
+        panel.message = Self.localized(
+            "The export includes the workspace configuration. It holds no passwords.")
         panel.prompt = Self.localized("Export")
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -413,7 +518,7 @@ extension MainWindowView {
                                     account: credential.account, secret: credential.secret))
             }
             let payload = EncryptedConfigurationPayload(
-                archive: VigilConfigurationArchive(cameras: cameras, groups: groups),
+                archive: portableArchive(cameras: cameras, groups: groups),
                 credentials: stored)
             do {
                 let data = try await Task.detached(priority: .userInitiated) {

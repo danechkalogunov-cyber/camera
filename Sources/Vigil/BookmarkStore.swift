@@ -168,6 +168,12 @@ final class BookmarkStore {
         save()
     }
 
+    /// Replaces bookmarks from a validated configuration document.
+    func replaceForImport(with imported: [BookmarkRecord], validCameras: Set<CameraID>) {
+        bookmarks = Self.sorted(imported.filter { validCameras.contains($0.cameraID) })
+        save()
+    }
+
     /// Everything marked on one camera, newest first.
     func bookmarks(for camera: CameraID) -> [BookmarkRecord] {
         bookmarks.filter { $0.cameraID == camera }

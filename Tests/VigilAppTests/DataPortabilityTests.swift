@@ -5,6 +5,7 @@ import Testing
 @testable import Vigil
 import VigilCore
 import VigilProtocols
+import VigilUI
 
 @Suite("Configuration import and export")
 struct DataPortabilityTests {
@@ -68,6 +69,81 @@ struct DataPortabilityTests {
         #expect(throws: ConfigurationArchiveCodec.Failure.self) {
             try ConfigurationArchiveCodec.decode(encoded)
         }
+    }
+
+    @Test func jsonRoundTripCarriesTheWholeWorkspaceDocument() throws {
+        let camera = Camera(name: "Front", host: "camera.local",
+                            createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let bookmark = BookmarkRecord(id: UUID(), cameraID: camera.id,
+                                      instant: Date(timeIntervalSince1970: 100),
+                                      title: "Visitor", note: "Gate",
+                                      createdAt: Date(timeIntervalSince1970: 101))
+        let layouts = VLayoutPresetCollection([
+            VLayoutPreset(name: "Entrance", layout: .single,
+                          cameraIDs: [camera.id.rawValue.uuidString]),
+        ])
+        let settings = VigilWorkspaceSettings(
+            layout: .grid2x2, watchedCameraIDs: [camera.id], fillsTile: true,
+            showsVideoOverlay: false, isSidebarVisible: false,
+            prefersSidebarRail: true, isInspectorVisible: false)
+        let archive = VigilConfigurationArchive(
+            exportedAt: Date(timeIntervalSince1970: 200), cameras: [camera], groups: [],
+            bookmarks: [bookmark], layoutPresets: layouts,
+            videoWall: VVideoWallConfiguration(layout: .grid3x3, patrolInterval: 12,
+                                               isPatrolling: true),
+            settings: settings)
+
+        let decoded = try ConfigurationArchiveCodec.decode(
+            ConfigurationArchiveCodec.encode(archive))
+
+        #expect(decoded == archive)
+        #expect(decoded.version == 2)
+        #expect(decoded.bookmarks == [bookmark])
+        #expect(decoded.layoutPresets == layouts)
+        #expect(decoded.settings == settings)
+    }
+
+    @Test func jsonVersionOneStillImportsWithoutClearingNewWorkspaceState() throws {
+        let camera = Camera(host: "legacy.local",
+                            createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        var archive = VigilConfigurationArchive(cameras: [camera], groups: [])
+        archive.version = 1
+        let encoded = try ConfigurationArchiveCodec.encode(archive)
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for key in ["bookmarks", "layoutPresets", "videoWall", "settings"] {
+            object.removeValue(forKey: key)
+        }
+        let decoded = try ConfigurationArchiveCodec.decode(
+            JSONSerialization.data(withJSONObject: object))
+
+        #expect(decoded.version == 1)
+        #expect(decoded.bookmarks == nil)
+        #expect(decoded.layoutPresets == nil)
+        #expect(decoded.settings == nil)
+    }
+
+    @Test func jsonMergePlanPreservesLocalRowsAndNamesEveryConflict() {
+        let sharedID = CameraID()
+        let localOnly = Camera(name: "Local", host: "local.test")
+        let before = Camera(id: sharedID, name: "Old", host: "old.test")
+        let replacement = Camera(id: sharedID, name: "Updated", host: "new.test",
+                                 credentialRef: before.credentialRef,
+                                 createdAt: before.createdAt)
+        let added = Camera(name: "Added", host: "added.test")
+        let current = VigilConfigurationArchive(cameras: [localOnly, before], groups: [],
+                                                bookmarks: [],
+                                                layoutPresets: VLayoutPresetCollection())
+        let imported = VigilConfigurationArchive(cameras: [replacement, added], groups: [],
+                                                 bookmarks: [],
+                                                 layoutPresets: VLayoutPresetCollection())
+
+        let plan = ConfigurationMergePlan.make(current: current, imported: imported)
+
+        #expect(plan.archive.cameras.map(\.id) == [localOnly.id, sharedID, added.id])
+        #expect(plan.archive.cameras[1].host == "new.test")
+        #expect(plan.addedCameras == ["Added"])
+        #expect(plan.updatedCameras == ["Updated"])
+        #expect(plan.retainedCameraCount == 1)
     }
 
     @Test func csvSupportsQuotedNamesAndConnectionFields() throws {
