@@ -26,6 +26,21 @@ public struct ONVIFMediaClient: Sendable {
         self.transport = transport
     }
 
+    /// Resolves the Media service from a WS-Discovery device-service XAddr.
+    public func getMediaServiceURL(token: WSUsernameToken?) async throws -> URL {
+        let body = "<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>"
+        let response = try await send(
+            action: "http://www.onvif.org/ver10/device/wsdl/GetCapabilities",
+            body: envelope(header: token?.xml ?? "", body: body))
+        let xml = try successfulXML(response, resource: "ONVIF GetCapabilities")
+        guard let media = Self.elements(named: "Media", in: xml).first,
+              let value = Self.text(named: "XAddr", in: media),
+              let url = URL(string: value) else {
+            throw ISAPIError.malformedResponse("ONVIF GetCapabilities omitted Media XAddr")
+        }
+        return url
+    }
+
     public func getProfiles(token: WSUsernameToken?) async throws -> [ONVIFMediaProfile] {
         let body = envelope(header: token?.xml ?? "", body: "<trt:GetProfiles/>")
         let response = try await send(action: "http://www.onvif.org/ver10/media/wsdl/GetProfiles", body: body)
@@ -77,6 +92,7 @@ public struct ONVIFMediaClient: Sendable {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
             + "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
             + "xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\" "
+            + "xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\" "
             + "xmlns:tt=\"http://www.onvif.org/ver10/schema\" "
             + "xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/"
             + "oasis-200401-wss-wssecurity-secext-1.0.xsd\" "

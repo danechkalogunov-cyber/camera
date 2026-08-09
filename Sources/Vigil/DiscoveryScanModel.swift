@@ -78,6 +78,9 @@ final class DiscoveryScanModel: Identifiable {
     /// Addresses already in the library, so a row can say "Added" instead of offering a duplicate.
     private let knownAddresses: Set<String>
 
+    /// Channel counts previously learned through an authenticated connection.
+    private let channelSummaries: [String: VDiscoveredCamera.ChannelSummary]
+
     private var coordinator: DiscoveryCoordinator?
     private var task: Task<Void, Never>?
 
@@ -88,9 +91,11 @@ final class DiscoveryScanModel: Identifiable {
     /// - Parameters:
     ///   - logger: the app's logger, passed down to `VigilDiscovery`, which has no other way out.
     ///   - knownAddresses: hosts the user has already added.
-    init(logger: any LoggerProtocol, knownAddresses: Set<String> = []) {
+    init(logger: any LoggerProtocol, knownAddresses: Set<String> = [],
+         channelSummaries: [String: VDiscoveredCamera.ChannelSummary] = [:]) {
         self.logger = logger
         self.knownAddresses = knownAddresses
+        self.channelSummaries = channelSummaries
     }
 
     // MARK: - Running
@@ -224,7 +229,10 @@ final class DiscoveryScanModel: Identifiable {
             confidence: device.confidence,
             supportsISAPI: device.vendor.supportsISAPI,
             isAlreadyAdded: knownAddresses.contains(address),
-            needsActivation: device.needsActivation)
+            needsActivation: device.needsActivation,
+            channelSummary: channelSummaries[address],
+            onvifServiceURL: device.vendor == .genericONVIF
+                ? device.onvifServiceURLs.compactMap(URL.init(string:)).first : nil)
     }
 
     /// A stable UUID for a device, hashed from its identity.

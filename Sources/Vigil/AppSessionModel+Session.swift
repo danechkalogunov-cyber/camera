@@ -78,7 +78,7 @@ extension AppSessionModel {
             // inherit its name.
             let remembered = LastConnection.load(from: defaults)
             let rememberedName = remembered?.host == request.host ? remembered?.name : nil
-            let camera = try makeCamera(host: request.host, ref: ref, rtspPath: rtspPath,
+            var camera = try makeCamera(host: request.host, ref: ref, rtspPath: rtspPath,
                                         name: rememberedName)
             if request.password.isEmpty {
                 // A retry after the password already reached the Keychain: the form clears its
@@ -124,9 +124,68 @@ extension AppSessionModel {
                     return
                 }
             }
+            if rtspPath == nil,
+               let resolved = await resolveONVIFStream(for: request, camera: camera) {
+                camera.rtspPort = resolved.port
+                camera.rtspPathOverride = resolved.path
+                self.rtspPort = resolved.port
+                self.resolvedPath = resolved.path
+            }
             await stream(camera: camera, ref: ref)
         } catch {
             fail(with: error, host: request.host)
+        }
+    }
+
+    /// Uses authenticated ONVIF Device + Media calls only for the discovery row that supplied it.
+    private func resolveONVIFStream(for request: ConnectRequest, camera: Camera) async
+        -> (port: Int, path: String)? {
+        guard let deviceURL = pendingONVIFServiceURL,
+              deviceURL.host?.caseInsensitiveCompare(request.host) == .orderedSame else {
+            pendingONVIFServiceURL = nil
+            return nil
+        }
+        pendingONVIFServiceURL = nil
+        do {
+            let secret: String
+            if request.password.isEmpty {
+                guard let stored = try await credentials.credential(for: camera) else { return nil }
+                secret = stored.secret
+            } else {
+                secret = request.password
+            }
+            var random = dependencies.random
+            func freshToken() -> WSUsernameToken {
+                WSUsernameToken(username: request.username, password: secret,
+                                nonce: random.randomBytes(20),
+                                created: ISO8601DateFormatter().string(from: Date()))
+            }
+            let transport = URLSessionHTTPTransport(logger: dependencies.logger)
+            let device = ONVIFMediaClient(endpoint: deviceURL, transport: transport)
+            let mediaURL = try await device.getMediaServiceURL(token: freshToken())
+            guard mediaURL.host?.caseInsensitiveCompare(request.host) == .orderedSame else {
+                dependencies.logger.warning(.app, "ONVIF returned a Media service on another host")
+                return nil
+            }
+            let media = ONVIFMediaClient(endpoint: mediaURL, transport: transport)
+            guard let profile = try await media.getProfiles(token: freshToken()).first else {
+                dependencies.logger.notice(.app, "ONVIF device reported no media profiles")
+                return nil
+            }
+            let streamURL = try await media.getStreamURI(profileToken: profile.token,
+                                                         token: freshToken())
+            guard streamURL.host?.caseInsensitiveCompare(request.host) == .orderedSame,
+                  streamURL.scheme?.lowercased() == "rtsp" else {
+                dependencies.logger.warning(.app, "ONVIF returned an unsafe stream URI")
+                return nil
+            }
+            var path = streamURL.path.isEmpty ? "/" : streamURL.path
+            if let query = streamURL.query, !query.isEmpty { path += "?\(query)" }
+            return (streamURL.port ?? request.rtspPort, path)
+        } catch {
+            dependencies.logger.notice(.app, "ONVIF media fallback failed",
+                                       ["reason": String(describing: error)])
+            return nil
         }
     }
 

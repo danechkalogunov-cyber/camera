@@ -98,6 +98,9 @@ final class AppSessionModel {
     let credentials: CredentialStore
     let defaults: UserDefaults
     let audioPlayback = AudioPlaybackEngine()
+
+    /// Device-service XAddr selected in discovery; consumed by the next matching form submit.
+    var pendingONVIFServiceURL: URL?
     let pictureInPicture = PictureInPictureCoordinator()
     let twoWayAudio = TwoWayAudioCoordinator()
     let synchronizedPlayback = SynchronizedPlaybackCoordinator()

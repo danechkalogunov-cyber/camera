@@ -211,6 +211,7 @@ struct RootView: View {
             }
             self.session.form.host = camera.address
             self.session.form.validate(.host)
+            self.session.pendingONVIFServiceURL = camera.onvifServiceURL
             self.endAutoScan()
         }
         autoScan = model
@@ -249,7 +250,9 @@ struct RootView: View {
         var known = Set(library.cameras.map { $0.host })
         if let host = session.camera?.host { known.insert(host) }
         known = known.filter { !$0.isEmpty }
-        let model = DiscoveryScanModel(logger: session.dependencies.logger, knownAddresses: known)
+        let model = DiscoveryScanModel(logger: session.dependencies.logger,
+                                       knownAddresses: known,
+                                       channelSummaries: library.channelSummaries)
         scan = model
         model.start()
     }
@@ -276,6 +279,7 @@ struct RootView: View {
     private func chose(_ camera: VDiscoveredCamera, from model: DiscoveryScanModel) {
         session.form.host = camera.address
         session.form.validate(.host)
+        session.pendingONVIFServiceURL = camera.onvifServiceURL
         // Choosing from the main window has to leave the user somewhere the password can be typed,
         // and the form is the only such place — writing the address into a form nobody can see would
         // look exactly like the sheet closing and nothing happening. The password is cleared with

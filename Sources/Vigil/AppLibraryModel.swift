@@ -39,6 +39,9 @@ final class AppLibraryModel {
     /// The library, in the order the user arranged it.
     private(set) var cameras: [Camera] = []
 
+    /// Authenticated NVR inventory summaries, keyed by the address discovery reports.
+    private(set) var channelSummaries: [String: VDiscoveredCamera.ChannelSummary] = [:]
+
     /// True when the document belongs to a newer Vigil. Nothing is written back in that state —
     /// downgrading a schema by writing an older one over it is how libraries get destroyed.
     private(set) var isReadOnly = false
@@ -195,9 +198,20 @@ final class AppLibraryModel {
         let available = channels.filter(\.isEnabled).sorted { $0.channel < $1.channel }
         guard !available.isEmpty else { return [] }
         var added: [Camera] = []
-        for (offset, channel) in available.enumerated() {
+        for channel in available {
+            if let existing = cameras.first(where: {
+                $0.host == camera.host && $0.httpPort == camera.httpPort
+                    && $0.channel == channel.channel
+            }) {
+                added.append(existing)
+                continue
+            }
             var copy = camera
-            if offset > 0 { copy.id = CameraID(); copy.createdAt = Date(); copy.lastSeenAt = nil }
+            if cameras.contains(where: { $0.id == copy.id }) {
+                copy.id = CameraID()
+                copy.createdAt = Date()
+                copy.lastSeenAt = nil
+            }
             copy.channel = channel.channel
             copy.name = channel.displayName
             if let stored = await add(copy) { added.append(stored) }
@@ -304,6 +318,18 @@ final class AppLibraryModel {
     private func refresh() async {
         guard let library else { return }
         cameras = await library.cameras()
+        var summaries: [String: VDiscoveredCamera.ChannelSummary] = [:]
+        for camera in cameras where summaries[camera.host] == nil {
+            guard let inventory = await library.channelInventory(host: camera.host,
+                                                                 httpPort: camera.httpPort) else {
+                continue
+            }
+            let enabled = inventory.channels.filter(\.isEnabled)
+            summaries[camera.host] = VDiscoveredCamera.ChannelSummary(
+                online: enabled.filter(\.isOnline).count,
+                empty: enabled.filter { !$0.isOnline }.count)
+        }
+        channelSummaries = summaries
         IntentCameraIndex.save(cameras)
     }
 }

@@ -53,6 +53,17 @@ func mediaRequests() async throws {
             == "rtsp://192.0.2.10/live")
 }
 
+@Test("ONVIF Device capabilities resolves the Media XAddr")
+func mediaCapability() async throws {
+    let body = Data(("<s:Envelope><s:Body><tds:GetCapabilitiesResponse><tds:Capabilities>"
+        + "<tt:Media><tt:XAddr>http://192.0.2.10/onvif/media_service</tt:XAddr></tt:Media>"
+        + "</tds:Capabilities></tds:GetCapabilitiesResponse></s:Body></s:Envelope>").utf8)
+    let transport = SOAPTransport([HTTPResponse(statusCode: 200, body: body)])
+    let client = ONVIFMediaClient(
+        endpoint: URL(string: "http://192.0.2.10/onvif/device_service")!, transport: transport)
+    #expect(try await client.getMediaServiceURL(token: nil).path == "/onvif/media_service")
+}
+
 @Test("SADP activation consumes a public-key challenge and emits ciphertext only")
 func sadpActivation() throws {
     let challenge = try SADPActivationCodec.decodeChallenge(

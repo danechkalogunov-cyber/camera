@@ -67,6 +67,9 @@ package struct VDiscoveredCamera: Identifiable, Sendable, Hashable {
     /// Present only after channel enumeration produced real online/empty states.
     package let channelSummary: ChannelSummary?
 
+    /// WS-Discovery device-service XAddr used only after the user supplies credentials.
+    package let onvifServiceURL: URL?
+
     /// Creates a row.
     package init(id: UUID, title: String, address: String, detail: String = "",
                  confidence: Int, supportsISAPI: Bool, isAlreadyAdded: Bool = false) {
@@ -79,11 +82,13 @@ package struct VDiscoveredCamera: Identifiable, Sendable, Hashable {
         self.isAlreadyAdded = isAlreadyAdded
         self.needsActivation = false
         self.channelSummary = nil
+        self.onvifServiceURL = nil
     }
 
     package init(id: UUID, title: String, address: String, detail: String = "",
                  confidence: Int, supportsISAPI: Bool, isAlreadyAdded: Bool = false,
-                 needsActivation: Bool, channelSummary: ChannelSummary? = nil) {
+                 needsActivation: Bool, channelSummary: ChannelSummary? = nil,
+                 onvifServiceURL: URL? = nil) {
         self.id = id
         self.title = title
         self.address = address
@@ -93,6 +98,7 @@ package struct VDiscoveredCamera: Identifiable, Sendable, Hashable {
         self.isAlreadyAdded = isAlreadyAdded
         self.needsActivation = needsActivation
         self.channelSummary = channelSummary
+        self.onvifServiceURL = onvifServiceURL
     }
 
     /// Confident enough to present as a device rather than a possibility (spec-discovery.md §7.6).

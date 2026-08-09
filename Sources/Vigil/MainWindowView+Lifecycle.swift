@@ -108,6 +108,41 @@ extension MainWindowView {
         .task(id: selectedCamera?.id) {
             loadDeviceInfo()
         }
+        .task(id: channelExpansionTrigger) {
+            await expandRecorderChannelsIfNeeded()
+        }
+    }
+
+    /// Turns an authenticated recorder inventory into one stable library row per enabled input.
+    private var channelExpansionTrigger: String {
+        "\(selectedCamera?.id.rawValue.uuidString ?? "-")/"
+            + "\(deviceInfo.identity.totalChannels)/\(String(describing: deviceInfo.outcome))"
+    }
+
+    private func expandRecorderChannelsIfNeeded() async {
+        guard let camera = selectedCamera,
+              deviceInfo.identity.totalChannels > 1,
+              let control = deviceInfo.session else { return }
+        do {
+            let channels = try await control.channels()
+            guard channels.count > 1 || channels.contains(where: { $0.upstream != nil }) else {
+                return
+            }
+            let before = library.cameras.filter {
+                $0.host == camera.host && $0.httpPort == camera.httpPort
+            }.count
+            let records = await library.addNVRChannels(channels, from: camera)
+            let created = max(0, records.count - before)
+            if created > 0 {
+                window.toast = MainWindowToast(
+                    kind: .success,
+                    message: Self.localized("Recorder channels were added to the camera list."))
+            }
+        } catch {
+            session.dependencies.logger.notice(
+                .isapi, "recorder channel enumeration failed",
+                ["host": camera.host, "reason": String(describing: error)])
+        }
     }
 
     /// Clips, telemetry, the poster frame and the event stream.
