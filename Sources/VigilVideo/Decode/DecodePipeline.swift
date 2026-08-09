@@ -126,6 +126,11 @@ public actor DecodePipeline {
 
     private var counters = Counters()
 
+    /// Executes the mode granted by the application-wide admission plan. The policy is deliberately
+    /// separate from format construction: parameter sets must still be retained from a frame that
+    /// a reduced mode chooses not to decode.
+    private var modeGate = DecodeModeGate()
+
     // MARK: - Initialisation
 
     /// Builds a pipeline for one stream.
@@ -179,6 +184,11 @@ public actor DecodePipeline {
 
         if let sets = frame.parameterSets {
             adopt(sets, codec: codec)
+        }
+
+        guard modeGate.admits(frame) else {
+            drop(reason: .policy)
+            return
         }
 
         guard let description = formatDescription, let info = formatInfo else {
@@ -245,6 +255,25 @@ public actor DecodePipeline {
         counters
     }
 
+    /// Applies the mode granted by the global decode admission plan.
+    ///
+    /// Returning from a zero-session mode requires a fresh recovery point: the decoder has not seen
+    /// the reference pictures that arrived while it was paused or represented by JPEG polling.
+    public func setMode(_ mode: DecodeMode) {
+        let previous = modeGate.mode
+        guard previous != mode else { return }
+        modeGate.setMode(mode)
+        if !previous.opensDecodeSession && mode.opensDecodeSession {
+            awaitingKeyframe = true
+            keyframeRequested = false
+        }
+    }
+
+    /// The mode currently executed by this pipeline.
+    public func currentMode() -> DecodeMode {
+        modeGate.mode
+    }
+
     /// Forgets everything about the stream: parameter sets, format description and the duration
     /// history. Counters are kept, because they are cumulative for the session, and so is
     /// `generation`, which must never repeat a number a sink has already seen.
@@ -258,6 +287,7 @@ public actor DecodePipeline {
         formatInfo = nil
         estimator.reset()
         estimator.nominalFrameRate = nil
+        modeGate.reset()
         awaitingKeyframe = true
         keyframeRequested = false
         sink.streamDidReset()
