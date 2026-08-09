@@ -241,6 +241,8 @@ extension MainWindowView {
                 .keyboardShortcut(.tab, modifiers: .shift)
             Button("", action: { window.isCinemaMode.toggle() })
                 .keyboardShortcut("f", modifiers: [.control, .command])
+            Button("", action: { session.muteAllAudio() })
+                .keyboardShortcut("m", modifiers: [.shift, .command])
         }
         .hidden()
         layoutShortcuts

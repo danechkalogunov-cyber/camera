@@ -76,6 +76,9 @@ struct VigilCommands: Commands {
                 // for the moment between connecting and the DESCRIBE landing rather than failing.
                 .disabled(session.format == nil)
             Divider()
+            Button(MainWindowView.localized("Mute All Audio")) { session.muteAllAudio() }
+                .keyboardShortcut("m", modifiers: [.shift, .command])
+            Divider()
             Button(MainWindowView.localized("Camera Settings…")) { window.sheet = .cameraSettings }
                 .disabled(session.camera == nil)
         }

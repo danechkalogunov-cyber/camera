@@ -98,6 +98,7 @@ final class AppSessionModel {
     let dependencies: CoreDependencies
     let credentials: CredentialStore
     let defaults: UserDefaults
+    let audioPlayback = AudioPlaybackEngine()
 
     /// The launch-time resume, and the connect the form submits. Application-scoped: there is one
     /// user pressing Return, however many cameras are streaming.

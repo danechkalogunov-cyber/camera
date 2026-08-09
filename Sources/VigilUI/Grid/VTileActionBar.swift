@@ -105,6 +105,9 @@ package struct VTileActions {
     /// Whether audio is muted, for the speaker glyph.
     package var isMuted = true
 
+    /// Normalized RMS level. It remains visible while muted so sound activity is discoverable.
+    package var audioLevel: Float = 0
+
     /// Whether the picture is filled rather than fitted, for the arrows.
     package var isFilled = false
 

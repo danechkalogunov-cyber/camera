@@ -43,10 +43,13 @@ extension AppSessionModel {
     /// the two `async` stops happen off this path, because a polite socket teardown takes up to
     /// 1.5 s and no click should wait for it.
     func stop(_ stream: CameraStream) {
+        let audioKey = stream.camera.map { StreamKey(camera: $0.id, quality: .main) }
         let outgoing = stream.teardown()
+        rebalanceDecodeBudget()
         guard outgoing.controller != nil || outgoing.pipeline != nil else { return }
         // The tile keeps its last picture on purpose — no flush, no blanking (R-36, §4.9).
         Task {
+            if let audioKey { await audioPlayback.remove(audioKey) }
             await outgoing.pipeline?.stop(reason: .stopped)
             // Graceful TEARDOWN, off the caller's path: `stop` is safe to await from a cancelled
             // task, and the UI must not wait 1.5 s for a socket to close politely.
@@ -212,6 +215,12 @@ extension AppSessionModel {
     /// two-implementation seams; this refactor exists to avoid adding a fifth.
     func start(_ stream: CameraStream, camera: Camera, ref: CredentialRef) async {
         stream.camera = camera
+        let muteKey = "Vigil.audio.muted.\(camera.id.rawValue.uuidString)"
+        stream.isAudioMuted = defaults.object(forKey: muteKey) as? Bool ?? true
+        stream.hasAudio = false
+        if !stream.isAudioMuted {
+            await audioPlayback.solo(StreamKey(camera: camera.id, quality: .main))
+        }
         cameras.file(stream)
         stream.activeRef = ref
         stream.attemptStartedAt = Date()
@@ -236,6 +245,7 @@ extension AppSessionModel {
                 logger.error(.video, "decode: \(error)")
             })
         stream.pipeline = pipeline
+        rebalanceDecodeBudget()
         // One ordered hop from the controller's isolation to the pipeline actor. A `Task` per frame
         // would preserve neither order nor allocation budget; a single-consumer stream does both,
         // and its bounded buffer drops the oldest frames rather than growing without limit (R-27).
@@ -261,9 +271,16 @@ extension AppSessionModel {
         let telemetry = stream.telemetry
         let backlog = stream.backlog
         let mediaClock = dependencies.clock
+        let audioPlayback = self.audioPlayback
+        let audioKey = StreamKey(camera: camera.id, quality: .main)
         backlog.reset()
         stream.decodeTask = Task.detached {
             for await frame in frameStream {
+                if frame.codec.audio != nil {
+                    await audioPlayback.submit(frame, for: audioKey)
+                    backlog.departed()
+                    continue
+                }
                 // Counted before the hop into the pipeline, so the measurement is of what arrived
                 // rather than of what the decoder got round to. Two integer additions under one
                 // uncontended lock; nothing here allocates.
@@ -275,7 +292,7 @@ extension AppSessionModel {
                 // the minimum of the cycle — one frame had just been drained — so it read zero even
                 // under load. The window reports the peak instead, once a second.
                 backlog.departed()
-                if let recorder = recordingTap.recorder() {
+                if let recorder = recordingTap.route(frame) {
                     await recorder.append(frame)
                 }
             }
@@ -288,6 +305,11 @@ extension AppSessionModel {
                                           frameSink: { frame in
                                               backlog.arrived()
                                               continuation.yield(frame)
+                                              if frame.codec.audio != nil {
+                                                  Task { @MainActor [weak stream] in
+                                                      stream?.hasAudio = true
+                                                  }
+                                              }
                                           },
                                           // Normal speed sends no `Scale:` at all, so a live
                                           // stream is byte-identical to what it was before speed
@@ -330,6 +352,11 @@ extension AppSessionModel {
                     qualityOverride: stream.camera?.preferredQuality)
                 if case .stream(let quality)? = selector.ingest(context, at: origin.duration(to: clock.now)) {
                     await controller.setQuality(quality)
+                }
+                if let cameraID = stream.camera?.id {
+                    let key = StreamKey(camera: cameraID, quality: .main)
+                    let audio = await audioPlayback.statistics(for: key)
+                    stream.audioLevel = audio.rmsLevel
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
@@ -440,6 +467,7 @@ extension AppSessionModel {
             present(named)
         case .formatResolved(let resolved):
             stream.format = resolved
+            rebalanceDecodeBudget()
         default:
             break
         }

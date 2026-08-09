@@ -255,17 +255,18 @@ extension MainWindowView {
 
     /// What the tile's seven hover buttons do (UX.md §5.3).
     ///
-    /// Only the six this build can honour are enabled. Mute is the one that stays dimmed: there is
-    /// no audio path at all — `VigilVideo`'s whole `Audio/` directory is unwritten — so the button
-    /// would be lying about a stream that has no sound to mute. It stays in the row rather than
-    /// being removed, because §5.3 fixes the order and a row that changes shape between cameras is a
-    /// row nobody can learn.
+    /// Audio starts muted and is enabled only after that camera has produced an audio buffer.
     ///
     /// Close joined the enabled set once the camera library existed; ``closeStageCell()`` records
     /// why it could not before.
     var tileActions: VTileActions {
         var actions = VTileActions()
         actions.enabled = [.snapshot, .record, .ptz, .quality, .fit, .timeline, .close]
+        if session.cameras.stream(for: cameraID)?.hasAudio == true {
+            actions.enabled.insert(.mute)
+        }
+        actions.isMuted = session.cameras.stream(for: cameraID)?.isAudioMuted ?? true
+        actions.audioLevel = session.cameras.stream(for: cameraID)?.audioLevel ?? 0
         actions.isFilled = window.fillsTile
         actions.perform = { action in
             switch action {
@@ -291,7 +292,7 @@ extension MainWindowView {
                 // stage — has no cell to name and therefore means the whole session.
                 closeStageCell()
             case .mute:
-                break
+                session.toggleAudio(for: cameraID)
             }
         }
         return actions

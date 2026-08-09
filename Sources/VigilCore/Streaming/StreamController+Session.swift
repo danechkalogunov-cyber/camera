@@ -91,7 +91,7 @@ extension StreamController {
         // the socket coming up and this loop starting can be missed.
         var config = RTSPSessionConfig(url: url)
         config.transport = transportFallback ?? camera.transport
-        config.setupAudio = false
+        config.setupAudio = true
         config.setupMetadataTrack = false
         config.initialScale = playbackScale
         // Above 2x, pacing is the difference between fast-forward and eight seconds of video per
@@ -333,22 +333,12 @@ extension StreamController {
 
     /// Adopts a negotiated track.
     ///
-    /// Only the first video track is taken: a device that offers two gets a warning and the first,
-    /// because switching mid-session on a hunch is worse than a documented choice. Audio is never
-    /// set up in this slice, so an audio track here means the SDP offered one anyway.
+    /// Adopts the selected video track and, independently, the selected audio track.
     func adopt(_ track: RTSPTrack) async {
-        guard track.kind == .video else {
-            if track.kind == .audio {
-                emit(.warning(.audioTrackIgnored(encodingName: track.encodingName)))
-            }
-            return
-        }
-        guard receivers.isEmpty else {
-            emit(.warning(.secondTrackIgnored))
-            return
-        }
+        guard track.kind == .video || track.kind == .audio else { return }
+        guard receivers[track.id] == nil else { return }
         guard let channels = track.interleavedChannels else {
-            logger.warning(.core, "video track has no interleaved channels", ["camera": id.short])
+            logger.warning(.core, "media track has no logical channels", ["camera": id.short])
             return
         }
         do {
@@ -365,7 +355,7 @@ extension StreamController {
             receivers[track.id] = receiver
             trackForRTPChannel[channels.lowerBound] = track.id
             rtcpChannelForTrack[track.id] = channels.upperBound
-            if track.parameterSets == nil {
+            if track.kind == .video, track.parameterSets == nil {
                 emit(.warning(.parameterSetsMissingFromSDP))
             }
         } catch {
@@ -412,7 +402,7 @@ extension StreamController {
         }
 
         for frame in result.frames {
-            if !sawFirstFrame {
+            if frame.codec.video != nil, !sawFirstFrame {
                 sawFirstFrame = true
                 cancelControllerTimer(.firstFrame)
                 // The attempt counter returns to zero only after a minute of healthy playback, so
@@ -423,7 +413,7 @@ extension StreamController {
                 emit(.firstFrameAssembled(afterStart: now - (startedAt ?? attemptStart)))
                 transition(to: .playing, detail: .plain(.playing, attempt: attempt))
             }
-            if frame.isKeyframe { emit(.keyframe(frame.pts)) }
+            if frame.codec.video != nil, frame.isKeyframe { emit(.keyframe(frame.pts)) }
             if !isPaused { frameSink?(frame) }
         }
 

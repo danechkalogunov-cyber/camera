@@ -789,5 +789,6 @@
 "Check the camera's ports" = "Check the camera's ports";
 "Cameras captured: %lld of %lld" = "Cameras captured: %lld of %lld";
 "Stopped — cameras captured: %lld" = "Stopped — cameras captured: %lld";
+"Mute All Audio" = "Mute All Audio";
 "Show in Finder" = "Show in Finder";
 "The snapshot set could not be written" = "The snapshot set could not be written";

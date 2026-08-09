@@ -129,6 +129,19 @@ final class CameraStream {
 
     var statistics = StreamStatistics()
 
+    /// Audio remains muted until the user explicitly enables this camera.
+    var isAudioMuted = true
+
+    /// Becomes true on the first assembled audio buffer and enables the tile speaker action.
+    var hasAudio = false
+
+    /// Latest normalized RMS level, sampled at 10 Hz for the tile's two-point meter.
+    var audioLevel: Float = 0
+
+    /// The mode the global decode plan granted this camera. Unlike stream quality, this controls
+    /// how many frames from that stream enter the decoder.
+    var decodeMode: DecodeMode = .full
+
     /// The named cause of the current failure, in `VigilUI`'s vocabulary.
     var diagnosis: ConnectDiagnosis?
 
@@ -237,6 +250,8 @@ final class CameraStream {
         attemptStartedAt = nil
         decodeFailures = 0
         droppedByReason.removeAll()
+        decodeMode = .full
+        audioLevel = 0
         return outgoing
     }
 

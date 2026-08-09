@@ -29,6 +29,42 @@ import VigilVideo
 
 extension AppSessionModel {
 
+    /// Toggles one camera's live audio. Unmuting solos it so a wall never erupts into many feeds.
+    func toggleAudio(for cameraID: CameraID) {
+        guard let stream = cameras.stream(for: cameraID), let camera = stream.camera else { return }
+        stream.isAudioMuted.toggle()
+        let muted = stream.isAudioMuted
+        defaults.set(muted, forKey: "Vigil.audio.muted.\(cameraID.rawValue.uuidString)")
+        if !muted {
+            for other in cameras.streams.values where other !== stream {
+                other.isAudioMuted = true
+                if let otherID = other.camera?.id {
+                    defaults.set(true,
+                                 forKey: "Vigil.audio.muted.\(otherID.rawValue.uuidString)")
+                }
+            }
+        }
+        let key = StreamKey(camera: camera.id, quality: .main)
+        Task {
+            if muted {
+                await audioPlayback.setMuted(true, for: key)
+            } else {
+                await audioPlayback.solo(key)
+            }
+        }
+    }
+
+    /// Silences every camera and persists the state. Bound to ⇧⌘M and the menu-bar extra.
+    func muteAllAudio() {
+        for stream in cameras.streams.values {
+            stream.isAudioMuted = true
+            if let id = stream.camera?.id {
+                defaults.set(true, forKey: "Vigil.audio.muted.\(id.rawValue.uuidString)")
+            }
+        }
+        Task { await audioPlayback.muteAll() }
+    }
+
     /// A sample the video renderer refused to decode.
     ///
     /// `VigilRender` hands over a diagnostic string rather than an error, because `any Error` is not
@@ -246,6 +282,32 @@ extension AppSessionModel {
                 cost: Self.cost(of: stream),
                 isPreemptible: !isRecording)
         }
+    }
+
+    /// Recomputes and applies the one global decode plan.
+    ///
+    /// This is intentionally idempotent and may be called after any fact that changes cost or
+    /// priority. The actor hop to each pipeline preserves ordering per stream and never moves frame
+    /// work onto the main actor.
+    func rebalanceDecodeBudget() {
+        let plan = DecodeAdmissionPlanner.plan(
+            for: decodeDemands(), budget: decodeBudget,
+            maxSessions: MachineDecodeBudget.maximumSessions)
+        for stream in cameras.all {
+            guard let camera = stream.camera else { continue }
+            let key = StreamKey(camera: camera.id, quality: .main)
+            let mode = plan.mode(for: key) ?? .full
+            stream.decodeMode = mode
+            if let pipeline = stream.pipeline {
+                Task { await pipeline.setMode(mode) }
+            }
+        }
+        dependencies.logger.info(
+            .video, "decode plan applied",
+            ["committed": plan.committed.description,
+             "budget": decodeBudget.description,
+             "demoted": "\(plan.demoted.count)",
+             "pressure": plan.pressure.rawValue])
     }
 
     /// Whether the budget has room for one more camera at a mode that actually decodes.

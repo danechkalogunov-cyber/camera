@@ -165,6 +165,7 @@
             .overlay(alignment: .topTrailing) { statsReadout }
             .overlay(alignment: .bottomLeading) { elapsedReadout }
             .overlay(alignment: .bottomTrailing) { actionBar }
+            .overlay(alignment: .bottom) { audioMeter }
             .background { sizeReader }
             .overlay { cornerCover }
             .overlay { borders }
@@ -302,6 +303,25 @@
                 VTileActionBar(isRecording: isRecording, actions: barActions)
                     .padding(VTheme.Metrics.tileChromeInset)
                     .transition(.opacity)
+            }
+        }
+
+        /// Two-point activity bar, deliberately independent of mute state.
+        @ViewBuilder
+        private var audioMeter: some View {
+            if tileActions.enabled.contains(.mute) {
+                GeometryReader { proxy in
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .fill(VTheme.Color.Semantic.accent)
+                            .frame(width: proxy.size.width
+                                * CGFloat(min(1, max(0, tileActions.audioLevel))))
+                        Spacer(minLength: 0)
+                    }
+                }
+                .frame(height: 2)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
         }
 
