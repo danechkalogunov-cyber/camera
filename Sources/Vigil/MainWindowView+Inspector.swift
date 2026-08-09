@@ -17,6 +17,7 @@ import SwiftUI
 
 import VigilCore
 import VigilProtocols
+import VigilRender
 import VigilUI
 
 // MARK: - The inspector
@@ -51,7 +52,8 @@ extension MainWindowView {
                         presets: ptz.presets,
                         patrols: ptz.patrols,
                         runningPatrol: ptz.runningPatrol,
-                        image: deviceInfo.image ?? InspectorImageSettings(),
+                        image: selectedCamera.flatMap { localImageAdjustments.settings(for: $0.id) }
+                            ?? deviceInfo.image ?? InspectorImageSettings(),
                         events: inspectorEvents,
                         recording: recordingState)
     }
@@ -272,8 +274,30 @@ extension MainWindowView {
     /// the value so the control follows the pointer, and schedules the write for once the control
     /// has stopped moving. Wrapping it here would only add a hop before that.
     func writeImage(_ settings: InspectorImageSettings) {
-        guard let channel = selectedCamera?.channel else { return }
+        guard let camera = selectedCamera else { return }
+        if settings.isLocalPreviewOnly {
+            let local: InspectorImageSettings
+            if localImageAdjustments.settings(for: camera.id) == nil,
+               deviceInfo.image?.isLocalPreviewOnly != true {
+                local = localImageAdjustments.reset(camera.id)
+            } else {
+                local = settings
+                localImageAdjustments.save(local, for: camera.id)
+            }
+            deviceInfo.publishLocalImagePreview(local)
+            return
+        }
+        if localImageAdjustments.settings(for: camera.id) != nil {
+            localImageAdjustments.remove(camera.id)
+            deviceInfo.endLocalImagePreview()
+            return
+        }
+        let channel = camera.channel
         deviceInfo.writeImage(channel: channel, settings)
+    }
+
+    func localTileAdjustments(for cameraID: CameraID) -> TileColorAdjustments {
+        localImageAdjustments.adjustments(for: cameraID)
     }
 
     /// Puts the camera's picture back to its factory settings, and says what happened.
@@ -283,11 +307,19 @@ extension MainWindowView {
     /// at that moment. Every one of those used to be a log line and nothing else, which is why the
     /// button read as broken: the press produced no picture change and no explanation.
     func resetImage() {
-        guard let channel = selectedCamera?.channel else {
+        guard let camera = selectedCamera else {
             window.toast = MainWindowToast(kind: .warning,
                                            message: Self.localized("Connect a camera first"))
             return
         }
+        if localImageAdjustments.settings(for: camera.id) != nil {
+            let neutral = localImageAdjustments.reset(camera.id)
+            deviceInfo.publishLocalImagePreview(neutral)
+            window.toast = MainWindowToast(kind: .success,
+                                           message: Self.localized("Picture settings reset"))
+            return
+        }
+        let channel = camera.channel
         Task {
             switch await deviceInfo.resetImage(channel: channel) {
             case .reset:

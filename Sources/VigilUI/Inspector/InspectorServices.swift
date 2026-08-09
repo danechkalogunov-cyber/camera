@@ -209,6 +209,7 @@ package struct InspectorImageSettings: Sendable, Hashable {
     package var contrast: Int
     package var saturation: Int
     package var sharpness: Int
+    package var clientGamma: Int
 
     /// WDR off / on / auto, with its level.
     package var wdrMode: InspectorTriState
@@ -228,7 +229,8 @@ package struct InspectorImageSettings: Sendable, Hashable {
     package var isLocalPreviewOnly: Bool
 
     package init(brightness: Int = 50, contrast: Int = 50, saturation: Int = 50,
-                 sharpness: Int = 50, wdrMode: InspectorTriState = .off, wdrLevel: Int = 50,
+                 sharpness: Int = 50, clientGamma: Int = 50,
+                 wdrMode: InspectorTriState = .off, wdrLevel: Int = 50,
                  dayNightMode: InspectorDayNightMode = .auto,
                  irMode: InspectorTriState = .auto, irLevel: Int = 50,
                  flip: InspectorFlipMode = .off, isLocalPreviewOnly: Bool = false) {
@@ -236,6 +238,7 @@ package struct InspectorImageSettings: Sendable, Hashable {
         self.contrast = Self.clamp(contrast)
         self.saturation = Self.clamp(saturation)
         self.sharpness = Self.clamp(sharpness)
+        self.clientGamma = Self.clamp(clientGamma)
         self.wdrMode = wdrMode
         self.wdrLevel = Self.clamp(wdrLevel)
         self.dayNightMode = dayNightMode

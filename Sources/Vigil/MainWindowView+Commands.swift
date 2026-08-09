@@ -22,6 +22,24 @@ import VigilUI
 /// `private` reaches a type's extensions only within one file.
 extension MainWindowView {
 
+    /// Applies visual zoom and an edge-clamped drag only while zoomed in.
+    func digitalViewport(_ content: some View) -> some View {
+        content
+            .scaleEffect(window.digitalViewport.scale)
+            .offset(x: window.digitalViewport.offset.width * window.contentWidth,
+                    y: window.digitalViewport.offset.height * window.contentWidth)
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let width = max(1, window.contentWidth)
+                        window.digitalViewport.panGesture(to: CGSize(
+                            width: value.translation.width / width,
+                            height: value.translation.height / width))
+                    }
+                    .onEnded { _ in window.digitalViewport.endPanGesture() },
+                including: window.digitalViewport.scale > 1 ? .all : .none)
+    }
+
     /// Reads the picture controls, but only when the Image tab is on screen.
     func loadImageIfShown() async {
         guard window.inspectorTab == .image, let channel = session.camera?.channel else { return }

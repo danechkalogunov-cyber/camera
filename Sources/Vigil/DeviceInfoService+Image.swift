@@ -25,6 +25,25 @@ import VigilUI
 /// belongs to. Nothing outside this target can reach `DeviceInfoService` regardless.
 extension DeviceInfoService {
 
+    /// Publishes display-only values without putting them on the ISAPI write queue.
+    func publishLocalImagePreview(_ settings: InspectorImageSettings) {
+        pendingImage = nil
+        var local = settings
+        local.isLocalPreviewOnly = true
+        image = local
+    }
+
+    /// Returns the controls to the last camera-confirmed values when display-only mode ends.
+    func endLocalImagePreview() {
+        pendingImage = nil
+        guard var confirmed = confirmedImage else {
+            image = InspectorImageSettings()
+            return
+        }
+        confirmed.isLocalPreviewOnly = false
+        image = confirmed
+    }
+
     /// Reads the camera's picture controls into ``image``.
     ///
     /// Silent on failure, like the poster: a firmware that does not expose a control leaves that row
@@ -57,12 +76,9 @@ extension DeviceInfoService {
     /// handful per second. ``drainImageWrites(channel:)`` waits for the value to hold still for
     /// ``imageSettleTime`` and then writes only what it has settled on.
     ///
-    /// **Everything here is the camera's own setting.** There is no local image processing anywhere
-    /// in Vigil — the decode path is passthrough, straight from the network into
-    /// `AVSampleBufferDisplayLayer` — so every control on this tab is an ISAPI write to
-    /// `/Image/channels/{ch}/…` and the picture changes at the sensor, for everyone watching.
-    /// ⚠️ That is also why "Adjust my view only" only *withholds* the write: honouring it properly
-    /// needs a render-path adjustment stage that does not exist. Reported in ЧТО-НЕ-СДЕЛАНО.md.
+    /// Camera-owned values reach this method. Display-only values are intercepted by
+    /// `MainWindowView.writeImage`, persisted per camera and passed to the Metal shader instead;
+    /// they never enter this ISAPI queue or the encoded recording path.
     func writeImage(channel: ChannelID, _ wanted: InspectorImageSettings) {
         image = wanted
         pendingImage = wanted

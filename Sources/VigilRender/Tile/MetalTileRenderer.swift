@@ -17,11 +17,14 @@ public struct TileColorAdjustments: Sendable, Equatable {
     public var brightness: Float
     public var contrast: Float
     public var saturation: Float
+    public var gamma: Float
 
-    public init(brightness: Float = 0, contrast: Float = 1, saturation: Float = 1) {
+    public init(brightness: Float = 0, contrast: Float = 1, saturation: Float = 1,
+                gamma: Float = 1) {
         self.brightness = brightness.clamped(to: -1 ... 1)
         self.contrast = contrast.clamped(to: 0 ... 2)
         self.saturation = saturation.clamped(to: 0 ... 2)
+        self.gamma = gamma.clamped(to: 0.5 ... 2)
     }
 }
 
@@ -221,7 +224,8 @@ private struct TileShaderUniforms {
 
     init(crop: NormalizedVideoRect, adjustments: TileColorAdjustments, overlayCount: Int) {
         self.crop = SIMD4(crop.x, crop.y, crop.width, crop.height)
-        self.color = SIMD4(adjustments.brightness, adjustments.contrast, adjustments.saturation, 0)
+        self.color = SIMD4(adjustments.brightness, adjustments.contrast,
+                           adjustments.saturation, adjustments.gamma)
         self.overlayCount = UInt32(overlayCount)
     }
 }

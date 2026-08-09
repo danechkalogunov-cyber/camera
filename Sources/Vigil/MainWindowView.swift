@@ -142,6 +142,7 @@ struct MainWindowView: View {
     /// describe the *selected* camera and read the one above, while a tile's pill describes the
     /// camera it is drawn over. One dictionary lookup per tile per second is the whole cost.
     @State var measuredTelemetry: [CameraID: StreamTelemetrySnapshot] = [:]
+    @State var localImageAdjustments = LocalImageAdjustmentStore()
 
     /// Balanced with `NSCursor.unhide()` when cinema mode ends.
     ///
@@ -272,11 +273,7 @@ struct MainWindowView: View {
                 sidebarRail
             }
 
-            stageRoute
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scaleEffect(window.digitalViewport.scale)
-                .offset(x: window.digitalViewport.offset.width * window.contentWidth,
-                        y: window.digitalViewport.offset.height * window.contentWidth)
+            digitalViewport(stageRoute.frame(maxWidth: .infinity, maxHeight: .infinity))
                 // One place, and it reaches every tile on the stage — which is the whole
                 // reason this is an environment value rather than an argument threaded through
                 // three initialisers.

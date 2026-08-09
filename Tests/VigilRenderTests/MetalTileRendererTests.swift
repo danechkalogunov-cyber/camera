@@ -24,8 +24,9 @@ struct MetalTileRendererTests {
     }
 
     @Test func colorAdjustmentsRejectOutOfRangeValues() {
-        let values = TileColorAdjustments(brightness: 3, contrast: -1, saturation: 5)
-        #expect(values == TileColorAdjustments(brightness: 1, contrast: 0, saturation: 2))
+        let values = TileColorAdjustments(brightness: 3, contrast: -1, saturation: 5, gamma: 9)
+        #expect(values == TileColorAdjustments(brightness: 1, contrast: 0,
+                                              saturation: 2, gamma: 2))
     }
 
     @Test func tileDefaultsSelectMetalAndIdentityEffects() {

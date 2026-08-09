@@ -85,6 +85,7 @@
     package struct VDigitalViewport: Sendable, Hashable {
         package private(set) var scale: CGFloat = 1
         package private(set) var offset: CGSize = .zero
+        private var panOrigin: CGSize?
         package static let maximumScale: CGFloat = 8
 
         /// ⚠️ Spelled out, because Swift never synthesises a memberwise initialiser above
@@ -110,9 +111,21 @@
                     height: offset.height + translation.height))
         }
 
+        /// Applies one drag relative to the offset at gesture start, not relative to every event.
+        package mutating func panGesture(to translation: CGSize) {
+            guard scale > 1 else { return }
+            if panOrigin == nil { panOrigin = offset }
+            let origin = panOrigin ?? .zero
+            offset = clamped(CGSize(width: origin.width + translation.width,
+                                    height: origin.height + translation.height))
+        }
+
+        package mutating func endPanGesture() { panOrigin = nil }
+
         package mutating func reset() {
             scale = 1
             offset = .zero
+            panOrigin = nil
         }
 
         private func clamped(_ value: CGSize) -> CGSize {

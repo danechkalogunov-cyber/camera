@@ -40,6 +40,11 @@
             viewport.pan(by: CGSize(width: 100, height: -100))
             #expect(viewport.scale == 8)
             #expect(abs(viewport.offset.width) <= 0.4375)
+            let beforeDrag = viewport.offset
+            viewport.panGesture(to: CGSize(width: -0.1, height: 0.1))
+            viewport.panGesture(to: CGSize(width: -0.2, height: 0.2))
+            #expect(viewport.offset.width < beforeDrag.width)
+            viewport.endPanGesture()
             viewport.reset()
             #expect(viewport == VDigitalViewport())
         }

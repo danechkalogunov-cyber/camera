@@ -555,7 +555,9 @@
                 // `updateNSView` retargets the layer's gravity in place, so toggling this
                 // does not rebuild the view or interrupt the picture — it is the one tile
                 // option that is free to change.
-                options: TileRenderOptions(gravity: window.fillsTile ? .fill : .fit),
+                options: TileRenderOptions(
+                    gravity: window.fillsTile ? .fill : .fit,
+                    adjustments: localTileAdjustments(for: id)),
                 logger: session.dependencies.logger,
                 // Each report names the stream that made it, so a recovery restarts the camera
                 // that stalled rather than whichever one the window happens to be bound to.

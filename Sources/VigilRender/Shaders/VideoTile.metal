@@ -8,7 +8,7 @@ struct TileVertexOut {
 
 struct TileUniforms {
     float4 crop;              // origin.xy, size.xy in normalized source coordinates
-    float4 color;             // brightness, contrast, saturation, reserved
+    float4 color;             // brightness, contrast, saturation, gamma
     float4 overlayColor;
     uint overlayCount;
 };
@@ -38,6 +38,7 @@ fragment float4 videoTileFragment(
     float3 color = (pixel.rgb - 0.5) * uniforms.color.y + 0.5 + uniforms.color.x;
     float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
     color = mix(float3(luminance), color, uniforms.color.z);
+    color = pow(max(color, float3(0.0)), float3(1.0 / uniforms.color.w));
 
     float border = 0.0;
     for (uint index = 0; index < min(uniforms.overlayCount, 16u); ++index) {

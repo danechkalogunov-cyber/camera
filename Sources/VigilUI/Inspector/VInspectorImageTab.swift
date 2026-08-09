@@ -59,6 +59,8 @@ package struct VInspectorImageTab: View {
         VInspectorSliderRow("Contrast", value: level(\.contrast))
         VInspectorSliderRow("Saturation", value: level(\.saturation))
         VInspectorSliderRow("Sharpness", value: level(\.sharpness))
+        VInspectorSliderRow("Gamma", value: level(\.clientGamma),
+                            isEnabled: state.image.isLocalPreviewOnly)
         VInspectorToggleRow("Adjust my view only", isOn: localPreviewBinding)
         Text("""
             Local changes stay in Vigil's own render path and are never written to the camera, \
