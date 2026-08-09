@@ -14,6 +14,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 import VigilCore
+import VigilDiscovery
 import VigilProtocols
 
 private extension UTType {
@@ -78,8 +79,15 @@ extension MainWindowView {
             let stats = measuredTelemetry[camera.id]?.statistics ?? .init()
             files.append(DiagnosticsArchiveFile(
                 path: "streams/\(key)/stats.csv", text: Self.statisticsCSV(stats)))
-            let doctor = session.cameras.stream(for: camera.id)?.diagnosis
-                .map(String.init(describing:)) ?? "No Stream Doctor result recorded."
+            let doctor: String
+            if window.streamDoctorCameraID == camera.id, !window.streamDoctorOutcomes.isEmpty {
+                doctor = StreamDoctorResult(outcomes: window.streamDoctorOutcomes,
+                                            failures: window.streamDoctorFailures,
+                                            details: window.streamDoctorDetails).redactedText
+            } else {
+                doctor = session.cameras.stream(for: camera.id)?.diagnosis
+                    .map(String.init(describing:)) ?? "No Stream Doctor result recorded."
+            }
             files.append(DiagnosticsArchiveFile(path: "streams/\(key)/doctor.txt", text: doctor))
         }
         return files

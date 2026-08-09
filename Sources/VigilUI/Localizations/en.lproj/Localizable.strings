@@ -682,7 +682,6 @@
 /* TWO BUTTONS THAT ANSWER HONESTLY. Both features are absent rather than broken, and this
    project's rule is that a control answering to silence is worse than one not offered. */
 "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly.";
-"Stream Doctor is not in this build. The Info tab has the same numbers it would read." = "Stream Doctor is not in this build. The Info tab has the same numbers it would read.";
 "Automatic" = "Automatic";
 "Colour tag" = "Colour tag";
 "Enable camera" = "Enable camera";
@@ -765,7 +764,6 @@
 "This list" = "This list";
 
 // MARK: - Import, export and Stream Doctor (⇧⌘I, ⌥⌘E, ⌥⌘D), UX.md §8.5
-"Checking the camera's ports…" = "Checking the camera's ports…";
 "Choose a camera list or Vigil backup to restore." = "Choose a camera list or Vigil backup to restore.";
 "Unlock the Vigil backup" = "Unlock the Vigil backup";
 "Enter the passphrase used when this encrypted backup was created." = "Enter the passphrase used when this encrypted backup was created.";
@@ -857,6 +855,9 @@
 "Stop Watching Camera" = "Stop Watching Camera";
 "View Live" = "View Live";
 "Play Back" = "Play Back";
+"Copy Report" = "Copy Report";
+"Run Again" = "Run Again";
+"Waiting…" = "Waiting…";
 "Protect the backup with a passphrase" = "Protect the backup with a passphrase";
 "Use at least 12 characters. You will need this passphrase to restore the passwords." = "Use at least 12 characters. You will need this passphrase to restore the passwords.";
 "Passphrase (12 or more characters)" = "Passphrase (12 or more characters)";

@@ -127,21 +127,14 @@ extension MainWindowView {
         // with the playhead five seconds early (UX.md §9.1). Routed through the one function so the
         // two surfaces cannot drift apart about what "open this event" means.
         actions.onOpenEvent = { event in openArchive(at: event.instant) }
-        // ⛔ Both of these say what is true instead of doing nothing. A button that answers to
-        // silence is worse than one that is not offered — this project's own rule — and the two
-        // features behind them are genuinely absent rather than broken.
+        // Transport switching is still unavailable; Stream Doctor is a real report surface.
         actions.onSwapTransport = {
             window.toast = MainWindowToast(
                 kind: .warning,
                 message: Self.localized("This build streams over TCP only. UDP is refused at "
                                         + "SETUP rather than negotiated badly."))
         }
-        actions.onRunStreamDoctor = {
-            window.toast = MainWindowToast(
-                kind: .warning,
-                message: Self.localized("Stream Doctor is not in this build. The Info tab has the "
-                                        + "same numbers it would read."))
-        }
+        actions.onRunStreamDoctor = { runStreamDoctor() }
         return actions
     }
 

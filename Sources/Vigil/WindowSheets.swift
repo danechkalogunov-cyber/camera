@@ -459,6 +459,19 @@ extension MainWindowView {
                         window.csvImportPreview = nil
                     })
             }
+        case .streamDoctor:
+            StreamDoctorSheet(
+                cameraName: window.streamDoctorCameraName,
+                outcomes: window.streamDoctorOutcomes,
+                failures: window.streamDoctorFailures,
+                details: window.streamDoctorDetails,
+                isRunning: window.isStreamDoctorRunning,
+                onCopy: copyStreamDoctorReport,
+                onRunAgain: runStreamDoctor,
+                onClose: {
+                    window.streamDoctorTask?.cancel()
+                    window.sheet = nil
+                })
         }
     }
 }

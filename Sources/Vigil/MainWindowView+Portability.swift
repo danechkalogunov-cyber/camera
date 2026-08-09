@@ -454,27 +454,14 @@ extension MainWindowView {
 
     // MARK: - ⌥⌘D, Stream Doctor
 
-    /// Runs the credential-free connection test against the camera on screen (UX.md §11.1).
-    ///
-    /// The same prefix the connect form's `Test` button runs — TCP 80 and 554, then RTSP `OPTIONS`
-    /// — which until now could only be reached *before* connecting, from a form the user leaves as
-    /// soon as a picture appears. That is the wrong moment: a stream that has started misbehaving is
-    /// when someone wants to know whether the camera still answers, and by then the form is gone.
+    /// Opens the eleven-stage report and starts real control/media probes for the selected camera.
     func runStreamDoctor() {
-        guard let camera = session.camera else {
+        guard let camera = selectedCamera else {
             window.toast = MainWindowToast(kind: .warning,
                                            message: Self.localized("Connect a camera first"))
             return
         }
-        window.toast = MainWindowToast(kind: .info,
-                                       message: Self.localized("Checking the camera's ports…"))
-        session.testConnection(ConnectRequest(host: camera.host,
-                                              username: session.form.request.username,
-                                              password: "",
-                                              httpPort: camera.httpPort,
-                                              rtspPort: camera.rtspPort,
-                                              channel: camera.channel.value,
-                                              usesTLS: camera.useTLS))
+        beginStreamDoctor(camera: camera)
     }
 
     // MARK: - Private Helpers

@@ -665,7 +665,6 @@
 /* TWO BUTTONS THAT ANSWER HONESTLY. Both features are absent rather than broken, and this
    project's rule is that a control answering to silence is worse than one not offered. */
 "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "Эта сборка передаёт только по TCP. UDP отклоняется на SETUP, а не согласуется кое-как.";
-"Stream Doctor is not in this build. The Info tab has the same numbers it would read." = "Stream Doctor в эту сборку не входит. Во вкладке «Инфо» те же числа, которые он читал бы.";
 "Automatic" = "Автоматически";
 "Colour tag" = "Цветовая метка";
 "Enable camera" = "Включить камеру";
@@ -748,7 +747,6 @@
 "This list" = "Этот список";
 
 // MARK: - Import, export and Stream Doctor (⇧⌘I, ⌥⌘E, ⌥⌘D), UX.md §8.5
-"Checking the camera's ports…" = "Проверяю порты камеры…";
 "Choose a camera list or Vigil backup to restore." = "Выберите список камер или резервную копию Vigil.";
 "Unlock the Vigil backup" = "Разблокировать резервную копию Vigil";
 "Enter the passphrase used when this encrypted backup was created." = "Введите парольную фразу, заданную при создании этой резервной копии.";
@@ -840,6 +838,9 @@
 "Stop Watching Camera" = "Не следить за камерой";
 "View Live" = "Смотреть онлайн";
 "Play Back" = "Воспроизвести запись";
+"Copy Report" = "Копировать отчёт";
+"Run Again" = "Запустить снова";
+"Waiting…" = "Ожидание…";
 "Protect the backup with a passphrase" = "Защитите резервную копию парольной фразой";
 "Use at least 12 characters. You will need this passphrase to restore the passwords." = "Используйте не менее 12 символов. Эта фраза понадобится для восстановления паролей.";
 "Passphrase (12 or more characters)" = "Парольная фраза (не менее 12 символов)";

@@ -33,9 +33,8 @@ import VigilVideo
 /// evaluation. `StreamController` is an actor, so every call into it is `await`ed from a task that
 /// inherits this isolation; nothing blocks the main thread.
 ///
-/// **What it deliberately does not do:** no discovery, no channel enumeration, no Stream Doctor,
-/// no library persistence. Those are named in R1 and in the manifest and land in W2–W6; the slice's
-/// job is to prove the column from socket to pixel (`.vigil/SLICE.md`).
+/// Discovery, library persistence and window-owned diagnostics are injected around this model;
+/// its job is the media column from socket to pixel (`.vigil/SLICE.md`).
 @MainActor
 @Observable
 final class AppSessionModel {
@@ -415,9 +414,8 @@ final class AppSessionModel {
     /// Performs one of the remedies the diagnosis card offered.
     ///
     /// `ConnectDiagnosis` promises that every failure has at least one action; this is where the
-    /// promise is kept. Three of the nine remedies need machinery the slice does not have —
-    /// activation, ONVIF and Stream Doctor are W2–W4 — and each says so here rather than silently
-    /// doing nothing, because a button that does nothing is worse than one that is not offered.
+    /// promise is kept. Activation and ONVIF still require external/device machinery and say so
+    /// rather than silently doing nothing.
     func perform(_ remedy: ConnectRemedy) {
         switch remedy {
         case .checkAddress, .updatePassword:
@@ -453,7 +451,9 @@ final class AppSessionModel {
         case .useONVIF:
             unavailable("ONVIF is not in this build yet.")
         case .runStreamDoctor:
-            unavailable("Stream Doctor is not in this build yet.")
+            // The full report is window-owned. On the connect screen, run its credential-free
+            // prefix rather than presenting a dead remedy.
+            testConnection(form.request)
         }
     }
 

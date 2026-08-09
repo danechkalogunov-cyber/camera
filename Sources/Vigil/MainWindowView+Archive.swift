@@ -522,6 +522,12 @@
         /// at camera three's card. `F-LIV-01`'s remaining step is what makes the form follow the
         /// selection; until then this is where the line honestly falls.
         func applyRemedy(_ remedy: ConnectRemedy, to id: CameraID) {
+            if case .runStreamDoctor = remedy {
+                let camera = session.cameras.stream(for: id)?.camera
+                    ?? library.cameras.first { $0.id == id }
+                if let camera { beginStreamDoctor(camera: camera) }
+                return
+            }
             // The bound camera keeps every remedy exactly as it had it, including the log lines
             // `perform` writes for the ones that are really a reconnect.
             guard id != cameraID else { return session.perform(remedy) }

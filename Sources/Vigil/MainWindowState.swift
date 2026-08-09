@@ -15,6 +15,7 @@ import Observation
 import SwiftUI
 
 import VigilCore
+import VigilDiscovery
 import VigilProtocols
 import VigilUI
 
@@ -369,8 +370,15 @@ final class MainWindowState {
     /// The monotonically increasing request bridges those two owners without a global singleton.
     var exportDiagnosticsRequests: UInt64 = 0
 
-    /// Camera menu bridge and persisted watch-mode selection. Authorization is requested only when
-    /// the user adds a camera to this set.
+    var streamDoctorCameraName = ""
+    var streamDoctorCameraID: CameraID?
+    var streamDoctorOutcomes: [StreamDoctorStep: StreamDoctorOutcome] = [:]
+    var streamDoctorFailures: [StreamDoctorStep: StreamDoctorFailure] = [:]
+    var streamDoctorDetails: [StreamDoctorStep: String] = [:]
+    var isStreamDoctorRunning = false
+    @ObservationIgnored var streamDoctorTask: Task<Void, Never>?
+
+    /// Camera menu bridge and persisted watch-mode selection.
     var toggleWatchRequests: UInt64 = 0
     var watchedCameraIDs: Set<CameraID> = [] {
         didSet {
@@ -516,8 +524,9 @@ enum MainWindowSheet: Identifiable, Hashable {
     /// The keyboard cheat sheet — ⌘/, UX.md §11.1.
     case shortcuts
 
-    /// Editable, per-row camera import review.
     case csvImport
+
+    case streamDoctor
 
     /// Distinguishes one presentation from the next, which is what `sheet(item:)` keys on.
     var id: String {
@@ -529,6 +538,7 @@ enum MainWindowSheet: Identifiable, Hashable {
         case .editBookmark(let mark):   return "editBookmark.\(mark)"
         case .shortcuts:                return "shortcuts"
         case .csvImport:                return "csvImport"
+        case .streamDoctor:             return "streamDoctor"
         }
     }
 }
