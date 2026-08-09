@@ -196,6 +196,7 @@ extension MainWindowView {
         .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
         .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
         .onChange(of: window.openRecordingsFolderRequests) { _, _ in openRecordingsFolder() }
+        .onChange(of: window.exportDiagnosticsRequests) { _, _ in exportDiagnostics() }
     }
 
     /// Everything a coordinator learns the hard way, said out loud.

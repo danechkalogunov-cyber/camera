@@ -65,6 +65,9 @@ struct VigilCommands: Commands {
             Button(MainWindowView.localized("Save Snapshot")) { window.snapshotRequests &+= 1 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(session.camera == nil)
+            Button(MainWindowView.localized("Export Diagnostics…")) {
+                window.exportDiagnosticsRequests &+= 1
+            }
         }
 
         // A menu of our own, so `Camera` sits where §11.2 puts it rather than being folded into a

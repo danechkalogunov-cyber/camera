@@ -365,6 +365,10 @@ final class MainWindowState {
     /// Named layouts are encoded alongside the workspace by the library owner.
     var layoutPresets = VLayoutPresetCollection()
 
+    /// File ▸ Export Diagnostics is app-scene state, while the evidence lives in MainWindowView.
+    /// The monotonically increasing request bridges those two owners without a global singleton.
+    var exportDiagnosticsRequests: UInt64 = 0
+
     /// Custom 12×12 mosaic edit state; non-nil while the eight resize handles are active.
     var mosaicEditor: VMosaicEditor?
 

@@ -175,13 +175,9 @@ extension MainWindowView {
         }
     }
 
-    /// Puts a plain-text summary of the stream's state on the pasteboard.
-    ///
-    /// Not the diagnostics bundle `FEATURES.md` F-DAT-03 describes — that needs
-    /// `DiagnosticsBundleBuilder`, which does not exist. This is what the app can honestly produce
-    /// today: the numbers already on screen, in a form that can be pasted into a message. Nothing
-    /// here is a secret; the password never leaves the Keychain and the serial is the one the Info
-    /// tab already shows.
+    /// Puts a quick plain-text summary on the pasteboard. The complete, redacted support archive is
+    /// the separate File ▸ Export Diagnostics command; keeping this instant copy action is useful
+    /// for chat while avoiding an unexpected save panel from an inspector button named “Copy”.
     func copyDiagnostics() {
         let device = deviceInfo.identity
         let stats = telemetry.statistics

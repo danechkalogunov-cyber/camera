@@ -841,3 +841,11 @@
 "Mute All Audio" = "Mute All Audio";
 "Show in Finder" = "Show in Finder";
 "The snapshot set could not be written" = "The snapshot set could not be written";
+
+/* Diagnostics export */
+"Export Diagnostics…" = "Export Diagnostics…";
+"The archive is redacted and stays on this Mac until you choose to share it." = "The archive is redacted and stays on this Mac until you choose to share it.";
+"Building diagnostics archive…" = "Building diagnostics archive…";
+"Diagnostics archive exported." = "Diagnostics archive exported.";
+"Diagnostics export cancelled." = "Diagnostics export cancelled.";
+"Could not export diagnostics: %@" = "Could not export diagnostics: %@";
