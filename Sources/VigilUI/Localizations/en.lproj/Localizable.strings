@@ -708,6 +708,10 @@
 "Camera activated. You can add it now." = "Camera activated. You can add it now.";
 "Could not activate camera: %@" = "Could not activate camera: %@";
 "Could not activate camera." = "Could not activate camera.";
+"App visibility" = "App visibility";
+"Show Vigil in the menu bar" = "Show Vigil in the menu bar";
+"Run as a menu-bar-only app" = "Run as a menu-bar-only app";
+"Open Vigil from the menu-bar extra whenever you need the window." = "Open Vigil from the menu-bar extra whenever you need the window.";
 
 "HTTP port" = "HTTP port";
 

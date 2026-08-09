@@ -78,6 +78,7 @@ struct VigilApp: App {
     /// builder cannot reach state a view owns. Moving it up is the smaller of the two changes; the
     /// other is threading a dozen closures from the window back into the app.
     @State private var window = MainWindowState()
+    @AppStorage(GeneralPreferenceKey.showsMenuBarExtra) private var showsMenuBarExtra = true
 
     // MARK: - Initialisation
 
@@ -128,10 +129,10 @@ struct VigilApp: App {
             AuxiliarySceneView(title: "About Vigil", symbol: "info.circle")
         }
         Window("Settings", id: SceneID.settings) {
-            AuxiliarySceneView(title: "Settings", symbol: "gearshape")
+            GeneralSettingsView()
         }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $showsMenuBarExtra) {
             MenuBarExtraContent(session: session, window: window)
         } label: {
             MenuBarExtraLabel(session: session, isRecording: window.isRecording, window: window)

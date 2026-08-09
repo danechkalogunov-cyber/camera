@@ -40,9 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// A bundled app is already `.regular`, but a binary run straight from `swift build` output —
     /// which is exactly how this gets tested first — launches behind the terminal without this.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let menuBarOnly = UserDefaults.standard.bool(forKey: GeneralPreferenceKey.menuBarOnly)
+        AppVisibility.apply(menuBarOnly: menuBarOnly, hideWindows: menuBarOnly)
         // `activate()`, not `activate(ignoringOtherApps:)`: the latter is deprecated on macOS 14,
         // which is this app's floor.
-        NSApplication.shared.activate()
+        if !menuBarOnly { NSApplication.shared.activate() }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         let actions = [

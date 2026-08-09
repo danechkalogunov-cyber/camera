@@ -8,8 +8,11 @@
 #if os(macOS)
 
 import AppKit
+import ImageIO
+import Observation
 import SwiftUI
 
+import VigilISAPI
 import VigilProtocols
 import VigilUI
 
@@ -96,6 +99,7 @@ struct MenuBarExtraContent: View {
 
     let session: AppSessionModel
     @Bindable var window: MainWindowState
+    @State private var thumbnails = MenuBarThumbnailStore()
 
     private var rows: [CameraStream] {
         Array(session.cameras.all.sorted {
@@ -162,19 +166,38 @@ struct MenuBarExtraContent: View {
         }
         .padding(12)
         .frame(width: 340)
+        .task(id: rows.compactMap { $0.camera?.id }) {
+            await thumbnails.poll(cameras: rows.compactMap(\.camera), session: session)
+        }
     }
 
     private func cameraCell(_ stream: CameraStream) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(statusColor(stream.liveState)).frame(width: 7, height: 7)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: stream.camera?.displayName ?? "—").lineLimit(1)
-                Text(stream.liveState.statusWord).font(.caption).foregroundStyle(.secondary)
+        ZStack(alignment: .bottomLeading) {
+            if let id = stream.camera?.id, let image = thumbnails.images[id] {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Rectangle().fill(.quaternary)
+                Image(systemName: "video.slash")
+                    .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 0)
+
+            HStack(spacing: 5) {
+                Circle().fill(statusColor(stream.liveState)).frame(width: 7, height: 7)
+                Text(verbatim: stream.camera?.displayName ?? "—")
+                    .font(.caption.weight(.medium)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 7).padding(.vertical, 5)
+            .background(.black.opacity(0.62))
+            .foregroundStyle(.white)
         }
-        .padding(8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .frame(height: 78)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(stream.camera?.displayName ?? "Vigil")
+        .accessibilityValue(stream.liveState.statusWord)
     }
 
     private func statusColor(_ state: LiveConnectionState) -> Color {
@@ -200,6 +223,65 @@ struct MenuBarExtraContent: View {
     private func deferToMainWindow(_ request: MainWindowState.DeferredRequest) {
         window.deferredRequest = request
         openWindow(id: SceneID.main)
+    }
+}
+
+// MARK: - JPEG polling
+
+/// Small device-rendered pictures for the menu extra; no media decoder or second RTSP session.
+@MainActor
+@Observable
+final class MenuBarThumbnailStore {
+    private(set) var images: [CameraID: CGImage] = [:]
+
+    /// Polls at the required 1 Hz while the menu window exists, capped by the caller at eight.
+    func poll(cameras: [Camera], session: AppSessionModel) async {
+        let wanted = Set(cameras.map(\.id))
+        images = images.filter { wanted.contains($0.key) }
+        while !Task.isCancelled {
+            await refresh(cameras: cameras, session: session)
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func refresh(cameras: [Camera], session: AppSessionModel) async {
+        var authenticated: [(Camera, Credential)] = []
+        for camera in cameras.prefix(8) {
+            guard let credential = try? await session.credentials.credential(
+                for: camera.credentialRef) else { continue }
+            authenticated.append((camera, credential))
+        }
+
+        let logger = session.dependencies.logger
+        let clock = session.dependencies.clock
+        await withTaskGroup(of: (CameraID, Data?).self) { group in
+            for (camera, credential) in authenticated {
+                group.addTask {
+                    let client = ISAPIClient(
+                        endpoint: ISAPIEndpoint(host: camera.host, port: camera.httpPort,
+                                                useTLS: camera.useTLS),
+                        credential: credential,
+                        transport: URLSessionHTTPTransport(logger: logger),
+                        clock: clock,
+                        logger: logger)
+                    let route = SnapshotDeviceRoute(requester: client, clock: clock)
+                    return (camera.id, try? await route.fetchJPEG(channel: camera.channel))
+                }
+            }
+            for await (id, jpeg) in group {
+                guard let jpeg,
+                      let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+                      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 320,
+                      ] as CFDictionary) else { continue }
+                images[id] = image
+            }
+        }
     }
 }
 

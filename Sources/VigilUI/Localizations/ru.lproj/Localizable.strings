@@ -691,6 +691,10 @@
 "Camera activated. You can add it now." = "Камера активирована. Теперь её можно добавить.";
 "Could not activate camera: %@" = "Не удалось активировать камеру: %@";
 "Could not activate camera." = "Не удалось активировать камеру.";
+"App visibility" = "Отображение приложения";
+"Show Vigil in the menu bar" = "Показывать Vigil в строке меню";
+"Run as a menu-bar-only app" = "Работать только в строке меню";
+"Open Vigil from the menu-bar extra whenever you need the window." = "Окно Vigil всегда можно открыть из строки меню.";
 
 "HTTP port" = "HTTP-порт";
 
