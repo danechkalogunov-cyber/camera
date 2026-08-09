@@ -27,21 +27,72 @@ import VigilProtocols
 /// Reading it costs one lock acquisition per frame and nothing else. When no recording is running the
 /// read answers `nil` and the loop moves on, so the cost on the common path is a lock and a branch.
 final class RecordingTap: Sendable {
+    private struct State: Sendable {
+        var recorder: ClipRecorder?
+        var preRoll = PreRollBuffer()
+        /// Non-nil while a writer is opening. Frames arriving in that interval are held here so
+        /// the pre-roll/live join has neither a gap nor an ordering inversion.
+        var pending: [EncodedFrame]?
+    }
 
-    /// The recorder, or `nil` when nothing is being written.
-    private let current = OSAllocatedUnfairLock<ClipRecorder?>(initialState: nil)
+    private let state = OSAllocatedUnfairLock<State>(initialState: State())
 
     /// Creates an empty tap.
     init() {}
 
-    /// Installs a recorder, replacing any previous one.
-    func attach(_ recorder: ClipRecorder?) {
-        current.withLock { $0 = recorder }
+    /// Routes one live frame and keeps the bounded history warm even while recording.
+    func route(_ frame: EncodedFrame) -> ClipRecorder? {
+        state.withLock { state in
+            state.preRoll.append(frame)
+            if state.pending != nil {
+                state.pending?.append(frame)
+                return nil
+            }
+            return state.recorder
+        }
     }
 
     /// The recorder to feed, if any.
     func recorder() -> ClipRecorder? {
-        current.withLock { $0 }
+        state.withLock { $0.recorder }
+    }
+
+    /// Freezes a pre-roll snapshot and starts collecting the frames that follow it.
+    func prepareStart(seconds: Double) -> [EncodedFrame] {
+        state.withLock { state in
+            state.preRoll.targetSeconds = seconds
+            state.pending = []
+            return state.preRoll.drain(seconds: seconds)
+        }
+    }
+
+    /// Drains frames that arrived while older pre-roll was appended. Returns `nil` only after the
+    /// recorder has been installed atomically, at which point new frames route straight to it.
+    func handOffPending(to recorder: ClipRecorder) -> [EncodedFrame]? {
+        state.withLock { state in
+            guard let pending = state.pending else {
+                state.recorder = recorder
+                return nil
+            }
+            if pending.isEmpty {
+                state.pending = nil
+                state.recorder = recorder
+                return nil
+            }
+            state.pending = []
+            return pending
+        }
+    }
+
+    func cancelStart() {
+        state.withLock { state in
+            state.pending = nil
+            state.recorder = nil
+        }
+    }
+
+    func detach() {
+        state.withLock { $0.recorder = nil }
     }
 }
 
@@ -126,11 +177,10 @@ final class RecordingCoordinator {
 
     // MARK: - API
 
-    /// Starts writing a clip from the next keyframe.
+    /// Starts writing a clip from the oldest retained pre-roll keyframe.
     ///
-    /// Returns immediately. `ClipRecorder` holds its own keyframe gate, so the file does not open
-    /// until a decodable starting point arrives — which is why ``isRecording`` goes true here while
-    /// bytes may not land for another moment.
+    /// Returns immediately. The recorder opens asynchronously, receives a keyframe-aligned history,
+    /// catches up with frames accumulated during opening, then switches atomically to the live path.
     ///
     /// - Parameters:
     ///   - camera: the camera being recorded, for the file name and the metadata.
@@ -143,8 +193,9 @@ final class RecordingCoordinator {
                codec: VideoCodec,
                parameterSets: ParameterSets?,
                resolution: Resolution?,
+               preRollSeconds: Double = 10,
                requestKeyframe: @escaping @Sendable () -> Void) {
-        guard !isRecording else { return }
+        guard !isRecording, !isSettlingClip else { return }
 
         let info = RecordingCameraInfo(id: camera.id,
                                        slug: Self.slug(for: camera),
@@ -171,6 +222,7 @@ final class RecordingCoordinator {
                                     logger: logger,
                                     requestKeyframe: requestKeyframe)
         self.recorder = recorder
+        let buffered = tap.prepareStart(seconds: preRollSeconds)
         // Set before the `Task`, not inside it: `recorder.start` opens the writer, so the
         // `.partial` file can exist before any state this method sets asynchronously is visible.
         isSettlingClip = true
@@ -180,9 +232,13 @@ final class RecordingCoordinator {
                 try await recorder.start(codec: codec,
                                          parameterSets: parameterSets,
                                          resolution: resolution)
-                // Only now does the tap see it. Attaching before `start` would let the frame loop
-                // append into a recorder that had not opened its writer.
-                tap.attach(recorder)
+                // Oldest to newest. Once the frozen snapshot is written, repeatedly take the frames
+                // that arrived during the write. The final empty handoff installs the live recorder
+                // under the same lock the frame path reads, so no boundary frame can disappear.
+                for frame in buffered { await recorder.append(frame) }
+                while let pending = tap.handOffPending(to: recorder) {
+                    for frame in pending { await recorder.append(frame) }
+                }
                 isRecording = true
                 startedAt = Date()
                 lastFailure = nil
@@ -191,6 +247,7 @@ final class RecordingCoordinator {
                 // settling. On the failure path there is nothing left to own.
                 isSettlingClip = false
             } catch {
+                tap.cancelStart()
                 self.recorder = nil
                 isSettlingClip = false
                 lastFailure = String(describing: error)
@@ -205,7 +262,7 @@ final class RecordingCoordinator {
     /// finishing. Safe to call when nothing is recording.
     func stop() {
         guard let recorder, isRecording else { return }
-        tap.attach(nil)
+        tap.detach()
         isRecording = false
         startedAt = nil
         self.recorder = nil
