@@ -361,6 +361,18 @@ import VigilProtocols
         #expect(G711.encode(pcm, law: .aLaw) == payload)
     }
 
+    @Test func nativeSampleEncoderMatchesLittleEndianPCMEncoder() {
+        let samples: [Int16] = [Int16.min, -1_000, 0, 1_000, Int16.max]
+        var pcm = Data()
+        for sample in samples {
+            let bits = UInt16(bitPattern: sample)
+            pcm.append(UInt8(truncatingIfNeeded: bits))
+            pcm.append(UInt8(truncatingIfNeeded: bits >> 8))
+        }
+        #expect(G711.encode(samples, law: .muLaw) == G711.encode(pcm, law: .muLaw))
+        #expect(G711.encode(samples, law: .aLaw) == G711.encode(pcm, law: .aLaw))
+    }
+
     /// An empty payload is reported, and an odd trailing byte on the encode path is ignored.
     @Test func g711HandlesEmptyAndOddLengthBuffers() throws {
         #expect(G711.decode(Data(), law: .aLaw).isEmpty)

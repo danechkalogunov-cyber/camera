@@ -23,6 +23,9 @@ package enum VTileAction: String, Sendable, Hashable, CaseIterable, Identifiable
     /// This camera's audio.
     case mute
 
+    /// Momentary microphone upload to this camera.
+    case talk
+
     /// Save a still.
     case snapshot
 
@@ -61,6 +64,7 @@ package enum VTileAction: String, Sendable, Hashable, CaseIterable, Identifiable
     package func symbol(isRecording: Bool, isMuted: Bool, isFilled: Bool) -> VTheme.Symbol {
         switch self {
         case .mute:     return isMuted ? .mute : .unmuted
+        case .talk:     return .pushToTalk
         case .snapshot: return .snapshot
         case .record:   return isRecording ? .recording : .record
         case .ptz:      return .ptzPad
@@ -75,6 +79,7 @@ package enum VTileAction: String, Sendable, Hashable, CaseIterable, Identifiable
     package var accessibilityLabel: LocalizedStringKey {
         switch self {
         case .mute:     return "Mute"
+        case .talk:     return "Push to Talk"
         case .snapshot: return "Snapshot"
         case .record:   return "Record"
         case .ptz:      return "PTZ"
@@ -110,6 +115,12 @@ package struct VTileActions {
 
     /// Whether the picture is filled rather than fitted, for the arrows.
     package var isFilled = false
+
+    /// Momentary talk state and press/release hooks; separate from `perform` because release is an
+    /// action with the stronger cleanup guarantee.
+    package var isTalking = false
+    package var beginTalk: () -> Void = {}
+    package var endTalk: () -> Void = {}
 
     /// Performs one action.
     package var perform: (VTileAction) -> Void = { _ in }
@@ -162,6 +173,7 @@ package struct VTileActionBar: View {
 
     /// What the buttons do.
     package let actions: VTileActions
+    @State private var talkPressed = false
 
     /// Creates the bar.
     package init(isRecording: Bool, actions: VTileActions) {
@@ -188,7 +200,9 @@ package struct VTileActionBar: View {
         let symbol = action.symbol(isRecording: isRecording,
                                    isMuted: actions.isMuted,
                                    isFilled: actions.isFilled)
-        return Button { actions.perform(action) } label: {
+        return Button {
+            if action != .talk { actions.perform(action) }
+        } label: {
             symbol.image()
                 .vIcon(size: VTheme.Icon.sm)
                 // Record turns red while it is running — the one button whose *state* is the point
@@ -202,11 +216,25 @@ package struct VTileActionBar: View {
         .disabled(!isEnabled)
         .help(action.accessibilityLabel)
         .accessibilityLabel(Text(action.accessibilityLabel, bundle: .vigilUI))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard action == .talk, isEnabled, !talkPressed else { return }
+                    talkPressed = true
+                    actions.beginTalk()
+                }
+                .onEnded { _ in
+                    guard action == .talk, talkPressed else { return }
+                    talkPressed = false
+                    actions.endTalk()
+                }
+        )
     }
 
     private func tint(for action: VTileAction, isEnabled: Bool) -> SwiftUI.Color {
         guard isEnabled else { return VTheme.Color.Text.onVideoDim }
         if action == .record, isRecording { return VTheme.Color.Semantic.live }
+        if action == .talk, actions.isTalking { return VTheme.Color.Semantic.live }
         return VTheme.Color.Text.onVideo
     }
 }

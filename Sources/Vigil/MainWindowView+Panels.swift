@@ -11,6 +11,31 @@ import SwiftUI
 import VigilUI
 
 extension MainWindowView {
+
+    /// A visible half-duplex state and live microphone level while the key/button is held.
+    @ViewBuilder
+    var talkingOverlay: some View {
+        if session.twoWayAudio.isTalking {
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text("Talking", bundle: .vigilUI).font(.caption.weight(.semibold))
+                GeometryReader { proxy in
+                    Capsule().fill(.white.opacity(0.22))
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(.white).frame(
+                                width: proxy.size.width
+                                    * CGFloat(min(1, session.twoWayAudio.inputLevel * 5)))
+                        }
+                }
+                .frame(width: 56, height: 4)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(.red.opacity(0.88), in: Capsule())
+            .padding(.top, 10)
+            .allowsHitTesting(false)
+        }
+    }
     // MARK: - Panels
 
     /// The camera list, presenting the single session camera as a one-element library.

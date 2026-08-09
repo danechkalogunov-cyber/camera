@@ -265,9 +265,16 @@ extension MainWindowView {
         if session.cameras.stream(for: cameraID)?.hasAudio == true {
             actions.enabled.insert(.mute)
         }
+        if session.twoWayAudio.supportedCameraIDs.contains(cameraID) {
+            actions.enabled.insert(.talk)
+        }
         actions.isMuted = session.cameras.stream(for: cameraID)?.isAudioMuted ?? true
         actions.audioLevel = session.cameras.stream(for: cameraID)?.audioLevel ?? 0
         actions.isFilled = window.fillsTile
+        actions.isTalking = session.twoWayAudio.activeCameraID == cameraID
+            && session.twoWayAudio.isTalking
+        actions.beginTalk = { beginPushToTalk() }
+        actions.endTalk = { session.twoWayAudio.end() }
         actions.perform = { action in
             switch action {
             case .snapshot: takeSnapshot()
@@ -293,6 +300,8 @@ extension MainWindowView {
                 closeStageCell()
             case .mute:
                 session.toggleAudio(for: cameraID)
+            case .talk:
+                break
             }
         }
         return actions

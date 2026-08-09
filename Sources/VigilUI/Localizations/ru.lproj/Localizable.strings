@@ -760,6 +760,11 @@
 "cameras will replace the current configuration. " = "камер заменят текущую конфигурацию. ";
 "Replace Configuration" = "Заменить конфигурацию";
 "Configuration restored." = "Конфигурация восстановлена.";
+"Push to Talk" = "Говорить";
+"Talking" = "Передача голоса";
+"Vigil needs microphone access to talk to your cameras" = "Vigil нужен доступ к микрофону для разговора через камеры";
+"Open Settings" = "Открыть настройки";
+"Two-way audio failed: %@" = "Ошибка двустороннего звука: %@";
 "That passphrase didn't work." = "Эта парольная фраза не подошла.";
 "This backup file is damaged." = "Файл резервной копии повреждён.";
 "Could not import that configuration: %@" = "Не удалось импортировать конфигурацию: %@";

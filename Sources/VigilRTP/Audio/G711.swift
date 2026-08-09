@@ -68,6 +68,15 @@ public enum G711 {
         return out
     }
 
+    /// Encodes host-native signed samples without an intermediate PCM byte buffer.
+    public static func encode(_ samples: [Int16], law: Law) -> Data {
+        var out = Data(capacity: samples.count)
+        for value in samples {
+            out.append(law == .aLaw ? linearToALaw(value) : linearToMuLaw(value))
+        }
+        return out
+    }
+
     /// The 256-entry µ-law decode table, generated once from `muLawToLinear`.
     public static let muLawTable: [Int16] = (0...255).map { muLawToLinear(UInt8($0)) }
 

@@ -71,6 +71,12 @@ extension MainWindowView {
                 Task { @MainActor in streamLifecycle.stop() }
             })
         }
+        .onKeyPress(keys: [KeyEquivalent(Character("t"))], phases: [.down, .up]) { press in
+            if press.phase == .down { beginPushToTalk() }
+            else { session.twoWayAudio.end() }
+            return .handled
+        }
+        .onDisappear { session.twoWayAudio.end() }
     }
 
     /// What a picture arriving — or stopping — means.
@@ -146,7 +152,12 @@ extension MainWindowView {
         // The capability read is cached for 24 h by the session, so re-running this on a tab change
         // costs nothing after the first time — and the coordinator ignores a repeat for the same
         // channel anyway.
-        .task(id: deviceInfoReady) { followPTZ() }
+        .task(id: deviceInfoReady) {
+            followPTZ()
+            if let camera = selectedCamera {
+                await session.twoWayAudio.probe(camera: camera, deviceSession: deviceInfo.session)
+            }
+        }
         // The index is only worth reading when the Recordings screen is actually on the stage:
         // it is a paged search at the device and a camera with a full card answers slowly.
         .task(id: archiveTrigger) { await loadArchive() }
@@ -201,6 +212,26 @@ extension MainWindowView {
         // The mirror the menu reads to say Start or Stop. One writer, here.
         .onChange(of: recording.isRecording, initial: true) { _, isRecording in
             window.isRecording = isRecording
+        }
+        .onChange(of: session.twoWayAudio.state) { _, state in
+            guard case .failed(let reason) = state else { return }
+            if reason == "microphonePermission" {
+                window.toast = MainWindowToast(
+                    kind: .error,
+                    message: Self.localized("Vigil needs microphone access to talk to your cameras"),
+                    actionTitle: "Open Settings",
+                    action: {
+                        let settings = "x-apple.systempreferences:com.apple.preference.security"
+                            + "?Privacy_Microphone"
+                        if let url = URL(string: settings) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    })
+            } else {
+                window.toast = MainWindowToast(
+                    kind: .error,
+                    message: String(format: Self.localized("Two-way audio failed: %@"), reason))
+            }
         }
         // ⚠️ A toast is the right shape for a recovery — a list rebuilt from a backup, an add the
         // store refused — and the wrong one for read-only, which is a condition rather than an

@@ -150,6 +150,14 @@ public actor AudioPlaybackEngine {
         }
     }
 
+    /// Reduces the camera's own speaker route during push-to-talk to prevent acoustic feedback.
+    /// A muted route stays muted; ending talk restores only a route the user had enabled.
+    public func setDucked(_ ducked: Bool, for key: StreamKey) {
+        let route = route(for: key)
+        guard !route.muted else { return }
+        ramp(route.player, to: ducked ? 0.2 : 1)
+    }
+
     /// Unmutes one camera and fades every other route out.
     public func solo(_ key: StreamKey) {
         for (candidate, route) in routes {

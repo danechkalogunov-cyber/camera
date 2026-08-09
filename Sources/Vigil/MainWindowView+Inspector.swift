@@ -25,6 +25,12 @@ import VigilUI
 /// `private` reaches a type's extensions only within one file.
 extension MainWindowView {
 
+    /// Begins the selected camera's capability-vetted half-duplex talk session.
+    func beginPushToTalk() {
+        guard let camera = selectedCamera else { return }
+        session.twoWayAudio.begin(camera: camera, deviceInfo: deviceInfo, appSession: session)
+    }
+
     /// What the inspector shows.
     ///
     /// Only the fields the slice can actually answer are set. The rest keep their defaults, so a

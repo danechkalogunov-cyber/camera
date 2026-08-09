@@ -387,6 +387,7 @@ struct MainWindowView: View {
         .overlay(alignment: .bottom) { cinemaBar }
         .overlay(alignment: .topLeading) { overflowMenu }
         .overlay { paletteOverlay }
+        .overlay(alignment: .top) { talkingOverlay }
     }
 
     /// The name and the way out, while the chrome is gone.

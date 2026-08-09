@@ -57,16 +57,15 @@ public struct URLSessionHTTPTransport: HTTPTransporting, Sendable {
         try await pool.stream(request)
     }
 
-    /// Chunked upload. **Not implemented in the pure transport.**
-    ///
-    /// A chunked request body needs `uploadTask(withStreamedRequest:)` and a bound
-    /// `InputStream`/`OutputStream` pair; `Stream.getBoundStreams` is unimplemented on
-    /// swift-corelibs-foundation, so an implementation here could not be compiled *or* run in the
-    /// Linux CI that gates this module, and shipping an unverified one is how a feature looks
-    /// finished and is not. Two-way audio therefore requires a macOS transport that `VigilCore`
-    /// injects; every test uses a fixture transport.
+    /// Opens the caller-driven request body used by two-way audio. Darwin supplies bound streams;
+    /// swift-corelibs Foundation does not, so Linux keeps the explicit unsupported result while the
+    /// shipping macOS transport uses the same authenticated URLRequest and audio lane.
     public func upload(_ request: HTTPRequest) async throws(ISAPIError) -> any HTTPUploadHandle {
+        #if os(macOS)
+        return try await pool.upload(request)
+        #else
         throw ISAPIError.notSupported(resource: request.url.path)
+        #endif
     }
 }
 
@@ -159,6 +158,30 @@ actor URLSessionLanePool {
     }
 
     // MARK: Streaming
+
+    #if os(macOS)
+    /// Starts a streamed upload backed by Foundation's bound input/output stream pair.
+    func upload(_ request: HTTPRequest) throws -> any HTTPUploadHandle {
+        var input: InputStream?
+        var output: OutputStream?
+        Stream.getBoundStreams(withBufferSize: 64 * 1024,
+                               inputStream: &input, outputStream: &output)
+        guard let input, let output else {
+            throw ISAPIError.notConnected("could not create the audio upload stream")
+        }
+        var urlRequest = Self.makeURLRequest(request)
+        urlRequest.httpBodyStream = input
+        urlRequest.setValue("chunked", forHTTPHeaderField: "Transfer-Encoding")
+        let session = URLSession(configuration: Self.configuration(for: .audio,
+                                                                   configuration: configuration))
+        let task = session.uploadTask(withStreamedRequest: urlRequest)
+        let handle = DarwinHTTPUploadHandle(input: input, output: output, task: task,
+                                            session: session, request: request)
+        output.open()
+        task.resume()
+        return handle
+    }
+    #endif
 
     /// Opens a streaming request on its own session, so the delegate's lifetime is the stream's.
     func stream(_ request: HTTPRequest) async throws(ISAPIError)
@@ -281,6 +304,77 @@ actor URLSessionLanePool {
         }
     }
 }
+
+#if os(macOS)
+
+/// Actor-isolated writer for a URLSession streamed upload. The 64 KiB bound-stream buffer is far
+/// larger than the talk queue's 80 ms maximum batch; a full buffer yields briefly instead of
+/// blocking the cooperative executor, and a peer close becomes the domain's normal network error.
+private actor DarwinHTTPUploadHandle: HTTPUploadHandle {
+    private let input: InputStream
+    private let output: OutputStream
+    private let task: URLSessionUploadTask
+    private let session: URLSession
+    private let request: HTTPRequest
+    private var finished = false
+
+    init(input: InputStream, output: OutputStream, task: URLSessionUploadTask,
+         session: URLSession, request: HTTPRequest) {
+        self.input = input
+        self.output = output
+        self.task = task
+        self.session = session
+        self.request = request
+    }
+
+    var isOpen: Bool {
+        !finished && task.state != .completed && task.state != .canceling
+    }
+
+    func send(_ chunk: Data) async throws(ISAPIError) {
+        guard isOpen else { throw transportFailure() }
+        var offset = 0
+        while offset < chunk.count {
+            if let error = task.error { throw URLSessionLanePool.map(error, request: request) }
+            guard output.streamStatus != .error && output.streamStatus != .closed else {
+                throw transportFailure()
+            }
+            if !output.hasSpaceAvailable {
+                try? await Task.sleep(for: .milliseconds(2))
+                continue
+            }
+            let written = chunk.withUnsafeBytes { bytes -> Int in
+                guard let base = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return 0
+                }
+                return output.write(base.advanced(by: offset), maxLength: chunk.count - offset)
+            }
+            guard written >= 0 else { throw transportFailure() }
+            if written == 0 {
+                try? await Task.sleep(for: .milliseconds(2))
+            } else {
+                offset += written
+            }
+        }
+    }
+
+    func finish() {
+        guard !finished else { return }
+        finished = true
+        output.close()
+        session.finishTasksAndInvalidate()
+    }
+
+    private func transportFailure() -> ISAPIError {
+        if let error = task.error { return URLSessionLanePool.map(error, request: request) }
+        if let error = output.streamError {
+            return ISAPIError.notConnected(String(describing: error))
+        }
+        return ISAPIError.notConnected("the camera closed the audio upload")
+    }
+}
+
+#endif
 
 // MARK: - Streaming delegate
 

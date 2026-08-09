@@ -360,14 +360,14 @@ public actor ISAPIClient {
         try await guardBeforeSending()
         let uri = endpoint.requestURI(resource, query: [])
         let url = try endpoint.url(resource, query: [])
-        var request = HTTPRequest(url: url, method: "POST",
+        var request = HTTPRequest(url: url, method: "PUT",
                                   headers: baseHeaders(extra: .init()), body: nil,
                                   timeout: configuration.streamIdleTimeout, lane: .audio)
         request.headers["Content-Type"] = contentType
         // A streamed body cannot be replayed after a 401, so the first attempt must already carry
         // a valid header (spec-isapi §5, reason 2). Callers issue a cheap GET first when the
         // challenge is not yet cached.
-        if let authorization = await digest.header(for: "POST", uri: uri, credential: credential) {
+        if let authorization = await digest.header(for: "PUT", uri: uri, credential: credential) {
             request.headers["Authorization"] = authorization
         }
         return try await transport.upload(request)

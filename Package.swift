@@ -147,7 +147,7 @@ let package = Package(
         ),
         .target(
             name: "VigilVideo",
-            dependencies: ["VigilProtocols", "VigilBitstream"],
+            dependencies: ["VigilProtocols", "VigilBitstream", "VigilRTP"],
             path: "Sources/VigilVideo",
             swiftSettings: apple
         ),

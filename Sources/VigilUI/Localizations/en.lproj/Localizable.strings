@@ -777,6 +777,11 @@
 "cameras will replace the current configuration. " = "cameras will replace the current configuration. ";
 "Replace Configuration" = "Replace Configuration";
 "Configuration restored." = "Configuration restored.";
+"Push to Talk" = "Push to Talk";
+"Talking" = "Talking";
+"Vigil needs microphone access to talk to your cameras" = "Vigil needs microphone access to talk to your cameras";
+"Open Settings" = "Open Settings";
+"Two-way audio failed: %@" = "Two-way audio failed: %@";
 "That passphrase didn't work." = "That passphrase didn't work.";
 "This backup file is damaged." = "This backup file is damaged.";
 "Could not import that configuration: %@" = "Could not import that configuration: %@";
