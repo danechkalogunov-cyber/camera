@@ -93,6 +93,68 @@ struct DataPortabilityTests {
         }
     }
 
+    @Test func csvPreviewKeepsValidRowsBesideNamedFailures() throws {
+        let csv = "host,http_port\r\nfront.local,80\r\nbad.local,nope\r\nback.local,443\r\n"
+        let preview = try CameraCSVImporter.preview(Data(csv.utf8))
+        #expect(preview.rows.count == 3)
+        #expect(preview.validCameras.map(\.host) == ["front.local", "back.local"])
+        #expect(preview.invalidCount == 1)
+        #expect(preview.rows[1].sourceRow == 3)
+        #expect(preview.rows[1].failure
+            == .invalidInteger(row: 3, column: "httpport"))
+    }
+
+    @Test func csvPreviewCarriesCredentialAndGroupPromptsWithoutASecret() throws {
+        let csv = "host,username,group\r\ncamera.local,operator,Outside\r\n"
+        let row = try #require(CameraCSVImporter.preview(Data(csv.utf8)).rows.first)
+        #expect(row.username == "operator")
+        #expect(row.groupName == "Outside")
+        #expect(row.camera?.host == "camera.local")
+    }
+
+    @Test func csvDetectsSemicolonAndAcceptsSnakeCaseHeader() throws {
+        let csv = "\u{FEFF}host;name;http_port;use_tls;stream;color_tag\r\n"
+            + "192.0.2.2;\"Gate, north\";443;yes;sub;purple\r\n"
+        let camera = try #require(CameraCSVImporter.decode(Data(csv.utf8)).first)
+        #expect(camera.name == "Gate, north")
+        #expect(camera.httpPort == 443)
+        #expect(camera.useTLS)
+        #expect(camera.preferredQuality == .sub)
+        #expect(camera.colorTag == .purple)
+    }
+
+    @Test func csvDetectsTabDelimiter() throws {
+        let csv = "name\thost\trtsp_port\nBack\tcamera.local\t8554\n"
+        let camera = try #require(CameraCSVImporter.decode(Data(csv.utf8)).first)
+        #expect(camera.name == "Back")
+        #expect(camera.rtspPort == 8554)
+    }
+
+    @Test func csvAcceptsWindows1251() throws {
+        var data = Data("host;name\r\ncamera.local;".utf8)
+        data.append(contentsOf: [0xCA, 0xE0, 0xEC, 0xE5, 0xF0, 0xE0]) // Камера
+        data.append(contentsOf: [0x0D, 0x0A])
+        let camera = try #require(CameraCSVImporter.decode(data).first)
+        #expect(camera.name == "Камера")
+    }
+
+    @Test func csvExportHasNormativeHeaderAndNeverAPasswordColumn() throws {
+        let camera = Camera(name: "Gate, \"north\"\nlevel 1", host: "camera.local",
+                            preferredQuality: .main, colorTag: .blue)
+        let data = CameraCSVExporter.encode([camera], groupNames: [camera.id: "Outside"],
+                                            usernames: [camera.id: "operator"])
+        let text = try #require(String(data: data, encoding: .utf8))
+        #expect(text.hasPrefix(CameraCSVExporter.header.joined(separator: ",") + "\r\n"))
+        #expect(!CameraCSVExporter.header.contains("password"))
+        #expect(text.contains("\"Gate, \"\"north\"\"\nlevel 1\""))
+        #expect(text.hasSuffix("\r\n"))
+
+        let restored = try #require(CameraCSVImporter.decode(data).first)
+        #expect(restored.name == camera.name)
+        #expect(restored.preferredQuality == .main)
+        #expect(restored.colorTag == .blue)
+    }
+
     @Test func diagnosticFileScrubsStructuredAndEmbeddedSecrets() throws {
         let data = try DiagnosticBundleBuilder.build(
             createdAt: Date(timeIntervalSince1970: 0),

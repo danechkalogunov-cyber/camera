@@ -399,6 +399,10 @@ final class MainWindowState {
     /// sheets at once" unrepresentable instead of merely unlikely.
     var sheet: MainWindowSheet?
 
+    /// Parsed CSV rows waiting for explicit review. Kept separate from the sheet enum because the
+    /// rows are editable state, not presentation identity.
+    var csvImportPreview: CameraCSVImporter.Preview?
+
     /// Whether the archive scrubber is laid over the bottom of the stage.
     ///
     /// Opening a camera is a layout change — `.single` with the inspector away — and this is the
@@ -496,6 +500,9 @@ enum MainWindowSheet: Identifiable, Hashable {
     /// The keyboard cheat sheet — ⌘/, UX.md §11.1.
     case shortcuts
 
+    /// Editable, per-row camera import review.
+    case csvImport
+
     /// Distinguishes one presentation from the next, which is what `sheet(item:)` keys on.
     var id: String {
         switch self {
@@ -505,6 +512,7 @@ enum MainWindowSheet: Identifiable, Hashable {
         case .newBookmark(let instant): return "newBookmark.\(instant.timeIntervalSince1970)"
         case .editBookmark(let mark):   return "editBookmark.\(mark)"
         case .shortcuts:                return "shortcuts"
+        case .csvImport:                return "csvImport"
         }
     }
 }

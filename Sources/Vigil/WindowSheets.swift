@@ -445,6 +445,20 @@ extension MainWindowView {
                           onCancel: { window.sheet = nil })
         case .shortcuts:
             VShortcutsSheet(sections: VShortcutReference.sections) { window.sheet = nil }
+        case .csvImport:
+            if let preview = window.csvImportPreview {
+                CSVImportPreviewSheet(
+                    preview: preview,
+                    onImport: { rows in
+                        window.sheet = nil
+                        window.csvImportPreview = nil
+                        importPreviewRows(rows)
+                    },
+                    onCancel: {
+                        window.sheet = nil
+                        window.csvImportPreview = nil
+                    })
+            }
         }
     }
 }

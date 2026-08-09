@@ -246,59 +246,171 @@ private extension JSONDecoder {
 // MARK: - CSV camera list
 
 enum CameraCSVImporter {
-    enum Failure: Error, Equatable {
+    enum Failure: Error, Sendable, Hashable {
         case emptyDocument
+        case unsupportedTextEncoding
         case missingHostColumn
         case malformedRow(Int)
         case invalidInteger(row: Int, column: String)
         case invalidBoolean(row: Int, column: String)
+        case invalidCamera(row: Int, reason: String)
     }
 
-    /// Imports RFC 4180 CSV. Required column: `host`. Optional columns are `name`, `httpPort`,
-    /// `rtspPort`, `channel`, `useTLS`, and `enabled`. Unknown columns are retained by the user's
-    /// source file and ignored, making exports from inventory tools forward compatible.
+    struct PreviewRow: Identifiable, Sendable, Hashable {
+        var id: Int { sourceRow }
+        let sourceRow: Int
+        var camera: Camera?
+        let username: String?
+        let groupName: String?
+        let failure: Failure?
+    }
+
+    struct Preview: Sendable, Hashable {
+        let delimiter: Character
+        let encoding: String
+        var rows: [PreviewRow]
+
+        var validCameras: [Camera] { rows.compactMap(\.camera) }
+        var invalidCount: Int { rows.filter { $0.failure != nil }.count }
+    }
+
+    /// Imports RFC 4180-style CSV with comma, semicolon or tab separation. UTF-8 (with or without a
+    /// BOM) and Windows-1251 are accepted because camera inventories commonly come from Russian
+    /// Windows installations. Unknown columns are ignored for forward compatibility.
     static func decode(_ data: Data) throws -> [Camera] {
-        guard let text = String(data: data, encoding: .utf8) else { throw Failure.emptyDocument }
-        let rows = try rows(in: text)
+        let preview = try preview(data)
+        if let failure = preview.rows.compactMap(\.failure).first { throw failure }
+        return preview.validCameras
+    }
+
+    static func preview(_ data: Data) throws -> Preview {
+        let decoded = try decodeText(data)
+        let text = decoded.text
+        let delimiter = delimiter(in: text)
+        let rows = try rows(in: text, delimiter: delimiter)
         guard let header = rows.first, !header.isEmpty else { throw Failure.emptyDocument }
-        let names = header.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let names = header.map(canonicalHeader)
         guard let hostIndex = names.firstIndex(of: "host") else { throw Failure.missingHostColumn }
 
-        return try rows.dropFirst().enumerated().compactMap { offset, fields in
+        let previewRows = rows.dropFirst().enumerated().compactMap { offset, fields -> PreviewRow? in
             let row = offset + 2
             if fields.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
                 return nil
             }
-            guard fields.count == header.count else { throw Failure.malformedRow(row) }
-            func value(_ key: String) -> String? {
-                guard let index = names.firstIndex(of: key) else { return nil }
-                let result = fields[index].trimmingCharacters(in: .whitespacesAndNewlines)
-                return result.isEmpty ? nil : result
+            do {
+                let parsed = try camera(in: fields, headerCount: header.count, names: names,
+                                        hostIndex: hostIndex, sourceRow: row)
+                return PreviewRow(sourceRow: row, camera: parsed.camera,
+                                  username: parsed.username, groupName: parsed.groupName,
+                                  failure: nil)
+            } catch let failure as Failure {
+                return PreviewRow(sourceRow: row, camera: nil, username: nil, groupName: nil,
+                                  failure: failure)
+            } catch {
+                return PreviewRow(sourceRow: row, camera: nil, username: nil, groupName: nil,
+                                  failure: .invalidCamera(row: row,
+                                                          reason: String(describing: error)))
             }
-            func integer(_ key: String, default fallback: Int) throws -> Int {
-                guard let raw = value(key) else { return fallback }
-                guard let parsed = Int(raw) else { throw Failure.invalidInteger(row: row, column: key) }
-                return parsed
+        }
+        return Preview(delimiter: delimiter, encoding: decoded.encoding, rows: previewRows)
+    }
+
+    private static func camera(in fields: [String], headerCount: Int, names: [String],
+                               hostIndex: Int, sourceRow row: Int)
+        throws -> (camera: Camera, username: String?, groupName: String?) {
+        guard fields.count == headerCount else { throw Failure.malformedRow(row) }
+        func value(_ key: String) -> String? {
+            guard let index = names.firstIndex(of: canonicalHeader(key)) else { return nil }
+            let result = fields[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            return result.isEmpty ? nil : result
+        }
+        func integer(_ key: String, default fallback: Int) throws -> Int {
+            guard let raw = value(key) else { return fallback }
+            guard let parsed = Int(raw) else {
+                throw Failure.invalidInteger(row: row, column: key)
             }
-            func boolean(_ key: String, default fallback: Bool) throws -> Bool {
-                guard let raw = value(key)?.lowercased() else { return fallback }
-                switch raw {
-                case "true", "yes", "1": return true
-                case "false", "no", "0": return false
-                default: throw Failure.invalidBoolean(row: row, column: key)
-                }
+            return parsed
+        }
+        func boolean(_ key: String, default fallback: Bool) throws -> Bool {
+            guard let raw = value(key)?.lowercased() else { return fallback }
+            switch raw {
+            case "true", "yes", "1": return true
+            case "false", "no", "0": return false
+            default: throw Failure.invalidBoolean(row: row, column: key)
             }
-            let host = fields[hostIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-            return try Camera(name: value("name") ?? "", host: host,
-                              httpPort: integer("httpport", default: 80),
-                              rtspPort: integer("rtspport", default: 554),
-                              useTLS: boolean("usetls", default: false),
-                              channel: ChannelID(integer("channel", default: 1)),
-                              isEnabled: boolean("enabled", default: true)).validated()
+        }
+        let host = fields[hostIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        let transport = value("transport").flatMap(RTSPTransportKind.init(rawValue:))
+            ?? .tcpInterleaved
+        let quality: StreamQuality? = switch value("stream")?.lowercased() {
+        case "main": .main
+        case "sub": .sub
+        case "third": .third
+        default: nil
+        }
+        let color = value("colorTag").flatMap(ColorTag.init(rawValue:)) ?? .none
+        do {
+            let camera = try Camera(name: value("name") ?? "", host: host,
+                                    httpPort: integer("httpport", default: 80),
+                                    rtspPort: integer("rtspport", default: 554),
+                                    useTLS: boolean("usetls", default: false),
+                                    channel: ChannelID(integer("channel", default: 1)),
+                                    preferredQuality: quality, transport: transport,
+                                    isEnabled: boolean("enabled", default: true), colorTag: color,
+                                    rtspPathOverride: value("rtspPathOverride")).validated()
+            return (camera, value("username"), value("group"))
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure.invalidCamera(row: row, reason: String(describing: error))
         }
     }
 
-    private static func rows(in text: String) throws -> [[String]] {
+    private static func decodeText(_ data: Data) throws -> (text: String, encoding: String) {
+        let decoded: (String, String)?
+        if let text = String(data: data, encoding: .utf8) {
+            decoded = (text, "UTF-8")
+        } else if let text = String(data: data, encoding: .windowsCP1251) {
+            decoded = (text, "Windows-1251")
+        } else {
+            decoded = nil
+        }
+        guard var decoded else { throw Failure.unsupportedTextEncoding }
+        if decoded.0.first == "\u{FEFF}" { decoded.0.removeFirst() }
+        guard !decoded.0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Failure.emptyDocument
+        }
+        return (decoded.0, decoded.1)
+    }
+
+    static func delimiter(in text: String) -> Character {
+        var counts: [Character: Int] = [",": 0, ";": 0, "\t": 0]
+        var quoted = false
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "\"" {
+                let next = text.index(after: index)
+                if quoted, next < text.endIndex, text[next] == "\"" { index = next }
+                else { quoted.toggle() }
+            } else if !quoted, character == "\n" || character == "\r" {
+                break
+            } else if !quoted, counts[character] != nil {
+                counts[character, default: 0] += 1
+            }
+            index = text.index(after: index)
+        }
+        return [";", "\t"].reduce(Character(",")) { best, candidate in
+            (counts[candidate] ?? 0) > (counts[best] ?? 0) ? candidate : best
+        }
+    }
+
+    private static func canonicalHeader(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .filter { $0 != "_" && $0 != "-" && !$0.isWhitespace }
+    }
+
+    private static func rows(in text: String, delimiter: Character) throws -> [[String]] {
         var result: [[String]] = [], row: [String] = [], field = ""
         var quoted = false
         let characters = Array(text.replacingOccurrences(of: "\r\n", with: "\n"))
@@ -311,7 +423,7 @@ enum CameraCSVImporter {
                 } else if character == "\"" { quoted = false } else { field.append(character) }
             } else if character == "\"" && field.isEmpty {
                 quoted = true
-            } else if character == "," {
+            } else if character == delimiter {
                 row.append(field); field = ""
             } else if character == "\n" {
                 row.append(field); result.append(row); row = []; field = ""
@@ -321,6 +433,34 @@ enum CameraCSVImporter {
         guard !quoted else { throw Failure.malformedRow(max(result.count + 1, 1)) }
         if !field.isEmpty || !row.isEmpty { row.append(field); result.append(row) }
         return result
+    }
+}
+
+enum CameraCSVExporter {
+    static let header = [
+        "name", "host", "http_port", "rtsp_port", "use_tls", "channel", "transport",
+        "stream", "group", "username", "color_tag", "enabled", "rtsp_path_override", "notes",
+    ]
+
+    /// Passwords cannot be supplied to this API and therefore cannot become a column accidentally.
+    static func encode(_ cameras: [Camera], groupNames: [CameraID: String] = [:],
+                       usernames: [CameraID: String] = [:]) -> Data {
+        var lines = [header.joined(separator: ",")]
+        lines += cameras.map { camera in
+            [camera.name, camera.host, String(camera.httpPort), String(camera.rtspPort),
+             String(camera.useTLS), String(camera.channel.value), camera.transport.rawValue,
+             camera.preferredQuality?.stringValue ?? "", groupNames[camera.id] ?? "",
+             usernames[camera.id] ?? "", camera.colorTag.rawValue, String(camera.isEnabled),
+             camera.rtspPathOverride ?? "", ""]
+                .map(field).joined(separator: ",")
+        }
+        return Data((lines.joined(separator: "\r\n") + "\r\n").utf8)
+    }
+
+    private static func field(_ value: String) -> String {
+        guard value.contains(",") || value.contains("\"") || value.contains("\r")
+                || value.contains("\n") else { return value }
+        return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 }
 

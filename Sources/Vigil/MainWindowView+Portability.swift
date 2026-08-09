@@ -60,9 +60,9 @@ extension MainWindowView {
             return
         }
 
-        let parsed: [Camera]
+        let preview: CameraCSVImporter.Preview
         do {
-            parsed = try CameraCSVImporter.decode(try Data(contentsOf: url))
+            preview = try CameraCSVImporter.preview(try Data(contentsOf: url))
         } catch {
             window.toast = MainWindowToast(
                 kind: .error,
@@ -70,12 +70,13 @@ extension MainWindowView {
                                 Self.describe(error)))
             return
         }
-        guard !parsed.isEmpty else {
+        guard !preview.rows.isEmpty else {
             window.toast = MainWindowToast(kind: .warning,
                                            message: Self.localized("That file listed no cameras."))
             return
         }
-        Task { await addImportedCameras(parsed) }
+        window.csvImportPreview = preview
+        window.sheet = .csvImport
     }
 
     private func restorePlainConfiguration(from url: URL) {
@@ -182,7 +183,7 @@ extension MainWindowView {
     /// ⚠️ The count is reported even when it is zero, because "18 cameras, all already here" and
     /// "18 cameras added" are different outcomes and a silent import cannot be told apart from a
     /// failed one.
-    private func addImportedCameras(_ cameras: [Camera]) async {
+    func addImportedCameras(_ cameras: [Camera]) async {
         var added = 0
         var duplicates = 0
         for camera in cameras {
@@ -202,6 +203,81 @@ extension MainWindowView {
                             added, duplicates))
     }
 
+    /// Asks exactly once per distinct host/account pair, then applies credentials, cameras and CSV
+    /// group names. Passwords live only in the secure fields, this dictionary and Keychain; they are
+    /// never added to the preview model or written back beside the source CSV.
+    func importPreviewRows(_ rows: [CameraCSVImporter.PreviewRow]) {
+        struct AccountPair: Hashable, Sendable {
+            let host: String
+            let username: String
+        }
+        let newRows = rows.filter { row in
+            guard let camera = row.camera else { return false }
+            return !library.cameras.contains {
+                $0.host == camera.host && $0.channel == camera.channel
+            }
+        }
+        let pairs = Set(newRows.compactMap { row -> AccountPair? in
+            guard let camera = row.camera,
+                  let username = row.username?.trimmingCharacters(in: .whitespaces),
+                  !username.isEmpty else { return nil }
+            return AccountPair(host: camera.host.lowercased(), username: username)
+        }).sorted { ($0.host, $0.username) < ($1.host, $1.username) }
+
+        var passwords: [AccountPair: String] = [:]
+        for pair in pairs {
+            let alert = NSAlert()
+            alert.messageText = Self.localized("Password for imported camera")
+            alert.informativeText = String(
+                format: Self.localized("Enter the password for %1$@ on %2$@, or skip it for now."),
+                pair.username, pair.host)
+            let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0,
+                                                                 width: 360, height: 24))
+            passwordField.placeholderString = Self.localized("Camera password")
+            alert.accessoryView = passwordField
+            alert.addButton(withTitle: Self.localized("Save Password"))
+            alert.addButton(withTitle: Self.localized("Skip"))
+            if alert.runModal() == .alertFirstButtonReturn, !passwordField.stringValue.isEmpty {
+                passwords[pair] = passwordField.stringValue
+            }
+        }
+
+        Task {
+            for row in newRows {
+                guard let camera = row.camera,
+                      let username = row.username?.trimmingCharacters(in: .whitespaces),
+                      !username.isEmpty else { continue }
+                let pair = AccountPair(host: camera.host.lowercased(), username: username)
+                guard let password = passwords[pair] else { continue }
+                do {
+                    try await session.credentials.save(
+                        Credential(ref: camera.credentialRef, account: username, secret: password),
+                        descriptor: CredentialDescriptor(camera: camera, account: username))
+                } catch {
+                    window.toast = MainWindowToast(
+                        kind: .error,
+                        message: String(format: Self.localized("Could not save an imported password: %@"),
+                                        Self.describe(error)))
+                    return
+                }
+            }
+            await addImportedCameras(rows.compactMap(\.camera))
+            for row in newRows {
+                guard let camera = row.camera,
+                      let name = row.groupName?.trimmingCharacters(in: .whitespaces),
+                      !name.isEmpty else { continue }
+                let groupID = groups.groups.first {
+                    $0.name.caseInsensitiveCompare(name) == .orderedSame
+                }?.id ?? groups.create(named: name)
+                if let importedID = library.cameras.first(where: {
+                    $0.host == camera.host && $0.channel == camera.channel
+                })?.id {
+                    groups.setGroup(groupID, for: importedID)
+                }
+            }
+        }
+    }
+
     // MARK: - ⌥⌘E, export
 
     /// Offers a shareable password-free JSON file or an authenticated encrypted backup containing
@@ -211,9 +287,10 @@ extension MainWindowView {
         choice.messageText = Self.localized("Export Configuration")
         choice.informativeText = Self.localized(
             "Choose encrypted backup to move cameras and passwords to another Mac, "
-            + "or plain JSON to share settings without passwords.")
+            + "plain JSON for a complete editable configuration, or CSV for a camera list.")
         choice.addButton(withTitle: Self.localized("Encrypted Backup…"))
         choice.addButton(withTitle: Self.localized("Plain JSON"))
+        choice.addButton(withTitle: Self.localized("Camera List CSV"))
         choice.addButton(withTitle: Self.localized("Cancel"))
         switch choice.runModal() {
         case .alertFirstButtonReturn:
@@ -221,6 +298,9 @@ extension MainWindowView {
             return
         case .alertSecondButtonReturn:
             break
+        case .alertThirdButtonReturn:
+            exportCSVConfiguration()
+            return
         default:
             return
         }
@@ -249,6 +329,49 @@ extension MainWindowView {
                 kind: .success,
                 message: String(format: Self.localized("Exported cameras: %lld"),
                                 archive.cameras.count),
+                actionTitle: "Reveal in Finder",
+                action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
+        } catch {
+            window.toast = MainWindowToast(
+                kind: .error,
+                message: String(format: Self.localized("Could not write the export: %@"),
+                                Self.describe(error)))
+        }
+    }
+
+    private func exportCSVConfiguration() {
+        let cameras = library.cameras
+        var groupNames: [CameraID: String] = [:]
+        for group in groups.groups {
+            for cameraID in group.members where groupNames[cameraID] == nil {
+                groupNames[cameraID] = group.name
+            }
+        }
+        Task {
+            var usernames: [CameraID: String] = [:]
+            for camera in cameras {
+                if let credential = try? await session.credentials.credential(for: camera) {
+                    usernames[camera.id] = credential.account
+                }
+            }
+            saveCSVConfiguration(CameraCSVExporter.encode(cameras, groupNames: groupNames,
+                                                          usernames: usernames),
+                                 cameraCount: cameras.count)
+        }
+    }
+
+    private func saveCSVConfiguration(_ data: Data, cameraCount: Int) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "vigil-cameras.csv"
+        panel.message = Self.localized("The CSV contains camera settings and usernames, but no passwords.")
+        panel.prompt = Self.localized("Export")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+            window.toast = MainWindowToast(
+                kind: .success,
+                message: String(format: Self.localized("Exported cameras: %lld"), cameraCount),
                 actionTitle: "Reveal in Finder",
                 action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
         } catch {
@@ -363,12 +486,17 @@ extension MainWindowView {
             return localized("no host column in the header row")
         case CameraCSVImporter.Failure.emptyDocument:
             return localized("the file is empty or not UTF-8 text")
+        case CameraCSVImporter.Failure.unsupportedTextEncoding:
+            return localized("the file is not UTF-8 or Windows-1251 text")
         case let CameraCSVImporter.Failure.malformedRow(row):
             return String(format: localized("row %lld has the wrong number of columns"), row)
         case let CameraCSVImporter.Failure.invalidInteger(row, column):
             return String(format: localized("row %lld, column %@ is not a number"), row, column)
         case let CameraCSVImporter.Failure.invalidBoolean(row, column):
             return String(format: localized("row %lld, column %@ is not yes or no"), row, column)
+        case let CameraCSVImporter.Failure.invalidCamera(row, reason):
+            return String(format: localized("row %@ is not a valid camera: %@"),
+                          String(row), reason)
         default:
             return (error as NSError).localizedDescription
         }
