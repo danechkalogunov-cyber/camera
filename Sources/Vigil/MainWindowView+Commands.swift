@@ -276,7 +276,7 @@ extension MainWindowView {
                 window.mosaicEditor = VMosaicEditor(tiles: window.layout.cells)
             }).keyboardShortcut("8", modifiers: [.option, .command])
             Button("", action: {
-                if let first = window.layoutPresets.presets.first { selectLayout(first.layout) }
+                if let first = window.layoutPresets.presets.first { applyLayoutPreset(first) }
             }).keyboardShortcut("9", modifiers: .command)
             Button("", action: { selectNextCycleInterval() })
                 .keyboardShortcut("y", modifiers: [.option, .command])
@@ -475,8 +475,15 @@ extension MainWindowView {
     /// has fewer pages than it.
     func selectLayout(_ layout: VGridLayout) {
         // Through `chooseLayout`, so an explicit choice also ends solo — see `layoutBeforeSolo`.
+        window.presetCameraOrder = nil
         window.chooseLayout(layout)
         window.cycle = window.cycle.retargeted(cameraCount: library.cameras.count, layout: layout)
+    }
+
+    func applyLayoutPreset(_ preset: VLayoutPreset) {
+        window.chooseLayout(preset.layout)
+        window.presetCameraOrder = preset.cameraIDs.compactMap(UUID.init(uuidString:)).map(CameraID.init)
+        window.cycle = window.cycle.retargeted(cameraCount: stageOrder.count, layout: preset.layout)
     }
 
     /// What restarts the cycle timer: whether it is ticking, how fast, and over what.

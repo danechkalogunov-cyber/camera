@@ -17,6 +17,8 @@
             #expect(collection.presets[0].cameraIDs.count == 4)
             collection.move(from: 1, to: 0)
             #expect(collection.presets.map(\.name) == ["Warehouse", "Entrance"])
+            collection.remove(first.id)
+            #expect(collection.presets.map(\.name) == ["Warehouse"])
         }
 
         @Test func mosaicRejectsOverlapAndOutOfBounds() {

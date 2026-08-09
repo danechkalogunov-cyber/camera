@@ -87,6 +87,74 @@ private enum SheetMetrics {
     static let noteHeight: CGFloat = 76
 }
 
+// MARK: - Layout presets
+
+private struct LayoutPresetNameSheet: View {
+    @State private var name = ""
+    let onSave: (String) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        SheetFrame(title: "Save Layout Preset", confirmTitle: "Save",
+                   isConfirmEnabled: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   onConfirm: { onSave(name.trimmingCharacters(in: .whitespacesAndNewlines)) },
+                   onCancel: onCancel) {
+            TextField("Preset Name", text: $name)
+        }
+    }
+}
+
+private struct LayoutPresetManagerSheet: View {
+    @State private var presets: [VLayoutPreset]
+    let onSave: (VLayoutPresetCollection) -> Void
+    let onCancel: () -> Void
+
+    init(collection: VLayoutPresetCollection,
+         onSave: @escaping (VLayoutPresetCollection) -> Void,
+         onCancel: @escaping () -> Void) {
+        _presets = State(initialValue: collection.presets)
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        SheetFrame(title: "Manage Layout Presets", confirmTitle: "Done",
+                   isConfirmEnabled: true, onConfirm: commit, onCancel: onCancel) {
+            VStack(spacing: VTheme.Space.sm) {
+                ForEach(Array(presets.indices), id: \.self) { index in
+                    HStack(spacing: VTheme.Space.sm) {
+                        TextField("Preset Name", text: $presets[index].name)
+                        Text(verbatim: presets[index].layout.rawValue)
+                            .foregroundStyle(VTheme.Color.Text.secondary)
+                        Button { reorderPreset(index, by: -1) } label: {
+                            Image(systemName: "chevron.up")
+                        }.disabled(index == 0)
+                        Button { reorderPreset(index, by: 1) } label: {
+                            Image(systemName: "chevron.down")
+                        }.disabled(index == presets.count - 1)
+                        Button(role: .destructive) { presets.remove(at: index) } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
+            }
+            .frame(minHeight: 120)
+        }
+    }
+
+    private func reorderPreset(_ index: Int, by delta: Int) {
+        let destination = index + delta
+        guard presets.indices.contains(destination) else { return }
+        presets.swapAt(index, destination)
+    }
+
+    private func commit() {
+        var collection = VLayoutPresetCollection()
+        for preset in presets { collection.save(preset) }
+        onSave(collection)
+    }
+}
+
 // MARK: - CameraSettingsSheet
 
 /// Basic settings for one camera: what it is called, and which group it is in.
@@ -472,6 +540,23 @@ extension MainWindowView {
                     window.streamDoctorTask?.cancel()
                     window.sheet = nil
                 })
+        case .saveLayoutPreset:
+            LayoutPresetNameSheet(
+                onSave: { name in
+                    window.layoutPresets.save(VLayoutPreset(
+                        name: name, layout: window.layout,
+                        cameraIDs: stageAssignment.visibleCameras.map { $0.rawValue.uuidString }))
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
+        case .manageLayoutPresets:
+            LayoutPresetManagerSheet(
+                collection: window.layoutPresets,
+                onSave: { collection in
+                    window.layoutPresets = collection
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
         }
     }
 }

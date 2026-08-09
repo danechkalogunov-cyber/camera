@@ -53,7 +53,7 @@ extension MainWindowView {
                 $0.name.caseInsensitiveCompare(name) == .orderedSame
                     || $0.id.uuidString.caseInsensitiveCompare(name) == .orderedSame
             }) {
-                selectLayout(preset.layout)
+                applyLayoutPreset(preset)
             } else {
                 unsupportedLink(MainWindowView.localized("No layout is called that."))
             }

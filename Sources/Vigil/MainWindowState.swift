@@ -46,6 +46,7 @@ final class MainWindowState {
     private static let layoutKey = "Vigil.workspace.layout"
     private static let selectedCameraKey = "Vigil.workspace.selectedCamera"
     private static let videoWallKey = "Vigil.workspace.videoWall"
+    private static let layoutPresetsKey = "Vigil.workspace.layoutPresets"
 
     // MARK: - Chrome
 
@@ -364,8 +365,16 @@ final class MainWindowState {
     /// timer can only ever replace it, never mutate it half-way through a render.
     var cycle = VCycleModel()
 
-    /// Named layouts are encoded alongside the workspace by the library owner.
-    var layoutPresets = VLayoutPresetCollection()
+    /// Named layouts are encoded in workspace defaults and survive app relaunches.
+    var layoutPresets = VLayoutPresetCollection() {
+        didSet {
+            guard let data = try? JSONEncoder().encode(layoutPresets) else { return }
+            UserDefaults.standard.set(data, forKey: Self.layoutPresetsKey)
+        }
+    }
+
+    /// Exact camera ordering supplied by a named preset; nil uses the ordinary workspace order.
+    var presetCameraOrder: [CameraID]?
 
     /// File ▸ Export Diagnostics is app-scene state, while the evidence lives in MainWindowView.
     /// The monotonically increasing request bridges those two owners without a global singleton.
@@ -493,6 +502,10 @@ final class MainWindowState {
            let restored = try? JSONDecoder().decode(VVideoWallConfiguration.self, from: data) {
             videoWall = restored
         }
+        if let data = UserDefaults.standard.data(forKey: Self.layoutPresetsKey),
+           let restored = try? JSONDecoder().decode(VLayoutPresetCollection.self, from: data) {
+            layoutPresets = restored
+        }
     }
 
     private static let watchedCameraIDsKey = "Vigil.notifications.watchedCameraIDs"
@@ -506,22 +519,13 @@ enum MainWindowSheet: Identifiable, Hashable {
     /// Basic settings for one camera: its name, and what it belongs to.
     case cameraSettings
 
-    // ⛔ There is deliberately no `clipPlayer` case. One was added and removed: playing a recording
-    // belongs to `VRecordingsView`, which mounts `VClipPlayerView` inline above its scrubber, and a
-    // sheet doing the same thing meant a click played the clip twice — once in the screen and once
-    // in a small window on top of it. See `MainWindowView+Library.swift`'s note on `onPlayClip`.
-
     /// Naming a new group.
     case newGroup
 
     /// Renaming an existing one.
     case renameGroup(GroupID)
 
-    /// Marking a moment, with a title and a note.
-    ///
-    /// Carries the instant rather than reading "now" when the sheet saves. The two differ whenever
-    /// the timeline is up: marking what you are looking at on the scrubber and marking the moment
-    /// you happened to press Save are different acts, and only the first is useful.
+    /// Marking a moment, carrying the timeline instant rather than reading `Date()` on save.
     case newBookmark(Date)
 
     /// Editing a bookmark that already exists.
@@ -534,6 +538,10 @@ enum MainWindowSheet: Identifiable, Hashable {
 
     case streamDoctor
 
+    case saveLayoutPreset
+
+    case manageLayoutPresets
+
     /// Distinguishes one presentation from the next, which is what `sheet(item:)` keys on.
     var id: String {
         switch self {
@@ -545,22 +553,15 @@ enum MainWindowSheet: Identifiable, Hashable {
         case .shortcuts:                return "shortcuts"
         case .csvImport:                return "csvImport"
         case .streamDoctor:             return "streamDoctor"
+        case .saveLayoutPreset:         return "saveLayoutPreset"
+        case .manageLayoutPresets:      return "manageLayoutPresets"
         }
     }
 }
 
 // MARK: - MainWindowToast
 
-/// An advisory shown over the stage, with the one action it offers.
-///
-/// `kind` chooses the semantic colour and the dwell policy through `VToastPolicy.resolved(for:…)`;
-/// the view layer owns both, so this type carries only what the window decides.
-///
-/// **Not `Sendable`, deliberately.** It holds a `LocalizedStringKey`, which SwiftUI does not declare
-/// `Sendable`, so the conformance does not compile. Dropping it costs nothing: this value is created
-/// in a view callback, stored in `MainWindowState` and read in a view body — all on the main actor,
-/// never across an isolation boundary. Reaching for `@unchecked Sendable` to keep a conformance
-/// nothing needs would be asserting a guarantee in exchange for no benefit.
+/// A main-actor-only advisory shown over the stage, optionally with one action.
 struct MainWindowToast: Identifiable {
 
     /// Distinguishes one advisory from the next so SwiftUI animates a replacement rather than

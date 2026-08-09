@@ -47,6 +47,10 @@
             presets.insert(
                 value, at: min(destination > source ? destination - 1 : destination, presets.count))
         }
+
+        package mutating func remove(_ id: UUID) {
+            presets.removeAll { $0.id == id }
+        }
     }
 
     /// Validates custom mosaic edits in the canonical 12×12 coordinate space.

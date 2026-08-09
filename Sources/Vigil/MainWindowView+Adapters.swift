@@ -182,6 +182,12 @@ extension MainWindowView {
     /// which reading caught and no test could have, because the app target has no test bundle. This
     /// property is now the seam that supplies the group store; the ordering is tested next door.
     var stageOrder: [CameraID] {
+        if let preset = window.presetCameraOrder {
+            let available = Set(library.cameras.map(\.id))
+            let ordered = preset.filter { available.contains($0) }
+            let remainder = library.cameras.map(\.id).filter { !ordered.contains($0) }
+            return ordered + remainder
+        }
         var selectedGroup: GroupID?
         if case .group(let group) = window.sidebarSelection.focus { selectedGroup = group }
         return VStageOrder.resolve(library: library.cameras.map { $0.id },

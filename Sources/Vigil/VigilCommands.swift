@@ -107,6 +107,13 @@ struct VigilCommands: Commands {
                 Button(MainWindowView.localized("Apply First Layout Preset")) { applyFirstPreset() }
                     .keyboardShortcut("9", modifiers: .command)
                     .disabled(window.layoutPresets.presets.isEmpty)
+                Button(MainWindowView.localized("Save as Preset…")) {
+                    window.sheet = .saveLayoutPreset
+                }
+                Button(MainWindowView.localized("Manage Presets…")) {
+                    window.sheet = .manageLayoutPresets
+                }
+                    .disabled(window.layoutPresets.presets.isEmpty)
                 Button(MainWindowView.localized("Edit Mosaic")) {
                     window.mosaicEditor = VMosaicEditor(tiles: window.layout.cells)
                 }
@@ -179,13 +186,16 @@ struct VigilCommands: Commands {
     /// fewer pages than it. The window's own `selectLayout` does the same; the camera count is not
     /// reachable from here, so the cycle is retargeted against the layout alone.
     private func selectLayout(_ layout: VGridLayout) {
-        window.layout = layout
+        window.presetCameraOrder = nil
+        window.chooseLayout(layout)
         window.cycle = window.cycle.retargeted(cameraCount: 1, layout: layout)
     }
 
     private func applyFirstPreset() {
         guard let preset = window.layoutPresets.presets.first else { return }
-        selectLayout(preset.layout)
+        window.chooseLayout(preset.layout)
+        window.presetCameraOrder = preset.cameraIDs.compactMap(UUID.init(uuidString:)).map(CameraID.init)
+        window.cycle = window.cycle.retargeted(cameraCount: 1, layout: preset.layout)
     }
 
     private func selectNextCycleInterval() {

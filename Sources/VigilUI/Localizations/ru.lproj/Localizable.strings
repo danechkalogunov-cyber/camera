@@ -865,3 +865,8 @@
 "Decode limit" = "Предел декодирования";
 "Exit (Esc)" = "Выйти (Esc)";
 "Recorder channels were added to the camera list." = "Каналы регистратора добавлены в список камер.";
+"Save as Preset…" = "Сохранить как пресет…";
+"Manage Presets…" = "Управление пресетами…";
+"Save Layout Preset" = "Сохранить пресет раскладки";
+"Manage Layout Presets" = "Управление пресетами раскладки";
+"Preset Name" = "Название пресета";
