@@ -71,6 +71,10 @@ public actor ClipRecorder {
         /// actually scales with. 64 MiB, per spec-core §9.6.
         public var freeSpaceCheckEveryBytes: Int64
 
+        /// Preserve source timestamp gaps in one file. Archive export sets this: a ten-second hole
+        /// on the camera's card must remain ten seconds of empty time, not be collapsed or split.
+        public var preservesSourceGaps: Bool
+
         public init(container: RecordingContainer = .mp4,
                     trigger: String = "manual",
                     nameTemplate: String = RecordingNaming.defaultClipTemplate,
@@ -79,7 +83,8 @@ public actor ClipRecorder {
                     keyframeGiveUpAfter: Duration = .seconds(15),
                     fragmentIntervalSeconds: Double = 2,
                     stopBelowFreeBytes: Int64 = 512 << 20,
-                    freeSpaceCheckEveryBytes: Int64 = 64 << 20) {
+                    freeSpaceCheckEveryBytes: Int64 = 64 << 20,
+                    preservesSourceGaps: Bool = false) {
             self.container = container
             self.trigger = trigger
             self.nameTemplate = nameTemplate
@@ -89,6 +94,7 @@ public actor ClipRecorder {
             self.fragmentIntervalSeconds = fragmentIntervalSeconds
             self.stopBelowFreeBytes = stopBelowFreeBytes
             self.freeSpaceCheckEveryBytes = freeSpaceCheckEveryBytes
+            self.preservesSourceGaps = preservesSourceGaps
         }
     }
 
@@ -191,6 +197,10 @@ public actor ClipRecorder {
                                           requestAfter: options.keyframeRequestAfter,
                                           giveUpAfter: options.keyframeGiveUpAfter)
         self.freeBytes = destination.freeBytesAtResolution
+        if options.preservesSourceGaps {
+            timeline.maximumPreservedGapSeconds = .infinity
+            timeline.newSegmentGapSeconds = .infinity
+        }
     }
 
     // MARK: - Public API
@@ -377,6 +387,27 @@ public actor ClipRecorder {
 
     /// The records for the files finished so far.
     public func segments() -> [RecordingSegmentRecord] { completed }
+
+    /// Cancels an export and removes every partial or finished segment it produced.
+    ///
+    /// This is intentionally stronger than ``abandon``: cancellation is a user request to leave no
+    /// artifact, while abandonment is the crash-resilience path that keeps a fragmented partial.
+    public func cancelAndDelete() {
+        guard finishedReason == nil else {
+            for segment in completed { try? fileSystem.removeItem(at: segment.url) }
+            completed = []
+            return
+        }
+        finishedReason = .cancelled
+        isRunning = false
+        writer?.cancel()
+        if let writer { try? fileSystem.removeItem(at: writer.outputURL) }
+        if let currentFinalURL { try? fileSystem.removeItem(at: currentFinalURL) }
+        for segment in completed { try? fileSystem.removeItem(at: segment.url) }
+        writer = nil
+        currentFinalURL = nil
+        completed = []
+    }
 }
 
 #endif

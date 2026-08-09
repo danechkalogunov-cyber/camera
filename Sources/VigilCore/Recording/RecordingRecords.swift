@@ -28,6 +28,7 @@ public enum RecordingEndReason: String, Sendable, Hashable, Codable {
     case appQuitting
     case noKeyframe
     case writeError
+    case cancelled
 }
 
 // MARK: - RecordingCameraInfo
