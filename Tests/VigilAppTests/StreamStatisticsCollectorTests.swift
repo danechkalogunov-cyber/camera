@@ -317,6 +317,41 @@ struct StreamStatisticsCollectorTests {
         #expect(kept == StreamStatisticsRollup.historyCapacity)
     }
 
+    // MARK: - Twenty-four-hour rollup
+
+    @Test func minuteHistoryAveragesGaugesAndKeepsLatestCounters() {
+        let collector = StreamStatisticsCollector()
+        collector.ingest(.statistics(sample(framesDecoded: 10, framesPerSecond: 10,
+                                            bitsPerSecond: 1_000, packetsReceived: 100)), at: at(0))
+        collector.ingest(.statistics(sample(framesDecoded: 30, framesPerSecond: 30,
+                                            bitsPerSecond: 3_000, packetsReceived: 300)), at: at(30))
+        collector.ingest(.statistics(sample(framesDecoded: 40, framesPerSecond: 40,
+                                            bitsPerSecond: 4_000, packetsReceived: 400)), at: at(60))
+
+        let minutes = collector.telemetry(at: at(60)).minuteStatistics
+        #expect(minutes.count == 1)
+        #expect(minutes[0].statistics.framesPerSecond == 20)
+        #expect(minutes[0].statistics.bitsPerSecond == 2_000)
+        #expect(minutes[0].statistics.packetsReceived == 300)
+    }
+
+    @Test func minuteHistorySurvivesReconnectAndIsBoundedToOneDay() {
+        let collector = StreamStatisticsCollector()
+        for minute in 0...(StreamStatisticsRollup.minuteHistoryCapacity + 5) {
+            let seconds = Double(minute * 60)
+            collector.ingest(.statistics(sample(framesDecoded: UInt64(minute))), at: at(seconds))
+            if minute == 2 {
+                collector.ingest(.connectAttemptStarted(attempt: 2, endpoint: "cam"),
+                                 at: at(seconds + 1))
+            }
+        }
+
+        let kept = collector.telemetry(at: at(90_000)).minuteStatistics
+        #expect(kept.count == StreamStatisticsRollup.minuteHistoryCapacity)
+        #expect(kept.last?.statistics.framesDecoded
+                == UInt64(StreamStatisticsRollup.minuteHistoryCapacity + 4))
+    }
+
     // MARK: - Reconnects
 
     /// ⛔ A reconnect invalidates every window: the receivers are rebuilt, the counters restart, and

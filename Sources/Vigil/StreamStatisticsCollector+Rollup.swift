@@ -37,6 +37,9 @@ package struct StreamStatisticsRollup: Sendable {
     /// emitted faster than once a second must not be able to grow this array without bound.
     package static let historyCapacity = 60
 
+    /// One slot per completed minute for exactly 24 hours.
+    package static let minuteHistoryCapacity = 24 * 60
+
     /// Longest gap between two frames that still counts as a running stream, in seconds.
     ///
     /// Restated rather than imported: this value is `StatisticsAccumulator.maximumFrameInterval`,
@@ -73,6 +76,11 @@ package struct StreamStatisticsRollup: Sendable {
 
     /// When each entry of ``history`` was recorded. Same order, same count, always.
     private var historyInstants: [MediaInstant] = []
+
+    /// Long-lived support history. Unlike the 60-second UI history, reconnects do not clear it.
+    private var minuteHistory: [StreamMinuteStatistics] = []
+    private var minuteStart: MediaInstant?
+    private var minuteAccumulator = MinuteStatisticsAccumulator()
 
     /// The newest sample exactly as the controller sent it, before this type's overlays.
     private var latestRaw = StreamStatistics()
@@ -165,6 +173,7 @@ package struct StreamStatisticsRollup: Sendable {
         // Reserved once, so the 1 Hz append never reallocates for the life of the connection.
         history.reserveCapacity(Self.historyCapacity)
         historyInstants.reserveCapacity(Self.historyCapacity)
+        minuteHistory.reserveCapacity(Self.minuteHistoryCapacity)
     }
 }
 
@@ -284,7 +293,9 @@ extension StreamStatisticsRollup {
         closeElapsedWindows(at: now)
 
         latestRaw = sample
-        append(reconciled(sample, at: now), at: now)
+        let resolved = reconciled(sample, at: now)
+        append(resolved, at: now)
+        appendMinute(resolved, at: now)
     }
 }
 
@@ -378,6 +389,26 @@ extension StreamStatisticsRollup {
         }
     }
 
+    /// Folds 1 Hz readings into a completed minute and keeps the last 1,440 minutes.
+    private mutating func appendMinute(_ sample: StreamStatistics, at now: MediaInstant) {
+        guard let start = minuteStart else {
+            minuteStart = now
+            minuteAccumulator.add(sample)
+            return
+        }
+        if now.seconds(since: start) >= 60 {
+            if let aggregate = minuteAccumulator.aggregate {
+                minuteHistory.append(StreamMinuteStatistics(endedAt: now, statistics: aggregate))
+                if minuteHistory.count > Self.minuteHistoryCapacity {
+                    minuteHistory.removeFirst(minuteHistory.count - Self.minuteHistoryCapacity)
+                }
+            }
+            minuteStart = now
+            minuteAccumulator = MinuteStatisticsAccumulator()
+        }
+        minuteAccumulator.add(sample)
+    }
+
     /// Clears every window and every derived figure, keeping the session's identity and counters.
     private mutating func resetWindows(at now: MediaInstant) {
         throughputWindowStart = now
@@ -406,6 +437,9 @@ extension StreamStatisticsRollup {
         resetWindows(at: now)
         history.removeAll(keepingCapacity: true)
         historyInstants.removeAll(keepingCapacity: true)
+        minuteHistory.removeAll(keepingCapacity: true)
+        minuteStart = nil
+        minuteAccumulator = MinuteStatisticsAccumulator()
         decodeQueueDepth = nil
         isHardwareDecode = false
         codecLabel = nil
@@ -426,6 +460,7 @@ extension StreamStatisticsRollup {
         return StreamTelemetrySnapshot(
             statistics: reconciled(latestRaw, at: now),
             recentStatistics: history,
+            minuteStatistics: minuteHistory,
             tile: tileStats(framesPerSecond: fps),
             throughput: VThroughput(bitsPerSecond: bits ?? 0),
             bitsPerSecond: bits,

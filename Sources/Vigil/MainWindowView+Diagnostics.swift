@@ -118,6 +118,10 @@ extension MainWindowView {
             let stats = measuredTelemetry[camera.id]?.statistics ?? .init()
             files.append(DiagnosticsArchiveFile(
                 path: "streams/\(key)/stats.csv", text: Self.statisticsCSV(stats)))
+            let minutes = measuredTelemetry[camera.id]?.minuteStatistics ?? []
+            files.append(DiagnosticsArchiveFile(
+                path: "streams/\(key)/stats-24h.csv",
+                text: Self.minuteStatisticsCSV(minutes, now: session.dependencies.clock.now())))
             let doctor: String
             if window.streamDoctorCameraID == camera.id, !window.streamDoctorOutcomes.isEmpty {
                 doctor = StreamDoctorResult(outcomes: window.streamDoctorOutcomes,
@@ -217,6 +221,23 @@ extension MainWindowView {
                    String(stats.reconnectCount), stats.lastErrorCode ?? ""]
             .map(csvField).joined(separator: ",")
         return header + "\r\n" + row + "\r\n"
+    }
+
+    private static func minuteStatisticsCSV(_ rows: [StreamMinuteStatistics],
+                                            now: MediaInstant) -> String {
+        let header = "minutes_ago,fps,bits_per_second,packets_received,packets_lost,loss_fraction,"
+            + "jitter_ms,decode_queue,uptime_seconds,reconnects,last_error"
+        let values = rows.reversed().map { row in
+            let stats = row.statistics
+            let age = max(0, Int(now.seconds(since: row.endedAt) / 60))
+            return [String(age), String(stats.framesPerSecond), String(stats.bitsPerSecond),
+                    String(stats.packetsReceived), String(stats.packetsLost),
+                    String(stats.lossFraction), String(stats.jitterMilliseconds),
+                    String(stats.decodeQueueDepth), String(stats.uptimeSeconds),
+                    String(stats.reconnectCount), stats.lastErrorCode ?? ""]
+                .map(csvField).joined(separator: ",")
+        }
+        return ([header] + values).joined(separator: "\r\n") + "\r\n"
     }
 
     private static func csvField(_ value: String) -> String {

@@ -56,6 +56,9 @@ package struct StreamTelemetrySnapshot: Sendable, Hashable {
     /// never grow: see ``StreamStatisticsRollup/historyCapacity``.
     package var recentStatistics: [StreamStatistics]
 
+    /// Completed one-minute aggregates, oldest first, bounded to the most recent 24 hours.
+    package var minuteStatistics: [StreamMinuteStatistics]
+
     // MARK: Tile
 
     /// The tile's top-trailing badge, or `nil` before the stream's format is known — which is what
@@ -104,6 +107,7 @@ package struct StreamTelemetrySnapshot: Sendable, Hashable {
     /// that has seen no events reports.
     package init(statistics: StreamStatistics = StreamStatistics(),
                  recentStatistics: [StreamStatistics] = [],
+                 minuteStatistics: [StreamMinuteStatistics] = [],
                  tile: VTileStats? = nil,
                  throughput: VThroughput = .unmeasured,
                  bitsPerSecond: Double? = nil,
@@ -117,6 +121,7 @@ package struct StreamTelemetrySnapshot: Sendable, Hashable {
                  reconnectCount: UInt32 = 0) {
         self.statistics = statistics
         self.recentStatistics = recentStatistics
+        self.minuteStatistics = minuteStatistics
         self.tile = tile
         self.throughput = throughput
         self.bitsPerSecond = bitsPerSecond
@@ -138,6 +143,12 @@ package struct StreamTelemetrySnapshot: Sendable, Hashable {
         bitsPerSecond != nil || framesPerSecond != nil || jitterMilliseconds != nil
             || !recentStatistics.isEmpty
     }
+}
+
+/// One completed minute in the 24-hour diagnostics history.
+package struct StreamMinuteStatistics: Sendable, Hashable {
+    package var endedAt: MediaInstant
+    package var statistics: StreamStatistics
 }
 
 // MARK: - StreamStatisticsCollector
