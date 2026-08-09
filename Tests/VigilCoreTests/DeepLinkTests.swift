@@ -52,6 +52,13 @@ private func link(_ text: String, sourceLocation: SourceLocation = #_sourceLocat
     #expect(target == .camera(.slug("lobby"), action: .record, stream: .sub))
 }
 
+@Test func deepLinkReadsIdempotentAudioActions() throws {
+    #expect(try DeepLink.parse(try link("vigil://camera/lobby?action=mute"))
+        == .camera(.slug("lobby"), action: .mute, stream: nil))
+    #expect(try DeepLink.parse(try link("vigil://camera/lobby?action=unmute"))
+        == .camera(.slug("lobby"), action: .unmute, stream: nil))
+}
+
 /// Unknown query parameters are ignored, which acceptance 2 requires by name.
 @Test func deepLinkIgnoresUnknownQueryParameters() throws {
     let target = try DeepLink.parse(try link("vigil://camera/lobby?utm_source=mail&action=live"))
@@ -67,6 +74,8 @@ private func link(_ text: String, sourceLocation: SourceLocation = #_sourceLocat
     #expect(try DeepLink.parse(try link("vigil://layout/grid2x2")) == .layout("grid2x2"))
     #expect(try DeepLink.parse(try link("vigil://group/Perimeter")) == .group(.slug("perimeter")))
     #expect(try DeepLink.parse(try link("vigil://settings/General")) == .settings(pane: "general"))
+    #expect(try DeepLink.parse(try link("vigil://cycling/start")) == .cycling(true))
+    #expect(try DeepLink.parse(try link("vigil://cycling/stop")) == .cycling(false))
 }
 
 /// An empty `?q=` is what a link builder emits for "no filter". Treating it as a search for the
@@ -172,7 +181,7 @@ private func link(_ text: String, sourceLocation: SourceLocation = #_sourceLocat
 @Test func deepLinkMarksTheActionsThatNeedConfirmation() {
     #expect(DeepLinkAction.record.needsConfirmationFromAnotherApp)
     #expect(DeepLinkAction.snapshot.needsConfirmationFromAnotherApp)
-    for action in [DeepLinkAction.live, .fullscreen, .stop, .diagnose] {
+    for action in [DeepLinkAction.live, .fullscreen, .stop, .diagnose, .mute, .unmute] {
         #expect(action.needsConfirmationFromAnotherApp == false)
     }
 }

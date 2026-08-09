@@ -47,11 +47,16 @@ extension MainWindowView {
         case let .group(reference):
             openGroup(reference)
         case let .layout(name):
-            guard let layout = VGridLayout(rawValue: name) else {
+            if let layout = VGridLayout(rawValue: name) {
+                selectLayout(layout)
+            } else if let preset = window.layoutPresets.presets.first(where: {
+                $0.name.caseInsensitiveCompare(name) == .orderedSame
+                    || $0.id.uuidString.caseInsensitiveCompare(name) == .orderedSame
+            }) {
+                selectLayout(preset.layout)
+            } else {
                 unsupportedLink(MainWindowView.localized("No layout is called that."))
-                return
             }
-            selectLayout(layout)
         case let .palette(query):
             window.paletteQuery = query ?? ""
             window.paletteSelection = nil
@@ -79,6 +84,8 @@ extension MainWindowView {
             openArchive(at: event.occurredAt)
         case .settings:
             openWindow(id: SceneID.settings)
+        case .cycling(let starts):
+            window.cycle = starts ? window.cycle.started() : window.cycle.stopped()
         }
     }
 
@@ -91,8 +98,17 @@ extension MainWindowView {
         guard let camera = resolveLinkedCamera(reference) else { return }
         if camera.id != cameraID {
             window.sidebarSelection.select(.camera(camera.id))
-            Task { await session.switchTo(camera) }
+            Task {
+                await session.switchTo(camera)
+                performLinkedCameraAction(action, stream: stream, camera: camera)
+            }
+            return
         }
+        performLinkedCameraAction(action, stream: stream, camera: camera)
+    }
+
+    private func performLinkedCameraAction(_ action: DeepLinkAction?, stream: StreamQuality?,
+                                           camera: Camera) {
         guard let action else { return }
         // ⛔ Acceptance 4. `NSApp.isActive` is the whole test: a link the user clicked inside Vigil
         // is the user acting, and one that arrived from Mail while Vigil sat in the background is
@@ -113,7 +129,7 @@ extension MainWindowView {
         case .fullscreen:
             focusCamera(camera.id)
         case .snapshot:
-            takeSnapshot()
+            takeSnapshot(intentRequestID: IntentSnapshotBridge.takePending(for: camera.id))
         case .record:
             if !recording.isRecording { toggleRecording() }
         case .stop:
@@ -121,6 +137,10 @@ extension MainWindowView {
         case .diagnose:
             window.isInspectorVisible = true
             window.inspectorTab = .info
+        case .mute:
+            session.setAudioMuted(true, for: camera.id)
+        case .unmute:
+            session.setAudioMuted(false, for: camera.id)
         }
     }
 

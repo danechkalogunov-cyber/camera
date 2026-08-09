@@ -65,6 +65,13 @@ extension AppSessionModel {
         Task { await audioPlayback.muteAll() }
     }
 
+    /// Idempotent audio state for links and App Intents. UI buttons remain toggles, but automation
+    /// must be safe to retry without turning a requested mute back off.
+    func setAudioMuted(_ muted: Bool, for cameraID: CameraID) {
+        guard let stream = cameras.stream(for: cameraID), stream.isAudioMuted != muted else { return }
+        toggleAudio(for: cameraID)
+    }
+
     /// A sample the video renderer refused to decode.
     ///
     /// `VigilRender` hands over a diagnostic string rather than an error, because `any Error` is not

@@ -305,6 +305,8 @@ extension MainWindowView {
             session.telemetry.tick(at: now)
             telemetry = session.telemetry.telemetry(at: now)
             measuredTelemetry = sampleStreamTelemetry(at: now)
+            IntentCameraIndex.update(library.cameras, streams: session.cameras,
+                                     telemetry: measuredTelemetry)
             sampleProcessResources()
             do {
                 try await Task.sleep(nanoseconds: 1_000_000_000)

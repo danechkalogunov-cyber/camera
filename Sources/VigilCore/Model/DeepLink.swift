@@ -61,6 +61,8 @@ public enum DeepLinkAction: String, Sendable, Hashable, CaseIterable {
     case record
     case stop
     case diagnose
+    case mute
+    case unmute
 
     /// Whether performing this without asking would be a privacy decision made on the user's behalf.
     ///
@@ -103,6 +105,9 @@ public enum DeepLinkTarget: Sendable, Hashable {
 
     /// `vigil://settings/<pane>`
     case settings(pane: String)
+
+    /// `vigil://cycling/start|stop` — the App Intent and menu use the same cycle state machine.
+    case cycling(Bool)
 }
 
 // MARK: - DeepLinkError
@@ -193,6 +198,13 @@ public enum DeepLink {
         case "settings":
             guard let first = path.first else { throw .missingComponent(target: target) }
             return .settings(pane: first.lowercased())
+        case "cycling":
+            guard let first = path.first else { throw .missingComponent(target: target) }
+            switch first.lowercased() {
+            case "start": return .cycling(true)
+            case "stop": return .cycling(false)
+            default: throw .malformedParameter(name: "cycling", value: first)
+            }
         default:
             throw .unknownTarget(target)
         }

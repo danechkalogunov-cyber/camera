@@ -150,8 +150,11 @@ extension MainWindowView {
     /// Safe to point at any camera, unlike recording: a snapshot is one ISAPI request for a JPEG and
     /// needs no session of its own. Recording does, which is why the Rec tab is still the bound
     /// camera's — see `recordingState`.
-    func takeSnapshot() {
+    func takeSnapshot(intentRequestID: UUID? = nil) {
         guard let camera = selectedCamera else {
+            if let intentRequestID {
+                IntentSnapshotBridge.fail(intentRequestID, reason: "No camera is selected.")
+            }
             window.toast = MainWindowToast(kind: .warning,
                                            message: Self.localized("Connect a camera first"))
             return
@@ -161,12 +164,14 @@ extension MainWindowView {
                                            client: deviceInfo.client,
                                            model: deviceInfo.identity.model) {
             case .saved(let url):
+                if let intentRequestID { IntentSnapshotBridge.complete(intentRequestID, url: url) }
                 window.toast = MainWindowToast(
                     kind: .success,
                     message: Self.localized("Snapshot saved"),
                     actionTitle: "Reveal in Finder",
                     action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
             case .failed(let reason):
+                if let intentRequestID { IntentSnapshotBridge.fail(intentRequestID, reason: reason) }
                 window.toast = MainWindowToast(
                     kind: .error,
                     message: String(format: Self.localized("The snapshot could not be taken: %@"),
