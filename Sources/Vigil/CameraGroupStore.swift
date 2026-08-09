@@ -139,6 +139,12 @@ final class CameraGroupStore {
         logger.info(.storage, "camera group deleted")
     }
 
+    /// Replaces groups from a configuration archive after camera identities were validated.
+    func replace(with imported: [CameraGroupRecord]) {
+        groups = Self.repaired(imported)
+        save()
+    }
+
     /// Sets a group's identity colour, or clears it back to the derived one.
     func setIdentityIndex(_ index: Int?, for id: GroupID) {
         guard let position = groups.firstIndex(where: { $0.id == id }) else { return }

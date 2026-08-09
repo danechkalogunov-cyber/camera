@@ -11,13 +11,9 @@
 //  reachable from nothing at all: no menu item, no key, no button. A parser nobody can hand a file
 //  to is a test fixture, and it was one for as long as it has existed.
 //
-//  ⚠️ WHAT IS HERE IS THE PANEL, NOT THE WHOLE OF §8.5. That section also specifies a dry-run
-//  preview table with editable cells, delimiter sniffing (`;` and tab), CP1251 for exports from
-//  Russian VMS tools, and an encrypted `.vigilconfig` for exports that include passwords. None of
-//  that is here: the importer takes UTF-8 RFC 4180 with a `host` column, and the export writes the
-//  archive JSON, which never contains a password to begin with. The report after an import says
-//  exactly what happened — added, skipped as duplicates, and the reason a file was refused — so the
-//  gap is visible to the user rather than silent, and ЧТО-НЕ-СДЕЛАНО carries the rest.
+//  The same door also accepts a password-free library JSON document and the authenticated
+//  `.vigilbackup` container. Encrypted input is decoded and authenticated before the confirmation
+//  is shown; only after confirmation are Keychain items and the atomic library replacement touched.
 //
 
 #if os(macOS)
@@ -31,23 +27,38 @@ import VigilCore
 import VigilProtocols
 import VigilUI
 
+private extension UTType {
+    static let vigilBackup = UTType(exportedAs: "com.vigil.backup", conformingTo: .data)
+    static let vigilLibraryJSON = UTType(exportedAs: "com.vigil.library-json", conformingTo: .json)
+}
+
 extension MainWindowView {
 
     // MARK: - ⇧⌘I, import
 
-    /// Asks for a CSV file and adds the cameras it names.
+    /// Opens CSV, plain JSON, or an authenticated encrypted backup.
     ///
     /// Duplicates are skipped rather than merged, and the rule is `host` + `channel` — the pair
     /// UX.md §8.5 names, and the right one: the same address on two channels is two cameras on an
     /// NVR, while the same address on the same channel twice is the same camera listed twice.
     func importCamerasFromCSV() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .plainText]
+        panel.allowedContentTypes = [.vigilBackup, .vigilLibraryJSON, .json,
+                                     .commaSeparatedText, .tabSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = Self.localized("Choose a CSV file with a header row and a host column.")
+        panel.message = Self.localized("Choose a camera list or Vigil backup to restore.")
         panel.prompt = Self.localized("Import")
         guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        if url.pathExtension.lowercased() == "vigilbackup" {
+            restoreEncryptedConfiguration(from: url)
+            return
+        }
+        if ["json", "vigiljson", "vigilconfig"].contains(url.pathExtension.lowercased()) {
+            restorePlainConfiguration(from: url)
+            return
+        }
 
         let parsed: [Camera]
         do {
@@ -65,6 +76,105 @@ extension MainWindowView {
             return
         }
         Task { await addImportedCameras(parsed) }
+    }
+
+    private func restorePlainConfiguration(from url: URL) {
+        let archive: VigilConfigurationArchive
+        do { archive = try ConfigurationArchiveCodec.decode(Data(contentsOf: url)) } catch {
+            reportImportFailure(error)
+            return
+        }
+        guard confirmRestore(cameraCount: archive.cameras.count, includesCredentials: false) else {
+            return
+        }
+        Task { await applyRestoredArchive(archive, credentials: []) }
+    }
+
+    private func restoreEncryptedConfiguration(from url: URL) {
+        let container: Data
+        do { container = try Data(contentsOf: url, options: .mappedIfSafe) } catch {
+            reportImportFailure(error)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = Self.localized("Unlock the Vigil backup")
+        alert.informativeText = Self.localized(
+            "Enter the passphrase used when this encrypted backup was created.")
+        let passphraseField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        passphraseField.placeholderString = Self.localized("Backup passphrase")
+        alert.accessoryView = passphraseField
+        alert.addButton(withTitle: Self.localized("Unlock"))
+        alert.addButton(withTitle: Self.localized("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let passphrase = passphraseField.stringValue
+        Task {
+            do {
+                let payload = try await Task.detached(priority: .userInitiated) {
+                    try EncryptedConfigurationCodec.decode(container, passphrase: passphrase)
+                }.value
+                guard confirmRestore(cameraCount: payload.archive.cameras.count,
+                                     includesCredentials: true) else { return }
+                await applyRestoredArchive(payload.archive, credentials: payload.credentials)
+            } catch {
+                reportImportFailure(error)
+            }
+        }
+    }
+
+    private func confirmRestore(cameraCount: Int, includesCredentials: Bool) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = Self.localized("Replace the current configuration?")
+        let detail = includesCredentials
+            ? Self.localized("Camera settings, groups, and saved passwords will be restored.")
+            : Self.localized("Camera settings and groups will be restored. Passwords are not in this file.")
+        alert.informativeText = "\(cameraCount) "
+            + Self.localized("cameras will replace the current configuration. ") + detail
+        alert.addButton(withTitle: Self.localized("Replace Configuration"))
+        alert.addButton(withTitle: Self.localized("Cancel"))
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func applyRestoredArchive(
+        _ archive: VigilConfigurationArchive,
+        credentials: [EncryptedConfigurationPayload.StoredCredential]
+    ) async {
+        do {
+            // Write credentials first: camera records are not made active until every Keychain
+            // item succeeds. A failure therefore leaves the current configuration untouched.
+            let byID = Dictionary(uniqueKeysWithValues: archive.cameras.map { ($0.id, $0) })
+            for stored in credentials {
+                guard let camera = byID[stored.cameraID] else {
+                    throw EncryptedConfigurationCodec.Failure.damaged
+                }
+                let credential = Credential(ref: stored.ref, account: stored.account,
+                                            secret: stored.secret)
+                try await session.credentials.save(
+                    credential, descriptor: CredentialDescriptor(camera: camera,
+                                                                  account: stored.account))
+            }
+            try await library.replace(with: archive.cameras)
+            groups.replace(with: archive.groups)
+            window.toast = MainWindowToast(kind: .success,
+                                           message: Self.localized("Configuration restored."))
+        } catch {
+            reportImportFailure(error)
+        }
+    }
+
+    private func reportImportFailure(_ error: any Error) {
+        let message: String
+        switch error {
+        case EncryptedConfigurationCodec.Failure.wrongPassphrase:
+            message = Self.localized("That passphrase didn't work.")
+        case EncryptedConfigurationCodec.Failure.damaged:
+            message = Self.localized("This backup file is damaged.")
+        case EncryptedConfigurationCodec.Failure.weakPassphrase:
+            message = Self.localized("The passphrase must contain at least 12 characters.")
+        default:
+            message = String(format: Self.localized("Could not import that configuration: %@"),
+                             Self.describe(error))
+        }
+        window.toast = MainWindowToast(kind: .error, message: message)
     }
 
     /// Adds the rows that are not already in the library, and reports both numbers.
@@ -94,14 +204,26 @@ extension MainWindowView {
 
     // MARK: - ⌥⌘E, export
 
-    /// Writes the library and the groups to a file the user chooses.
-    ///
-    /// ⛔ No passwords, and not by omission: `Camera` carries a `CredentialRef`, which is a UUID
-    /// naming a Keychain item, and the secret itself never enters the record. UX.md §8.5 offers an
-    /// encrypted bundle that *does* include passwords; this writes the plain archive, so the file is
-    /// safe to email and useless to an attacker who takes it. The sheet that offers the encrypted
-    /// variant is the part that is not here.
+    /// Offers a shareable password-free JSON file or an authenticated encrypted backup containing
+    /// Keychain credentials.
     func exportConfiguration() {
+        let choice = NSAlert()
+        choice.messageText = Self.localized("Export Configuration")
+        choice.informativeText = Self.localized(
+            "Choose encrypted backup to move cameras and passwords to another Mac, "
+            + "or plain JSON to share settings without passwords.")
+        choice.addButton(withTitle: Self.localized("Encrypted Backup…"))
+        choice.addButton(withTitle: Self.localized("Plain JSON"))
+        choice.addButton(withTitle: Self.localized("Cancel"))
+        switch choice.runModal() {
+        case .alertFirstButtonReturn:
+            exportEncryptedConfiguration()
+            return
+        case .alertSecondButtonReturn:
+            break
+        default:
+            return
+        }
         let archive = VigilConfigurationArchive(cameras: library.cameras, groups: groups.groups)
         let data: Data
         do {
@@ -115,8 +237,8 @@ extension MainWindowView {
         }
 
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "vigil-configuration.json"
+        panel.allowedContentTypes = [.vigilLibraryJSON]
+        panel.nameFieldStringValue = "vigil-configuration.vigiljson"
         panel.message = Self.localized("The export lists cameras and groups. It holds no passwords.")
         panel.prompt = Self.localized("Export")
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -127,6 +249,76 @@ extension MainWindowView {
                 kind: .success,
                 message: String(format: Self.localized("Exported cameras: %lld"),
                                 archive.cameras.count),
+                actionTitle: "Reveal in Finder",
+                action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
+        } catch {
+            window.toast = MainWindowToast(
+                kind: .error,
+                message: String(format: Self.localized("Could not write the export: %@"),
+                                Self.describe(error)))
+        }
+    }
+
+    private func exportEncryptedConfiguration() {
+        let alert = NSAlert()
+        alert.messageText = Self.localized("Protect the backup with a passphrase")
+        alert.informativeText = Self.localized(
+            "Use at least 12 characters. You will need this passphrase to restore the passwords.")
+        let secureField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        secureField.placeholderString = Self.localized("Passphrase (12 or more characters)")
+        alert.accessoryView = secureField
+        alert.addButton(withTitle: Self.localized("Continue"))
+        alert.addButton(withTitle: Self.localized("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let passphrase = secureField.stringValue
+        guard passphrase.count >= 12 else {
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: Self.localized("The passphrase must contain at least 12 characters."))
+            return
+        }
+
+        let cameras = library.cameras
+        let groups = groups.groups
+        Task {
+            var stored: [EncryptedConfigurationPayload.StoredCredential] = []
+            for camera in cameras {
+                guard let credential = try? await session.credentials.credential(for: camera) else {
+                    continue
+                }
+                stored.append(.init(cameraID: camera.id, ref: credential.ref,
+                                    account: credential.account, secret: credential.secret))
+            }
+            let payload = EncryptedConfigurationPayload(
+                archive: VigilConfigurationArchive(cameras: cameras, groups: groups),
+                credentials: stored)
+            do {
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try EncryptedConfigurationCodec.encode(payload, passphrase: passphrase)
+                }.value
+                saveEncryptedConfiguration(data, cameraCount: cameras.count)
+            } catch {
+                window.toast = MainWindowToast(
+                    kind: .error,
+                    message: String(format: Self.localized("Could not build the export: %@"),
+                                    Self.describe(error)))
+            }
+        }
+    }
+
+    private func saveEncryptedConfiguration(_ data: Data, cameraCount: Int) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.vigilBackup]
+        panel.nameFieldStringValue = "vigil-configuration.vigilbackup"
+        panel.message = Self.localized(
+            "This encrypted backup contains camera passwords. Keep its passphrase separately.")
+        panel.prompt = Self.localized("Export")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            window.toast = MainWindowToast(
+                kind: .success,
+                message: String(format: Self.localized("Exported cameras: %lld"), cameraCount),
                 actionTitle: "Reveal in Finder",
                 action: { NSWorkspace.shared.activateFileViewerSelecting([url]) })
         } catch {

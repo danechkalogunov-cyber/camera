@@ -766,7 +766,20 @@
 
 // MARK: - Import, export and Stream Doctor (⇧⌘I, ⌥⌘E, ⌥⌘D), UX.md §8.5
 "Checking the camera's ports…" = "Checking the camera's ports…";
-"Choose a CSV file with a header row and a host column." = "Choose a CSV file with a header row and a host column.";
+"Choose a camera list or Vigil backup to restore." = "Choose a camera list or Vigil backup to restore.";
+"Unlock the Vigil backup" = "Unlock the Vigil backup";
+"Enter the passphrase used when this encrypted backup was created." = "Enter the passphrase used when this encrypted backup was created.";
+"Backup passphrase" = "Backup passphrase";
+"Unlock" = "Unlock";
+"Replace the current configuration?" = "Replace the current configuration?";
+"Camera settings, groups, and saved passwords will be restored." = "Camera settings, groups, and saved passwords will be restored.";
+"Camera settings and groups will be restored. Passwords are not in this file." = "Camera settings and groups will be restored. Passwords are not in this file.";
+"cameras will replace the current configuration. " = "cameras will replace the current configuration. ";
+"Replace Configuration" = "Replace Configuration";
+"Configuration restored." = "Configuration restored.";
+"That passphrase didn't work." = "That passphrase didn't work.";
+"This backup file is damaged." = "This backup file is damaged.";
+"Could not import that configuration: %@" = "Could not import that configuration: %@";
 "Could not build the export: %@" = "Could not build the export: %@";
 "Could not read that CSV: %@" = "Could not read that CSV: %@";
 "Could not write the export: %@" = "Could not write the export: %@";
@@ -789,8 +802,21 @@
 "Check the camera's ports" = "Check the camera's ports";
 "Cameras captured: %lld of %lld" = "Cameras captured: %lld of %lld";
 "Stopped — cameras captured: %lld" = "Stopped — cameras captured: %lld";
+
+/* Menu-bar extra */
+"Quit Vigil" = "Quit Vigil";
 "Arm Motion Recording" = "Arm Motion Recording";
 "Disarm Motion Recording" = "Disarm Motion Recording";
+"Export Configuration" = "Export Configuration";
+"Choose encrypted backup to move cameras and passwords to another Mac, or plain JSON to share settings without passwords." = "Choose encrypted backup to move cameras and passwords to another Mac, or plain JSON to share settings without passwords.";
+"Encrypted Backup…" = "Encrypted Backup…";
+"Plain JSON" = "Plain JSON";
+"Protect the backup with a passphrase" = "Protect the backup with a passphrase";
+"Use at least 12 characters. You will need this passphrase to restore the passwords." = "Use at least 12 characters. You will need this passphrase to restore the passwords.";
+"Passphrase (12 or more characters)" = "Passphrase (12 or more characters)";
+"The passphrase must contain at least 12 characters." = "The passphrase must contain at least 12 characters.";
+"This encrypted backup contains camera passwords. Keep its passphrase separately." = "This encrypted backup contains camera passwords. Keep its passphrase separately.";
+"Continue" = "Continue";
 "Mute All Audio" = "Mute All Audio";
 "Show in Finder" = "Show in Finder";
 "The snapshot set could not be written" = "The snapshot set could not be written";

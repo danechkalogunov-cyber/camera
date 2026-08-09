@@ -749,7 +749,20 @@
 
 // MARK: - Import, export and Stream Doctor (⇧⌘I, ⌥⌘E, ⌥⌘D), UX.md §8.5
 "Checking the camera's ports…" = "Проверяю порты камеры…";
-"Choose a CSV file with a header row and a host column." = "Выберите CSV-файл со строкой заголовка и колонкой host.";
+"Choose a camera list or Vigil backup to restore." = "Выберите список камер или резервную копию Vigil.";
+"Unlock the Vigil backup" = "Разблокировать резервную копию Vigil";
+"Enter the passphrase used when this encrypted backup was created." = "Введите парольную фразу, заданную при создании этой резервной копии.";
+"Backup passphrase" = "Парольная фраза резервной копии";
+"Unlock" = "Разблокировать";
+"Replace the current configuration?" = "Заменить текущую конфигурацию?";
+"Camera settings, groups, and saved passwords will be restored." = "Настройки камер, группы и сохранённые пароли будут восстановлены.";
+"Camera settings and groups will be restored. Passwords are not in this file." = "Настройки камер и группы будут восстановлены. В этом файле нет паролей.";
+"cameras will replace the current configuration. " = "камер заменят текущую конфигурацию. ";
+"Replace Configuration" = "Заменить конфигурацию";
+"Configuration restored." = "Конфигурация восстановлена.";
+"That passphrase didn't work." = "Эта парольная фраза не подошла.";
+"This backup file is damaged." = "Файл резервной копии повреждён.";
+"Could not import that configuration: %@" = "Не удалось импортировать конфигурацию: %@";
 "Could not build the export: %@" = "Не удалось собрать экспорт: %@";
 "Could not read that CSV: %@" = "Не удалось прочитать CSV: %@";
 "Could not write the export: %@" = "Не удалось записать экспорт: %@";
@@ -772,8 +785,21 @@
 "Check the camera's ports" = "Проверить порты камеры";
 "Cameras captured: %lld of %lld" = "Снято камер: %lld из %lld";
 "Stopped — cameras captured: %lld" = "Остановлено — снято камер: %lld";
+
+/* Menu-bar extra */
+"Quit Vigil" = "Завершить Vigil";
 "Arm Motion Recording" = "Включить запись по движению";
 "Disarm Motion Recording" = "Отключить запись по движению";
+"Export Configuration" = "Экспорт конфигурации";
+"Choose encrypted backup to move cameras and passwords to another Mac, or plain JSON to share settings without passwords." = "Выберите зашифрованную резервную копию для переноса камер и паролей на другой Mac или обычный JSON без паролей.";
+"Encrypted Backup…" = "Зашифрованная копия…";
+"Plain JSON" = "Обычный JSON";
+"Protect the backup with a passphrase" = "Защитите резервную копию парольной фразой";
+"Use at least 12 characters. You will need this passphrase to restore the passwords." = "Используйте не менее 12 символов. Эта фраза понадобится для восстановления паролей.";
+"Passphrase (12 or more characters)" = "Парольная фраза (не менее 12 символов)";
+"The passphrase must contain at least 12 characters." = "Парольная фраза должна содержать не менее 12 символов.";
+"This encrypted backup contains camera passwords. Keep its passphrase separately." = "Эта зашифрованная копия содержит пароли камер. Храните парольную фразу отдельно.";
+"Continue" = "Продолжить";
 "Mute All Audio" = "Заглушить весь звук";
 "Show in Finder" = "Показать в Finder";
 "The snapshot set could not be written" = "Набор снимков не удалось записать";

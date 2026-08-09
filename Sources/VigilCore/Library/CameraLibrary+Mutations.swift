@@ -21,6 +21,25 @@ extension CameraLibrary {
 
     // MARK: Mutations — membership
 
+    /// Atomically replaces the camera collection during a validated configuration restore.
+    /// One commit means observers never see the half-empty intermediate states produced by a
+    /// remove/add loop, and `LibraryStore` rotates the pre-import document to its backup on save.
+    public func replaceCameras(_ cameras: [Camera]) throws(LibraryMutationError) {
+        try requireWritable()
+        var prepared: [Camera] = []
+        var identifiers: Set<CameraID> = []
+        for camera in cameras {
+            guard identifiers.insert(camera.id).inserted else {
+                throw LibraryMutationError.duplicateCameraID(camera.id)
+            }
+            prepared.append(try validate(camera))
+        }
+        document.cameras = prepared
+        let retained = Set(prepared.map(\.id))
+        document.channelInventories.removeAll { !retained.contains($0.cameraID) }
+        commit(.reordered)
+    }
+
     /// Adds a camera, at the end of the list or at an explicit position.
     ///
     /// The record is validated and repaired first (`Camera.validated()`), so a name typed as spaces

@@ -218,6 +218,15 @@ final class AppLibraryModel {
         }
     }
 
+    /// Replaces the whole camera list in one library transaction after an import was confirmed.
+    func replace(with cameras: [Camera]) async throws {
+        guard let library, !isReadOnly else { throw ImportFailure.readOnly }
+        try await library.replaceCameras(cameras)
+        await refresh()
+    }
+
+    enum ImportFailure: Error { case readOnly }
+
     /// Duplicates a camera next to its source and returns the new record for selection/editing.
     @discardableResult
     func duplicate(_ id: CameraID) async -> Camera? {
