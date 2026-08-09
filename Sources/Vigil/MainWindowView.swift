@@ -385,6 +385,7 @@ struct MainWindowView: View {
         .overlay(alignment: .topLeading) { overflowMenu }
         .overlay { paletteOverlay }
         .overlay(alignment: .top) { talkingOverlay }
+        .overlay(alignment: .topTrailing) { eventPreviewOverlay }
     }
 
     /// The name and the way out, while the chrome is gone.

@@ -130,6 +130,9 @@ public struct EventMonitorCounters: Sendable, Hashable, Codable {
 /// * `maxUnsupportedReprobes` (3) bounds re-probing a device that answered 403/404/405.
 public actor EventMonitorService {
 
+    /// Persists an optional device JPEG after the store assigns the stable event identity.
+    public typealias SnapshotSink = @Sendable (EventID, CameraID, Data) async -> Void
+
     // MARK: Policy
 
     public struct Policy: Sendable, Hashable {
@@ -185,6 +188,7 @@ public actor EventMonitorService {
     private nonisolated let clock: any MonotonicClock
     private nonisolated let logger: any LoggerProtocol
     private nonisolated let makeMonitor: EventMonitorFactory
+    private nonisolated let snapshotSink: SnapshotSink
     private var random: any RandomSource
 
     private var subscriptions: [EventDeviceKey: Subscription] = [:]
@@ -202,12 +206,14 @@ public actor EventMonitorService {
                 clock: any MonotonicClock,
                 random: any RandomSource = SystemRandomSource(),
                 logger: any LoggerProtocol = NullLogger(),
+                snapshotSink: @escaping SnapshotSink = { _, _, _ in },
                 makeMonitor: @escaping EventMonitorFactory) {
         self.store = store
         self.policy = policy
         self.clock = clock
         self.random = random
         self.logger = logger
+        self.snapshotSink = snapshotSink
         self.makeMonitor = makeMonitor
     }
 
@@ -504,6 +510,9 @@ public actor EventMonitorService {
         // behind them. A test that needs to read the store must wait on the store.
         totals.alertsForwarded += 1
         let outcome = await store.ingest(alert, from: cameraID)
+        if let snapshot = alert.snapshot, let record = outcome.record {
+            await snapshotSink(record.id, cameraID, snapshot)
+        }
         publish(.ingested(cameraID, outcome))
     }
 

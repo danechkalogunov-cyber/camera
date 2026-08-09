@@ -48,6 +48,16 @@ private final class EventFactoryScript: @unchecked Sendable {
     }
 }
 
+private actor EventSnapshotCapture {
+    private(set) var values: [(EventID, CameraID, Data)] = []
+
+    func append(eventID: EventID, cameraID: CameraID, data: Data) {
+        values.append((eventID, cameraID, data))
+    }
+
+    var count: Int { values.count }
+}
+
 /// The pieces every test here needs: clocks, a store, and a service wired to a scripted device.
 private struct EventServiceHarness {
     let clock = EventTestClock()
@@ -69,9 +79,11 @@ private struct EventServiceHarness {
     }
 
     func service(policy: EventMonitorService.Policy = EventMonitorService.Policy(),
+                 snapshotSink: @escaping EventMonitorService.SnapshotSink = { _, _, _ in },
                  makeMonitor: @escaping EventMonitorFactory) -> EventMonitorService {
         EventMonitorService(store: store, policy: policy, clock: clock,
-                           random: SplitMix64RandomSource(seed: 11), makeMonitor: makeMonitor)
+                           random: SplitMix64RandomSource(seed: 11),
+                           snapshotSink: snapshotSink, makeMonitor: makeMonitor)
     }
 
     /// A policy with a small re-probe budget, so the terminal path resolves in a few steps.
@@ -110,6 +122,40 @@ struct EventMonitorServiceTests {
         #expect(record?.rawEventType == "VMD")
         #expect(record?.channel == 1)
         #expect(await service.counters().alertsForwarded == 1)
+        await service.stopAll()
+    }
+
+    /// The store intentionally keeps only `hasSnapshot`; the bytes leave through the sink after the
+    /// stable EventID exists, so the app can name and cache them without retaining image data in the
+    /// event ring.
+    @Test func eventMonitorServiceForwardsPairedSnapshotWithStoredIdentity() async throws {
+        let h = EventServiceHarness()
+        let camera = eventTestCamera()
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        let capture = EventSnapshotCapture()
+        let requests = EventScriptedRequests(script: [
+            .bytes([EventMultipartFixture.part(eventType: "VMD", channel: 1,
+                                               state: "active", count: 1),
+                    EventMultipartFixture.image(jpeg),
+                    EventMultipartFixture.closing()]),
+        ])
+        let monitor = h.monitor(requests)
+        let service = h.service(
+            policy: EventServiceHarness.fastPolicy(),
+            snapshotSink: { eventID, cameraID, data in
+                await capture.append(eventID: eventID, cameraID: cameraID, data: data)
+            },
+            makeMonitor: { _ in monitor })
+
+        await service.reconcile(cameras: [camera])
+        #expect(await eventWaitUntil { await capture.count == 1 })
+        let stored = try #require(await h.store.recent(cameraID: camera.id).first)
+        let captured = await capture.values
+        let forwarded = try #require(captured.first)
+        #expect(forwarded.0 == stored.id)
+        #expect(forwarded.1 == camera.id)
+        #expect(forwarded.2 == jpeg)
+        #expect(stored.hasSnapshot)
         await service.stopAll()
     }
 

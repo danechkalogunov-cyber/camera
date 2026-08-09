@@ -252,6 +252,16 @@ enum EventMultipartFixture {
         return out
     }
 
+    /// One camera-supplied JPEG part paired with the preceding XML alert.
+    static func image(_ bytes: Data) -> Data {
+        var out = Data("--\(boundary)\r\n".utf8)
+        out.append(Data("Content-Type: image/jpeg\r\n".utf8))
+        out.append(Data("Content-Length: \(bytes.count)\r\n\r\n".utf8))
+        out.append(bytes)
+        out.append(Data("\r\n".utf8))
+        return out
+    }
+
     /// The closing delimiter.
     static func closing() -> Data { Data("--\(boundary)--\r\n".utf8) }
 }

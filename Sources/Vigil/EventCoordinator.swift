@@ -35,6 +35,14 @@ import VigilUI
 @Observable
 final class EventCoordinator {
 
+    struct Preview: Identifiable, Sendable, Hashable {
+        let id: UUID
+        let cameraID: CameraID
+        let cameraName: String
+        let eventLabel: String
+        let thumbnailURL: URL?
+    }
+
     // MARK: - Observable State
 
     /// The most recent events, newest first, ready for `VLibraryState.events`.
@@ -47,6 +55,9 @@ final class EventCoordinator {
     /// SwiftUI observation coalescing several alerts into only the final property value.
     private(set) var recordingTriggerRevision: UInt64 = 0
 
+    /// Four-second in-app preview for the newest event.
+    private(set) var preview: Preview?
+
     // MARK: - Stored Properties
 
     private let store: EventStore
@@ -54,6 +65,7 @@ final class EventCoordinator {
     private let credentials: CredentialStore
     private let dependencies: CoreDependencies
     private let notifications = CameraNotificationCenter()
+    private let thumbnails: EventThumbnailStore
     private var drain: Task<Void, Never>?
     private var publishedEventIDs: Set<EventID> = []
     private var recordingEventLastAt: [EventID: Date] = [:]
@@ -61,6 +73,7 @@ final class EventCoordinator {
     private var monitoredCameras: [Camera] = []
     private var displayedCameraID: CameraID?
     private var pendingRecordingTriggers: [MotionRecordingTrigger] = []
+    private var previewTask: Task<Void, Never>?
 
     /// The camera the factory builds credentials for. `CredentialStore` looks a password up by
     /// `Camera`, while `EventMonitorFactory` is handed only a device key, so the current camera has
@@ -81,6 +94,8 @@ final class EventCoordinator {
                                wallClock: SystemWallClock(),
                                logger: dependencies.logger)
         self.store = store
+        let thumbnails = EventThumbnailStore(logger: dependencies.logger)
+        self.thumbnails = thumbnails
 
         let clock = dependencies.clock
         let logger = dependencies.logger
@@ -92,6 +107,9 @@ final class EventCoordinator {
             clock: clock,
             random: random,
             logger: logger,
+            snapshotSink: { eventID, _, data in
+                _ = await thumbnails.save(data, eventID: eventID)
+            },
             makeMonitor: { [credentials, followed] key in
                 guard let camera = followed.withLock({ $0[key] }),
                       let credential = try? await credentials.credential(for: camera) else {
@@ -184,6 +202,13 @@ final class EventCoordinator {
         return pendingRecordingTriggers
     }
 
+    /// Dismisses the transient preview without touching the event or its notification.
+    func dismissPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        preview = nil
+    }
+
     /// Forgets one event.
     ///
     /// **Local only.** UX.md §9.1 is explicit that deleting an event never touches the device — the
@@ -191,6 +216,7 @@ final class EventCoordinator {
     /// tool to hand a security operator. This removes Vigil's copy and nothing else.
     func delete(_ id: UUID, camera: Camera?) async {
         await store.delete([EventID(id)])
+        await thumbnails.remove(EventID(id))
         guard let camera else { return }
         await refresh(camera: camera)
     }
@@ -204,6 +230,9 @@ final class EventCoordinator {
 
     /// Stops the feed and releases the subscription.
     func stop() async {
+        previewTask?.cancel()
+        previewTask = nil
+        preview = nil
         drain?.cancel()
         drain = nil
         await service.stopAll()
@@ -242,7 +271,10 @@ final class EventCoordinator {
             for camera in monitoredCameras {
                 for record in rows[camera.id, default: []] {
                     if publishedEventIDs.insert(record.id).inserted {
-                        await notifications.post(event: record, camera: camera)
+                        let thumbnail = await thumbnails.existingURL(for: record.id)
+                        await notifications.post(event: record, camera: camera,
+                                                 thumbnailURL: thumbnail)
+                        showPreview(event: record, camera: camera, thumbnailURL: thumbnail)
                     }
                     if recordingEventLastAt[record.id].map({ record.lastAt > $0 }) ?? true {
                         recordingEventLastAt[record.id] = record.lastAt
@@ -262,6 +294,20 @@ final class EventCoordinator {
         events = Self.present(rows[camera.id, default: []], camera: camera)
     }
 
+    private func showPreview(event: EventRecord, camera: Camera, thumbnailURL: URL?) {
+        previewTask?.cancel()
+        preview = Preview(id: event.id.rawValue, cameraID: camera.id,
+                          cameraName: camera.displayName,
+                          eventLabel: event.rawEventType.isEmpty ? "Camera event" : event.rawEventType,
+                          thumbnailURL: thumbnailURL)
+        let previewID = event.id.rawValue
+        previewTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, self?.preview?.id == previewID else { return }
+            self?.preview = nil
+        }
+    }
+
     /// Reads the store into the screen's shape.
     private func refresh(camera: Camera) async {
         let records = await store.recent(cameraID: camera.id, limit: 200)
@@ -272,7 +318,11 @@ final class EventCoordinator {
         publishedEventIDs.formUnion(records.map(\.id))
         for record in records { recordingEventLastAt[record.id] = record.lastAt }
         hasNotificationBaseline = true
-        for record in incoming { await notifications.post(event: record, camera: camera) }
+        for record in incoming {
+            let thumbnail = await thumbnails.existingURL(for: record.id)
+            await notifications.post(event: record, camera: camera, thumbnailURL: thumbnail)
+            showPreview(event: record, camera: camera, thumbnailURL: thumbnail)
+        }
         for record in recordingUpdates {
             enqueueRecordingTrigger(MotionRecordingTrigger(cameraID: camera.id,
                                                             eventID: record.id,

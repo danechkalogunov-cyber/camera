@@ -7,6 +7,7 @@
 
 #if os(macOS)
 
+import AppKit
 import SwiftUI
 import VigilUI
 
@@ -132,6 +133,61 @@ extension MainWindowView {
                            library.dismissNotice()
                        })
                 .padding(.bottom, VTheme.Space.xl)
+        }
+    }
+
+    /// A short, non-modal look at the camera that just raised an alert.
+    ///
+    /// If its stream is already running this is a second presentation of the same frame source —
+    /// not a second decoder. Cameras without a live stream use the JPEG paired with the alert, so
+    /// the preview is still useful without silently starting a network session. The renderer itself
+    /// is never clipped, faded or shadowed; those effects would force the display layer off its
+    /// direct composition path.
+    @ViewBuilder
+    var eventPreviewOverlay: some View {
+        if let preview = eventFeed.preview {
+            VStack(alignment: .leading, spacing: VTheme.Space.sm) {
+                Group {
+                    if session.cameras.stream(for: preview.cameraID)?.isActive == true
+                        || (preview.cameraID == cameraID && session.live.isActive) {
+                        stageVideo(for: preview.cameraID)
+                    } else if let url = preview.thumbnailURL,
+                              let image = NSImage(contentsOf: url) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                    } else {
+                        VTheme.Color.Layer.videoWell
+                    }
+                }
+                .frame(width: 280, height: 158)
+
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(preview.cameraName).font(.callout.weight(.semibold))
+                        Text(preview.eventLabel)
+                            .font(.caption)
+                            .foregroundStyle(VTheme.Color.Text.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: VTheme.Space.md)
+                    Text("View Live", bundle: .vigilUI)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(VTheme.Color.Semantic.accent)
+                }
+            }
+            .padding(VTheme.Space.sm)
+            .background(VTheme.Color.Layer.surfaceRaised)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                window.sidebarSelection.select(.camera(preview.cameraID))
+                eventFeed.dismissPreview()
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .padding(.top, VTheme.Space.lg)
+            .padding(.trailing, VTheme.Space.lg)
         }
     }
 
