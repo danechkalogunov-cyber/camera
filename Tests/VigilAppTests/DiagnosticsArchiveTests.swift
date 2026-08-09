@@ -7,6 +7,29 @@ import Testing
 
 @Suite("Diagnostics archive")
 struct DiagnosticsArchiveTests {
+    @Test func builderStopsBeforeWritingWhenItsTaskIsCancelled() async {
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        let task = Task {
+            for await _ in gate { break }
+            return try DiagnosticsArchiveBuilder.build(
+                createdAt: Date(timeIntervalSince1970: 0),
+                includesHostnames: false, includesFullLogs: true,
+                files: [DiagnosticsArchiveFile(path: "summary.txt", text: "hello")])
+        }
+        task.cancel()
+        release.yield(())
+        release.finish()
+
+        do {
+            _ = try await task.value
+            Issue.record("a cancelled diagnostics build succeeded")
+        } catch is CancellationError {
+            // Expected: cancellation is checked before redaction, hashing and ZIP encoding.
+        } catch {
+            Issue.record("unexpected cancellation error: \(error)")
+        }
+    }
+
     @Test func redactsEveryTextFileAtTheArchiveBoundary() throws {
         let knownPassword = "only-for-the-test"
         let authorization = "Digest response=deadbeef, nonce=abc123"

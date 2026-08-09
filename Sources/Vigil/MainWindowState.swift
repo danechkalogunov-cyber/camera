@@ -376,9 +376,9 @@ final class MainWindowState {
     /// Exact camera ordering supplied by a named preset; nil uses the ordinary workspace order.
     var presetCameraOrder: [CameraID]?
 
-    /// File ▸ Export Diagnostics is app-scene state, while the evidence lives in MainWindowView.
-    /// The monotonically increasing request bridges those two owners without a global singleton.
+    /// Bridges the app-scene diagnostics command to the evidence owned by `MainWindowView`.
     var exportDiagnosticsRequests: UInt64 = 0
+    @ObservationIgnored var diagnosticsExportTask: Task<Void, Never>?
 
     var streamDoctorCameraName = ""
     var streamDoctorCameraID: CameraID?

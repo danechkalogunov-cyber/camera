@@ -52,11 +52,13 @@ enum DiagnosticsArchiveBuilder {
 
     static func build(createdAt: Date, includesHostnames: Bool, includesFullLogs: Bool,
                       files input: [DiagnosticsArchiveFile]) throws -> Data {
+        try Task.checkCancellation()
         let inputBytes = input.reduce(0) { $0 + $1.data.count }
         guard inputBytes <= maximumBytes else {
             throw DiagnosticsArchiveError.exceedsSizeLimit(bytes: inputBytes)
         }
-        let files = input.map { file in
+        let files = try input.map { file in
+            try Task.checkCancellation()
             let text = String(decoding: file.data, as: UTF8.self)
             return DiagnosticsArchiveFile(path: file.path,
                                           text: Redact.secrets(in: text))
@@ -66,7 +68,8 @@ enum DiagnosticsArchiveBuilder {
             throw DiagnosticsArchiveError.exceedsSizeLimit(bytes: contentBytes)
         }
 
-        let rows = files.map { file in
+        let rows = try files.map { file in
+            try Task.checkCancellation()
             DiagnosticsManifest.File(path: file.path, bytes: file.data.count,
                                      sha256: SHA256.hash(data: file.data).hexadecimal)
         }
@@ -79,6 +82,7 @@ enum DiagnosticsArchiveBuilder {
         let manifestData = try encoder.encode(manifest)
         let entries = files.map { ZIPEntry(path: $0.path, data: $0.data) }
             + [ZIPEntry(path: "manifest.json", data: manifestData)]
+        try Task.checkCancellation()
         let archive = try StoreOnlyZIP.encode(entries)
         guard archive.count <= maximumBytes else {
             throw DiagnosticsArchiveError.exceedsSizeLimit(bytes: archive.count)

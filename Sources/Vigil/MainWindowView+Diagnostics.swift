@@ -23,7 +23,15 @@ private extension UTType {
 
 extension MainWindowView {
     func exportDiagnostics() {
+        guard window.diagnosticsExportTask == nil else { return }
         let now = Date()
+        let files: [DiagnosticsArchiveFile]
+        do { files = try diagnosticFiles(now: now) } catch {
+            reportDiagnosticsFailure(error)
+            return
+        }
+        guard confirmDiagnostics(files) else { return }
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.vigilDiagnostics, .zip]
         panel.nameFieldStringValue = "Vigil-Diagnostics-\(Self.diagnosticStamp(now)).zip"
@@ -32,21 +40,25 @@ extension MainWindowView {
         panel.prompt = Self.localized("Export")
         guard panel.runModal() == .OK, let destination = panel.url else { return }
 
-        let files: [DiagnosticsArchiveFile]
-        do { files = try diagnosticFiles(now: now) } catch {
-            reportDiagnosticsFailure(error)
-            return
-        }
         window.toast = MainWindowToast(kind: .info,
-                                       message: Self.localized("Building diagnostics archive…"))
-        Task {
+                                       message: Self.localized("Building diagnostics archive…"),
+                                       actionTitle: Self.localized("Cancel export"),
+                                       action: { window.diagnosticsExportTask?.cancel() })
+        window.diagnosticsExportTask = Task {
+            defer { window.diagnosticsExportTask = nil }
             do {
-                let data = try await Task.detached(priority: .userInitiated) {
+                let worker = Task.detached(priority: .userInitiated) {
                     try DiagnosticsArchiveBuilder.build(createdAt: now,
                                                         includesHostnames: false,
                                                         includesFullLogs: true,
                                                         files: files)
-                }.value
+                }
+                let data = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                try Task.checkCancellation()
                 try data.write(to: destination, options: [.atomic, .completeFileProtection])
                 window.toast = MainWindowToast(
                     kind: .success,
@@ -60,6 +72,33 @@ extension MainWindowView {
                 reportDiagnosticsFailure(error)
             }
         }
+    }
+
+    /// Lists every source and its pre-ZIP size before collection can begin.
+    private func confirmDiagnostics(_ files: [DiagnosticsArchiveFile]) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = Self.localized("Review diagnostics archive")
+        alert.informativeText = Self.localized(
+            "These redacted files will be included. No data leaves this Mac automatically.")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 240))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let text = NSTextView(frame: scroll.bounds)
+        text.isEditable = false
+        text.isSelectable = true
+        text.backgroundColor = .textBackgroundColor
+        text.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        let rows = files.map { file in
+            let size = ByteCountFormatter.string(fromByteCount: Int64(file.data.count),
+                                                 countStyle: .file)
+            return "\(file.path)  \(size)"
+        } + ["manifest.json  " + Self.localized("generated")]
+        text.string = rows.joined(separator: "\n")
+        scroll.documentView = text
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: Self.localized("Continue"))
+        alert.addButton(withTitle: Self.localized("Cancel"))
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func diagnosticFiles(now: Date) throws -> [DiagnosticsArchiveFile] {

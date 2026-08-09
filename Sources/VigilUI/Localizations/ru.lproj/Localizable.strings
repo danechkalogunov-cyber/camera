@@ -871,6 +871,9 @@
 "Export Diagnostics…" = "Экспортировать диагностику…";
 "The archive is redacted and stays on this Mac until you choose to share it." = "Архив очищен от секретов и останется на этом Mac, пока вы сами не решите им поделиться.";
 "Building diagnostics archive…" = "Создание архива диагностики…";
+"Review diagnostics archive" = "Проверьте архив диагностики";
+"These redacted files will be included. No data leaves this Mac automatically." = "Эти файлы с удалёнными секретами будут добавлены. Данные не покинут этот Mac автоматически.";
+"generated" = "создаётся автоматически";
 "Diagnostics archive exported." = "Архив диагностики экспортирован.";
 "Diagnostics export cancelled." = "Экспорт диагностики отменён.";
 "Could not export diagnostics: %@" = "Не удалось экспортировать диагностику: %@";
