@@ -876,3 +876,8 @@
 "Diagnostics archive exported." = "Diagnostics archive exported.";
 "Diagnostics export cancelled." = "Diagnostics export cancelled.";
 "Could not export diagnostics: %@" = "Could not export diagnostics: %@";
+"That display is gone — the wall opened on this Mac instead." = "That display is gone — the wall opened on this Mac instead.";
+"Display" = "Display";
+"Patrol" = "Patrol";
+"Decode limit" = "Decode limit";
+"Exit (Esc)" = "Exit (Esc)";

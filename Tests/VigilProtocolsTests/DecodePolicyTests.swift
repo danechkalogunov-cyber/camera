@@ -140,13 +140,13 @@ import VigilProtocols
     }
 
     @Test func priorityOrderMatchesFeatureDEC06() {
-        // focused > recording > visible large > visible small > wall > PiP > offscreen >
-        // sidebar > background. Recording sits above every preview because it is never demoted.
+        // wall > focused > recording > visible large > visible small > PiP > offscreen >
+        // sidebar > background. Recording remains non-preemptible independently of ordering.
+        #expect(StreamPriority.wall > .focused)
         #expect(StreamPriority.focused > .recording)
         #expect(StreamPriority.recording > .visibleLarge)
         #expect(StreamPriority.visibleLarge > .visibleSmall)
-        #expect(StreamPriority.visibleSmall > .wall)
-        #expect(StreamPriority.wall > .pictureInPicture)
+        #expect(StreamPriority.visibleSmall > .pictureInPicture)
         #expect(StreamPriority.pictureInPicture > .offscreen)
         #expect(StreamPriority.offscreen > .sidebarThumbnail)
         #expect(StreamPriority.sidebarThumbnail > .background)

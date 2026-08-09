@@ -45,6 +45,7 @@ final class MainWindowState {
 
     private static let layoutKey = "Vigil.workspace.layout"
     private static let selectedCameraKey = "Vigil.workspace.selectedCamera"
+    private static let videoWallKey = "Vigil.workspace.videoWall"
 
     // MARK: - Chrome
 
@@ -394,7 +395,12 @@ final class MainWindowState {
     var digitalViewport = VDigitalViewport()
 
     /// The second-display workspace is intentionally independent from the main stage.
-    var videoWall = VVideoWallConfiguration()
+    var videoWall = VVideoWallConfiguration() {
+        didSet {
+            guard let data = try? JSONEncoder().encode(videoWall) else { return }
+            UserDefaults.standard.set(data, forKey: Self.videoWallKey)
+        }
+    }
 
     // MARK: - Library
 
@@ -483,6 +489,10 @@ final class MainWindowState {
            let uuid = UUID(uuidString: raw) {
             sidebarSelection.select(.camera(CameraID(uuid)))
         }
+        if let data = UserDefaults.standard.data(forKey: Self.videoWallKey),
+           let restored = try? JSONDecoder().decode(VVideoWallConfiguration.self, from: data) {
+            videoWall = restored
+        }
     }
 
     private static let watchedCameraIDsKey = "Vigil.notifications.watchedCameraIDs"
@@ -490,11 +500,7 @@ final class MainWindowState {
 
 // MARK: - MainWindowSheet
 
-/// The modal sheets the main window can put up.
-///
-/// Carries the subject with the case, so a sheet cannot be presented for a camera that has since
-/// been deselected — the alternative is a second `@State` holding the subject, which goes stale
-/// exactly when the sheet is dismissed and re-presented quickly.
+/// The modal sheets the main window can put up, including their stable presentation identity.
 enum MainWindowSheet: Identifiable, Hashable {
 
     /// Basic settings for one camera: its name, and what it belongs to.
@@ -579,13 +585,6 @@ struct MainWindowToast: Identifiable {
     /// would stop a caller closing over the window state the action almost always needs to touch.
     let action: (() -> Void)?
 
-    /// Builds an advisory.
-    ///
-    /// - Parameters:
-    ///   - kind: severity; drives colour and dwell.
-    ///   - message: the localised sentence to show.
-    ///   - actionTitle: label for the inline action, or `nil` for no action.
-    ///   - action: what the inline action does. Ignored when `actionTitle` is `nil`.
     init(kind: VToastKind,
          message: String,
          actionTitle: LocalizedStringKey? = nil,

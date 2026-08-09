@@ -859,3 +859,8 @@
 "Diagnostics archive exported." = "Архив диагностики экспортирован.";
 "Diagnostics export cancelled." = "Экспорт диагностики отменён.";
 "Could not export diagnostics: %@" = "Не удалось экспортировать диагностику: %@";
+"That display is gone — the wall opened on this Mac instead." = "Этот дисплей отключён — видеостена открыта на этом Mac.";
+"Display" = "Дисплей";
+"Patrol" = "Патруль";
+"Decode limit" = "Предел декодирования";
+"Exit (Esc)" = "Выйти (Esc)";

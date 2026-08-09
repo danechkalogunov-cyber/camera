@@ -50,6 +50,9 @@ final class AppLibraryModel {
     /// flashing an empty list at a user who has cameras.
     private(set) var hasLoaded = false
 
+    /// Prevents the main window and wall, which can appear together, from opening the store twice.
+    private var isLoading = false
+
     // MARK: - Stored Properties
 
     private let logger: any LoggerProtocol
@@ -94,7 +97,12 @@ final class AppLibraryModel {
     ///   passed down as a plain dictionary so a non-`Sendable` `UserDefaults` never crosses an
     ///   isolation boundary — which is exactly what that overload exists for.
     func load(importingLegacyFrom defaults: UserDefaults) async {
-        defer { hasLoaded = true }
+        guard !hasLoaded, !isLoading else { return }
+        isLoading = true
+        defer {
+            isLoading = false
+            hasLoaded = true
+        }
         guard let library else { return }
 
         let outcome = await library.load()

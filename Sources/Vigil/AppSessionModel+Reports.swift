@@ -286,8 +286,9 @@ extension AppSessionModel {
             return DecodeDemand(
                 id: StreamKey(camera: camera.id, quality: .main),
                 priority: isRecording || stream.isMotionRecordingArmed
-                    ? .recording : (stream.isPictureInPicture
-                        ? .pictureInPicture : (stream === live ? .focused : .visibleLarge)),
+                    ? .recording : (stream.isVideoWall
+                        ? .wall : (stream.isPictureInPicture
+                            ? .pictureInPicture : (stream === live ? .focused : .visibleLarge))),
                 mode: compressedOnly ? .paused : .full,
                 cost: compressedOnly ? .zero : Self.cost(of: stream),
                 isPreemptible: !isRecording)
@@ -325,11 +326,11 @@ extension AppSessionModel {
     /// ⚠️ The candidate is asked for **last** and at the lowest priority, and that is the policy
     /// rather than an accident: a camera the user has just clicked must not slow down a camera they
     /// are already watching. It joins at the back of the queue and pays its own way in.
-    func canAdmit(_ target: Camera) -> Bool {
+    func canAdmit(_ target: Camera, priority: StreamPriority = .offscreen) -> Bool {
         var demands = decodeDemands()
         demands.append(DecodeDemand(
             id: StreamKey(camera: target.id, quality: .main),
-            priority: .offscreen,
+            priority: priority,
             orderIndex: demands.count,
             mode: .full,
             cost: Self.assumedCost))

@@ -47,12 +47,12 @@ struct RootView: View {
 
     /// Every camera the user has added.
     ///
-    /// ⛔ Owned here and not by `MainWindowView`, which is where it started. The library is an
-    /// *app* fact, not a window fact, and two things outside the main window need it: the scan, so
+    /// ⛔ Owned by `VigilApp` and not by this window, because the library is an
+    /// *app* fact. Two things outside the main stage need it: the scan, so
     /// a device already in the list is offered as "Added" rather than as a find, and the connect
     /// form, which is on screen precisely when the window is not. Built here it also loads once at
     /// launch instead of on the first frame of video.
-    @State private var library: AppLibraryModel
+    @Bindable var library: AppLibraryModel
 
     /// The network scan, created only when the user asks for one.
     ///
@@ -82,13 +82,11 @@ struct RootView: View {
 
     /// Builds the root over the app's session.
     ///
-    /// Explicit because ``library`` needs the session's logger, which a property initialiser cannot
-    /// reach: `@State private var library = AppLibraryModel(logger: session…)` would be reading one
-    /// stored property from another's default value, which Swift does not allow.
-    init(session: AppSessionModel, window: MainWindowState) {
+    /// Explicit because all three app-lifetime models are injected by `VigilApp`.
+    init(session: AppSessionModel, window: MainWindowState, library: AppLibraryModel) {
         self.session = session
         self.window = window
-        _library = State(initialValue: AppLibraryModel(logger: session.dependencies.logger))
+        self.library = library
     }
 
     // MARK: - Body

@@ -114,6 +114,9 @@ final class CameraStream {
     /// Keeps this stream at PiP priority even when the main window is closed or occluded.
     var isPictureInPicture = false
 
+    /// The stream is currently mounted in the dedicated second-display wall.
+    var isVideoWall = false
+
     // MARK: - What the window says about it
 
     /// The controller's last reported state.

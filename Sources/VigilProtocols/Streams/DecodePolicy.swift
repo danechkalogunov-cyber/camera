@@ -43,14 +43,14 @@ public enum DecodeMode: Int, Sendable, Hashable, Codable, Comparable, CaseIterab
 /// Admission priority. Ties break on `orderIndex` ascending. One enum, not two
 /// (`TilePriority` does not exist — API_CONTRACT §2 R-49).
 public enum StreamPriority: Int, Sendable, Hashable, Codable, Comparable, CaseIterable {
+    /// A dedicated monitoring display wins over every interactive preview.
+    case wall = 450
     /// Fullscreen, or the single focused tile, or the audio-solo camera.
     case focused = 400
     /// On-screen tile with a short edge ≥ 480 backing px.
     case visibleLarge = 300
     /// On-screen tile with a short edge < 480 backing px.
     case visibleSmall = 200
-    /// Video-wall tile on a secondary display.
-    case wall = 175
     case pictureInPicture = 150
     /// **Never demoted, never occlusion-paused.** A recording must not be sacrificed for a preview.
     /// Its raw value puts it above every visible tile but below the focused one.

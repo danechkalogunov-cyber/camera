@@ -199,6 +199,35 @@ extension AppSessionModel {
         return true
     }
 
+    /// Starts or promotes a stream for the dedicated wall without replacing the bound camera.
+    @discardableResult
+    func connectForVideoWall(_ target: Camera) async -> Bool {
+        let stream = target.id == camera?.id ? live : cameras.stream(for: target)
+        stream.isVideoWall = true
+        if stream.isActive {
+            rebalanceDecodeBudget()
+            return true
+        }
+        guard canAdmit(target, priority: .wall) else {
+            stream.isVideoWall = false
+            return false
+        }
+        stream.resolvedPath = target.capabilities?.resolvedRTSPPath
+        stream.beginConnecting()
+        await start(stream, camera: target, ref: target.credentialRef)
+        rebalanceDecodeBudget()
+        return true
+    }
+
+    /// Removes wall priority while leaving a stream alive for any other surface using it.
+    func releaseVideoWall(_ ids: Set<CameraID>) {
+        for id in ids {
+            let stream = id == camera?.id ? live : cameras.stream(for: id)
+            stream?.isVideoWall = false
+        }
+        rebalanceDecodeBudget()
+    }
+
     /// Retries one camera now, cancelling whatever backoff it was waiting out.
     ///
     /// ⛔ The tile that asks is the tile that retries. `perform(.retry)` reconnects the *form's*
