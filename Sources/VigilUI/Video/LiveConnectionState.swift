@@ -48,6 +48,11 @@ package enum LiveConnectionState: Sendable, Hashable {
     /// arriving. Stopping is a thing the user did, and the interface has to say so.
     case paused
 
+    /// Archive review reached a gap for this camera. Unlike offline, this is not a failed
+    /// connection and offers no Retry button; synchronized playback rejoins it automatically when
+    /// the UTC playhead reaches the next recorded segment.
+    case noRecording
+
     /// Whether the connect choreography's timers should be running.
     package var isConnecting: Bool {
         if case .connecting = self { return true }
@@ -61,7 +66,7 @@ package enum LiveConnectionState: Sendable, Hashable {
         // `paused` is included: the tile is still showing the frame it was stopped on, and the
         // failure overlays must not cover it.
         case .live, .degraded, .paused: return true
-        case .connecting, .offline: return false
+        case .connecting, .offline, .noRecording: return false
         }
     }
 
@@ -72,6 +77,7 @@ package enum LiveConnectionState: Sendable, Hashable {
         case .live: return .live
         case .degraded: return .degraded
         case .paused: return .offline
+        case .noRecording: return .offline
         case .offline(let detail):
             // A credential failure gets its own dot — red with a slash — because it is the one
             // offline state Vigil will never retry out of on its own (UX.md §12.7).
@@ -88,6 +94,7 @@ package enum LiveConnectionState: Sendable, Hashable {
         case .live: return "Live"
         case .degraded: return "Degraded"
         case .paused: return "Paused"
+        case .noRecording: return "No recording"
         case .offline: return "Offline"
         }
     }

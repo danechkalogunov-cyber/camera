@@ -227,6 +227,19 @@ struct CameraStreamTests {
         stream.statistics = statistics
         #expect(stream.liveState == .degraded(.packetLoss(fraction: 0.03)))
     }
+
+    /// A gap in synchronized archive coverage is its own state: it is neither a failed connection
+    /// nor a user pause, and it remains visible after the socket is torn down while the lane waits.
+    @Test func archiveGapHasAnHonestStateAcrossTeardown() {
+        let stream = CameraStream()
+        stream.playback = PlaybackLocator(track: TrackID(101), start: Date(), end: nil)
+        stream.hasPlaybackCoverage = false
+
+        stream.teardown()
+
+        #expect(stream.liveState == .noRecording)
+        #expect(stream.playback != nil)
+    }
 }
 
 #endif  // os(macOS)

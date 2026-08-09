@@ -84,6 +84,12 @@ struct StageTimelineOverlay: View {
     let onTogglePause: () -> Void
     let onFrameStep: (Bool) -> Void
 
+    /// Multi-camera UTC playback. `nil` means the current stage cannot synchronize (fewer than two
+    /// cameras); a non-nil label is both the status and the toggle's accessible value.
+    let syncLabel: String?
+    let isSyncEnabled: Bool
+    let onToggleSync: () -> Void
+
     /// Steps the playhead by a number of seconds, positive or negative.
     let onStep: (Double) -> Void
 
@@ -166,6 +172,9 @@ struct StageTimelineOverlay: View {
          isPaused: Bool = false,
          onTogglePause: @escaping () -> Void = {},
          onFrameStep: @escaping (Bool) -> Void = { _ in },
+         syncLabel: String? = nil,
+         isSyncEnabled: Bool = false,
+         onToggleSync: @escaping () -> Void = {},
          onRate: @escaping (TimelinePlaybackRate) -> Void = { _ in }) {
         self.archive = archive
         self.availability = availability
@@ -189,6 +198,9 @@ struct StageTimelineOverlay: View {
         self.isPaused = isPaused
         self.onTogglePause = onTogglePause
         self.onFrameStep = onFrameStep
+        self.syncLabel = syncLabel
+        self.isSyncEnabled = isSyncEnabled
+        self.onToggleSync = onToggleSync
         self.onRate = onRate
     }
 
@@ -408,6 +420,16 @@ struct StageTimelineOverlay: View {
                 // walks into an empty future is a control that only produces empty screens.
                 .disabled(clock.day(containing: clock.now).start <= day.start)
             Spacer(minLength: 0)
+            if syncLabel != nil {
+                VButton(symbol: .synchronisedPlayback,
+                        style: isSyncEnabled ? .primary : .icon,
+                        size: .sm,
+                        accessibilityLabel: isSyncEnabled
+                            ? "Stop synchronized playback"
+                            : "Synchronize visible cameras",
+                        action: onToggleSync)
+                    .help(syncLabel ?? "Synchronize visible cameras")
+            }
             VButton(symbol: VTheme.Symbol.close,
                     style: .icon,
                     size: .sm,

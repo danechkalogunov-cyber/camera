@@ -762,6 +762,12 @@
 "Configuration restored." = "Конфигурация восстановлена.";
 "Push to Talk" = "Говорить";
 "Talking" = "Передача голоса";
+"Stop synchronized playback" = "Остановить синхронное воспроизведение";
+"Synchronize visible cameras" = "Синхронизировать видимые камеры";
+"No recording" = "Нет записи";
+"No recording at this time" = "В это время записи нет";
+"Synchronized playback" = "Синхронное воспроизведение";
+"Archive unavailable" = "Архив недоступен";
 "Vigil needs microphone access to talk to your cameras" = "Vigil нужен доступ к микрофону для разговора через камеры";
 "Open Settings" = "Открыть настройки";
 "Two-way audio failed: %@" = "Ошибка двустороннего звука: %@";

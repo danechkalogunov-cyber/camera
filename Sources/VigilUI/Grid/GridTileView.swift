@@ -473,6 +473,8 @@
                 return Text("Live but degraded", bundle: .vigilUI)
             case .paused:
                 return Text("Paused", bundle: .vigilUI)
+            case .noRecording:
+                return Text("No recording at this time", bundle: .vigilUI)
             case .offline:
                 return Text("No signal", bundle: .vigilUI)
             }

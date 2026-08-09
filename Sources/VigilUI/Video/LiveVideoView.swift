@@ -156,6 +156,13 @@ package struct LiveVideoView<Video: View>: View {
                                detail: detail,
                                onRetryNow: { onRetry() },
                                onRemedy: { onRemedy($0) })
+            case .noRecording:
+                ZStack {
+                    VTheme.Color.Scrim.strong
+                    Text("No recording at this time", bundle: .vigilUI)
+                        .vType(VTheme.Typography.body)
+                        .foregroundStyle(VTheme.Color.Text.onVideo)
+                }
             // Nothing over the picture: the frame the user stopped on is the whole message, and
             // the status chip beside the camera's name says `Paused`.
             case .live, .degraded, .paused:
@@ -285,7 +292,7 @@ package struct LiveVideoView<Video: View>: View {
     private var overlayKind: OverlayKind {
         switch state {
         case .connecting: return .connecting
-        case .offline: return .offline
+        case .offline, .noRecording: return .offline
         case .live, .degraded, .paused: return .none
         }
     }

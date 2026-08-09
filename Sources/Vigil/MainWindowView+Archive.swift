@@ -32,6 +32,13 @@
         /// that an arbitrary time with nothing recorded yields a 404 or a stream that ends at once, and
         /// "there is nothing here" is a better answer than a picture that dies in a second.
         func playArchive(from instant: Date) {
+            if session.synchronizedPlayback.isEnabled {
+                Task {
+                    await session.synchronizedPlayback.seek(
+                        to: instant, rate: session.playbackRate, appSession: session)
+                }
+                return
+            }
             guard let locator = archive.locator(at: instant) else {
                 window.toast = MainWindowToast(
                     kind: .info,
@@ -52,11 +59,46 @@
 
         /// Puts the picture back on the live stream.
         func returnToLive() {
-            Task { await session.returnToLive() }
+            Task {
+                if session.synchronizedPlayback.isEnabled {
+                    await session.synchronizedPlayback.returnToLive(appSession: session)
+                } else {
+                    await session.returnToLive()
+                }
+            }
+        }
+
+        /// Cameras occupying visible cells, in cell order, capped by F-PLB-05's four-session limit.
+        var synchronizedPlaybackCameras: [Camera] {
+            stageAssignment.cells.prefix(SyncedPlaybackPolicy.maximumCameras)
+                .compactMap { id in
+                    id.flatMap { cameraID in library.cameras.first { $0.id == cameraID } }
+                }
+        }
+
+        func toggleSynchronizedPlayback() {
+            if session.synchronizedPlayback.isEnabled {
+                Task { await session.synchronizedPlayback.returnToLive(appSession: session) }
+                return
+            }
+            let cameras = synchronizedPlaybackCameras
+            guard cameras.count > 1, let day = archive.archive?.day else { return }
+            Task {
+                await session.synchronizedPlayback.enable(
+                    cameras: cameras, day: day, appSession: session)
+                guard let instant = archive.archive?.playhead else { return }
+                await session.synchronizedPlayback.seek(
+                    to: instant, rate: session.playbackRate, appSession: session)
+            }
         }
 
         /// Loads a different day into the timeline.
         func loadArchiveDay(_ day: TimelineDay) {
+            if session.synchronizedPlayback.isEnabled {
+                // Its four indexes belong to the outgoing day. Keeping them while the ruler moves
+                // to another date would turn every valid segment into a false gap.
+                Task { await session.synchronizedPlayback.returnToLive(appSession: session) }
+            }
             let clock = libraryClock
             archive.load(
                 day: day,
@@ -338,10 +380,21 @@
                     rate: session.playbackRate,
                     // Only while an archive is open. A live channel has no speed —
                     // `Scale: 4` on it asks for the next four seconds.
-                    isRateAdjustable: session.playback != nil,
-                    isPaused: session.isPlaybackPaused,
+                    isRateAdjustable: session.playback != nil
+                        || session.synchronizedPlayback.isEnabled,
+                    isPaused: session.synchronizedPlayback.isEnabled
+                        ? (session.synchronizedPlayback.playhead?.isPaused ?? false)
+                        : session.isPlaybackPaused,
                     onTogglePause: {
-                        Task { await session.togglePlaybackPause() }
+                        Task {
+                            if session.synchronizedPlayback.isEnabled {
+                                let paused = !(session.synchronizedPlayback.playhead?.isPaused ?? false)
+                                await session.synchronizedPlayback.setPaused(
+                                    paused, appSession: session)
+                            } else {
+                                await session.togglePlaybackPause()
+                            }
+                        }
                     },
                     // ⛔ ONE ACTION, NOT TWO. This used to seek to the stepped instant and then
                     // call `stepPlaybackFrame`, which stopped the session it had just started —
@@ -353,8 +406,21 @@
                         guard let instant = archive.archive?.playhead else { return }
                         playArchive(from: instant)
                     },
+                    syncLabel: synchronizedPlaybackCameras.count > 1
+                        ? (session.synchronizedPlayback.label
+                            ?? vigilUIString("Synchronize visible cameras"))
+                        : nil,
+                    isSyncEnabled: session.synchronizedPlayback.isEnabled,
+                    onToggleSync: { toggleSynchronizedPlayback() },
                     onRate: { stop in
-                        Task { await session.setPlaybackRate(stop) }
+                        Task {
+                            if session.synchronizedPlayback.isEnabled {
+                                session.playbackRate = stop
+                                await session.synchronizedPlayback.setRate(stop, appSession: session)
+                            } else {
+                                await session.setPlaybackRate(stop)
+                            }
+                        }
                     })
             }
         }

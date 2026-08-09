@@ -84,29 +84,60 @@ extension AppSessionModel {
     /// notices it has been overtaken, and the camera is never asked to hold two playback sessions
     /// for one viewer. On a camera that permits a handful of concurrent sessions, that mattered.
     func playArchive(_ locator: PlaybackLocator) async {
+        await playArchive(locator, on: live)
+    }
+
+    /// Opens one camera's archive without disturbing the other streams on the stage.
+    ///
+    /// This is the media-session half of F-PLB-05. The original one-camera entry point above still
+    /// addresses ``live``; synchronized playback uses this overload for every admitted tile, so
+    /// each camera keeps its own controller, decoder, credential and playback locator.
+    func playArchive(_ locator: PlaybackLocator, on stream: CameraStream) async {
         // ⚠️ `activeRef` is cleared by a teardown, so a seek made while the picture is stopped —
         // after a pause, or after a terminal failure — would refuse on a camera whose password is
         // in the Keychain under the record's own handle. The record is the fallback and it is the
         // same handle in every case that matters.
-        guard let camera else { return }
-        let ref = activeRef ?? camera.credentialRef
-        seekGeneration &+= 1
-        let generation = seekGeneration
+        guard let camera = stream.camera else { return }
+        let ref = stream.activeRef ?? camera.credentialRef
+        stream.seekGeneration &+= 1
+        let generation = stream.seekGeneration
         var target = camera
         let query = locator.rawQuery
         target.rtspPathOverride = query.isEmpty ? locator.path : locator.path + "?" + query
-        playback = locator
+        stream.playback = locator
+        stream.hasPlaybackCoverage = true
         // A seek is a picture starting to move again, whatever the button said a moment ago.
-        isPlaybackPaused = false
-        seekStartedAt = dependencies.clock.now()
+        stream.isPlaybackPaused = false
+        stream.seekStartedAt = dependencies.clock.now()
         dependencies.logger.info(.app, "seek: opening \(target.rtspPathOverride ?? "")")
-        stopSession()
-        guard generation == seekGeneration else {
+        if stream === live { stopSession() } else { stop(stream) }
+        guard generation == stream.seekGeneration else {
             dependencies.logger.debug(.app, "seek \(generation) superseded before it began")
             return
         }
-        beginConnecting()
-        await stream(camera: target, ref: ref)
+        if stream === live { phase = .live }
+        stream.beginConnecting()
+        await start(stream, camera: target, ref: ref)
+    }
+
+    /// Sets one archive stream's rate, rebuilding only that camera's RTSP session.
+    func setPlaybackRate(_ rate: TimelinePlaybackRate, on stream: CameraStream) async {
+        guard rate != stream.playbackRate, let locator = stream.playback else { return }
+        stream.playbackRate = rate
+        await playArchive(locator, on: stream)
+    }
+
+    /// Pauses or resumes one archive stream. A pause owns no socket and holds the tile's last frame.
+    func setPlaybackPaused(_ paused: Bool, on stream: CameraStream) async {
+        guard stream.isPlaybackPaused != paused else { return }
+        stream.isPlaybackPaused = paused
+        if paused {
+            if stream === live { stopSession() } else { stop(stream) }
+            // Teardown deliberately preserves the pause bit.
+            stream.isPlaybackPaused = true
+        } else if let locator = stream.playback {
+            await playArchive(locator, on: stream)
+        }
     }
 
     /// Streams a different camera from the library.
@@ -346,24 +377,31 @@ extension AppSessionModel {
     /// Restores the override the camera had before playback rather than clearing it: a user who set
     /// an explicit RTSP path in the connect form must get that path back, not the probe ladder.
     func returnToLive() async {
-        guard playback != nil, let camera else { return }
-        let ref = activeRef ?? camera.credentialRef
+        await returnToLive(live)
+    }
+
+    /// Restores one synchronized lane to its own live path.
+    func returnToLive(_ stream: CameraStream) async {
+        guard stream.playback != nil, let camera = stream.camera else { return }
+        let ref = stream.activeRef ?? camera.credentialRef
         var target = camera
-        target.rtspPathOverride = resolvedPath
-        playback = nil
+        target.rtspPathOverride = stream.resolvedPath
+        stream.playback = nil
+        stream.hasPlaybackCoverage = true
         // Live has no speed, and leaving the rate set would make the next session ask a live
         // channel for `Scale: 4` — the next four seconds, which do not exist yet.
-        playbackRate = .normal
-        isPlaybackPaused = false
+        stream.playbackRate = .normal
+        stream.isPlaybackPaused = false
         // Bumped so a seek still opening does not finish into a session that has gone back to live,
         // and cleared so the live stream's first frame is not reported as a seek that took as long
         // as the user spent deciding to leave.
-        seekGeneration &+= 1
-        seekStartedAt = nil
+        stream.seekGeneration &+= 1
+        stream.seekStartedAt = nil
         dependencies.logger.info(.app, "returning to the live stream")
-        stopSession()
-        beginConnecting()
-        await stream(camera: target, ref: ref)
+        if stream === live { stopSession() } else { stop(stream) }
+        if stream === live { phase = .live }
+        stream.beginConnecting()
+        await start(stream, camera: target, ref: ref)
     }
 
     /// Stores a renamed camera, so the name outlives the window.

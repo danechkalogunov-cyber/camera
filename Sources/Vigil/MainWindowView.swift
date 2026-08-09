@@ -570,6 +570,9 @@ struct MainWindowView: View {
             // The list says "not running", which is what a stopped camera is. `.offline` would put
             // a countdown and a retry on a row nothing is retrying.
             return .disabled
+        case .noRecording:
+            // A playback gap is not a failed live camera and must not inflate the offline badge.
+            return .disabled
         case .offline:
             return .offline(retryInSeconds: nil)
         }

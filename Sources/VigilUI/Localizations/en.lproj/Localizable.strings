@@ -779,6 +779,12 @@
 "Configuration restored." = "Configuration restored.";
 "Push to Talk" = "Push to Talk";
 "Talking" = "Talking";
+"Stop synchronized playback" = "Stop synchronized playback";
+"Synchronize visible cameras" = "Synchronize visible cameras";
+"No recording" = "No recording";
+"No recording at this time" = "No recording at this time";
+"Synchronized playback" = "Synchronized playback";
+"Archive unavailable" = "Archive unavailable";
 "Vigil needs microphone access to talk to your cameras" = "Vigil needs microphone access to talk to your cameras";
 "Open Settings" = "Open Settings";
 "Two-way audio failed: %@" = "Two-way audio failed: %@";

@@ -184,6 +184,7 @@ struct MenuBarExtraContent: View {
         case .connecting: .blue
         case .offline: .red
         case .paused: .secondary
+        case .noRecording: .secondary
         }
     }
 

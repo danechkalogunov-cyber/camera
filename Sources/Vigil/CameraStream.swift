@@ -202,6 +202,9 @@ final class CameraStream {
     /// A paused archive retains its locator but owns no streaming session.
     var isPlaybackPaused = false
 
+    /// False only while synchronized playback's UTC sits in a gap in this camera's index.
+    var hasPlaybackCoverage = true
+
     // MARK: - Initialisation
 
     /// Creates an idle stream with no camera.
@@ -287,6 +290,7 @@ final class CameraStream {
     /// camera** and a wall of sixteen needs sixteen of them. It read `self.streamState` on the
     /// session object for as long as there was only ever one camera to be wrong about.
     var liveState: LiveConnectionState {
+        if playback != nil, !hasPlaybackCoverage { return .noRecording }
         // ⛔ BEFORE EVERYTHING ELSE. A stopped session reports `StreamState.idle`, which the ladder
         // below reads as "resolving" — so pressing stop put a spinner over a picture that was
         // exactly where the user left it and never resolved, because nothing was connecting. The
