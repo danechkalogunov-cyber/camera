@@ -92,6 +92,9 @@ public struct RTSPTrack: Sendable, Hashable, Identifiable {
     /// The synchronisation source the server announced, when it announced one.
     public var ssrc: UInt32?
 
+    /// Multicast group, port pair and hop limit selected by the server.
+    public var multicastEndpoint: RTSPMulticastEndpoint?
+
     /// Builds a track. Everything but the identity and control URI is defaulted, because the SDP
     /// legitimately omits most of it.
     public init(id: Int,
@@ -116,7 +119,8 @@ public struct RTSPTrack: Sendable, Hashable, Identifiable {
                 interleavedChannels: ClosedRange<UInt8>? = nil,
                 clientPorts: RTSPUDPPortPair? = nil,
                 serverPorts: RTSPUDPPortPair? = nil,
-                ssrc: UInt32? = nil) {
+                ssrc: UInt32? = nil,
+                multicastEndpoint: RTSPMulticastEndpoint? = nil) {
         self.id = id
         self.kind = kind
         self.codec = codec
@@ -140,6 +144,7 @@ public struct RTSPTrack: Sendable, Hashable, Identifiable {
         self.clientPorts = clientPorts
         self.serverPorts = serverPorts
         self.ssrc = ssrc
+        self.multicastEndpoint = multicastEndpoint
     }
 }
 
@@ -152,6 +157,21 @@ public struct RTSPUDPPortPair: Sendable, Hashable {
         guard rtp.isMultiple(of: 2), rtcp == rtp &+ 1 else { return nil }
         self.rtp = rtp
         self.rtcp = rtcp
+    }
+}
+
+/// The destination negotiated by `RTP/AVP;multicast`.
+public struct RTSPMulticastEndpoint: Sendable, Hashable {
+    public var destination: String
+    public var ports: RTSPUDPPortPair
+    public var timeToLive: UInt8
+
+    public init?(destination: String, ports: RTSPUDPPortPair, timeToLive: UInt8) {
+        let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, timeToLive > 0 else { return nil }
+        self.destination = trimmed
+        self.ports = ports
+        self.timeToLive = timeToLive
     }
 }
 
@@ -385,6 +405,8 @@ public enum RTSPAction: Sendable, Hashable {
     case sendInterleaved(channel: UInt8, payload: Data)
     /// Bind a UDP RTP/RTCP pair before sending this track's SETUP request.
     case prepareUDP(trackID: Int, ports: RTSPUDPPortPair)
+    /// Join both RTP and RTCP ports of a server-selected multicast group.
+    case joinMulticast(trackID: Int, endpoint: RTSPMulticastEndpoint)
     /// Send an RTCP datagram from the reserved local RTCP port.
     case sendUDP(localPort: UInt16, payload: Data)
     /// Arm or re-arm a timer; an existing timer with the same id is **replaced**, not stacked.

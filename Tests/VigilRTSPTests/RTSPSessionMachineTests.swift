@@ -85,6 +85,7 @@ func kind(_ action: RTSPAction) -> String {
     case .send: "send"
     case .sendInterleaved: "sendInterleaved"
     case .prepareUDP: "prepareUDP"
+    case .joinMulticast: "joinMulticast"
     case .sendUDP: "sendUDP"
     case let .setTimer(id, _): "setTimer(\(timerName(id)))"
     case let .cancelTimer(id): "cancelTimer(\(timerName(id)))"

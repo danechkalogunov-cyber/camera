@@ -129,6 +129,8 @@ public actor StreamController: Identifiable {
     var latestStatistics = StreamStatistics()
     var resolvedCandidate: RTSPPathCandidate?
     var pendingRedirect: RTSPURL?
+    /// Session-local fallback after a multicast join or five-second media timeout fails.
+    var transportFallback: RTSPTransportKind?
 
     // MARK: Per-attempt state
 
@@ -277,6 +279,7 @@ public actor StreamController: Identifiable {
         guard runTask == nil else { return }
         isStopping = false
         attempt = 0
+        transportFallback = nil
         startedAt = clock.now()
         runGeneration &+= 1
         let generation = runGeneration

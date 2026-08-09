@@ -2,7 +2,7 @@
 //  RTSPConnection+UDP.swift
 //  VigilTransport
 //
-//  Network.framework UDP flows used by RTSP unicast sessions.
+//  Network.framework UDP flows used by RTSP unicast and multicast sessions.
 //
 
 #if os(macOS)
@@ -13,6 +13,83 @@ import VigilProtocols
 import VigilRTSP
 
 extension RTSPConnection {
+
+    /// Joins the server-selected multicast destination on both RTP and RTCP ports.
+    /// Entitlement inspection provides an early named failure; group state is still authoritative.
+    func prepareMulticast(trackID: Int, endpoint: RTSPMulticastEndpoint) -> Bool {
+        guard EntitlementInspector.multicastEntitlementPresent() else {
+            logger.error(.transport, "multicast entitlement missing",
+                         ["track": String(trackID)])
+            deliverFailure(.transport(.multicastBlocked))
+            return false
+        }
+        return openMulticast(destination: endpoint.destination, port: endpoint.ports.rtp,
+                             ttl: endpoint.timeToLive)
+            && openMulticast(destination: endpoint.destination, port: endpoint.ports.rtcp,
+                             ttl: endpoint.timeToLive)
+    }
+
+    private func openMulticast(destination: String, port: UInt16, ttl: UInt8) -> Bool {
+        if multicastGroups[port] != nil { return true }
+        guard let address = Network.IPv4Address(destination),
+              let groupPort = NWEndpoint.Port(rawValue: port) else {
+            deliverFailure(.rtsp(.transportRejected))
+            return false
+        }
+        let endpoint = NWEndpoint.hostPort(host: .ipv4(address), port: groupPort)
+        guard let descriptor = try? NWMulticastGroup(for: [endpoint], disableUnicast: true) else {
+            deliverFailure(.rtsp(.transportRejected))
+            return false
+        }
+        let parameters = NWParameters.udp
+        parameters.allowLocalEndpointReuse = true
+        // Follow the route selected by the already-established RTSP control connection. This is
+        // essential on a Mac connected to both Ethernet and Wi-Fi: an unpinned multicast join may
+        // otherwise land on the interface that cannot reach the camera's VLAN.
+        if let path = socket?.currentPath,
+           let interface = path.availableInterfaces.first(where: {
+               path.usesInterfaceType($0.type)
+           }) {
+            parameters.requiredInterface = interface
+        }
+        if let ip = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ip.version = .v4
+            ip.hopLimit = ttl
+        }
+        let group = NWConnectionGroup(with: descriptor, using: parameters)
+        group.setReceiveHandler(maximumMessageSize: 65_535, rejectOversizedMessages: false) {
+            [weak self, weak group] _, content, _ in
+            guard let self, let group, let content, !content.isEmpty else { return }
+            Task { await self.receivedMulticast(content, on: group, localPort: port) }
+        }
+        group.stateUpdateHandler = { [weak self, weak group] state in
+            guard let self, let group else { return }
+            if case let .failed(error) = state {
+                Task { await self.multicastFailed(error, group: group, localPort: port) }
+            }
+        }
+        multicastGroups[port] = group
+        multicastDestinations[port] = endpoint
+        group.start(queue: queue)
+        return true
+    }
+
+    private func receivedMulticast(_ data: Data, on group: NWConnectionGroup,
+                                   localPort: UInt16) {
+        guard lifecycle == .running, multicastGroups[localPort] === group else { return }
+        execute(machine.ingestUDP(data, localPort: localPort, now: clock.now()))
+    }
+
+    private func multicastFailed(_ error: NWError, group: NWConnectionGroup,
+                                 localPort: UInt16) {
+        guard lifecycle == .running, multicastGroups[localPort] === group else { return }
+        multicastGroups.removeValue(forKey: localPort)
+        multicastDestinations.removeValue(forKey: localPort)
+        group.cancel()
+        logger.error(.transport, "multicast group failed",
+                     ["port": String(localPort), "error": String(describing: error)])
+        deliverFailure(.transport(.multicastBlocked))
+    }
 
     /// Opens the connected RTP and RTCP datagram flows described by a successful SETUP.
     ///
@@ -80,6 +157,15 @@ extension RTSPConnection {
     }
 
     func sendUDP(_ payload: Data, from localPort: UInt16) {
+        if let group = multicastGroups[localPort],
+           let destination = multicastDestinations[localPort] {
+            group.send(content: payload, to: destination) { [weak self] error in
+                guard let error else { return }
+                Task { await self?.multicastFailed(error, group: group,
+                                                   localPort: localPort) }
+            }
+            return
+        }
         guard let connection = udpSockets[localPort] else {
             deliverFailure(.rtsp(.transportRejected))
             return

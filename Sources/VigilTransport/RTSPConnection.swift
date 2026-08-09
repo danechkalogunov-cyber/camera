@@ -256,6 +256,9 @@ public actor RTSPConnection {
     /// UDP flows keyed by the local port advertised in SETUP. Populated after the corresponding
     /// SETUP response supplies the camera's server ports and before PLAY is sent.
     var udpSockets: [UInt16: NWConnection] = [:]
+    /// Multicast groups keyed by destination RTP/RTCP port.
+    var multicastGroups: [UInt16: NWConnectionGroup] = [:]
+    var multicastDestinations: [UInt16: NWEndpoint] = [:]
     var connectedHostText: String?
     var lifecycle: Lifecycle = .idle
     var connectContinuation: CheckedContinuation<VigilError?, Never>?

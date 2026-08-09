@@ -90,7 +90,7 @@ extension StreamController {
         // The event stream is taken **before** `connect()`, so nothing the connection emits between
         // the socket coming up and this loop starting can be missed.
         var config = RTSPSessionConfig(url: url)
-        config.transport = .tcpInterleaved
+        config.transport = transportFallback ?? camera.transport
         config.setupAudio = false
         config.setupMetadataTrack = false
         config.initialScale = playbackScale
@@ -246,6 +246,13 @@ extension StreamController {
         case let .reconnect(url, _):
             await finish(outcome: .redirect(url))
         case let .failed(error):
+            if case .transport(.multicastBlocked) = error,
+               camera.transport == .udpMulticast,
+               transportFallback == nil {
+                transportFallback = .tcpInterleaved
+                logger.notice(.transport, "multicast blocked; falling back to interleaved TCP",
+                              ["camera": id.short])
+            }
             await finish(with: StreamError.from(vigil: error))
         }
     }

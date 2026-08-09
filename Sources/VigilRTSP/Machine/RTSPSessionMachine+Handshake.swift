@@ -179,7 +179,7 @@ extension RTSPSessionMachine {
             decoder.registerInterleavedChannels([channels.lowerBound, channels.upperBound])
             transport = "RTP/AVP/TCP;unicast;interleaved=\(channels.lowerBound)-\(channels.upperBound)"
         case .udpMulticast:
-            return actions + terminate(.transportRejected)
+            transport = "RTP/AVP;multicast"
         }
         actions += request(.setup, uri: negotiatedTracks[index].controlURI,
                            extra: [("Transport", transport)], trackIndex: index, now: now)
@@ -211,6 +211,17 @@ extension RTSPSessionMachine {
             if config.transport == .udpUnicast {
                 negotiatedTracks[index].serverPorts = RTSPResponseFields.udpPortPair(
                     transport, parameter: "server_port")
+                negotiatedTracks[index].interleavedChannels = requested
+            } else if config.transport == .udpMulticast {
+                guard let endpoint = RTSPResponseFields.multicastEndpoint(transport) else {
+                    return actions + terminate(.transportRejected)
+                }
+                negotiatedTracks[index].multicastEndpoint = endpoint
+                // UDP uses the same logical even/odd numbering as interleaved TCP downstream.
+                negotiatedTracks[index].clientPorts = endpoint.ports
+                negotiatedTracks[index].interleavedChannels = requested
+                actions.append(.joinMulticast(trackID: negotiatedTracks[index].id,
+                                              endpoint: endpoint))
             } else if let channels = RTSPResponseFields.interleavedChannels(transport) {
                 decoder.registerInterleavedChannels([channels.lowerBound, channels.upperBound])
                 negotiatedTracks[index].interleavedChannels = channels
@@ -219,6 +230,8 @@ extension RTSPSessionMachine {
                 actions.append(.log(.assumedInterleavedChannels(requested)))
             }
             negotiatedTracks[index].ssrc = RTSPResponseFields.ssrc(transport)
+        } else if config.transport == .udpMulticast {
+            return actions + terminate(.transportRejected)
         } else if config.transport != .udpUnicast {
             negotiatedTracks[index].interleavedChannels = requested
             actions.append(.log(.assumedInterleavedChannels(requested)))

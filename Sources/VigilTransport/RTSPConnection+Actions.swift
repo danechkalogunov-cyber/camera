@@ -50,6 +50,9 @@ extension RTSPConnection {
                 // both connected datagram flows before the machine advances to PLAY.
                 break
 
+            case let .joinMulticast(trackID, endpoint):
+                guard prepareMulticast(trackID: trackID, endpoint: endpoint) else { return }
+
             case let .sendUDP(localPort, payload):
                 sendUDP(payload, from: localPort)
 
@@ -209,6 +212,9 @@ extension RTSPConnection {
         socket = nil
         for udpSocket in udpSockets.values { udpSocket.cancel() }
         udpSockets.removeAll()
+        for group in multicastGroups.values { group.cancel() }
+        multicastGroups.removeAll()
+        multicastDestinations.removeAll()
         lifecycle = .closed
 
         eventSink?.finish()

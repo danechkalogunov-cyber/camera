@@ -162,7 +162,7 @@ public struct RTSPSessionMachine: Sendable {
         }
         switch command {
         case let .sendRTCP(channel, payload):
-            if config.transport == .udpUnicast,
+            if config.transport.isUDP,
                let position = negotiatedTracks.indices.first(where: {
                    UInt8(truncatingIfNeeded: $0 * 2 + 1) == channel
                }), let port = negotiatedTracks[position].clientPorts?.rtcp {
@@ -229,7 +229,7 @@ public struct RTSPSessionMachine: Sendable {
     /// even/odd channel numbering as interleaved TCP, keeping the RTP consumer transport-neutral.
     public mutating func ingestUDP(_ payload: Data, localPort: UInt16,
                                    now: MediaInstant) -> [RTSPAction] {
-        guard !isTerminated, config.transport == .udpUnicast,
+        guard !isTerminated, config.transport.isUDP,
               let position = negotiatedTracks.firstIndex(where: {
                   $0.clientPorts?.rtp == localPort || $0.clientPorts?.rtcp == localPort
               }), let ports = negotiatedTracks[position].clientPorts else { return [] }
@@ -254,6 +254,7 @@ public struct RTSPSessionMachine: Sendable {
 
         case .firstMediaTimeout:
             guard hasPlayed, lastMediaAt == nil else { return [] }
+            if config.transport == .udpMulticast { return terminate(.multicastBlocked) }
             return terminate(.timeout(.firstMediaTimeout))
 
         case .dataIdle:
@@ -479,6 +480,21 @@ enum RTSPResponseFields {
               let rtp = UInt16(SDPText.trimmedOWS(bounds[0])),
               let rtcp = UInt16(SDPText.trimmedOWS(bounds[1])) else { return nil }
         return RTSPUDPPortPair(rtp: rtp, rtcp: rtcp)
+    }
+
+    /// Parses the mandatory destination/port and optional TTL from a multicast SETUP response.
+    static func multicastEndpoint(_ value: String) -> RTSPMulticastEndpoint? {
+        guard let destination = parameter("destination", in: value),
+              let ports = udpPortPair(value, parameter: "port") else { return nil }
+        let ttl: UInt8
+        if let rawTTL = parameter("ttl", in: value) {
+            guard let parsed = UInt8(unquoted(rawTTL)), parsed > 0 else { return nil }
+            ttl = parsed
+        } else {
+            ttl = 1
+        }
+        return RTSPMulticastEndpoint(destination: unquoted(destination), ports: ports,
+                                     timeToLive: ttl)
     }
 
     /// `ssrc=48A9C1B2` in either case, with no `0x`.

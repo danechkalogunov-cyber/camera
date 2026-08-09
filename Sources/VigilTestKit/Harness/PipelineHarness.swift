@@ -262,6 +262,8 @@ public struct PipelineHarness {
 
             case let .sendUDP(localPort, payload):
                 trace("sendUDP(\(localPort),\(payload.count))")
+            case let .joinMulticast(trackID, endpoint):
+                trace("joinMulticast(\(trackID),\(endpoint.destination):\(endpoint.ports.rtp))")
 
             case let .setTimer(id, deadline):
                 trace("setTimer(\(id))")
