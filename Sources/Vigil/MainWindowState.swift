@@ -31,6 +31,13 @@ import VigilUI
 @Observable
 final class MainWindowState {
 
+    /// Work requested from a surface that can outlive the main window, such as `MenuBarExtra`.
+    /// The value is consumed with `initial: true` when a new main window appears, so an action is
+    /// not lost merely because no window existed when the user chose it.
+    enum DeferredRequest: Equatable {
+        case snapshotAll, recordToggle, discover
+    }
+
     enum KeyboardRegion: Int, CaseIterable {
         case sidebar, stage, inspector
     }
@@ -268,6 +275,12 @@ final class MainWindowState {
 
     /// See ``snapshotRequests``.
     var openRecordingsFolderRequests = 0
+
+    /// A request that must survive the main window being closed.
+    var deferredRequest: DeferredRequest?
+
+    /// Mirrored from the window-owned event coordinator for the window-independent menu badge.
+    var unreadEventCount = 0
 
     /// A `vigil://` link that has been parsed and not yet acted on.
     ///

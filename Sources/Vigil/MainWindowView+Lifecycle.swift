@@ -129,6 +129,9 @@ extension MainWindowView {
                 handleMotionRecordingTrigger(trigger)
             }
         }
+        .onChange(of: eventFeed.unreadCount, initial: true) { _, count in
+            window.unreadEventCount = count
+        }
     }
 
     /// Work that only makes sense while a particular panel or screen is being looked at.
@@ -166,6 +169,15 @@ extension MainWindowView {
         // `initial: true` so a link that arrived during launch — before this window existed — is
         // performed the moment it does. That is §F-AUT-03 acceptance 5.
         .onChange(of: window.pendingDeepLink, initial: true) { _, _ in performPendingDeepLink() }
+        .onChange(of: window.deferredRequest, initial: true) { _, request in
+            guard let request else { return }
+            window.deferredRequest = nil
+            switch request {
+            case .snapshotAll: snapshotAllEnabledCameras()
+            case .recordToggle: toggleRecording()
+            case .discover: onFindCameras()
+            }
+        }
         .onChange(of: window.isOverflowMenuOpen) { _, open in
             window.cycle = window.cycle.paused(open)
         }

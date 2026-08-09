@@ -122,6 +122,13 @@ struct VigilApp: App {
         Window("Settings", id: SceneID.settings) {
             AuxiliarySceneView(title: "Settings", symbol: "gearshape")
         }
+
+        MenuBarExtra {
+            MenuBarExtraContent(session: session, window: window)
+        } label: {
+            MenuBarExtraLabel(session: session, isRecording: window.isRecording, window: window)
+        }
+        .menuBarExtraStyle(.window)
     }
 
     // MARK: - Private Helpers

@@ -21,14 +21,9 @@ import AppKit
 /// is here is what a one-window viewer gets wrong without it.
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    /// Quit when the window is closed.
-    ///
-    /// The slice has one window and no menu-bar extra, so an app left running with no window would
-    /// have no way back except the Dock icon — and, worse, would keep an RTSP session and a decode
-    /// session alive with nothing on screen. W6 changes this to `false`, once `MenuBarExtra` and
-    /// the reopen path exist.
+    /// Keep the process available from its menu-bar extra after the last window closes.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
     }
 
     /// Bring the window back when the Dock icon is clicked with no visible window.

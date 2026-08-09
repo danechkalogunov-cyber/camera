@@ -287,6 +287,7 @@ final class AppLibraryModel {
     private func refresh() async {
         guard let library else { return }
         cameras = await library.cameras()
+        IntentCameraIndex.save(cameras)
     }
 }
 

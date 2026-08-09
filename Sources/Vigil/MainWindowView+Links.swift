@@ -175,6 +175,7 @@ extension MainWindowView {
             }
             return camera
         case let .slug(slug):
+            if slug == "focused", let camera = session.camera { return camera }
             let matches = library.cameras.filter { DeepLink.slug($0.displayName) == slug }
             if matches.count == 1 { return matches[0] }
             window.paletteQuery = slug
