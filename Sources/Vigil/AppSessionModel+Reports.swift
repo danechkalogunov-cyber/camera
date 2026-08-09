@@ -279,7 +279,8 @@ extension AppSessionModel {
             return DecodeDemand(
                 id: StreamKey(camera: camera.id, quality: .main),
                 priority: isRecording || stream.isMotionRecordingArmed
-                    ? .recording : (stream === live ? .focused : .visibleLarge),
+                    ? .recording : (stream.isPictureInPicture
+                        ? .pictureInPicture : (stream === live ? .focused : .visibleLarge)),
                 mode: compressedOnly ? .paused : .full,
                 cost: compressedOnly ? .zero : Self.cost(of: stream),
                 isPreemptible: !isRecording)

@@ -111,6 +111,9 @@ final class CameraStream {
     /// Keeps the compressed stream and pre-roll alive even when no tile currently displays it.
     var isMotionRecordingArmed = false
 
+    /// Keeps this stream at PiP priority even when the main window is closed or occluded.
+    var isPictureInPicture = false
+
     // MARK: - What the window says about it
 
     /// The controller's last reported state.

@@ -325,6 +325,8 @@ extension MainWindowView {
                 .keyboardShortcut("e", modifiers: [.option, .command])
             Button("", action: { runStreamDoctor() })
                 .keyboardShortcut("d", modifiers: [.option, .command])
+            Button("", action: { togglePictureInPicture() })
+                .keyboardShortcut("p", modifiers: [.control, .command])
         }
         .hidden()
         // `Esc` leaves solo, per §5.8 — but only when the timeline is away, because the scrubber's
@@ -427,14 +429,28 @@ extension MainWindowView {
     /// The other four stay dimmed and are not given "not in this build" toasts: an item in a menu
     /// can be genuinely disabled, which says the same thing without spending a click to say it.
     var unavailableOverflowItems: Set<VOverflowItem> {
-        [.videoWall, .pictureInPicture, .streamDoctor, .settings]
+        [.videoWall, .streamDoctor, .settings]
     }
 
     /// Handles an overflow choice.
     func select(_ item: VOverflowItem) {
         window.isOverflowMenuOpen = false
-        guard item == .discovery else { return }
-        onFindCameras()
+        switch item {
+        case .discovery: onFindCameras()
+        case .pictureInPicture: togglePictureInPicture()
+        default: return
+        }
+    }
+
+    /// Floats the selected live camera in the one process-wide PiP panel.
+    func togglePictureInPicture() {
+        guard let camera = selectedCamera,
+              let stream = session.cameras.stream(for: camera.id), stream.isActive else {
+            window.toast = MainWindowToast(kind: .warning,
+                                           message: Self.localized("Connect a camera first"))
+            return
+        }
+        session.pictureInPicture.toggle(camera: camera, stream: stream, session: session)
     }
 
     /// Applies a layout and re-anchors the cycle, so a page index cannot survive into a layout that

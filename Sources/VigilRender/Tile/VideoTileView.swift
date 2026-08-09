@@ -275,8 +275,8 @@ public final class VideoTileView: NSView {
     /// and **not** blanked: the view is on its way out, and blanking it would produce exactly the
     /// black flash the contract forbids if SwiftUI is merely rebuilding the hierarchy.
     public func detachFromFrameSource() {
-        guard let frameSource, frameSource.sink === self else { return }
-        frameSource.detach()
+        guard let frameSource else { return }
+        frameSource.detach(self)
     }
 
     // MARK: - Frame ingest (nonisolated)

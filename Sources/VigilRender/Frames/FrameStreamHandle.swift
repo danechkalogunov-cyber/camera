@@ -47,6 +47,10 @@ public final class FrameStreamHandle {
     /// directly; do not re-read it per frame.
     public private(set) weak var sink: VideoTileView?
 
+    /// Mounted views in attachment order. A temporary floating view may replace a tile and, when
+    /// it closes, the still-mounted tile underneath must become current again without a rebuild.
+    private var mounted: [WeakTile] = []
+
     /// Called when a view attaches or detaches, so a producer can start or stop delivering without
     /// polling. The argument is the new value of `sink`.
     public var onSinkChange: ((VideoTileView?) -> Void)?
@@ -63,6 +67,8 @@ public final class FrameStreamHandle {
     /// Attaching a second view replaces the first; the previous view simply stops receiving. It is
     /// not an error — SwiftUI legitimately rebuilds a view before tearing the old one down.
     public func attach(_ view: VideoTileView) {
+        mounted.removeAll { $0.value == nil || $0.value === view }
+        mounted.append(WeakTile(view))
         sink = view
         view.frameSource = self
         onSinkChange?(view)
@@ -73,9 +79,24 @@ public final class FrameStreamHandle {
     /// Safe to call when nothing is attached. Calling it does **not** flush or blank the layer: the
     /// last displayed picture is the correct thing to leave on screen (docs/API_CONTRACT.md §4.9).
     public func detach() {
-        sink = nil
-        onSinkChange?(nil)
+        if let sink { mounted.removeAll { $0.value == nil || $0.value === sink } }
+        else { mounted.removeAll { $0.value == nil } }
+        sink = mounted.last?.value
+        onSinkChange?(sink)
     }
+
+    /// Detaches a particular mounted view, restoring the most recently attached survivor.
+    public func detach(_ view: VideoTileView) {
+        mounted.removeAll { $0.value == nil || $0.value === view }
+        guard sink === view else { return }
+        sink = mounted.last?.value
+        onSinkChange?(sink)
+    }
+}
+
+private final class WeakTile {
+    weak var value: VideoTileView?
+    init(_ value: VideoTileView) { self.value = value }
 }
 
 #endif
