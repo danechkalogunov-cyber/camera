@@ -278,6 +278,15 @@ extension AppSessionModel {
         stream.isAudioMuted = defaults.object(forKey: muteKey) as? Bool ?? true
         stream.hasAudio = false
         if !stream.isAudioMuted {
+            // A hand-edited defaults domain or an older build can leave more than one camera
+            // remembered as audible. Restore the same one-route invariant the mute button enforces
+            // before any audio packet reaches the graph; the stream starting now wins.
+            for other in cameras.streams.values where other !== stream {
+                other.isAudioMuted = true
+                if let otherID = other.camera?.id {
+                    defaults.set(true, forKey: "Vigil.audio.muted.\(otherID.rawValue.uuidString)")
+                }
+            }
             await audioPlayback.solo(StreamKey(camera: camera.id, quality: .main))
         }
         cameras.file(stream)

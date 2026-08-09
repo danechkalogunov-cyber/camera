@@ -58,7 +58,7 @@ public enum StreamWarning: Sendable, Hashable {
     case parameterSetsMissingFromSDP
     /// The SDP offered more than one video track and Vigil took the first.
     case secondTrackIgnored
-    /// An audio track was offered and skipped. The slice never sets up audio.
+    /// An audio track was offered and skipped by a configuration that disabled audio.
     case audioTrackIgnored(encodingName: String)
     /// RTP timestamps jumped by more than a plausible frame interval.
     case timestampDiscontinuity(seconds: Double)

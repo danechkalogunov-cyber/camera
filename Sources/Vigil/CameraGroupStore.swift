@@ -183,8 +183,11 @@ final class CameraGroupStore {
         groups.first { $0.id == id }?.members ?? []
     }
 
-    func toggleMuted(_ id: GroupID) {
-        if !mutedGroups.insert(id).inserted { mutedGroups.remove(id) }
+    @discardableResult
+    func toggleMuted(_ id: GroupID) -> Bool {
+        if mutedGroups.insert(id).inserted { return true }
+        mutedGroups.remove(id)
+        return false
     }
 
     /// Replaces groups after a validated configuration import and persists them atomically.

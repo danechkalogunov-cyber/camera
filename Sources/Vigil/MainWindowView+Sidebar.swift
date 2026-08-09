@@ -494,7 +494,7 @@ extension MainWindowView {
                 title: Self.localized(muteKey),
                 symbol: .mute,
                 isOn: isMuted,
-                action: { groups.toggleMuted(group.id) }),
+                action: { toggleGroupAudio(group.id) }),
             .separator(id: "group.actions.rule"),
             VSidebarMenuItem(
                 id: "group.rename",
@@ -509,6 +509,23 @@ extension MainWindowView {
                 role: .destructive,
                 action: { deleteGroup(group.id) }),
         ]
+    }
+
+    /// Group mute is a real audio action, not only a checked menu row. Clearing it restores at most
+    /// one route — the selected member, or the first active member — because live audio deliberately
+    /// enforces one audible camera at a time.
+    func toggleGroupAudio(_ id: GroupID) {
+        let members = groups.members(of: id)
+        if groups.toggleMuted(id) {
+            for cameraID in members { session.setAudioMuted(true, for: cameraID) }
+            return
+        }
+        let selectedID = selectedCamera?.id
+        let selected = selectedID.flatMap { members.contains($0) ? $0 : nil }
+        let candidate = selected ?? members.first {
+            session.cameras.stream(for: $0)?.hasAudio == true
+        }
+        if let candidate { session.setAudioMuted(false, for: candidate) }
     }
 
     /// Captures each member in group order, switching the single-session build as needed.

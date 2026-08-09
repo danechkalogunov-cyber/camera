@@ -39,6 +39,21 @@ struct AudioPlaybackEngineTests {
         #expect(mutedAfterAll)
         #expect(mutedAfterRemoval)
     }
+
+    @Test func soloMakesExactlyOneRouteAudible() async {
+        let engine = AudioPlaybackEngine()
+        let other = StreamKey(camera: CameraID(), quality: .main)
+
+        await engine.solo(key)
+        let firstIsMuted = await engine.isMuted(key)
+        #expect(!firstIsMuted)
+        await engine.solo(other)
+
+        let firstAfterSwitch = await engine.isMuted(key)
+        let secondAfterSwitch = await engine.isMuted(other)
+        #expect(firstAfterSwitch)
+        #expect(!secondAfterSwitch)
+    }
 }
 
 #endif  // os(macOS)
