@@ -49,6 +49,7 @@ extension MainWindowView {
     private func windowStartupTasks(_ content: some View) -> some View {
         content
         .task { window.showsVideoOverlay = session.remembersVideoOverlay }
+        .task { eventFeed.restoreWatching(window.watchedCameraIDs) }
         .task {
             window.isFullKeyboardAccessEnabled = NSApp.isFullKeyboardAccessEnabled
         }
@@ -64,7 +65,9 @@ extension MainWindowView {
             }
         }
         .task {
-            streamLifecycle.start { session.reconnectImmediately() }
+            streamLifecycle.start(
+                suspendForSleep: { session.suspendForSystemSleep() },
+                reconnect: { session.resumeAfterSystemSleep() })
             await withTaskCancellationHandler(operation: {
                 try? await Task.sleep(for: .seconds(60 * 60 * 24 * 365))
             }, onCancel: {
@@ -102,7 +105,9 @@ extension MainWindowView {
         .task(id: cycleTick) { await runCycle() }
         // Keyed on the camera's id, so a reconnect to the same device does not re-ask and a switch
         // to a different one does. `load` is cheap when the ISAPI session's TTL cache is warm.
-        .task(id: selectedCamera?.id) { loadDeviceInfo() }
+        .task(id: selectedCamera?.id) {
+            loadDeviceInfo()
+        }
     }
 
     /// Clips, telemetry, the poster frame and the event stream.
@@ -197,6 +202,13 @@ extension MainWindowView {
         .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
         .onChange(of: window.openRecordingsFolderRequests) { _, _ in openRecordingsFolder() }
         .onChange(of: window.exportDiagnosticsRequests) { _, _ in exportDiagnostics() }
+        .onChange(of: window.toggleWatchRequests) { _, _ in
+            guard let camera = selectedCamera else { return }
+            let starts = !window.watchedCameraIDs.contains(camera.id)
+            if starts { window.watchedCameraIDs.insert(camera.id) }
+            else { window.watchedCameraIDs.remove(camera.id) }
+            Task { await eventFeed.setWatching(starts, camera: camera) }
+        }
     }
 
     /// Everything a coordinator learns the hard way, said out loud.

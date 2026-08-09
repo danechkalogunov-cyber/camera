@@ -108,6 +108,11 @@ final class AppSessionModel {
     /// user pressing Return, however many cameras are streaming.
     var sessionTask: Task<Void, Never>?
 
+    /// Camera sessions that were active immediately before macOS went to sleep.
+    /// Old sockets and decoder sessions are never reused after wake.
+    var systemSleepStreamIDs: Set<CameraID> = []
+    var isSuspendedForSystemSleep = false
+
     // MARK: - Forwarders onto ``live``
     //
     // Mechanical, and deliberately so. Each pair is the property `CameraStream` now stores; the
@@ -485,6 +490,7 @@ final class AppSessionModel {
     /// ⚠️ Every stream, not the bound one. A Mac that slept with four cameras up wakes with four
     /// dead sockets, and three of them waiting out a backoff nobody can see is the same bug as one.
     func reconnectImmediately() {
+        guard !isSuspendedForSystemSleep else { return }
         var reachedLive = false
         for stream in cameras.all {
             if stream === live { reachedLive = true }
@@ -495,6 +501,46 @@ final class AppSessionModel {
         // the map yet and would otherwise be the one stream this misses.
         guard !reachedLive, let controller = live.controller else { return }
         Task { await controller.restart() }
+    }
+
+    /// Finalizes recordings and releases every socket/decoder before macOS sleeps.
+    func suspendForSystemSleep() {
+        guard !isSuspendedForSystemSleep else { return }
+        isSuspendedForSystemSleep = true
+        systemSleepStreamIDs = Set(cameras.all.compactMap { stream in
+            guard stream.isActive else { return nil }
+            stream.recordingCoordinator?.stop()
+            return stream.camera?.id
+        })
+        for stream in cameras.all where stream.isActive { stop(stream) }
+        // A connection can be resolving before it has been filed in the set.
+        if let id = live.camera?.id, live.isActive, !systemSleepStreamIDs.contains(id) {
+            live.recordingCoordinator?.stop()
+            systemSleepStreamIDs.insert(id)
+            stopSession()
+        } else {
+            sessionTask?.cancel()
+            sessionTask = nil
+        }
+        dependencies.logger.info(.app, "suspended camera sessions for system sleep",
+                                 ["count": "\(systemSleepStreamIDs.count)"])
+    }
+
+    /// Rebuilds exactly the sessions that were active before sleep, with fresh media paths.
+    func resumeAfterSystemSleep() {
+        guard isSuspendedForSystemSleep else { return }
+        isSuspendedForSystemSleep = false
+        let ids = systemSleepStreamIDs
+        systemSleepStreamIDs.removeAll()
+        dependencies.logger.info(.app, "resuming camera sessions after system wake",
+                                 ["count": "\(ids.count)"])
+        for id in ids {
+            guard let stream = cameras.stream(for: id),
+                  let camera = stream.camera,
+                  stream.controller == nil else { continue }
+            stream.beginConnecting()
+            Task { await start(stream, camera: camera, ref: camera.credentialRef) }
+        }
     }
 }
 

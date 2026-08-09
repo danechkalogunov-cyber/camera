@@ -64,7 +64,7 @@ struct VigilCommands: Commands {
             Divider()
             Button(MainWindowView.localized("Save Snapshot")) { window.snapshotRequests &+= 1 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(session.camera == nil)
+                .disabled(selectedCameraID == nil)
             Button(MainWindowView.localized("Export Diagnostics…")) {
                 window.exportDiagnosticsRequests &+= 1
             }
@@ -81,6 +81,11 @@ struct VigilCommands: Commands {
             Divider()
             Button(MainWindowView.localized("Mute All Audio")) { session.muteAllAudio() }
                 .keyboardShortcut("m", modifiers: [.shift, .command])
+            Button(MainWindowView.localized(isWatching ? "Stop Watching Camera"
+                                                        : "Watch Camera")) {
+                window.toggleWatchRequests &+= 1
+            }
+                .disabled(selectedCameraID == nil)
             Divider()
             Button(MainWindowView.localized("Camera Settings…")) { window.sheet = .cameraSettings }
                 .disabled(session.camera == nil)
@@ -145,6 +150,14 @@ struct VigilCommands: Commands {
     /// rather than `@Observable`, so a title read from it would never refresh.
     private var recordTitle: String {
         window.isRecording ? "Stop Recording" : "Start Recording"
+    }
+
+    private var isWatching: Bool {
+        selectedCameraID.map(window.watchedCameraIDs.contains) ?? false
+    }
+
+    private var selectedCameraID: CameraID? {
+        window.sidebarSelection.focus.selectedCamera ?? session.camera?.id
     }
 
     /// The same act as the sidebar's `+`: back to the form, address cleared, account kept.

@@ -369,6 +369,16 @@ final class MainWindowState {
     /// The monotonically increasing request bridges those two owners without a global singleton.
     var exportDiagnosticsRequests: UInt64 = 0
 
+    /// Camera menu bridge and persisted watch-mode selection. Authorization is requested only when
+    /// the user adds a camera to this set.
+    var toggleWatchRequests: UInt64 = 0
+    var watchedCameraIDs: Set<CameraID> = [] {
+        didSet {
+            UserDefaults.standard.set(watchedCameraIDs.map { $0.rawValue.uuidString }.sorted(),
+                                      forKey: Self.watchedCameraIDsKey)
+        }
+    }
+
     /// Custom 12×12 mosaic edit state; non-nil while the eight resize handles are active.
     var mosaicEditor: VMosaicEditor?
 
@@ -453,6 +463,10 @@ final class MainWindowState {
 
     /// Builds the window state and restores the last layout and selected camera.
     init() {
+        watchedCameraIDs = Set(
+            UserDefaults.standard.stringArray(forKey: Self.watchedCameraIDsKey)?.compactMap {
+                UUID(uuidString: $0).map(CameraID.init)
+            } ?? [])
         if let raw = UserDefaults.standard.string(forKey: Self.layoutKey),
            let restored = VGridLayout(rawValue: raw) {
             layout = restored
@@ -462,6 +476,8 @@ final class MainWindowState {
             sidebarSelection.select(.camera(CameraID(uuid)))
         }
     }
+
+    private static let watchedCameraIDsKey = "Vigil.notifications.watchedCameraIDs"
 }
 
 // MARK: - MainWindowSheet

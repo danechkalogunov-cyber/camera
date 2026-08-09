@@ -135,6 +135,7 @@ final class EventCoordinator {
             $0.id.rawValue.uuidString < $1.id.rawValue.uuidString
         }
         displayedCameraID = cameraID
+        notifications.visibleCameraIDs = Set(cameraID.map { [$0] } ?? [])
         followed.withLock { state in
             state.removeAll(keepingCapacity: true)
             for camera in monitoredCameras where state[EventDeviceKey(camera: camera)] == nil {
@@ -165,6 +166,12 @@ final class EventCoordinator {
         } else {
             notifications.policy.watchedCameraIDs.remove(camera.id)
         }
+    }
+
+    /// Restores persisted choices without prompting at launch. Authorization was requested at the
+    /// moment each camera was originally enabled; restoring a preference must not raise a prompt.
+    func restoreWatching(_ cameraIDs: Set<CameraID>) {
+        notifications.policy.watchedCameraIDs = cameraIDs
     }
 
     func cameraLost(_ camera: Camera?) async {

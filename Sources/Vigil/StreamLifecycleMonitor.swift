@@ -16,11 +16,14 @@ final class StreamLifecycleMonitor {
     private let pathMonitor: NWPathMonitor
     private var observers: [any NSObjectProtocol] = []
     private var wasSatisfied = true
+    private var suspendForSleep: (@MainActor () -> Void)?
     private var reconnect: (@MainActor () -> Void)?
 
     init(pathMonitor: NWPathMonitor = NWPathMonitor()) { self.pathMonitor = pathMonitor }
 
-    func start(reconnect: @escaping @MainActor () -> Void) {
+    func start(suspendForSleep: @escaping @MainActor () -> Void,
+               reconnect: @escaping @MainActor () -> Void) {
+        self.suspendForSleep = suspendForSleep
         self.reconnect = reconnect
         pathMonitor.pathUpdateHandler = { [weak self] path in
             // ⚠️ `self.` spelled out. The `guard let self` that would normally license dropping it
@@ -36,9 +39,19 @@ final class StreamLifecycleMonitor {
         }
         pathMonitor.start(queue: DispatchQueue(label: "camera.vigil.network-path"))
         let workspace = NSWorkspace.shared.notificationCenter
+        observers.append(workspace.addObserver(forName: NSWorkspace.willSleepNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspendForSleep?() }
+        })
         observers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.reconnect?() }
+            Task { @MainActor in
+                // Wi-Fi needs a moment to associate; otherwise the first attempt spends itself on
+                // a route that is not ready yet.
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
+                self?.reconnect?()
+            }
         })
     }
 
@@ -47,6 +60,7 @@ final class StreamLifecycleMonitor {
         let workspace = NSWorkspace.shared.notificationCenter
         observers.forEach(workspace.removeObserver)
         observers.removeAll()
+        suspendForSleep = nil
         reconnect = nil
     }
 

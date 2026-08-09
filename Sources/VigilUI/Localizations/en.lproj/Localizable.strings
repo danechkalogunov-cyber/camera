@@ -853,6 +853,10 @@
 "Save Password" = "Save Password";
 "Skip" = "Skip";
 "Could not save an imported password: %@" = "Could not save an imported password: %@";
+"Watch Camera" = "Watch Camera";
+"Stop Watching Camera" = "Stop Watching Camera";
+"View Live" = "View Live";
+"Play Back" = "Play Back";
 "Protect the backup with a passphrase" = "Protect the backup with a passphrase";
 "Use at least 12 characters. You will need this passphrase to restore the passwords." = "Use at least 12 characters. You will need this passphrase to restore the passwords.";
 "Passphrase (12 or more characters)" = "Passphrase (12 or more characters)";

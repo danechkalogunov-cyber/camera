@@ -836,6 +836,10 @@
 "Save Password" = "Сохранить пароль";
 "Skip" = "Пропустить";
 "Could not save an imported password: %@" = "Не удалось сохранить импортированный пароль: %@";
+"Watch Camera" = "Следить за камерой";
+"Stop Watching Camera" = "Не следить за камерой";
+"View Live" = "Смотреть онлайн";
+"Play Back" = "Воспроизвести запись";
 "Protect the backup with a passphrase" = "Защитите резервную копию парольной фразой";
 "Use at least 12 characters. You will need this passphrase to restore the passwords." = "Используйте не менее 12 символов. Эта фраза понадобится для восстановления паролей.";
 "Passphrase (12 or more characters)" = "Парольная фраза (не менее 12 символов)";
