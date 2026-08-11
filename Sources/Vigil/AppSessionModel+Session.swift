@@ -13,6 +13,7 @@ import AppKit
 import Foundation
 
 import VigilCore
+import VigilDiscovery
 import VigilISAPI
 import VigilProtocols
 import VigilRender

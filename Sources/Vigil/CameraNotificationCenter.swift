@@ -56,10 +56,10 @@ struct CameraNotificationRateLimiter: Sendable {
 /// The single gateway for macOS alerts, keeping notification text and attachment handling testable.
 @MainActor
 final class CameraNotificationCenter {
-    static let eventCategory = "VIGIL_CAMERA_EVENT"
-    static let cameraLostCategory = "VIGIL_CAMERA_LOST"
-    static let viewLiveAction = "VIGIL_VIEW_LIVE"
-    static let playBackAction = "VIGIL_PLAY_BACK"
+    nonisolated static let eventCategory = "VIGIL_CAMERA_EVENT"
+    nonisolated static let cameraLostCategory = "VIGIL_CAMERA_LOST"
+    nonisolated static let viewLiveAction = "VIGIL_VIEW_LIVE"
+    nonisolated static let playBackAction = "VIGIL_PLAY_BACK"
 
     var policy = CameraWatchPolicy()
     private let center: UNUserNotificationCenter
