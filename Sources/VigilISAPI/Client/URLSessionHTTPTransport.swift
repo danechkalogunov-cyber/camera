@@ -102,6 +102,7 @@ actor URLSessionLanePool {
 
     /// Performs one request through the continuation bridge.
     func perform(_ request: HTTPRequest) async throws(ISAPIError) -> HTTPResponse {
+        try await HTTPDestinationGuard.requirePermitted(request.url)
         let session = session(for: request.lane)
         let urlRequest = Self.makeURLRequest(request)
         let id = nextID
@@ -161,7 +162,8 @@ actor URLSessionLanePool {
 
     #if os(macOS)
     /// Starts a streamed upload backed by Foundation's bound input/output stream pair.
-    func upload(_ request: HTTPRequest) throws -> any HTTPUploadHandle {
+    func upload(_ request: HTTPRequest) async throws(ISAPIError) -> any HTTPUploadHandle {
+        try await HTTPDestinationGuard.requirePermitted(request.url)
         var input: InputStream?
         var output: OutputStream?
         Stream.getBoundStreams(withBufferSize: 64 * 1024,
@@ -173,7 +175,8 @@ actor URLSessionLanePool {
         urlRequest.httpBodyStream = input
         urlRequest.setValue("chunked", forHTTPHeaderField: "Transfer-Encoding")
         let session = URLSession(configuration: Self.configuration(for: .audio,
-                                                                   configuration: configuration))
+                                                                   configuration: configuration),
+                                 delegate: SameHostRedirectDelegate(), delegateQueue: nil)
         let task = session.uploadTask(withStreamedRequest: urlRequest)
         let handle = DarwinHTTPUploadHandle(input: input, output: output, task: task,
                                             session: session, request: request)
@@ -186,6 +189,7 @@ actor URLSessionLanePool {
     /// Opens a streaming request on its own session, so the delegate's lifetime is the stream's.
     func stream(_ request: HTTPRequest) async throws(ISAPIError)
         -> (status: Int, headers: HTTPHeaders, bytes: AsyncThrowingStream<Data, any Error>) {
+        try await HTTPDestinationGuard.requirePermitted(request.url)
         let (bytes, byteContinuation) = AsyncThrowingStream<Data, any Error>.makeStream(
             bufferingPolicy: .bufferingNewest(64))
         let (heads, headContinuation) = AsyncStream<StreamHead>.makeStream()
@@ -214,7 +218,8 @@ actor URLSessionLanePool {
     private func session(for lane: HTTPLane) -> URLSession {
         if let existing = sessions[lane] { return existing }
         let created = URLSession(configuration: Self.configuration(for: lane,
-                                                                  configuration: configuration))
+                                                                  configuration: configuration),
+                                 delegate: SameHostRedirectDelegate(), delegateQueue: nil)
         sessions[lane] = created
         return created
     }
@@ -226,6 +231,7 @@ actor URLSessionLanePool {
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         cfg.urlCache = nil
         cfg.httpCookieAcceptPolicy = .never
+        cfg.connectionProxyDictionary = [:]
         // HTTP/1 pipelining stays off — Hikvision mis-handles pipelined GETs. `URLSession` defaults
         // it off and the property that used to set it is deprecated, so there is nothing to assign.
         cfg.httpAdditionalHeaders = ["Accept": "*/*", "Connection": "keep-alive"]
@@ -302,6 +308,28 @@ actor URLSessionLanePool {
         default:
             return .notConnected("\(urlError.code.rawValue) \(urlError.localizedDescription)")
         }
+    }
+}
+
+// MARK: - Redirect egress
+
+/// URLSession follows redirects by default. A cross-host redirect would bypass the destination
+/// preflight, so production sessions accept only same-host redirects (for example HTTP → HTTPS).
+private final class SameHostRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(HTTPRedirectPolicy.allows(from: response.url, to: request.url)
+                          ? request : nil)
+    }
+}
+
+enum HTTPRedirectPolicy {
+    static func allows(from original: URL?, to redirect: URL?) -> Bool {
+        guard let originalHost = original?.host?.lowercased(),
+              let redirectHost = redirect?.host?.lowercased() else { return false }
+        return originalHost == redirectHost
     }
 }
 
@@ -413,6 +441,14 @@ private final class StreamingDelegate: NSObject, URLSessionDataDelegate {
             heads.finish()
         }
         completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(HTTPRedirectPolicy.allows(from: response.url, to: request.url)
+                          ? request : nil)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
