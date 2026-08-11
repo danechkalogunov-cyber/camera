@@ -1,6162 +1,1270 @@
-# Vigil â€” API Contract
-
-**Status: NORMATIVE. This document outranks every other document in `docs/` except
-`docs/REQUIREMENTS-CUSTOMER.md`.**
-
-Twelve specifications were authored in parallel and therefore disagree at their seams. This file is
-the arbitration. Where a spec and this contract differ, **this contract is right and the spec must be
-amended**; Â§2 lists every amendment owed. Where this contract is silent, the owning module spec
-governs.
-
-## 0. How to use this document
-
-| You are | Read |
-|---|---|
-| Any implementation agent | Â§0, Â§1, Â§2 (skim, then your rows), Â§3 (verbatim), Â§6 Â§7 Â§8 in full |
-| A `VigilProtocols` implementer (W1) | Â§3 verbatim â€” you paste it. Then Â§5 rows tagged W1 |
-| A pure-module implementer (W2) | Â§3, your module's Â§4 subsection, your Â§5 rows, Â§7 |
-| A macOS-module implementer (W3â€“W6) | same, plus Â§7.9 (the `#if os(macOS)` template) |
-| A reviewer | Â§2 (the rulings you must enforce), Â§7 (the style you must reject on) |
-
-### 0.1 Precedence order (binding)
-
-1. `docs/REQUIREMENTS-CUSTOMER.md` â€” customer requirements. R1 (launch â†’ live video in 10 s with the
-   password as the only input) is a P0 acceptance gate and shapes the API surface: a DESCRIBE probe
-   ladder, automatic channel enumeration and transport self-healing are all **required API**, not
-   optional polish.
-2. **This document** (`docs/API_CONTRACT.md`) â€” type shapes, module surfaces, file manifest,
-   `Package.swift`, cross-cutting rules.
-3. `docs/BUILD-VERIFICATION.md` â€” anything actually compiled beats anything merely written.
-4. `.vigil/IMPL_RULES.md` â€” binding style/concurrency/testing rules for implementation agents. Â§7
-   here **extends** it and never contradicts it. If you think it does, IMPL_RULES wins and Â§7 is a
-   defect â€” report it.
-5. `docs/ARCHITECTURE.md` â€” structural backbone (module graph, concurrency model, error taxonomy,
-   observability, persistence, entitlements).
-6. The nine domain specs â€” normative for everything inside their module that this contract does not
-   pin down.
-7. `docs/OPEN-CONFLICTS.md` â€” a worklist, now fully discharged by Â§2. It is historical.
-
-### 0.2 What is already real in the repository
-
-Verified on Swift 6.1.2 / x86_64-unknown-linux-gnu (`docs/BUILD-VERIFICATION.md`):
-
-* `Package.swift` at the repo root is **authoritative and green**. Â§6 reproduces it. The copy in
-  `ARCHITECTURE.md` Â§3 is stale where they differ.
-* All 25 target directories exist, each with a `Placeholder.swift`.
-* All 12 declared resource directories exist, each with a `.placeholder` file:
-  `Sources/VigilRender/Shaders`, `Sources/VigilUI/Resources`, `Sources/VigilUI/Localizations`, and
-  `Fixtures/` in the nine test targets that declare `.copy("Fixtures")`.
-* `swift build --product VigilPure` and `swift build` are both green.
-* `.gitattributes` marks `*.rtsp`, `*.sdp`, `*.rtsp.txt` as `-text` so CRLF survives checkout.
-
-**Three build defects were found by compiling and are now load-bearing invariants. Do not undo them:**
-
-| Invariant | Why |
-|---|---|
-| The `VigilPure` product declares `type: .static` | Without it SwiftPM treats it as an *automatic* product, refuses `--product VigilPure`, and silently builds the whole package instead â€” turning the Linux purity gate into a gate that cannot fail |
-| Every directory named in a `resources:` clause exists, with a `.placeholder` inside | A `.copy()`/`.process()` at a missing path is a **hard build error** that blocks every other agent, not a warning |
-| Every target directory contains at least one `.swift` file | SwiftPM errors on a target with no sources. `Placeholder.swift` satisfies this until real sources land; **do not delete it yourself** â€” the supervisor removes it |
-
----
-
-## 1. The shape of the system, in one page
-
-```
-                        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ PURE (Foundation only, Linux CI) â”€â”€â”
-  VigilProtocols â”€â”€â”¬â”€â”€â–¶ VigilBitstream â”€â”€â–¶ VigilRTP                                   â”‚
-                   â”œâ”€â”€â–¶ VigilRTSP                                                     â”‚
-                   â”œâ”€â”€â–¶ VigilISAPI      (+ FoundationNetworking / FoundationXML)       â”‚
-                   â”œâ”€â”€â–¶ VigilDiscovery                                                â”‚
-                   â””â”€â”€â–¶ VigilTestKit    (tests only; never linked by the app)          â”‚
-                        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ macOS ONLY (#if os(macOS)) â”€â”€â”€â”€â”€â”€â”€â”€â”
-  VigilTransport  â† VigilProtocols, VigilRTSP, VigilDiscovery                          â”‚
-  VigilVideo      â† VigilProtocols, VigilBitstream                                     â”‚
-  VigilRender     â† VigilProtocols, VigilVideo                                         â”‚
-  VigilCore       â† Protocols, RTSP, RTP, Bitstream, ISAPI, Discovery, Transport, Video â”‚
-  VigilUI         â† VigilProtocols, VigilCore, VigilRender                              â”‚
-  Vigil (exe)     â† VigilUI, VigilCore                                                 â”‚
-                        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-```
-
-Forbidden edges, restated because they are the rules most likely to be broken:
-`VigilRTSP â†› VigilRTP`, `VigilRTP â†› VigilRTSP`, `VigilCore â†› VigilRender`, `VigilCore â†› VigilUI`,
-`VigilVideo â†› VigilRTP`, `VigilRender â†› VigilCore`, `VigilUI â†› VigilTransport/RTSP/RTP`,
-`VigilDiscovery â†› VigilRTSP`, any pure target â†› any Apple framework, anything â†› `VigilTestKit`
-outside `Tests/`.
-
-The frame path, with the exact type at every boundary:
-
-```
-NWConnection(Data) â†’[VigilTransport]â†’ RTSPSessionMachine.ingest â†’ RTSPAction.emitMedia(channel:payload:)
-  â†’ RTPTrackReceiver.ingestRTP â†’ EncodedFrame (4-byte BE length-prefixed NALs, MediaTimestamp pts)
-  â†’ EncodedFrameQueue (8 frames / 1500 ms, drop-to-keyframe)
-  â†’ VigilVideo: FormatDescriptionFactory â†’ CMSampleBuffer â†’ AVSampleBufferDisplayLayer
-                                                      or â†’ VTDecompressionSession â†’ VideoFrame
-  â†’ VigilRender: VideoSink.enqueue(_:) â†’ CAMetalLayer / ASBDL   (zero main-actor hops on the Metal path)
-```
-
----
-
-## 2. Rulings
-
-Every row of `docs/OPEN-CONFLICTS.md` plus every contradiction found while writing this contract.
-Format: **what each spec said â†’ the ruling â†’ why â†’ which documents must be amended.**
-
-A ruling marked **[BUILD]** breaks compilation or linking if ignored. **[SEMANTIC]** produces code
-that compiles but misbehaves. **[COSMETIC]** is a consistency matter that must still be settled once.
-
-### 2.1 Type ownership and shape
-
-#### R-01 â€” `VigilRTP` **does** depend on `VigilBitstream` **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§2.2 and `spec-bitstream.md` Â§1.1 assert the edge exists and is mandatory.
-`spec-rtp.md` Â§1.1 asserts it does not, and proposes a "40-line local peeker"
-(`Sources/VigilRTP/SliceHeaderPeek.swift`) built directly on `BitReader`.
-
-*Ruling:* **the edge exists.** `Package.swift` already declares
-`.target(name: "VigilRTP", dependencies: ["VigilProtocols", "VigilBitstream"])` and that manifest is
-compiled and green. `VigilRTP` **must** use `VigilBitstream` for: `H264NALType`/`H265NALType`,
-`NALHeader.decodeH264`/`decodeHEVC`/`typeCode`, `LengthPrefixed.append(nal:to:)`, and
-`SliceHeader.isFirstSliceOfPicture(nalUnit:codec:)`. `Sources/VigilRTP/SliceHeaderPeek.swift` is
-**deleted from the manifest** â€” a duplicate slice-header parser is a review-blocking defect, because
-the two copies will disagree on exactly the malformed input that matters.
-
-*Why:* a second implementation of `first_mb_in_slice` / `first_slice_segment_in_pic_flag` is the
-single highest-risk duplication in the repo â€” access-unit splitting is already not allowed to trust
-the marker bit, so this predicate *is* the AU boundary. One implementation, one set of fuzz tests.
-The claimed benefit (parallel implementation of RTP and Bitstream) is bought back by the wave plan:
-`VigilBitstream` and `VigilRTP` are both W2, and `VigilRTP` depends only on the four surfaces listed
-above, which are declared in Â§4.3 and can be stubbed for an afternoon if genuinely necessary.
-
-*Amend:* `spec-rtp.md` Â§1.1 (dependency claim) and Â§1.2 (drop `SliceHeaderPeek.swift`); Â§7.3 becomes
-a reference to `VigilBitstream.SliceHeader`.
-
-#### R-02 â€” `EncodedFrame`, `MediaTimestamp` and friends are declared **here**, verbatim **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§2.4 gives them to `VigilProtocols`; `spec-rtp.md` Â§2 calls itself "their
-authoritative definition"; `spec-video-pipeline.md` Â§2 restates them; `spec-bitstream.md` Â§2 restates
-them differently. The four versions disagree on: `data` type (`Data` vs `[UInt8]`), `codec` type
-(`Codec` vs `VideoCodec`), `dts` optionality, the arrival-time field (`receivedAt: MonotonicTime` vs
-`receivedHostTime: UInt64`), and whether `ParameterSets` carries `codec`.
-
-*Ruling:* Â§3 of this document is the **only** normative declaration. All four specs become
-explanatory. The field-level rulings are R-03 â€¦ R-08.
-
-*Why:* four partial declarations of a boundary struct is the canonical way to get code that does not
-link. Â§3 is written to be pasted, not paraphrased.
-
-*Amend:* `spec-rtp.md` Â§2, `spec-video-pipeline.md` Â§2, `spec-bitstream.md` Â§2 â€” each replaces its
-declaration with a pointer to `API_CONTRACT.md` Â§3 and keeps only its *semantics* prose.
-
-#### R-03 â€” `Data`, not `[UInt8]`, at every boundary **[BUILD]**
-
-*Said:* `spec-rtp.md` uses `Data` for `EncodedFrame.data` and `[Data]` for parameter sets;
-`spec-bitstream.md` uses `[UInt8]` and `[[UInt8]]` throughout, including in
-`AVCDecoderConfigurationRecord.init(sps:pps:spsExt:)`.
-
-*Ruling:* **`Data` for anything stored in a type that crosses a module or isolation boundary.**
-`[UInt8]` is permitted only as a *local scratch buffer* inside one function or as the return of an
-unescape/serialize helper. Concretely:
-
-| Where | Type |
-|---|---|
-| `EncodedFrame.data` | `Data` |
-| `ParameterSets.vps/.sps/.pps` | `[Data]` |
-| `AVCDecoderConfigurationRecord` / `HEVCDecoderConfigurationRecord` stored arrays and `init` params | `[Data]`, `serialized() -> Data` |
-| `RBSP.unescape(...)` return, `AnnexB.toLengthPrefixed(...)` | `[UInt8]` (scratch) |
-| `BitReader` backing storage | `[UInt8]`, with a convenience `init(_ data: Data)` |
-| Parser entry points | `UnsafeRawBufferPointer` (call through `Data.withUnsafeBytes`) |
-
-*Why:* `Data` is `Sendable`, is what `Foundation`/`URLSession`/`NWConnection` hand us, is what
-`AVAssetWriter` and `CMBlockBufferCreateWithMemoryBlock` want, and avoids one full copy per frame at
-the transport boundary. `[UInt8]` inside a `Sendable` boundary struct means a copy in and a copy out.
-The one real hazard of `Data` â€” a slice retaining a megabyte parent â€” is handled by the existing rule
-in Â§7.6 (`never store a slice long-term without `Data(slice)``).
-
-*Amend:* `spec-bitstream.md` Â§16, Â§17, Â§21, Â§22 (`[[UInt8]]` â†’ `[Data]`, `[UInt8]` â†’ `Data` on stored
-and returned values); `spec-rtp.md` Â§2.4 note that `data` is `Data`.
-
-#### R-04 â€” one flat `MediaCodec` on `EncodedFrame`; `VideoCodec` and `AudioCodec` both exist **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§2.4 â†’ `VideoCodec` (`h264, h265, mjpeg`) and `AudioCodec`.
-`spec-bitstream.md` â†’ `VideoCodec` (`h264, h265` only, with `nalHeaderLength`).
-`spec-rtp.md` â†’ a single `Codec` (`h264, h265, aac, pcmS16LE`) used by `EncodedFrame`.
-`spec-isapi.md` Appendix B lists both `VideoCodec` and `AudioCodec`.
-
-*Ruling:* three enums, each with one job, all in `VigilProtocols` (Â§3.4):
-
-* `VideoCodec` â€” `h264, h265, mjpeg`. Carries `nalHeaderLength` (1 / 2 / 0) and `isNALBased`.
-  Used by `ParameterSets`, `VideoFormatInfo`, ISAPI stream config, format-change detection.
-* `AudioCodec` â€” `aac, g711A, g711U, g726, pcmS16LE`. Used by ISAPI stream config and audio format.
-* `MediaCodec` â€” the flat union carried by `EncodedFrame.codec`, with `var video: VideoCodec?` and
-  `var audio: AudioCodec?` bridges so a video-path `switch` stays one line.
-
-*Why:* `EncodedFrame` genuinely carries both video and audio, so it needs a union. `ParameterSets`
-and `VideoFormatInfo` genuinely cannot be audio, so making them take the union would push
-unrepresentable states into every parser. `mjpeg` must be in `VideoCodec` because F-DEC-05 (MJPEG)
-and the class-D JPEG-poll tile mode both reference it.
-
-*Amend:* `spec-rtp.md` Â§2.3 (`Codec` â†’ `MediaCodec`, add the two narrow enums);
-`spec-bitstream.md` Â§2 (`VideoCodec` gains `mjpeg`; guard `nalHeaderLength` on `isNALBased`).
-
-#### R-05 â€” `MediaTimestamp.init` clamps; it does **not** `precondition` **[SEMANTIC, security]**
-
-*Said:* `spec-rtp.md` Â§2.1 declares
-`precondition(timescale > 0 || value == Int64.min, "timescale must be positive")`.
-
-*Ruling:* the initialiser **clamps a non-positive timescale to 1** and documents it. Validation of a
-timescale that came off the wire happens exactly once, at `RTPTrackFormat` construction, which throws
-`RTPTrackError.invalidClockRate(_:)`.
-
-*Why:* `timescale` is derived from the SDP `a=rtpmap` clock rate â€” **network data**. A camera (or an
-attacker on the LAN) that advertises `a=rtpmap:96 H264/0` would take the whole app down through a
-`precondition`. `IMPL_RULES.md` permits `precondition` only for "programmer error that cannot come
-from network data"; this is the opposite. `ARCHITECTURE.md` Â§7.4 is explicit: a malformed packet from
-one camera must never crash the app, and that is a security property.
-
-*Amend:* `spec-rtp.md` Â§2.1.
-
-#### R-06 â€” `dts` is optional; `duration` is optional **[SEMANTIC]**
-
-*Said:* `spec-rtp.md` `dts: MediaTimestamp?`; `spec-bitstream.md` `dts: MediaTimestamp`;
-`spec-video-pipeline.md` "RTP supplies `dts` only when the stream reorders".
-
-*Ruling:* `var dts: MediaTimestamp?`, `nil` when the stream does not reorder â€” which is every
-Hikvision live profile and all audio. `VigilVideo` treats `nil` as "dts == pts" and must **not**
-synthesise a decode order. When non-`nil`, `dts <= pts` is guaranteed by the producer.
-
-*Amend:* `spec-bitstream.md` Â§2.2.
-
-#### R-07 â€” one monotonic instant type: `MediaInstant`. `RTSPInstant`, `RTSPDuration`, `MonotonicTime` are deleted **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§5.10 â†’ `protocol MonotonicClock { var nowNanoseconds: UInt64 }`.
-`spec-rtp.md` Â§2.2 â†’ `struct MonotonicTime { nanoseconds: Int64 }` + `protocol MonotonicClock { func now() -> MonotonicTime }`.
-`spec-rtsp.md` Â§2.4 â†’ `struct RTSPInstant` + `struct RTSPDuration`.
-`spec-isapi.md` Â§1 â†’ `protocol VigilClock { var now: Date; func sleep(for:) }`.
-
-*Ruling:* `VigilProtocols` declares exactly one instant type, `MediaInstant` (`nanoseconds: Int64`,
-arbitrary epoch, never wall clock), and uses the **standard library `Duration`** for every duration.
-`protocol MonotonicClock` has `now()`, `sleep(for:)` and `sleep(until:)`. `protocol WallClock` has
-`now: Date`, used only for display, RTCP NTP mapping and parsed playback ranges.
-`RTSPInstant`, `RTSPDuration`, `MonotonicTime` and `VigilClock` do not exist.
-
-*Why:* four spellings of "nanoseconds since boot" means four conversion helpers, and the RTSP machine
-and the RTP receiver must timestamp against the *same* origin or the glass-to-glass latency estimate
-(FEATURES L8, Â±25 ms) is meaningless. `Duration` is in the stdlib, works on Linux, carries its unit
-in the type (satisfying Â§7.5's units-in-the-name rule without a name), and already appears in
-`MonotonicClock.sleep(for:)`.
-
-*Amend:* `spec-rtsp.md` Â§2.4 and every `RTSPInstant`/`RTSPDuration` use (a mechanical rename;
-`.seconds(5)` and `.milliseconds(400)` are `Duration` factories with the same spelling);
-`spec-rtp.md` Â§2.2; `spec-isapi.md` Â§1 and Â§4 (`VigilClock` â†’ `MonotonicClock` + `WallClock`);
-`ARCHITECTURE.md` Â§5.10.
-
-#### R-08 â€” `EncodedFrame.receivedAt: MediaInstant` **[BUILD]**
-
-*Said:* `spec-rtp.md` â†’ `receivedAt: MonotonicTime`; `spec-bitstream.md` â†’ `receivedHostTime: UInt64`
-("mach_absolute_time domain").
-
-*Ruling:* `var receivedAt: MediaInstant` â€” arrival of the **last** packet of the frame, which is the
-anchor for the glass-to-glass estimate. `mach_absolute_time` raw ticks never appear in a pure type;
-`SystemMonotonicClock` converts once.
-
-*Amend:* `spec-bitstream.md` Â§2.2.
-
-#### R-09 â€” one randomness protocol: `RandomSource`. `RTSPRandomSource` is deleted **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§5.10 â†’ `protocol RandomSource { mutating func next() -> UInt64 }`;
-`spec-rtsp.md` Â§2.5 â†’ `protocol RTSPRandomSource { func randomBytes(_:) -> [UInt8] }` (non-mutating).
-
-*Ruling:* one protocol, `RandomSource`, `mutating func next() -> UInt64`, with a
-**protocol extension** providing `mutating func randomBytes(_ count: Int) -> [UInt8]` and
-`mutating func hexString(bytes:)`. `RTSPDeterministicRandom` / `RTSPSystemRandom` become
-`SplitMix64RandomSource` (seeded, in `VigilProtocols` so both tests and fixtures use it) and
-`SystemRandomSource`.
-
-*Why:* `mutating` is required for a seeded generator to advance reproducibly, which is the entire
-point (`ARCHITECTURE.md` Â§5.10: "a failing CI run prints a seed"). A non-mutating `randomBytes`
-forces either a class with a lock or a non-reproducible source. Digest `cnonce` generation then reads
-`rng.randomBytes(8)` and is deterministic under test.
-
-*Amend:* `spec-rtsp.md` Â§2.5, Â§6.4.
-
-#### R-10 â€” **all** domain error enums live in `VigilProtocols` **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§7.1 declares `enum VigilError` in `VigilProtocols` wrapping
-`RTSPError`, `RTPError`, `BitstreamError`, `ISAPIError`, `DiscoveryError`, â€¦ and Â§2.4's registry says
-"`VigilError` + all domain error enums | `VigilProtocols`". But `spec-rtsp.md` Â§15 declares
-`RTSPError` inside `VigilRTSP`, `spec-bitstream.md` Â§22 declares `BitstreamError` inside
-`VigilBitstream`, `spec-isapi.md` Â§9 declares `ISAPIError` inside `VigilISAPI`, and `spec-rtp.md`
-Â§14.3 declares three error enums inside `VigilRTP`.
-
-*Ruling:* **every error enum named by `VigilError` is declared in `VigilProtocols`**, in
-`Sources/VigilProtocols/Errors/DomainErrors.swift`. Module-local errors that `VigilError` does *not*
-wrap may stay in their module (there are none in the current design).
-
-*Why:* this one is not a style preference, it is a cycle. If `VigilError` (in `VigilProtocols`) has a
-case `.rtsp(RTSPError)` and `RTSPError` lives in `VigilRTSP`, then `VigilProtocols` must import
-`VigilRTSP`, which imports `VigilProtocols`. SwiftPM rejects the cycle and nothing builds. The
-alternatives were considered and rejected: (a) `VigilError.wrapped(any VigilFailure)` destroys
-`Equatable`/`Hashable`/`Codable` conformance and makes `switch` on a cause impossible, and every
-retry decision in `StreamController` switches on the cause; (b) no root enum at all means every
-`throws(VigilError)` boundary becomes untyped, contradicting Â§7.7.
-
-Consequence for the wave plan: the error taxonomy is **W1 work, done once, by the `VigilProtocols`
-agent**, from the case lists in `ARCHITECTURE.md` Â§7.2 plus each module spec's error section. It is
-the single largest W1 file after the crypto set. Â§3.11 fixes the shape and the complete case list.
-
-*Amend:* `spec-rtsp.md` Â§15, `spec-rtp.md` Â§14.3, `spec-bitstream.md` Â§22, `spec-isapi.md` Â§9,
-`spec-discovery.md` Â§12, `spec-core.md`, `spec-video-pipeline.md`, `spec-render.md` â€” each keeps its
-case list as documentation and states that the declaration is in `VigilProtocols`.
-
-#### R-11 â€” the describing protocol is named `VigilFailure` **[COSMETIC]**
-
-*Said:* `ARCHITECTURE.md` Â§7.1 â†’ `protocol VigilErrorDescribing`; `spec-rtsp.md` Â§19 â†’ "the
-`VigilFailure` protocol".
-
-*Ruling:* `VigilFailure`. Same members as `VigilErrorDescribing` (`diagnosticCode`, `severity`,
-`disposition`, `userMessage`, `userRemedy`, `logMetadata`). `VigilError` and every domain enum
-conform. `LocalizedError` conformance is added by an extension in `VigilCore` so the pure layer stays
-Foundation-minimal while AppKit alerts still work.
-
-*Amend:* `ARCHITECTURE.md` Â§7.1.
-
-#### R-12 â€” `FrameGeometry`, `ColorInfo`, `FieldOrder` live in `VigilProtocols` **[BUILD]**
-
-*Said:* `spec-render.md` Â§2 â†’ `VigilProtocols` (pure, no CoreVideo; `VigilBitstream` computes them
-from SPS/VPS VUI, so they are Linux-testable). `spec-video-pipeline.md` implies `VigilVideo` by
-placing all geometry work next to `CVPixelBuffer`.
-
-*Ruling:* **`VigilProtocols`**, per `spec-render.md`. They are pure arithmetic over integers and
-ratios (coded size, clean aperture, SAR, primaries/transfer/matrix codes) and are produced by
-`VigilBitstream` from the VUI, which runs on Linux. `VigilVideo` and `VigilRender` consume them;
-`VigilRender` additionally derives its layer transforms from them but declares no geometry type.
-
-*Why:* if geometry lived in `VigilVideo` it could not be unit-tested on Linux, and the aspect-ratio /
-clean-aperture maths is exactly the kind of thing that needs a hundred table-driven test cases. It is
-also required by the recorder and by the "report cropped display size, allocate from coded size"
-rule, both of which have non-macOS-specific logic.
-
-*Amend:* `spec-video-pipeline.md` Â§2 and Â§4 (consume, do not declare).
-
-#### R-13 â€” three identifier types, in `VigilProtocols`; `StreamIndex` becomes `StreamQuality` **[BUILD]**
-
-*Said:* `spec-isapi.md` Â§11.3 declares `ChannelID`, `StreamIndex`, `StreamingChannelID` and `TrackID`
-in `VigilISAPI`. `spec-core.md` and the UI both need `StreamQuality`. `ARCHITECTURE.md` Â§2.4 does not
-list any of them.
-
-*Ruling:* all four move to `VigilProtocols`, and `StreamIndex` is renamed **`StreamQuality`**
-(`main = 1, sub = 2, third = 3`). The three-way distinction is preserved and is load-bearing:
-
-| Type | Space | Used by |
-|---|---|---|
-| `ChannelID` | 1-based video **input** channel | `/Image/channels/{ch}`, `/PTZCtrl/channels/{ch}`, `/System/Video/inputs/channels/{ch}`, motion config, `EventNotificationAlert.channelID` |
-| `StreamingChannelID` | `ch * 100 + quality.rawValue` | `/Streaming/channels/{id}`, `/Streaming/channels/{id}/picture`, the RTSP path |
-| `TrackID` | same numeric space, different concept | `/ContentMgmt/record/tracks`, `CMSearchDescription.trackIDList`, `/Streaming/tracks/{id}` |
-
-They are **not** interchangeable and none is `ExpressibleByIntegerLiteral` except `ChannelID`.
-
-*Why:* `VigilCore` persists them on `Camera` (so they must be `Codable` and visible without importing
-`VigilISAPI` from a Codable model), `VigilUI` displays them, `VigilRTSP` receives a built path, and
-`VigilDiscovery` reports channel counts. A type that four modules need is a `VigilProtocols` type by
-the standing rule in `ARCHITECTURE.md` Â§2.4. The rename removes the third spelling of the same
-concept (`StreamIndex` / `StreamQuality` / "stream index").
-
-*Amend:* `spec-isapi.md` Â§11.3 and Appendix B; `spec-core.md` Â§4.
-
-#### R-14 â€” one `Credential`; `ISAPICredential` is deleted; `Camera` has no password **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§2.4 â†’ `Credential` in `VigilProtocols`, value type only.
-`spec-isapi.md` Â§3 â†’ `ISAPICredential` in `VigilISAPI`, deliberately not `Codable`.
-`spec-core.md` Â§6 â†’ `Credential` (not `Codable`, Keychain-only), plus `CredentialRef` and
-`CredentialDescriptor`. `FEATURES.md` Â§20.2 â†’ Keychain only, `Camera` has no `password` property.
-
-*Ruling:* `VigilProtocols` declares `Credential` (username + password, **not** `Codable`, redacting
-`description` *and* `debugDescription`) and `CredentialRef` (an opaque `UUID`, `Codable`, safe to
-persist). `ISAPICredential` is deleted. `CredentialDescriptor` (the Keychain query shape) stays in
-`VigilCore` because it names Keychain attributes. `Camera` stores `credentialRef: CredentialRef?` and
-has no password-shaped property â€” enforced by the type, and by a test that reflects over
-`Camera`'s `CodingKeys`.
-
-*Amend:* `spec-isapi.md` Â§3, Â§4, Â§18 and Appendix B (`ISAPICredential` â†’ `Credential`).
-
-#### R-15 â€” one logging protocol: `LoggerProtocol`, 13 categories, and one `Redact` **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§8.1/Â§8.2 â†’ `LoggerProtocol`, `LogLevel`, `LogCategory`, `LogEvent`, with
-**13** categories (`app, discovery, rtsp, rtp, bitstream, isapi, transport, video, render, core,
-storage, ui, perf`) and `String.redactingSecrets()` plus a `Redaction.swift`. `spec-isapi.md` Â§1 â†’
-`VigilLogger` + `Redaction.mask(_:)`. `spec-core.md` Â§15 â†’ `LogRedaction`. `FEATURES.md` Â§20.6 â†’ one
-pure `Redact` in `VigilProtocols`, and a **different, 14-entry** category list (`app, discovery, rtsp,
-rtp, bitstream, decode, render, isapi, events, record, playback, health, store, security`).
-
-*Ruling:* `LoggerProtocol` / `LogLevel` / `LogCategory` / `LogEvent` exactly as
-`ARCHITECTURE.md` Â§8.2, with `ARCHITECTURE.md`'s **13 categories**. Redaction is one type,
-`enum Redact`, in `Sources/VigilProtocols/Logging/Redact.swift`. `VigilLogger`, `LogRedaction`,
-`Redaction` and `String.redactingSecrets()` do not exist.
-
-`FEATURES.md`'s extra categories map onto the 13: `decode â†’ video`, `events â†’ core`,
-`record â†’ core`, `playback â†’ core`, `health â†’ perf`, `store â†’ storage`, `security â†’ core`.
-
-*Why:* the 13-category list is the one with working code beside it (`OSLogLogger`, Â§8.2) and it is the
-list the diagnostics bundle and the log-level Settings pane index. Two lists means log filters that
-silently match nothing. `Redact` (the `FEATURES.md` name) wins over `Redaction`/`LogRedaction` because
-`FEATURES.md` Â§20.6 makes redaction a *shipping requirement* with a fuzz test, and names it.
-
-*Amend:* `FEATURES.md` Â§20.6 (category list); `spec-isapi.md` Â§1; `spec-core.md` Â§15;
-`ARCHITECTURE.md` Â§8.6 (`String.redactingSecrets()` â†’ `Redact`).
-
-#### R-16 â€” pure SHA-1 and SHA-256 in `VigilProtocols`; `CryptoKit` is banned everywhere **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§14.9 â†’ MD5 + CRC32 + a thin Base64 wrapper in `VigilProtocols`, and
-"`SHA-256`, when needed for TLS certificate fingerprint display, comes from `CryptoKit` in a
-macOS-only target". `FEATURES.md` â†’ **MD5, SHA-1 and SHA-256**, pure Swift, in `VigilProtocols`, and
-"no other module may implement a hash". `spec-rtsp.md` Â§1 â†’ MD5 plus a **padding-tolerant** Base64
-because Foundation's decoder rejects Hikvision's unpadded `sprop-*`. `spec-isapi.md` â†’ MD5.
-`OPEN-CONFLICTS.md` C5 â†’ all four files in `VigilProtocols/Crypto/`, first wave.
-
-*Ruling:* `Sources/VigilProtocols/Crypto/` ships `MD5.swift`, `SHA1.swift`, `SHA256.swift`,
-`Base64.swift` (padding-tolerant, whitespace-tolerant, URL-safe-tolerant) and `CRC32.swift`, all pure
-Swift, all streaming-capable, all tested against published RFC vectors on Linux. **`import CryptoKit`
-is forbidden in every target**, including macOS ones. TLS fingerprint display uses
-`VigilProtocols.SHA256`.
-
-*Why:* SHA-1 is needed for ONVIF WS-UsernameToken, which is parsed in `VigilDiscovery` â€” a pure,
-Linux-tested target. SHA-256 is needed for the encrypted config export *and* for the TOFU SPKI pin
-that `spec-isapi.md` Â§6 and `spec-rtsp.md` share via `Camera.tlsPinSPKI256`; the pin must be
-computable in a Linux test to be testable at all. Allowing `CryptoKit` for one of the three would
-mean two SHA-256 implementations and a lint rule with an exception, which is how the third one appears.
-
-*Amend:* `ARCHITECTURE.md` Â§14.9 (drop the CryptoKit sentence; `Scripts/lint.sh` bans `CryptoKit`
-repo-wide with no exceptions).
-
-#### R-17 â€” `HTTPTransporting` and its request/response types live in `VigilProtocols` **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§2.4 â†’ `HTTPTransporting` in `VigilProtocols` ("injection seam so
-`VigilISAPI` tests never touch the network"). `spec-isapi.md` Â§4.1 â†’ `ISAPIHTTPTransporting`,
-`ISAPIRawRequest`, `ISAPIResponse`, `HTTPHeaders`, `ISAPIUploadHandle`, and puts the lane enum inside
-`ISAPIClient` (`ISAPIClient.Lane`), which `ISAPIRawRequest` then references.
-
-*Ruling:* `VigilProtocols` declares `HTTPHeaders`, `HTTPRequest`, `HTTPResponse`, `HTTPLane` and
-`protocol HTTPTransporting`. `ISAPIClient.Lane` becomes `typealias Lane = HTTPLane` for readability at
-call sites. `URLSessionHTTPTransport` (the production conformance) lives in `VigilISAPI`;
-`FixtureHTTPTransport` lives in `VigilTestKit` (not in the test target â€” `VigilCoreTests` and
-`VigilPipelineTests` need it too).
-
-*Why:* `ISAPIRawRequest` referencing `ISAPIClient.Lane` while `ISAPIClient` holds an
-`any ISAPIHTTPTransporting` is a nested-type cycle that compiles but reads terribly, and the
-transport seam is also wanted by `VigilDiscovery`'s ONVIF `GetStreamUri` fallback (R1.2 candidate 6),
-which must not import `VigilISAPI`. `HTTPHeaders`, `ISAPIChunkedUpload` and `ISAPIUploadHandle` are
-named in `spec-isapi.md` Appendix B but **never declared anywhere** in it; Â§3.14 and Â§4.5 declare
-them here.
-
-*Amend:* `spec-isapi.md` Â§4.1, Â§4.2 and Appendix B.
-
-#### R-18 â€” `IPv4Address`, `MACAddress`, `IPv4Subnet` live in `VigilProtocols`; `IPv4CIDR` is renamed **[BUILD]**
-
-*Said:* `spec-discovery.md` Â§3 â†’ `IPv4Address` (UInt32-backed) and `MACAddress` (UInt64-backed) in
-`VigilProtocols`, with the instruction to write `VigilProtocols.IPv4Address` in files that also import
-`Network`. `ARCHITECTURE.md` Â§2.4 â†’ `IPv4CIDR` in `VigilDiscovery`.
-
-*Ruling:* `IPv4Address`, `MACAddress` and `IPv4Subnet` (the new name for `IPv4CIDR`) are all declared
-in `VigilProtocols`. In any file that imports `Network`, spell the type
-`VigilProtocols.IPv4Address` â€” `Network.IPv4Address` exists and the ambiguity is a compile error at
-best and a silent wrong-type at worst.
-
-*Why:* `Camera.lastKnownAddress`, `HostPolicy.classify`, the sweep planner, the ARP reader, the
-"address reused" guard and `VigilCore`'s reachability checks all need them, spanning four modules.
-`IPv4Subnet` reads as what it is; `IPv4CIDR` names a notation, not a value.
-
-*Amend:* `ARCHITECTURE.md` Â§2.4; `spec-discovery.md` Â§3 and Â§6 (`IPv4CIDR` â†’ `IPv4Subnet`).
-
-#### R-19 â€” `StreamStatistics` shape is `ARCHITECTURE.md` Â§8.4; `VigilRTP` owns the algebra **[SEMANTIC]**
-
-*Said:* `ARCHITECTURE.md` Â§8.4 fixes the shape (31 fields, `Codable`); `spec-rtp.md` Â§13 owns the
-update algebra and also declares it; `spec-rtp.md` Â§14.2 has `RTPTrackReceiver.statistics:
-StreamStatistics`, and `VigilVideo` pushes `decodeQueueDepth` in.
-
-*Ruling:* shape per `ARCHITECTURE.md` Â§8.4, reproduced verbatim in Â§3.10, declared in
-`VigilProtocols`. `VigilRTP` owns every update rule: fps EWMA Î± = 0.10, kbps EWMA Î± = 0.25 over a
-500 ms window, keyframe-interval EWMA Î± = 0.20, loss fraction over a 2 s window, jitter per RFC 3550
-A.8 converted from timescale units to milliseconds. `VigilVideo` writes `decodeQueueDepth`,
-`framesDroppedPreDisplay`, `decodeMillisecondsP50/P99` and `isHardwareAccelerated` through
-`RTPTrackReceiver.updateDecodeQueueDepth(_:)` and the sibling setters in Â§4.9.
-`isHardwareAccelerated` is the **measured** value from
-`kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder`, never the requested one â€”
-`FEATURES.md` makes honesty a shipping requirement.
-
-#### R-20 â€” `library.json` is schema **3**, with a separate `events.json` ring **[SEMANTIC]**
-
-*Said:* `ARCHITECTURE.md` Â§9.3 â†’ `LibraryDocument.currentSchemaVersion = 1`. `spec-core.md` Â§5 â†’
-schema 3, with a separate `events.json` ring, read-only if the on-disk schema is newer.
-
-*Ruling:* **schema 3.** `spec-core.md` is the persistence owner and was completed last; it defines
-the v1â†’v2â†’v3 migration chain and the fixtures. The other rules stand unchanged and are restated
-because they are easy to lose: `.bak` rotation before every write; write to a sibling temp file then
-`FileManager.replaceItemAt`; 500 ms debounce with a guaranteed final write and an awaited `flush()` on
-quit; `schemaVersion > current` â†’ `StorageError.schemaTooNew`, **open read-only and write nothing**;
-both files unreadable â†’ quarantine to `Corrupt/library-<ISO8601>.json`, start empty, and *tell the
-user*. Events live in `events.json` (last 5000, ring) so a large event log can never endanger the
-camera list. Recording/snapshot folders are reached through **security-scoped bookmarks** stored in
-`folderBookmarks` â€” a bare path string silently fails to write under the sandbox.
-
-*Amend:* `ARCHITECTURE.md` Â§9.3.
-
-### 2.2 The tile-size policy â€” one table, one unit
-
-#### R-21 â€” one policy table, keyed on **tile short edge in backing pixels** **[SEMANTIC]**
-
-*Said:* three different tables **and three different units**.
-
-* `FEATURES.md` F-STR-06: **short edge in physical px** = `min(width, height) Ã— backingScaleFactor`.
-  Buckets `1â€“95` JPEG poll @ 1 Hz, `96â€“479` sub, `480â€“1079` sub-with-promotion, `â‰¥1080` main; plus
-  hidden/occluded â†’ paused. 750 ms dwell + 15 % dead-band; switch gated on the new stream's first
-  keyframe with a 150 ms crossfade, never a black frame.
-* `spec-video-pipeline.md` Â§12.5: **backing *width***, buckets `â‰¥1600` main/full, `960â€“1599`
-  main-if-â‰¤4-tiles-else-sub, `640â€“959` sub, `384â€“639` sub fps-capped 15, `224â€“383` sub
-  keyframes-only, `<224` JPEG poll 2 s; sidebar 5 s, offscreen 15 s, occluded paused.
-* `spec-core.md` Â§8.5: **total backing pixels**, classes **Aâ€“F**: `â‰¥1_500_000` main,
-  `350_000â€“1_499_999` sub-or-main, `60_000â€“349_999` sub fps-capped 15, `12_000â€“59_999`
-  keyframe-only, `<12_000` JPEG poll 2 s, hidden â†’ paused. 15 % + 750 ms hysteresis.
-
-*Ruling â€” the unit:* **the tile's short edge in backing (device) pixels**, i.e.
-`min(pixelSize.width, pixelSize.height)` where `pixelSize = bounds Ã— backingScaleFactor` rounded to
-integers. `spec-render.md` already declares `TileRenderState.pixelSize` the authoritative input,
-published through `tile(_:didChangePixelSize:isVisible:)`, and it carries **both** dimensions, so
-every candidate unit is derivable from it â€” this is a naming problem, not a measurement problem.
-
-Short edge beats backing *width* because a 1-up tile on a portrait display and a `1+5` hero cell are
-both wider than they are tall, and it is the *shorter* dimension that decides whether a 720-line
-sub-stream has enough lines to look sharp. Short edge beats *total pixels* â€” despite
-`spec-core.md`'s argument that non-square cells break width â€” because total pixels conflates a
-1920Ã—135 letterbox strip (259 k px) with a 480Ã—540 cell (259 k px), and those two need opposite
-decisions. `spec-core.md`'s own Â§17.6 test 2 contradicts its own Â§8.5 table by one class in **both**
-directions (it calls 960Ã—540 class C where the table's own example calls it class B, and 480Ã—270
-class D where the table's own example calls it class C), which is evidence those boundaries were not
-settled. Class letters are kept, because `StreamCoordinator`'s plan is a pure function and
-`classB_promotesWhenSubIsSofterThanTile` is a far better test name than `p480to1079_...`.
-
-Then the two axes are separated, which is what the three tables were really conflating:
-
-**Axis 1 â€” tile size decides which stream to pull.** One table, `FEATURES.md`'s thresholds, with
-`spec-core.md`'s class letters attached so the code and the specs can name the buckets:
-
-| Class | Tile short edge (backing px) | Source | Notes |
-|---|---|---|---|
-| **A** | â‰¥ 1080 | **Main** stream | 1-up, fullscreen, PiP, video wall |
-| **B** | 480 â€“ 1079 | **Sub**, promoted to main if the sub stream's coded height < 0.75 Ã— tile short edge **and** the decode budget admits it | avoids visible softness at 3Ã—3 |
-| **C** | 96 â€“ 479 | **Sub** | the 4Ã—4 case |
-| **D** | 1 â€“ 95 | **ISAPI JPEG poll**, no decode session at all | micro-thumbnails |
-| **E** | hidden / occluded / window minimized | **Paused** â€” RTSP `PAUSE`, session kept alive, torn down after 60 s | recording-priority streams are exempt (F-DEC-06 rule 5) |
-
-JPEG-poll cadence for class D and for non-tile surfaces, from `spec-video-pipeline.md`:
-
-| Surface | Interval |
-|---|---|
-| Stage tile in class D | 1 s |
-| Sidebar row thumbnail | 5 s |
-| Offscreen / menu-bar thumbnail | 15 s |
-
-**Axis 2 â€” decode-budget pressure decides how hard to run the stream you already have.** This is
-where `spec-video-pipeline.md`'s finer rungs live, and they are *not* a function of tile size:
-
-`normal â†’ trim â†’ fpsCap(15) â†’ keyframesOnly â†’ skipToKeyframe â†’ demoteToSub â†’ jpegPoll â†’ paused`
-
-Entry/exit for the first four rungs is the queue-depth/latency ladder in
-`spec-video-pipeline.md` Â§12 (depth EWMA 3.0 / 5.0, latency 220 / 400 ms, 5 s recovery hysteresis);
-the last three are `StreamCoordinator` demotions under `F-DEC-06`. Every rung below `normal` must be
-**visible** (tile badge) and **explained** (inspector note) â€” silent degradation is a defect.
-
-**Hysteresis, both axes:** a change requires the new bucket to hold for â‰¥ **750 ms** and the driving
-value to move â‰¥ **15 %** past the threshold. A continuous window drag from 4Ã—4 to 1-up must produce
-**at most one** stream switch; the test that replays a 60-frame resize animation and asserts this is
-mandatory. A switch renders the old stream until the new stream's first keyframe decodes, then
-crossfades over 150 ms. There is no black frame, ever.
-
-*Why:* `FEATURES.md` owns the release gates and the acceptance criteria, its table is the
-customer-visible behaviour, and its four buckets map one-to-one onto the four stream sources that
-actually exist on a Hikvision device (main / sub / third-or-JPEG / none). `spec-video-pipeline.md`'s
-extra rungs are genuinely valuable â€” an fps cap and a keyframes-only mode are the right responses to
-*budget* pressure on a 16-tile wall â€” but expressing them as size buckets made a 384 px tile behave
-differently from a 384 px tile, depending on which document you read. Separating the axes keeps every
-mechanism all three authors wanted and removes the contradiction. `spec-core.md`'s class letters are
-kept because `StreamCoordinator`'s plan is a pure function whose test names read much better as
-"classB_promotesWhenSubIsSofterThanTile" than as "480to1079_...".
-
-There is **no class F**: `spec-core.md`'s six-way split collapses to five because its "fps-capped 15"
-and "keyframe-only" rungs move to Axis 2, where they belong.
-
-*Amend:* `spec-video-pipeline.md` Â§12.5 (replace the size table with Axis 2 and a pointer here);
-`spec-core.md` Â§8.5 (classes Aâ€“F on total pixels â†’ Aâ€“E on short edge) and Â§17.6 test 2 (fix the two
-shifted class letters); `FEATURES.md` F-STR-06 (add the class letters, the JPEG-cadence sub-table,
-and a pointer to Axis 2).
-
-#### R-22 â€” decode budget: **24 DU** Apple silicon, **10 DU** Intel; `DecodeBudget` is in `VigilVideo` **[SEMANTIC]**
-
-*Said:* `spec-video-pipeline.md` Â§12 â†’ "seed **20 DU** / 24 sessions on base M1, runtime-calibrated",
-`DecodeBudget` is a `@globalActor` in `VigilVideo` and the single admission authority.
-`FEATURES.md` F-DEC-06 â†’ "Total budget: **24 DU** on Apple silicon, **10 DU** on Intel, detected at
-launch via `sysctlbyname("hw.optional.arm64")` plus core count; user-overridable in Settings".
-
-*Ruling:* the numbers are **24 DU on Apple silicon / 10 DU on Intel**, user-overridable, with a hard
-concurrent-session cap of **24** `VTDecompressionSession`s regardless of DU. Runtime calibration may
-*lower* the seed after measuring, never raise it above the seed. 1 DU = 1080p30;
-`cost = ceil((width Ã— height Ã— fps) / (1920 Ã— 1080 Ã— 30) Ã— 4) / 4` (0.25 DU granularity). Ownership
-is unchanged: `DecodeBudget` is a `@globalActor actor` in `VigilVideo`, the single admission
-authority; `StreamCoordinator` supplies priority, consumes demotions, and keeps **no** budget of its
-own. `VigilCore` reaches it only through `protocol DecodeAdmitting` (Â§4.9), which is what makes
-`StreamCoordinator` testable without VideoToolbox.
-
-*Why:* `FEATURES.md` numbers are release gates with an Intel path and a Settings control behind them;
-`spec-video-pipeline.md`'s 20 was a hand-tuned seed for one machine. Keeping the session cap at 24
-preserves the real constraint `spec-video-pipeline.md` was protecting (VideoToolbox stops creating
-sessions long before the DU budget is exhausted on small streams).
-
-Priority order, exactly as `FEATURES.md` F-DEC-06 (ties broken by ascending `orderIndex`):
-`focused > visible-in-main-window > wall > PiP > recording (never demoted, never occlusion-paused) >
-offscreen/prewarm > sidebar thumbnail (JPEG poll, 0 DU)`.
-
-*Amend:* `spec-video-pipeline.md` Â§12.
-
-### 2.3 Ownership of behaviour
-
-#### R-23 â€” `VigilISAPI.HikvisionURL` is the single RTSP path builder, and it must expose a **ladder** **[SEMANTIC]**
-
-*Said:* `spec-discovery.md` Â§12 claims the vendor path table as reusable; `spec-isapi.md` Â§12.4
-declares `HikvisionURL` "the single RTSP path builder"; `spec-rtsp.md` Â§10 contains the authoritative
-per-firmware URL table.
-
-*Ruling:* `HikvisionURL` in `VigilISAPI` is the **only** implementation. `spec-rtsp.md` Â§10's table is
-documentation of the wire formats, not a second implementation. `VigilDiscovery` keeps only the coarse
-vendor â†’ first-guess-path map it needs for *fingerprinting* and must never be used to build a stream
-URL â€” enforced by the missing `VigilDiscovery â†’ VigilISAPI` edge.
-
-Because R1.2 requires a **probe ladder**, `HikvisionURL` must expose candidates, not one path:
-
-```swift
-public static func candidates(channel: ChannelID, quality: StreamQuality) -> [RTSPPathCandidate]
-```
-
-in exactly the R1.2 order (`/Streaming/Channels/{ch}0{q}`, `/Streaming/Channels/{ch}`,
-`/Streaming/tracks/{ch}01`, `/h264/ch{ch}/{main|sub}/av_stream`, `/mpeg4/ch{ch}/sub/av_stream`,
-then the ONVIF `GetStreamUri` marker). `HikvisionURL` returns **path strings**;
-`VigilCore` composes them into an `RTSPURL`, because `VigilRTSP` has no edge to `VigilISAPI` and must
-not gain one. The winning template is persisted on the `Camera` record so the ladder runs at most
-once per device, ever.
-
-*Amend:* `spec-discovery.md` Â§12; `spec-rtsp.md` Â§10 (mark the table informative);
-`spec-isapi.md` Â§12.4 (add `candidates`).
-
-#### R-24 â€” the keyframe-request chain is fixed, and has no shortcut **[BUILD]**
-
-*Said:* `spec-rtp.md` Â§7 â†’ `VigilISAPI` must expose `requestKeyFrame(channelID:)`, and it is the
-primary response to a detected gap. `spec-video-pipeline.md` Â§12 â†’ `VigilCore` owns the wire call and
-`VigilVideo` only asks via an injected closure.
-
-*Ruling:* they compose; the chain is normative and has exactly these links:
-
-```
-VigilRTP  emits DepacketizerEvent.keyframeNeeded(reason:)      â”€â”
-VigilVideo emits DecodeEvent.keyframeNeeded(reason:)           â”€â”¤
-                                                                â”œâ”€â–¶ StreamController (VigilCore)
-                                                                â”‚      â”œâ”€â–¶ ISAPIDeviceSession.requestKeyFrame(channel:)   [primary]
-                                                                â”‚      â””â”€â–¶ RTSPCommand.setParameter("keyFrameRequest")     [fallback]
-VigilRender never participates.                                â”€â”˜
-```
-
-`VigilRTP â†’ VigilISAPI` and `VigilVideo â†’ VigilISAPI` are **forbidden edges**; wiring one is a
-review-blocking defect even though it would compile through `VigilCore`'s dependency list. Rate limit:
-at most one keyframe request per camera per **2 s**, and at most 5 in any 30 s, then stop asking and
-escalate to a reconnect â€” a keyframe-request storm is how you make an NVR unresponsive.
-
-*Amend:* `spec-video-pipeline.md` Â§12 (name the chain); `spec-rtp.md` Â§7 (state that `VigilRTP` only
-*emits*).
-
-#### R-25 â€” auth lockout: **2** credentialed 401s per device is terminal, on one shared counter **[SEMANTIC, safety]**
-
-*Said:* `ARCHITECTURE.md` Â§7.5 â†’ max **2** authenticated attempts, one shared per-device counter
-across RTSP and ISAPI. `spec-rtsp.md` Â§14.2 â†’ `RTSPSessionConfig.maxAuthAttemptsPerRequest = 4`.
-`spec-isapi.md` Â§4.7 â†’ hard-block after **2** consecutive failures per (host, username), absolute
-across all lanes. `spec-core.md` â†’ terminal after two fresh-nonce 401s, with at most **3** credential
-probes per host+account per 10 minutes.
-
-*Ruling:*
-
-1. A `401` whose `WWW-Authenticate` nonce differs from the one we used, or which carries
-   `stale=true`, is **not** a failed login. Retry immediately, once. It does not count.
-2. A `401` answering a request that already carried a plausible `Authorization` header counts as one
-   attempt. The **second** such `401` â‡’ terminal `authRejected` / `authenticationFailed`. No retry on
-   any schedule, ever, until the user supplies a new credential.
-3. `maxAuthAttemptsPerRequest` is **2**, not 4.
-4. **One counter per device**, held by `StreamCoordinator`, shared by `StreamController` and every
-   `ISAPIDeviceSession` lane, so RTSP and ISAPI cannot each burn attempts independently.
-5. `GET /ISAPI/Security/userCheck` is the cheap pre-flight probe before any reconnect on a camera
-   whose credentials were just edited, because it reports lockout state and remaining attempts. It is
-   rate-limited to **3 probes per (host, account) per 10 minutes**.
-6. Auth failure **never** auto-retries and always prompts. `RetryDisposition.retryAfterUserAction`.
-
-*Why:* Hikvision firmware locks an account for 30 minutes after ~5 consecutive failed logins
-(`illegalLoginLock`), including the camera's own web UI. A 4-attempt budget on two independent
-counters is 8 attempts, which locks the user out of their own camera. That is the single worst
-possible failure of this app, and it is a two-line fix.
-
-*Amend:* `spec-rtsp.md` Â§14.2 and Â§6.7 (4 â†’ 2).
-
-#### R-26 â€” `VigilRTSP` emits `RTSPTrackTiming`; `VigilRTP` owns all timestamp maths **[SEMANTIC]**
-
-*Said:* `spec-rtsp.md` Â§9/Â§19 â†’ `VigilRTSP` never builds a `MediaTimestamp`; it emits
-`RTSPTrackTiming` (raw `seq`, `rtptime`, `clockRate`, `absoluteStart`, `scale`,
-`isRateControlDisabled`, `playResponseInstant`). `spec-rtp.md` Â§11 â†’ owns the unwrapper, presentation
-clock and PLL.
-
-*Ruling:* adopted as stated. `VigilRTSP` performs **no** modular arithmetic on RTP timestamps and
-never compares `rtptime` across tracks. `VigilRTP` pre-unwraps the 32-bit wraparound before building
-any `MediaTimestamp`, so `VigilVideo` never sees a wrap. The presentation clock (min-filter + PLL) is
-**not** used to pace live output â€” live pacing is `AVSampleBufferDisplayLayer` +
-`DisplayImmediately` with no timebase. It is used for the latency estimate, for A/V offset reporting,
-and for recorded playback.
-
-`RTSPTrackTiming.playResponseInstant` is a `MediaInstant` per R-07.
-
-#### R-27 â€” every `AsyncStream` is a factory over one bounded broadcaster **[BUILD]**
-
-*Said:* `spec-core.md` â†’ every `AsyncStream` accessor is a factory over a shared bounded broadcaster,
-never `.unbounded`. `spec-video-pipeline.md` â†’ `AsyncStream.Continuation` is the only sanctioned
-bridge out of C callbacks. `ARCHITECTURE.md` Â§14.10 â†’ every `AsyncStream` documents its buffering
-policy at the creation site.
-
-*Ruling:* all three, combined and made mechanical:
-
-* A property of the form `var events: AsyncStream<E>` is **forbidden** â€” a stored stream has exactly
-  one consumer and the second caller silently gets nothing. Declare
-  `func eventStream() -> AsyncStream<E>` (or `makeEventStream()`), which registers a new consumer on
-  an internal bounded broadcaster and returns a fresh stream. `onTermination` deregisters.
-* `.bufferingPolicy` is **always** explicit. `.unbounded` is forbidden in `Sources/`.
-  Standing capacities: RTP packets 512 (evict oldest, mark gap); `EncodedFrameQueue` 8 frames **or**
-  1500 ms of PTS span, drop-to-keyframe; decoded frames `.bufferingNewest(3)`; ISAPI alert-stream
-  events `.bufferingNewest(256)`; ISAPI byte streams `.bufferingNewest(64)`; recorded-playback frames
-  32 with **real** backpressure (the one place we apply it, because a file can be read at the
-  consumer's pace).
-* Every drop is counted into `StreamStatistics` and surfaced. A drop that no counter records is a bug.
-
-#### R-27a â€” `DeviceQuirks` is the only firmware-workaround channel **[SEMANTIC]**
-
-*Said:* `spec-isapi.md` Â§19 â†’ `DeviceQuirks`, a `Codable` value persisted on the camera record,
-consulted in exactly four places. `spec-core.md` â†’ `DeviceQuirk` is the single sanctioned
-firmware-workaround channel.
-
-*Ruling:* one type, plural name: **`DeviceQuirks`** (`spec-isapi.md` Â§19's struct of `Bool`/`Int?`
-flags, `schemaVersion` included). There is no `DeviceQuirk` singular. It is declared in
-`VigilProtocols` â€” not `VigilISAPI` â€” because `Camera` (a `Codable` model in `VigilCore`) stores it
-and `VigilUI` displays it. It is consulted in exactly **four** places and nowhere else:
-the path builder, the body builder, the parser configuration, and the request gate. A firmware
-workaround that lives anywhere else â€” an `if firmware.hasPrefix("V5.4")` in a decoder, a special case
-in a view â€” is a review-blocking defect.
-
-*Amend:* `spec-isapi.md` Â§19 (declaration moves to `VigilProtocols`); `spec-core.md` (`DeviceQuirk` â†’
-`DeviceQuirks`).
-
-#### R-28 â€” one `AlertStreamMonitor` per device, never per channel **[SEMANTIC]**
-
-*Ruling:* adopted from `spec-isapi.md` Â§14 without change, and restated because it is easy to get
-wrong when the UI is per-channel: exactly one `AlertStreamMonitor` per device, owned and memoized by
-`ISAPIDeviceSession`, referenced (not created) by `VigilCore.EventCenter`. Heartbeat parts are
-suppressed at the parser. A `403` on `/ISAPI/Event/notification/alertStream` maps to
-`.unsupported` with **no synthetic polling fallback** â€” a fake event stream is worse than none. A
-second `401` â‡’ `.authFailed`, stop permanently, notify `VigilCore`; `VigilCore` calls `start()` again
-only on network return or a credential change.
-
-#### R-29 â€” playback timeline comes only from `POST /ISAPI/ContentMgmt/search` **[SEMANTIC]**
-
-*Ruling:* adopted from `spec-isapi.md` Â§15. One `searchID` across all pages; the real
-`searchResultPostion` misspelling on the wire; paginate while
-`responseStatusStrip == "MORE"`. No other endpoint may paint the timeline.
-`PlaybackLocator` rewrites scheme/host/port and keeps **path + query verbatim** â€” Hikvision playback
-URIs contain query forms that no URL library round-trips safely, which is also why `RTSPURL` is
-hand-written rather than `URLComponents`-based.
-
-#### R-30 â€” configuration PUTs are read-modify-write, then re-GET **[SEMANTIC]**
-
-*Ruling:* adopted from `spec-isapi.md` Â§4/Â§12/Â§17. Every configuration `PUT` sends the **full**
-element, built from a fresh `GET` of that element, echoing the device's `version` and `xmlns`
-verbatim; then re-`GET`s and publishes the device's **clamped** values. The UI shows what the device
-accepted, never what we asked for. Wire units, restated because every one of them has been got wrong
-in the field: `maxFrameRate` = fps Ã— 100; `keyFrameInterval` = **milliseconds**; `GovLength` =
-**frames**; storage capacity = **decimal MB**.
-
-#### R-31 â€” discovery never sends credentials **[SEMANTIC, safety]**
-
-*Ruling:* adopted from `spec-discovery.md` Â§1 as an absolute rule, not behind a flag, not behind a
-preference. Hikvision locks accounts after ~5 failed logins, and a subnet sweep touches every host.
-Enforced mechanically: the injected transport protocols have no credential parameter anywhere in
-their signatures, and `VigilDiscoveryTests` contains a mock whose `send` fails the suite if the
-payload contains a credential-shaped field. `VigilDiscovery` has **no** edge to `VigilRTSP` and
-carries its own lenient `StartLineHeaderScanner` for the HTTP-banner fingerprint.
-
-#### R-32 â€” the pure layer is isolation-free and time-free **[BUILD]**
-
-*Ruling:* restating `ARCHITECTURE.md` Â§5.1 and `IMPL_RULES.md` because it is the rule most likely to
-be broken under deadline. In `VigilProtocols`, `VigilBitstream`, `VigilRTSP`, `VigilRTP`,
-`VigilISAPI`, `VigilDiscovery` and `VigilTestKit`:
-
-* **no `actor`**, **no `@MainActor`**, **no `Task`**, **no `async` function** except where a protocol
-  the module *declares* is inherently asynchronous (`HTTPTransporting`, `MonotonicClock.sleep`), and
-  the module never *calls* it â€” actors in `VigilTransport`/`VigilCore` do.
-* **Exception, granted explicitly:** `VigilISAPI` declares `actor ISAPIClient`, `actor DigestStore`,
-  `actor RequestGate`, `actor ISAPIDeviceSession`, `actor PTZController`, `actor AlertStreamMonitor`
-  and `actor TwoWayAudioSession`. This is deliberate and is the one pure module that is also a
-  *client*: `URLSession` is available in Linux Foundation, so ISAPI is genuinely asynchronous and
-  genuinely Linux-testable, and pushing its concurrency into `VigilCore` would mean re-implementing
-  the whole client there. These actors hold only `Sendable` state and never touch a platform
-  framework. No other pure module may declare an actor.
-* **no `Date()`, `Date.now`, `ContinuousClock.now`, `DispatchTime.now()`, `Thread.sleep`,
-  `Task.sleep`, `SystemRandomNumberGenerator`.** Time and randomness are parameters. Every pure state
-  machine takes `now: MediaInstant` as an argument to `step`/`ingest`/`tick`, so a failing CI run
-  prints a seed and re-running with that seed reproduces the failure byte for byte.
-* Parsers and state machines are `struct`s with `mutating` methods, owned by an actor elsewhere. They
-  are `Sendable` but must never be *shared*.
-
-#### R-33 â€” exactly two `@unchecked Sendable` types repo-wide **[BUILD]**
-
-*Ruling:* `DecodeSinkBox` (`VigilVideo`, the VideoToolbox callback bridge) and `VideoFrame`
-(`VigilVideo`, wraps a `CVPixelBuffer`). Both carry the justification comment shape in Â§7.4. A third
-requires an amendment to this section in the same commit, with a written justification.
-`spec-isapi.md` Â§4.6's `final class URLSessionTransport: â€¦ @unchecked Sendable` is **not** a third:
-rewrite it as an `actor` holding the delegate state, or as a `final class` whose mutable state lives
-behind a single `OSAllocatedUnfairLock`-guarded struct â€” and on Linux, where `OSAllocatedUnfairLock`
-does not exist, behind `NSLock` in a `#if canImport(Darwin)` pair. `spec-rtp.md` Â§2.2's
-`ManualClock` as `final class â€¦ @unchecked Sendable` is allowed because it lives in `VigilTestKit`,
-which ships to no product the app links; Â§7.4's cap counts `Sources/` outside `VigilTestKit`.
-
-### 2.4 Design, UX and platform
-
-#### R-34 â€” structural dimensions: `UX.md`'s numbers win **[COSMETIC]** (`OPEN-CONFLICTS.md` C1)
-
-*Ruling:* sidebar **264** default / min **208** / max **380**; inspector **320** default / min **288**
-/ max **440**, per `UX.md` Â§2.2, because they were derived from the content that has to fit (44 pt
-camera rows with thumbnail and sparkline; inspector key/value rows with a 92 pt reserved timecode
-column) rather than from grid arithmetic. `DESIGN.md` Â§5.1 is amended so `VTheme` remains the single
-source of tokens. **No view may contain either literal** â€” both come from `VTheme.Metrics`.
-
-*Amend:* `DESIGN.md` Â§5.1.
-
-#### R-35 â€” tile gutter **2 pt**, stage inset **8 pt**: `DESIGN.md` wins **[COSMETIC]** (C2)
-
-*Ruling:* `DESIGN.md` Â§5.1/Â§3.6. The 2 pt figure carries an argument â€” at that width the `#0B0C0F`
-canvas reads as a seam between frames without a stroke, and the 3.3 L\* step is deliberately too
-small to read as a border. `UX.md`'s 12Ã—12 integer unit grid keeps its cell arithmetic with the gap
-value substituted. `LayoutCell â†’ CGRect` takes the gutter from `VTheme`, never a literal.
-
-*Amend:* `UX.md` Â§5.1.
-
-#### R-36 â€” no gradient scrim over video: `DESIGN.md` wins **[SEMANTIC, visual]** (C3)
-
-*Ruling:* `DESIGN.md` P1/Â§2.3. Hover chrome uses `scrim.base` (black Î± 0.62) **inside the chip or
-toolbar shape only** â€” never a full-tile gradient band. The single permitted full-tile scrim is the
-offline/degraded state at Î± 0.82. There is **no `NSVisualEffectView` over video**, ever: the scrim
-ladder is solid Î± 0.45 / 0.62 / 0.82, and materials are for the sidebar, inspector, toolbar and
-detached overlays only. Every video well is true black (`#000000`), and tiles are separated by the
-2 pt canvas gutter rather than a border.
-
-*Why:* it is the design authority, the rule is argued from the product thesis ("the frame is
-sacred"), and it is the better result â€” a gradient band across the top of every tile is precisely the
-cheap-NVR look the product exists to avoid. `design/mockups/01-main-window.html` already follows this
-rule, so the intended result is visible.
-
-*Amend:* `UX.md` Â§5.3 (28 pt top / 32 pt bottom gradient bars â†’ chip-local scrims).
-
-#### R-37 â€” 44 pt sidebar rows are legal: control heights and row heights are different tokens **[COSMETIC]** (C8)
-
-*Ruling:* `DESIGN.md` Â§5.5's "five control heights, no others" (20/24/28/32/40, default 28) governs
-**controls** â€” buttons, fields, pickers, segmented controls. List and table **rows** are a separate
-token group, `VTheme.Metrics.Row`, with `camera = 44`, `event = 36`, `channel = 32`, `settings = 28`.
-A 44 pt camera row with a 30 pt thumbnail is correct and a reviewer must not flag it. Both groups
-remain multiples of 4.
-
-*Amend:* `DESIGN.md` Â§5.5 (add the row group).
-
-#### R-38 â€” SwiftPM cannot compile `.metal`; the shipping path is runtime compilation **[BUILD]**
-
-*Said:* `Package.swift` declares `resources: [.process("Shaders")]` for `VigilRender`;
-`ARCHITECTURE.md` Â§12.1 step 8 says the resource bundles "carry `Assets.car`, `default.metallib` and
-the `.lproj` folders"; `spec-render.md` Â§4 says SwiftPM has no `.metal` support so shaders compile at
-runtime from an embedded Swift string with an `MTLBinaryArchive` cache.
-
-*Ruling:* `spec-render.md` is right and `ARCHITECTURE.md` Â§12.1 step 8 is wrong: SwiftPM does not
-invoke `metal`/`metallib`, so **no `default.metallib` is ever produced by `swift build`**, and an app
-that expects one in its bundle fails to render. The shipping path is:
-
-1. `Sources/VigilRender/Shaders/*.metal` are the reviewable **source of truth**, declared as
-   `.process("Shaders")` resources so they land in the bundle for inspection and for the optional
-   offline compile.
-2. `Sources/VigilRender/Metal/ShaderSource.swift` holds the same text as a `static let` Swift string
-   constant. `MetalContext` compiles it at first use with
-   `device.makeLibrary(source:options:)`, and caches the result in an `MTLBinaryArchive` under
-   `~/Library/Caches/com.vigil.app/shaders/<sha256-of-source>.metallib`.
-3. `Scripts/gen-shader-source.swift` regenerates `ShaderSource.swift` from the `.metal` files, and
-   `VigilRenderTests` asserts the two are byte-identical. Editing one without the other fails CI.
-4. If the source fails to compile, `RenderError.pipelineCompileFailed(_:)` is fatal for the Metal
-   path and the tile falls back to `AVSampleBufferDisplayLayer` (Â§4.10), visibly and with a log at
-   `error`. It never shows black.
-
-*Amend:* `ARCHITECTURE.md` Â§12.1 step 8 (drop `default.metallib`); `Scripts/build-app.sh` step 8
-copies `Vigil_VigilUI.bundle` and `Vigil_VigilRender.bundle` for `Assets.car`, the `.lproj` folders
-and the `.metal` sources only.
-
-#### R-39 â€” `Info.plist` needs the two drag-and-drop UTIs and `NSBonjourServices` **[BUILD]**
-
-*Said:* `spec-render.md` Â§19 â†’ "the architecture doc must add `UTExportedTypeDeclarations` for
-`com.vigil.tile-assignment` and `com.vigil.camera-ref`, or drag-and-drop silently fails".
-`spec-discovery.md` Â§9 â†’ `NSLocalNetworkUsageDescription`, `NSBonjourServices`,
-`NSAllowsLocalNetworking`, plus the `com.apple.security.network.server` and
-`com.apple.developer.networking.multicast` entitlements.
-
-*Ruling:* all adopted. `UTExportedTypeDeclarations` gains two entries beyond `com.vigil.config`:
-
-| Identifier | Conforms to | Used for |
-|---|---|---|
-| `com.vigil.tile-assignment` | `public.data` | dragging a camera onto a layout cell |
-| `com.vigil.camera-ref` | `public.data` | dragging a camera between sidebar, stage and wall |
-
-`NSBonjourServices` = `["_http._tcp", "_rtsp._tcp", "_onvif._tcp"]`. `NSAllowsLocalNetworking` and
-`NSLocalNetworkUsageDescription` are already specified in `ARCHITECTURE.md` Â§12.3 and stay.
-`com.apple.security.network.server` is already in `Vigil.entitlements` (needed to bind UDP 37020 /
-3702 in the sandbox) and stays. `com.apple.developer.networking.multicast` is a **managed**
-entitlement requiring an Apple-issued provisioning profile; the app must run without it and degrade
-to a unicast sweep, detected at runtime. There is **one binary** and **no compile-time multicast
-flag**.
-
-*Amend:* `ARCHITECTURE.md` Â§12.3 (`UTExportedTypeDeclarations`, `NSBonjourServices`).
-
-#### R-40 â€” `VigilUI` uses explicit `@MainActor`, not `.defaultIsolation` **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§5.3 proposes
-`swiftSettings: apple + [.defaultIsolation(MainActor.self)]` on the `VigilUI` target, with explicit
-`@MainActor` as a fallback "if the toolchain does not yet accept it".
-
-*Ruling:* the fallback is the plan. `SwiftSetting.defaultIsolation` does not exist in Swift 6.1.2, and
-the real, green `Package.swift` does not use it. **Every top-level type in `VigilUI` carries an
-explicit `@MainActor`**, and `Scripts/lint.sh` fails on any un-annotated top-level type in
-`Sources/VigilUI/`. Do not rely on isolation inference from a `View` conformance â€” it does not cover
-the view model, the coordinator or the `@Observable` class beside it.
-
-*Amend:* `ARCHITECTURE.md` Â§5.3.
-
-#### R-41 â€” `Vigil` has no `@main`; `main.swift` calls `.main()` **[BUILD]**
-
-*Ruling:* adopted from `ARCHITECTURE.md` Â§4.2 Rule 3, restated because it is the one file whose shape
-is not negotiable. `Sources/Vigil/main.swift` is a top-level-code file; `VigilApp` is a `struct App`
-**without** `@main`. On Linux, `main.swift` writes a message to stderr and exits `EXIT_FAILURE`, which
-is what keeps a full `swift build` green on Linux.
-
-#### R-42 â€” `package` is the default cross-module access level **[COSMETIC]**
-
-*Ruling:* adopted from `ARCHITECTURE.md` Â§14.4 and `IMPL_RULES.md`, sharpened: Â§4's declarations are
-written `public` where they are part of a module's documented contract (which is what Â§4 *is*) and
-`package` where they exist only so another Vigil target can reach them. When in doubt inside a module,
-start at `private`. `open` is forbidden. The `VigilProtocols` types in Â§3 are all `public`, because
-`VigilTestKit`, the app target and the test targets all touch them.
-
-#### R-43 â€” `ExistentialAny` is on: write `any P` everywhere **[BUILD]**
-
-*Ruling:* `Package.swift` enables the `ExistentialAny` upcoming feature package-wide. Every
-existential must be spelled `any P` â€” `logger: any LoggerProtocol`, `clock: any MonotonicClock`,
-`[any VigilFailure]`, `(any Error)?`. A bare protocol name in type position is a **compile error**,
-not a warning. This is deliberate: existential boxing must be visible at call sites on the frame path.
-
-#### R-44 â€” where MJPEG lives **[SEMANTIC]**
-
-*Ruling:* MJPEG appears in three unrelated forms and they must not be conflated.
-(a) **ISAPI JPEG poll** (class D, sidebar, offscreen): `GET /ISAPI/Streaming/channels/{id}/picture`,
-decoded with `CGImageSourceCreateWithData` in `VigilVideo`, no RTSP session, 0 DU.
-(b) **MJPEG over RTP** (`F-DEC-05`, budget cameras): explicitly a **non-goal** for `VigilRTP`
-(`spec-rtp.md` Â§17 lists RTP-JPEG as excluded). A camera advertising only `JPEG/90000` in its SDP
-resolves to `StreamDoctor` diagnosis "Codec unsupported", which names the codec and offers to switch
-the camera's encoding over ISAPI â€” exactly the R1.5 behaviour. Do not implement RFC 2435.
-(c) **MJPEG over HTTP** (`multipart/x-mixed-replace`): reuses `AlertStreamMonitor`'s multipart parser
-in `VigilISAPI` and feeds `VigilVideo`'s JPEG decoder. This is the universal fallback.
-
-*Amend:* `FEATURES.md` F-DEC-05 (split the three forms; drop RTP-JPEG to a non-goal).
-
-#### R-45 â€” glass-to-glass and launch numbers: `FEATURES.md` Â§19 is the gate **[COSMETIC]**
-
-*Said:* `BRIEF.md` says "under 250 ms glass-to-glass on LAN" and "16 Ã— 1080p under about 35 % CPU";
-`FEATURES.md` Â§19 gives a per-configuration table (L4 UDP-Low p50 â‰¤ 95 / p95 â‰¤ 140; L5 UDP-Balanced
-p50 â‰¤ 120 / p95 â‰¤ 180; L6 TCP-Balanced p50 â‰¤ 160 / p95 â‰¤ 250; L2 launch â†’ first frame p50 â‰¤ 900 ms /
-p95 â‰¤ 1400 ms; R5 16 Ã— 1080p â‰¤ 35 % CPU / â‰¤ 18 % GPU / â‰¤ 900 MB; U1 UI p99 â‰¤ 7 ms at 120 Hz; U6 no
-main-actor operation > 8 ms; R13 hard ceiling 1.5 GB).
-
-*Ruling:* `FEATURES.md` Â§19 is the release gate and is consistent with the brief (TCP-Balanced p95 =
-250 ms is the brief's number). The brief's figures are the headline; Â§19's are the contract.
-`Scripts/bench.sh` asserts them from the fixed signpost names, which are **permanent API, not debug
-scaffolding**: `launch`, `launchToFirstFrame`, `describe`, `setup`, `firstRTP`, `firstKeyframe`,
-`decode`, `render`, `snapshot`, `recordStart`, `paletteOpen`, `timelineDraw`.
-
-#### R-46 â€” `EventNotification` vs `EventNotificationAlert` **[BUILD]**
-
-*Said:* `spec-isapi.md` Â§14.3 and `ARCHITECTURE.md` Â§2.4 say `EventNotificationAlert`; the same
-document's Appendix B says `EventNotification`.
-
-*Ruling:* **`EventNotificationAlert`** â€” it matches the wire element name
-`<EventNotificationAlert>`, which is the whole value of naming it after the protocol.
-
-*Amend:* `spec-isapi.md` Appendix B.
-
-#### R-47 â€” R1 is an API requirement, not a UI flourish **[SEMANTIC]**
-
-*Ruling:* `REQUIREMENTS-CUSTOMER.md` R1 forces four things into the API surface, and each is named
-here so nobody treats it as optional:
-
-1. **Probe ladder** â€” `HikvisionURL.candidates(channel:quality:)` (R-23) plus
-   `RTSPCommand.describeOnly` (already in `spec-rtsp.md` Â§14.4) plus a `StreamProbe` in `VigilCore`
-   that runs candidates **concurrently, bounded to 3 in flight**, treats `200` + parseable SDP with a
-   supported video codec as a win, `404`/`455` as "next", and **`401` as "this path is correct, apply
-   credentials"** â€” never as "advance the candidate". The winner is persisted on `Camera`.
-2. **Channel enumeration** â€” `ISAPIDeviceSession.channels()` over
-   `/ISAPI/ContentMgmt/InputProxy/channels` and `/ISAPI/System/Video/inputs/channels`, every populated
-   channel offered pre-checked; if ISAPI is unavailable, probe channels 1â€¦16 with a short-timeout
-   `DESCRIBE`.
-3. **Transport self-healing** â€” default TCP interleaved; if UDP is selected and no RTP arrives within
-   **5 s**, fall back to TCP automatically and persist that per device. The user is never asked about
-   transport. (`spec-rtsp.md` Â§14.2's `udpFirstPacketTimeout` is 3 s for the *machine's* timer; the
-   5 s figure is the `StreamController` watchdog that triggers the *fallback*. Both exist; they are
-   not the same timer.)
-4. **Nine named diagnoses** â€” `StreamDoctor` must resolve every failure to one of R1.5's nine
-   diagnoses, each with a cause sentence and a concrete action. A raw error code or an empty tile is a
-   defect. `VigilError.diagnosticCode` is for the log and the "copy details" button, never for the
-   user-facing sentence.
-
-#### R-48 â€” no transcoding, no cloud, LAN-only egress, zero telemetry **[SEMANTIC]**
-
-*Ruling:* adopted from `FEATURES.md` Â§18/Â§20 as decisions, not aspirations.
-Recording and export are **passthrough muxing only** â€” `AVAssetWriter` with
-`AVAssetWriterInput(mediaType:outputSettings: nil)` and `append(_ sampleBuffer:)`; there is no
-encoder in the app and no code path that could add one. All egress passes one **pure**
-`HostPolicy.classify(_:) -> HostClass` gate in `VigilProtocols`; `.publicInternet` is refused before a
-socket is opened, and the refusal is testable on Linux. There is no analytics SDK, no crash reporter,
-no usage ping, no remote config, no font or asset CDN, and no automatic update check in 1.0.
-
-### 2.5 Conflicts found while writing this contract
-
-These were not in `OPEN-CONFLICTS.md`. Each would have cost an implementation agent an hour or
-produced code that does not link.
-
-#### R-49 â€” decode admission: `DecodeAdmitting` (protocol, `VigilProtocols`) + `DecodeBudget` (actor, `VigilVideo`) **[BUILD]**
-
-*Said:* `spec-core.md` Â§8.4 declares `protocol DecodeAdmitting { currentBudget(); maxConcurrentSessions();
-acquire(cost: Double, priority: StreamPriority) async throws -> DecodeLease }` with cost
-`megapixels Ã— fps Ã— codecWeight` and a base-M1 budget of **900 units / 20 sessions**.
-`spec-video-pipeline.md` Â§12.4 declares `@globalActor public actor DecodeBudget` with
-`admit(Request) -> AdmissionResult`, `update`, `release`, `reserveTransient`, a `TilePriority` enum
-and DU costs normalised to 1080p30, base-M1 **20 DU / 24 sessions**. Two authorities, two cost
-units, two priority enums, two budget numbers, incompatible method names.
-
-*Ruling:*
-
-* **`protocol DecodeAdmitting`, `DecodeLease`, `DecodeCost`, `StreamPriority` and `TilePolicy` are
-  declared in `VigilProtocols`** â€” pure, Foundation-only, Linux-testable. This is what lets
-  `StreamCoordinator.makePlan` and the class Aâ€“E table be unit-tested without VideoToolbox, which
-  both specs asked for and neither could deliver from its own module.
-* **`DecodeBudget` is the single implementation**, a `@globalActor actor` in `VigilVideo` conforming
-  to `DecodeAdmitting`. It is the only authority that may admit a session. `StreamCoordinator`
-  computes priority, holds leases, and keeps **no** budget of its own.
-* **The unit is the decode unit (DU)**, per R-22. `megapixels Ã— fps Ã— codecWeight` is deleted; it
-  produced numbers like "829 units" that no human can sanity-check.
-* `TilePriority` is deleted in favour of `StreamPriority` (`spec-core.md` Â§7.1's enum). Note that
-  `TilePriority` as written **does not compile** â€” `visibleLarge` and `recording` both have raw
-  value `4`.
-* `DecodeBudget.admit` may return `.grantedDegraded(lease, DecodeMode)`; `StreamCoordinator` must
-  handle it and surface the demotion.
-
-*Amend:* `spec-core.md` Â§8.4 (cost unit, declaration site); `spec-video-pipeline.md` Â§12
-(`TilePriority` â†’ `StreamPriority`, conform to `DecodeAdmitting`, fix the raw-value collision).
-
-#### R-50 â€” one format type: `VideoFormatInfo`. `VideoFormat` is deleted **[BUILD]**
-
-*Said:* `spec-bitstream.md` Â§22 declares `VideoFormatInfo` (27 fields, flat) in `VigilBitstream`.
-`spec-video-pipeline.md` Â§2.2 declares `VideoFormat` (16 fields, flat, `Int32`-typed) in
-`VigilVideo`. `spec-render.md` Â§3.1 declares `FrameGeometry` + `ColorInfo` + `FieldOrder` in
-`VigilProtocols`. All three describe the same coded/display/SAR/colour facts, with different field
-names and types.
-
-*Ruling:* **one type, `VideoFormatInfo`, in `VigilProtocols`**, composed of `FrameGeometry` and
-`ColorInfo` rather than restating their fields. `VigilBitstream` computes it from SPS/VPS VUI;
-`VigilVideo` consumes it and converts once in `FormatDescriptionFactory`; `VigilRender` reads
-`geometry` for its coordinate pipeline. `VigilVideo.VideoFormat` is deleted.
-`VideoFormatInfo` keeps `displayWidth`/`displayHeight`/`sarWidth`/`sarHeight`/`codedWidth`/
-`codedHeight` as **computed passthroughs** to `geometry`, so every line of `spec-bitstream.md` still
-reads correctly.
-
-*Amend:* `spec-bitstream.md` Â§22 (declaration site + composition); `spec-video-pipeline.md` Â§2.2
-(delete `VideoFormat`).
-
-#### R-51 â€” one decoded-frame type: `VideoFrame`; one `VideoSink` **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§2.4 â†’ `DecodedFrame` in `VigilVideo`. `spec-video-pipeline.md` Â§2.2 â†’
-`DecodedVideoFrame` with a `Payload` enum, and `protocol VideoSink { present(_:); willChangeFormat;
-didChangeFormat; didDropFrames; didStall; didRecover }`. `spec-render.md` Â§3.1 â†’ `VideoFrame`, and
-`protocol VideoSink { enqueue(_:); streamDidReset(); streamDidEnd(reason:) }` plus "must also offer a
-`CMSampleBuffer` overload". Three names for the frame, two incompatible protocols with **no member in
-common**.
-
-*Ruling:* **`VideoFrame`** (the consumer's name wins; `VigilRender` is the only implementer).
-`DecodedFrame` and `DecodedVideoFrame` are deleted. One `VideoSink` in `VigilVideo`, the union of
-both member sets, with `enqueue` as the frame-delivery verb (not `present`), and default no-op
-extensions on the six observability members so a minimal sink is three lines. Exact declaration in
-Â§4.9. The `Payload` enum is dropped: pixel-buffer delivery and sample-buffer delivery are two
-`enqueue` overloads, which removes a `switch` from every frame.
-
-`CMSampleBuffer` crossing `VigilVideo â†’ VigilRender` through
-`nonisolated func enqueue(_:format:generation:)` is legal and needs no box: both sides are
-`nonisolated`, the call is synchronous, and no isolation boundary is crossed, so `Sendable` is not
-required. Do not wrap it. Do not store it.
-
-*Amend:* `ARCHITECTURE.md` Â§2.4; `spec-video-pipeline.md` Â§2.2/Â§2.4; `spec-render.md` Â§3.1.
-
-#### R-52 â€” exactly **three** `@unchecked Sendable` types, enumerated **[BUILD]**
-
-*Said:* `ARCHITECTURE.md` Â§5.9 â†’ exactly two (`DecodeSinkBox`, `DecodedFrame`).
-`spec-render.md` Â§1.3 â†’ `LatestFrameBox` plus a generic `struct UncheckedSendable<T>: @unchecked Sendable`.
-`spec-video-pipeline.md` Â§2.3 â†’ `FormatBox` plus a generic `struct Unsafe<T>: @unchecked Sendable`.
-`spec-discovery.md` Â§11 â†’ `final class MulticastDatagramChannel: @unchecked Sendable`.
-`spec-isapi.md` Â§4.6 â†’ `final class URLSessionTransport: @unchecked Sendable`.
-
-*Ruling:* the count is **three**, and this is the complete list. `ARCHITECTURE.md`'s two was written
-before the render spec existed and did not foresee the latest-frame slot.
-
-| # | Type | Module | Justification that must appear as a comment |
-|---|---|---|---|
-| 1 | `DecodeSinkBox` | `VigilVideo` | Only mutable state is an `AsyncStream.Continuation` (documented thread-safe for `yield`/`finish`) and an `OSAllocatedUnfairLock`-protected counter struct. Nothing else stored. |
-| 2 | `VideoFrame` | `VigilVideo` | Wraps a `CVPixelBuffer` produced by VideoToolbox, never mutated after delivery; consumers only lock the base address for reading or wrap it via `CVMetalTextureCache`. Never handed to two writers. |
-| 3 | `LatestFrameBox` | `VigilRender` | A single `VideoFrame` slot plus a â‰¤3-deep pending array, both guarded by one `NSLock` held for < 200 ns. `NSLock`, not `OSAllocatedUnfairLock`, because `put` is called from VideoToolbox's thread and the lock must be re-entrant-safe across the C boundary; `Mutex` needs macOS 15 and the floor is 14. |
-
-##### The census as actually built
-
-The table above is the design. What is in `Sources/` today is **one** conformance, and it is not any of
-the three, so the difference is recorded here rather than left for a reader to discover by grepping:
-
-| Slot | Designed | In the tree now |
-|---|---|---|
-| 1 | `DecodeSinkBox` (`VigilVideo`) | **absent.** `DecodePipeline` holds its sink as `any VideoSink` behind the actor and yields nothing across a boundary, so no box was needed. |
-| 2 | `VideoFrame` (`VigilVideo`) | **absent.** The `AVSampleBufferDisplayLayer` path enqueues `CMSampleBuffer` directly; no `CVPixelBuffer` is ever surfaced to a consumer. The type is still owed by the Metal path. |
-| 3 | `LatestFrameBox` (`VigilRender`) | **replaced, in the same slot,** by `SampleBufferBackend` (`VigilRender`). |
-
-`SampleBufferBackend` occupies slot 3 by supervisor ruling. Its justification is the same shape as
-`LatestFrameBox`'s and is spelled out in the file: every stored property is guarded by one `NSLock`,
-held for a bounded span, because the type is written from both the main actor (layer attachment,
-geometry) and VideoToolbox's callback thread (enqueue). `NSLock` for the same reason slot 3 always
-gave â€” `Mutex` needs macOS 15 and the floor is 14.
-
-The two paths are mutually exclusive, so the count stays at one until Metal lands. When it does,
-whichever of the two is not the shipping renderer must be deleted rather than kept alongside: the cap
-is three *live* conformances, and two latest-frame slots for one tile would mean the picture has two
-owners.
-
-**Forbidden:** the generic escape hatches `Unsafe<T>` and `UncheckedSendable<T>`. A generic
-`@unchecked Sendable` box is not a justification, it is a way to stop writing one, and it makes the
-lint rule that counts these unenforceable. `FormatBox` is unnecessary â€” `CMFormatDescription` is
-confined to the `DecodePipeline` actor and never crosses. `MulticastDatagramChannel` becomes an
-`actor` (it owns one `NWConnectionGroup` and a continuation; there is nothing an actor cannot hold).
-`URLSessionTransport` becomes an `actor` holding the delegate state, with the `URLSession` delegate
-methods hopping in via `Task`.
-
-`VigilTestKit` does not count: the cap is on `Sources/` excluding `VigilTestKit`, which ships to no
-product the app links. Two conformances live there today â€” `ManualClock` and
-`RecordingLogger.Storage`, the latter a private lock-guarded box that lets a `Sendable` logger
-accumulate lines. Both are inside the exemption, and both are named here so the exemption stays a
-short list rather than an open door.
-
-*Amend:* `ARCHITECTURE.md` Â§5.9; `spec-render.md` Â§1.3; `spec-video-pipeline.md` Â§2.3;
-`spec-discovery.md` Â§11; `spec-isapi.md` Â§4.6.
-
-#### R-53 â€” `parameterSets` are attached **only when they change** **[SEMANTIC]**
-
-*Said:* `spec-rtp.md` Â§2.4 â†’ "Non-nil **only on the first frame after the set changed** (including
-the very first frame)". `spec-video-pipeline.md` Â§2.1 â†’ "present on the first frame of every GOP",
-and its `ParameterSetStore` is built to dedupe "byte-identical resends (every GOP, which is normal)".
-
-*Ruling:* **only when changed.** `VigilRTP` holds the current sets, compares bytes, and attaches only
-on a real change. `VigilVideo.ParameterSetStore` still dedupes (belt and braces, and it also sees
-sets that arrive via SDP `sprop-*`), but the wire contract is changed-only: at 16 cameras with a 1 s
-GOP, per-GOP attachment is 16 needless `[Data]` allocations per second on the frame path.
-`VigilVideo` **must** retain the last non-`nil` sets for the lifetime of the stream â€” a decoder reset
-does not entitle it to ask for them again; it emits `.keyframeNeeded(.decoderReset)` and rebuilds
-from what it holds.
-
-*Amend:* `spec-video-pipeline.md` Â§2.1.
-
-#### R-54 â€” AAC `AudioSpecificConfig` lives in `AudioFormatInfo.magicCookie`, never in `ParameterSets.sps[0]` **[SEMANTIC]**
-
-*Said:* `spec-rtp.md` Â§2.3 â†’ "For AAC this carries the AudioSpecificConfig in `sps[0]`".
-
-*Ruling:* deleted. `ParameterSets` is a **video** type (it carries `codec: VideoCodec`); smuggling an
-audio cookie through a field named `sps` is exactly the kind of thing that produces a decoder that
-works until someone adds a `precondition` on H.264 NAL types. `EncodedFrame.audioFormat:
-AudioFormatInfo?` carries `magicCookie: Data?`, which is what `AudioConverterRef` wants under
-`kAudioConverterDecompressionMagicCookie`.
-
-*Amend:* `spec-rtp.md` Â§2.3, Â§8.6.
-
-#### R-55 â€” `StreamQuality` replaces `StreamProfile.Kind` and `StreamIndex`; "auto" is `nil` **[BUILD]**
-
-*Said:* `spec-core.md` declares both `StreamQuality { main, sub, third, auto }` and
-`StreamProfile.Kind { main, sub, third }`, and uses `qualityOverride: StreamQuality?` where `nil`
-already means auto. `spec-isapi.md` declares `StreamIndex { main = 1, sub = 2, third = 3 }`.
-
-*Ruling:* one type, `StreamQuality`, in `VigilProtocols`, cases `main = 1, sub = 2, third = 3`,
-`Codable` as its lowercase string. **There is no `.auto` case** â€” "auto" is the absence of an
-override, expressed as `StreamQuality?` (which `CellAssignment.qualityOverride` already does).
-`StreamProfile.Kind` and `StreamIndex` are deleted; `StreamProfile.id` becomes `StreamQuality`.
-
-*Why:* an `.auto` case in an enum that is also used to *name a concrete stream* means every switch
-has an unreachable branch and every `streamingChannelID(for:)` needs a precondition. Optionality
-expresses "unset" without inventing a value.
-
-*Amend:* `spec-core.md` Â§3, Â§4.2, Â§4.5; `spec-isapi.md` Â§11.3.
-
-#### R-56 â€” layout geometry is the 12Ã—12 integer grid; the persisted model is `LayoutMode` + `[CellAssignment]` **[BUILD]**
-
-*Said:* `UX.md` Â§5.1 â†’ all 8 layouts are integer rectangles on a **12 Ã— 12 unit grid**, cells are
-`LayoutCell { x, y, w, h, cameraID }`, mode enum
-`{ single, grid2x2, hero1p5, grid3x3, grid4x4, hero1p7, dual2p8, custom }`.
-`spec-core.md` Â§4.5 â†’ `LayoutMode { single, grid(columns:rows:), onePlusFive, onePlusSeven,
-twoPlusEight, custom(frames: [MosaicFrame]) }`, assignments are
-`CellAssignment { cellIndex, cameraID, qualityOverride, aspectMode, isAudioSolo }`, geometry is
-`frames() -> [MosaicFrame]` in the **unit square with `Double` coordinates**.
-
-*Ruling:* take both, layered â€” they are solving different problems and each is right about its own.
-
-* **Geometry** is `UX.md`'s **12 Ã— 12 integer grid**. `LayoutMode.cells() -> [GridCell]` returns
-  `GridCell { x, y, w, h }` with all fields `Int` in `0...12`. `MosaicFrame` and its `Double`
-  unit-square coordinates are deleted. Integers because a custom mosaic must snap exactly, because
-  `0.333333` cell widths accumulate a visible seam error at 4 K, and because layout equality has to
-  be exact for `@Observable` diffing.
-* **Persistence and identity** are `spec-core.md`'s: `LayoutMode` is the parameterised enum
-  (`grid(columns:rows:)` covers 2Ã—2, 3Ã—3, 4Ã—4, 5Ã—5, 1Ã—N and NÃ—1 in one case â€” `UX.md`'s five
-  separate `gridNxN` cases do not), and assignments are `[CellAssignment]` keyed by `cellIndex`,
-  sparse, sorted.
-* Pixel geometry is computed **once**, in `VigilUI/Stage/LayoutEngine.swift`, from
-  `cells()` + `VTheme.Metrics.tileGutter` + `VTheme.Metrics.stageInset`. No view computes a cell
-  rect; `StreamCoordinator` derives tile `Resolution` from the same function so the admission table
-  and the screen never disagree.
-* `matchedGeometryEffect` is keyed **by camera** (`DESIGN.md` Â§7.7), not by cell (`UX.md` Â§5.1).
-  A layout change must never tear down a decode session, and the tile has to fly from its old cell to
-  its new one â€” which is only expressible if the identity travelling through the transition is the
-  camera.
-
-*Amend:* `UX.md` Â§5.1 (`LayoutCell` â†’ `GridCell` + `CellAssignment`; adopt the parameterised
-`LayoutMode`; key the namespace by camera); `spec-core.md` Â§4.5 (`MosaicFrame` â†’ `GridCell`,
-`frames()` â†’ `cells()`, integer units).
-
-#### R-57 â€” `Resolution` is the one size type; `PixelSize` is deleted **[BUILD]**
-
-*Said:* `spec-core.md` Â§3 declares `Resolution { width, height: Int }` and Â§8.1 separately declares
-`PixelSize { width, height: Int }` for tile backing size.
-
-*Ruling:* one type, `Resolution`, in `VigilProtocols`, used for stream dimensions, display
-dimensions and tile backing size alike. `PixelSize` is deleted. `Viewport.Tile.pixelSize:
-Resolution` keeps the field name, because the name carries the unit (backing pixels) and the doc
-comment says so.
-
-#### R-58 â€” `VideoCodec.decodeWeight` = 1.00 / 1.35 / 0.45, and the DU cost formula is fixed **[SEMANTIC]**
-
-*Said:* `spec-core.md` â†’ H.264 1.00, H.265 1.35, MJPEG 0.45, unknown 1.35.
-`spec-video-pipeline.md` Â§12.2 â†’ H.264 1.00, H.265 8-bit 1.35, H.265 Main10 1.70, MJPEG 0.40.
-
-*Ruling:* `decodeWeight` is `h264 1.00`, `h265 1.35`, `mjpeg 0.45`. The Main10 surcharge is real but
-belongs to the *bit depth*, not the codec: `DecodeCost` multiplies by an extra **1.26** when
-`geometry.bitDepth > 8`, which yields 1.70 for H.265 Main10 and also covers H.264 High10.
-
-```
-cost(DU) = ceil( (codedWidth Ã— codedHeight Ã— fps) / (1920 Ã— 1080 Ã— 30)
-                 Ã— codec.decodeWeight Ã— (bitDepth > 8 ? 1.26 : 1.0)
-                 Ã— mode.weight Ã— 4 ) / 4
-```
-
-`mode.weight`: `full 1.00`, `fpsCapped(15) 0.55`, `keyframesOnly 0.12`, `jpegPoll 0`, `paused 0`;
-`+0.05` additive when downscale-on-decode is active; `Ã—6.0` for reverse playback. Rounded up to
-0.25 DU. Note `codedWidth Ã— codedHeight`, not display size: the decoder allocates coded (1088), and
-that is what costs memory bandwidth.
-
-*Amend:* `spec-video-pipeline.md` Â§12.2; `spec-core.md` Â§8.4.
-
-#### R-59 â€” machine budget table **[SEMANTIC]**
-
-*Ruling:* `FEATURES.md`'s two named classes are exact; `spec-video-pipeline.md`'s finer classes fill
-in the rest. Detected once at launch, persisted to
-`~/Library/Application Support/Vigil/decode-budget.json`, user-overridable in
-Settings â†’ Streams â†’ "Maximum concurrent decodes".
-
-| Detection | Class | Budget DU | Max sessions |
-|---|---|---|---|
-| Apple silicon, two media engines (`Mac14,13`/`Mac14,14`/Ultra) | Max / Ultra | 48 | 32 |
-| Apple silicon, `hw.perflevel0.physicalcpu >= 6` | Pro | 32 | 28 |
-| Apple silicon, base M-series | **base** | **24** | 24 |
-| Intel, HEVC hardware probe succeeds (T2 / Kaby Lake+) | Intel + Quick Sync | **10** | 16 |
-| Intel, H.264 hardware only | Intel legacy | 6 | 8 |
-| Both probes fail (VM, stripped GPU) | software only | 3 | 4 |
-
-Runtime calibration may only **lower** the seed (`Ã—0.90` on any `decodeLateRatio > 2 %` or
-`kVTCouldNotCreateInstanceErr`, floor 2 DU / 2 sessions) and may raise back to at most the seed.
-Thermal and power multipliers are applied on top, never persisted: `.fair Ã—0.85`, `.serious Ã—0.60`,
-`.critical Ã—0.35`, Low Power Mode `Ã—0.60`, battery with `pauseOnBattery` `Ã—0.75`.
-
-#### R-60 â€” log categories: 13, from `ARCHITECTURE.md`; the other two lists map onto them **[BUILD]**
-
-*Said:* a **third** list appeared â€” `spec-core.md` Â§15 declares `LogCategory { config, credentials,
-controller, coordinator, recording, snapshot, events, health, doctor, automation, persistence }`
-(11 cases), disjoint from both `ARCHITECTURE.md`'s 13 and `FEATURES.md`'s 14.
-
-*Ruling:* R-15 stands â€” `ARCHITECTURE.md`'s 13. Mapping for the other two lists:
-
-| From `spec-core.md` / `FEATURES.md` | Canonical |
-|---|---|
-| `config`, `persistence`, `store` | `storage` |
-| `credentials`, `security` | `core` |
-| `controller`, `coordinator`, `recording`, `snapshot`, `events`, `doctor`, `automation`, `playback` | `core` |
-| `health` | `perf` |
-| `decode` | `video` |
-
-If `core` proves too coarse in practice, the fix is a `subsystem` field on `LogEvent`, **not** a
-fourth category list.
-
-*Amend:* `spec-core.md` Â§15.
-
-#### R-61 â€” `EventKind` is the one event taxonomy; `VigilEventType` is deleted **[BUILD]**
-
-*Said:* `spec-core.md` Â§4.7 declares `EventKind` (19 cases, with
-`init(isapiEventType: String)`); `spec-isapi.md` Appendix B declares `VigilEventType`.
-
-*Ruling:* `EventKind` in `VigilProtocols`, with the lenient `init(isapiEventType:)` â€” `VigilISAPI`
-parses the wire string and constructs it, `VigilCore` stores it, `VigilUI` localises it via
-`displayNameKey`. `VigilEventType` is deleted. The wire string is preserved verbatim in
-`EventRecord.rawEventType` so an unrecognised event is still diagnosable.
-
-*Amend:* `spec-isapi.md` Appendix B and Â§14.
-
-#### R-62 â€” `EventNotificationAlert` vs the alert-stream owner (see also R-46) **[COSMETIC]**
-
-*Ruling:* `VigilISAPI.EventNotificationAlert` is the **wire** type (one parsed
-`<EventNotificationAlert>` part). `VigilCore.EventRecord` is the **domain** type (deduped,
-coalesced, persisted, with a thumbnail and a clip link). They are not the same type and neither
-replaces the other. `AlertStreamMonitor` emits the former; `EventCenter` produces the latter.
-
-#### R-63 â€” `StreamKey` replaces `StreamIdentifier` **[BUILD]**
-
-*Said:* `spec-video-pipeline.md` uses `StreamIdentifier` throughout and never declares it.
-
-*Ruling:* `struct StreamKey: Hashable, Sendable, Codable { var camera: CameraID; var quality: StreamQuality }`
-in `VigilProtocols`. It is what a decode pipeline, an audio route and a budget grant are actually
-keyed by â€” a camera alone is wrong the moment a main and a sub stream are both live during a
-quality switch, which is the exact 150 ms window R-21 mandates.
-
-#### R-64 â€” one `EncodedFrame` carries audio too; `EncodedAudioFrame` does not exist **[BUILD]**
-
-*Said:* `spec-video-pipeline.md` Â§13/Â§18 takes `EncodedAudioFrame` in `submitAudio(_:)` and never
-declares it. `spec-rtp.md` has a single `EncodedFrame` with `audioFormat` and audio codec cases.
-
-*Ruling:* one `EncodedFrame`. `submitAudio(_ frame: EncodedFrame)` takes the same type;
-`frame.codec.audio != nil` is the discriminator, and `DecodePipeline` asserts it in debug.
-
-*Amend:* `spec-video-pipeline.md` Â§13, Â§18.1, Â§18.2.
-
-#### R-65 â€” `AsyncStream` **properties** in the specs are all wrong; they must be factories **[BUILD]**
-
-*Said:* `spec-video-pipeline.md` (`var events: AsyncStream<PipelineEvent>`, `var changes`,
-`var sampleTap`, `var levels`), `spec-discovery.md` (`var inbound: AsyncStream<InboundDatagram>`,
-`var paths`, `var events`, `var responses`), `spec-core.md` Â§2 (`var paths`, `var events`,
-`var responses`) all declare stored/computed `AsyncStream` **properties**.
-
-*Ruling:* R-27 applies without exception. Every one becomes a factory
-(`func events() -> AsyncStream<E>`) over a shared bounded `Broadcaster`. The single permitted
-exception is a stream with a **structurally single consumer created by the same call that made it**
-â€” `DiscoveryCoordinator.start() -> AsyncStream<DiscoveryEvent>` and
-`StreamDoctor.diagnose(camera:) -> AsyncStream<DoctorProgress>` qualify, because each call starts a
-new run. A *property* never qualifies.
-
-`spec-core.md` Â§6.9's `Broadcaster<Element>` actor is adopted verbatim as the shared implementation
-and moves to `VigilProtocols` so `VigilISAPI` and `VigilDiscovery` can use it too. Standing
-buffering policies: `ConfigStore.changes()` `.bufferingNewest(1)` + replay;
-`EventLog.changes()` `.bufferingNewest(256)`; `StreamController.events()` `.bufferingNewest(64)` +
-replay; `StreamCoordinator.plans()` `.bufferingNewest(1)` + replay;
-`HealthMonitor.samples()` `.bufferingNewest(16)`; decoded frames `.bufferingNewest(3)`;
-alert-stream events `.bufferingNewest(256)`; ISAPI byte streams `.bufferingNewest(64)`;
-discovery datagrams `.bufferingNewest(512)`.
-
-#### R-66 â€” types referenced by the specs but never declared **[BUILD]**
-
-The specs collectively reference **41** types they never declare. Every one is declared here (Â§3 or
-Â§4) or explicitly deleted. Implementation agents: if you meet a name not in this contract, it does
-not exist â€” do not invent it, raise it.
-
-| Referenced in | Name | Disposition |
-|---|---|---|
-| isapi | `HTTPHeaders`, `ISAPIChunkedUpload`, `ISAPIUploadHandle` | declared, Â§3.14 / Â§4.5 |
-| isapi | `InvalidationReason`, `PathSegment`, `DataTaskState`, `StreamTaskState` | module-internal; implementer's choice |
-| core | `PowerEventObserving`, `PasteboardWriting`, `WindowID`, `FileAttributes` | declared, Â§3.17 / Â§4.8 |
-| core | `ISAPIEndpoint`, `RTSPEndpoint` | declared, Â§3.13 |
-| core | `BudgetPressure`, `PowerConditions`, `CameraRef`, `LayoutRef`, `SettingsPane`, `DeepLinkError`, `NotificationSound`, `NotificationResponse`, `SnapshotRequest`, `RecordingEvent`, `AuthScheme`, `SuppressionReason` | declared, Â§4.8 |
-| core | `CodableRect`, `CodableColor` | deleted â€” use `GridCell` and `ColorTag`; no view type is persisted |
-| core / video | `DecodeSinkOptions`, `RTSPTransport`, `FrameTap`, `DecodeLease` | declared, Â§4.8 / Â§4.9 |
-| video | `StreamIdentifier` | â†’ `StreamKey` (R-63) |
-| video | `EncodedAudioFrame` | deleted (R-64) |
-| video | `VTConfig`, `DecodeOutput`, `PendingAU`, `DropOutcome`, `FormatOverrides`, `ParameterSetChange`, `SnapshotError`, `AudioError`, `TalkbackError`, `AudioStatistics`, `PlaybackEvent`, `DenialReason`, `PauseReason`, `ModeChangeReason`, `BudgetChange`, `BudgetSnapshot`, `FrameDropReason`, `StreamEndReason`, `PacingMode`, `ColorSpaceTag` | declared, Â§4.9; `ColorSpaceTag` â†’ `ColorInfo` (R-50) |
-| render | `TileRenderer`, `PrivacyMaskSet.disabled`, `StreamEndReason`, `PacingMode` | declared, Â§4.10 |
-| discovery | `BudgetKind`, `ClassificationEvidence`, `ClassificationVerdict`, `POSIXCode`, `HostProbeResult`, `DiscoveryDiagnostic.Severity` | declared, Â§4.6 |
-| discovery | `MulticastGroupSpec.localAddress` | added to the struct, Â§4.6 |
-
-#### R-67 â€” defects in the source specs, corrected here **[BUILD]**
-
-These do not compile or are internally contradictory as written. The corrected form is in Â§3/Â§4.
-
-| Where | Defect | Correction |
-|---|---|---|
-| `spec-video-pipeline.md` Â§12.4 | `TilePriority` has two cases with raw value `4` | type deleted (R-49) |
-| `spec-video-pipeline.md` Â§4.5 | `mutating func ingest` on a `final class ParameterSetStore` | `ParameterSetStore` is a `struct` (as `spec-bitstream.md` Â§21 already says) |
-| `spec-video-pipeline.md` Â§18.4 | `VideoPipelineError` carries `underlying: Error?` yet claims `Sendable` | carries `underlyingDescription: String` |
-| `spec-video-pipeline.md` Â§18.3 | `DecodeStatistics: Codable` over non-`Codable` members | every member made `Codable` in Â§3/Â§4 |
-| `spec-video-pipeline.md` Â§18.1 | `public struct DecodePipelineConfiguration` uses its internal memberwise init from another module | explicit `public init` with defaults |
-| `spec-video-pipeline.md` Â§6.2 | `public struct StrategyInputs` with internal members | all members `public` |
-| `spec-video-pipeline.md` Â§10.4 | `enum LatencyLevel` not `Sendable` yet crosses boundaries | `: Int, Sendable, Codable, Comparable` |
-| `spec-video-pipeline.md` Â§15.3 | `options.format == .png` on a payload-carrying enum | `SnapshotFormat` is a plain `String`-raw enum; quality moves to `SnapshotOptions` |
-| `spec-discovery.md` Â§6.2 | `IPv4Subnet.addressCount` â€” both ternary branches identical | `1 << (32 - prefixLength)`, with `prefixLength == 0` handled |
-| `spec-discovery.md` Â§5.5 vs Â§10.5 | `WSDiscoveryCodec.decodeProbeMatches` declared twice with different signatures | Â§10.5's superset wins |
-| `spec-discovery.md` Â§11 | `MulticastGroupSpec.localAddress` used, not declared | added |
-| `spec-discovery.md` Â§11 vs Â§6.3 | `ARPTableReader.swift` vs `SystemARPTableReader.swift` | `SystemARPTableReader.swift` |
-| `spec-discovery.md` Â§12 | `SweepPlanError.noEligibleInterfaces` duplicates `DiscoveryError.noEligibleInterfaces` | one case, on `DiscoveryError` |
-| `spec-render.md` Â§14 | `PTZDirection.isaptiltPan` | `isapiPanTilt` |
-| `spec-render.md` Â§3.2 | `RenderStats.droppedFrames` vs `droppedByReplacement` | `droppedByReplacement` |
-| `spec-core.md` Â§17.6 test 2 | class letters contradict Â§8.5's own examples | see R-21 |
-| `spec-core.md` Â§4 | `Library.schemaVersion` cross-referenced to Â§5.5, declared in Â§5.2 | Â§5.2 |
-| `spec-isapi.md` Appendix B | `EventNotification` vs `EventNotificationAlert` | `EventNotificationAlert` (R-46) |
-
-#### R-68 â€” UI structure, naming and remaining `DESIGN.md` / `UX.md` splits **[COSMETIC]**
-
-| Question | Ruling | Loser amends |
-|---|---|---|
-| Sidebar / inspector widths | `UX.md`: 208 / **264** / 380 and 288 / **320** / 440 (R-34) | `DESIGN.md` Â§5.1 + `VTheme.Metrics` |
-| Sidebar rail width | **`UX.md`: 68 pt** â€” 52 cannot fit a 28 pt glyph beside a 44Ã—26 thumbnail | `DESIGN.md` (`sidebarRail = 68`) |
-| Tile gutter (stage) / stage inset | `DESIGN.md`: **2 pt / 8 pt** (R-35) | `UX.md` Â§5.1 |
-| Tile gutter (video wall) | **`DESIGN.md`: 0 pt**, edge-to-edge â€” "full bleed" is the point of the wall | `UX.md` Â§5.1 |
-| Unified toolbar height | **`DESIGN.md`: 52 pt** (it is a token) | `UX.md` Â§3 |
-| Main window default / min / scene type | **`UX.md`: 1440 Ã— 900, min 960 Ã— 600, `Window(id:)`, `.contentMinSize`** â€” `UX.md` Â§0 explicitly owns the scene graph and sizing | `DESIGN.md` Â§11.2 |
-| Command palette geometry | **`DESIGN.md`: 640 wide, top inset 132, max height 520** â€” and it is the one that fits `UX.md`'s own row math (56 input + 9 Ã— 44 rows + 28 footer = 480) | `UX.md` Â§10.1 |
-| `V*` component location | **all `V`-prefixed types in `Sources/VigilUI/Components/`**; `Shared/` holds only non-prefixed helpers | `UX.md` Â§17 |
-| Naming rule | **`V` prefix â‡” reusable design-system type in `Components/` or `Theme/`.** Screens, screen-local subviews and state types take no prefix. So: `VTile`, `VTimeline`, `VSidebarRow`, `VCommandPalette`, `VTheme`; but `MainWindowView`, `StageView`, `PlaybackWindowView`, `AppModel`. `VMainWindowView` is renamed `MainWindowView` | `DESIGN.md` Â§12.3 |
-| `\.vNamespaces` setter | `MainWindowView` | â€” |
-| Camera row height | 44 pt, legal (R-37) | `DESIGN.md` Â§5.5 gains `VTheme.Metrics.Row` |
-
-#### R-69 â€” `HikvisionURL` returns paths; `VigilCore` builds the URL **[BUILD]**
-
-Restating the mechanical consequence of R-23, because it is the one place a plausible-looking
-`import` would be rejected at review: `VigilRTSP` has **no** dependency on `VigilISAPI` and must not
-gain one. `HikvisionURL` (in `VigilISAPI`) returns `String` paths and `RTSPPathCandidate` values.
-`VigilCore.StreamProbe` combines a candidate with `Camera.host`/`rtspPort`/`transport` to make an
-`RTSPURL` (a `VigilRTSP` type) and drives `RTSPSessionMachine` with `RTSPCommand.describeOnly`.
-`VigilDiscovery` may not call `HikvisionURL` either â€” it has no edge â€” and keeps only
-`DiscoveredDevice.suggestedRTSPPath` for display and fingerprinting.
-
-#### R-70 â€” `Placeholder.swift` and the scaffolding invariants **[BUILD]**
-
-*Ruling:* every target keeps its `Placeholder.swift` until it has at least one real source file, at
-which point the **supervisor** deletes it â€” not the implementing agent, because an agent that
-deletes it and then fails to land its own file breaks the build for everyone. Likewise the 12
-`.placeholder` files in resource directories are **never** deleted, even after real resources land:
-they cost nothing and they are what stops a `git clean` from re-creating defect #2 of
-`docs/BUILD-VERIFICATION.md`.
-
-#### R-71 â€” where `HostPolicy` lives and what it gates **[BUILD]**
-
-*Ruling:* `enum HostPolicy` in `VigilProtocols` (`Net/HostPolicy.swift`), pure, Linux-tested:
-
-```swift
-public static func classify(_ host: String) -> HostClass
-```
-
-returning `.loopback`, `.privateLAN`, `.linkLocal`, `.multicast`, `.publicInternet`, `.invalid`.
-**Every** outbound socket, `URLSession` task and multicast join in `VigilTransport`, `VigilISAPI` and
-`VigilDiscovery` passes its destination through it first and refuses `.publicInternet` **before the
-socket is created**, throwing `TransportError.egressBlocked(host:)`. This is what makes
-`FEATURES.md` Â§20.3's "zero egress with no cameras configured" test a code property rather than a
-packet-capture ritual, and it is testable on Linux.
-
-#### R-72 â€” one shared `Broadcaster`, one shared `ConcurrencyLimiter`, one shared `RingBuffer` **[COSMETIC]**
-
-Three utilities are independently specified in three modules. Each is declared once, in
-`VigilProtocols`: `Broadcaster<Element>` (R-65), `ConcurrencyLimiter` (FIFO, priority-aware,
-cancellation-safe, `spec-core.md` Â§8.8), and `RingBuffer<Element>` (fixed capacity, preallocated,
-O(1) append â€” used by `HealthRing`, the RTP reorder buffer, `FrameQueue` and the statistics
-reservoirs). `DispatchSemaphore` is forbidden everywhere: it blocks a cooperative thread and
-deadlocks the pool under Swift 6.
-
-## 3. Canonical shared value types â€” `VigilProtocols`
-
-**This section is normative and is meant to be pasted.** Every declaration below lives in
-`Sources/VigilProtocols/`, is `public`, and is `Sendable`. Where a body is given, use it. Where a
-body is elided with `{ â€¦ }` or a `{ get }`, the doc comment is the specification and the
-implementation is the W1 agent's, subject to Â§7.
-
-No type in this section may import anything but `Foundation`, and several import nothing at all.
-
-### 3.1 File map
-
-| File | Declares |
-|---|---|
-| `Time/MediaInstant.swift` | `MediaInstant` |
-| `Time/Clocks.swift` | `MonotonicClock`, `WallClock`, `SystemMonotonicClock`, `SystemWallClock` |
-| `Time/MediaTimestamp.swift` | `MediaTimestamp`, `UInt64.divideWithOverflowGuard` |
-| `Time/RandomSource.swift` | `RandomSource`, `SystemRandomSource`, `SplitMix64RandomSource` |
-| `Media/Codecs.swift` | `VideoCodec`, `AudioCodec`, `MediaCodec` |
-| `Media/ParameterSets.swift` | `ParameterSets` |
-| `Media/EncodedFrame.swift` | `EncodedFrame`, `FrameDropClass`, `AudioFormatInfo` |
-| `Media/FrameGeometry.swift` | `FrameGeometry`, `ColorInfo`, `FieldOrder`, `Resolution` |
-| `Media/VideoFormatInfo.swift` | `VideoFormatInfo` |
-| `Streams/StreamQuality.swift` | `StreamQuality`, `StreamKey`, `RTSPTransportKind`, `LatencyPreset` |
-| `Streams/DecodePolicy.swift` | `DecodeMode`, `StreamPriority`, `DecodeCost`, `DecodeAdmitting`, `DecodeLease`, `DenialReason`, `BudgetPressure` |
-| `Streams/TilePolicy.swift` | `TileClass`, `TilePolicy`, `TileContext`, `StreamChoice` |
-| `Stats/StreamStatistics.swift` | `StreamStatistics` |
-| `Stats/RingBuffer.swift` | `RingBuffer` |
-| `Errors/VigilError.swift` | `VigilFailure`, `ErrorSeverity`, `RetryDisposition`, `VigilError`, `vigilRequire` |
-| `Errors/DomainErrors.swift` | all eleven domain error enums (R-10) |
-| `Errors/DiagnosticCodes.swift` | the `VG-<DOMAIN>-NNNN` tables |
-| `Logging/LoggerProtocol.swift` | `LogLevel`, `LogCategory`, `LogEvent`, `LoggerProtocol`, `NullLogger` |
-| `Logging/RateLimitedLogger.swift` | `RateLimitedLogger` |
-| `Logging/Redact.swift` | `Redact` |
-| `Bytes/ByteReader.swift` | `ByteReader` |
-| `Bytes/ByteWriter.swift` | `ByteWriter` |
-| `Bytes/BitReader.swift` | `BitReader` |
-| `Bytes/BitWriter.swift` | `BitWriter` |
-| `Crypto/MD5.swift` `SHA1.swift` `SHA256.swift` | `MD5`, `SHA1`, `SHA256` |
-| `Crypto/Base64.swift` | `Base64` |
-| `Crypto/CRC32.swift` | `CRC32` |
-| `Net/IPv4Address.swift` `MACAddress.swift` `IPv4Subnet.swift` | as named |
-| `Net/HostPolicy.swift` | `HostPolicy`, `HostClass` |
-| `Net/Endpoints.swift` | `ISAPIEndpoint`, `RTSPEndpoint` |
-| `Net/HTTP.swift` | `HTTPHeaders`, `HTTPRequest`, `HTTPResponse`, `HTTPLane`, `HTTPTransporting` |
-| `Net/Credential.swift` | `Credential`, `CredentialRef` |
-| `Identity/Identifiers.swift` | `CameraID`, `GroupID`, `LayoutID`, `EventID`, `ClipID`, `BookmarkID`, `WindowID` |
-| `Identity/DeviceIdentifiers.swift` | `ChannelID`, `StreamingChannelID`, `TrackID`, `DeviceQuirks` |
-| `Identity/EventKind.swift` | `EventKind`, `EventSeverity` |
-| `Concurrency/Broadcaster.swift` | `Broadcaster` |
-| `Concurrency/ConcurrencyLimiter.swift` | `ConcurrencyLimiter` |
-
-### 3.2 Time
-
-```swift
-/// A monotonic instant: nanoseconds since an arbitrary, process-stable epoch.
-///
-/// Never wall-clock time. Never decreases. Never wraps within any plausible uptime
-/// (`Int64.max` nanoseconds is 292 years). This is the *only* monotonic instant type in Vigil:
-/// `RTSPInstant`, `RTSPDuration` and `MonotonicTime` do not exist (API_CONTRACT Â§2 R-07).
-///
-/// Durations are always `Swift.Duration`, which carries its unit in the type.
-public struct MediaInstant: Hashable, Comparable, Sendable, Codable, CustomStringConvertible {
-
-    public var nanoseconds: Int64
-
-    public init(nanoseconds: Int64) { self.nanoseconds = nanoseconds }
-
-    /// The zero instant. Useful as a test origin; meaningless as a real time.
-    public static let zero = MediaInstant(nanoseconds: 0)
-
-    @inlinable public var seconds: Double { Double(nanoseconds) / 1e9 }
-
-    @inlinable public static func < (a: Self, b: Self) -> Bool { a.nanoseconds < b.nanoseconds }
-
-    /// Seconds elapsed from `earlier` to the receiver. Negative if the receiver is earlier.
-    @inlinable public func seconds(since earlier: MediaInstant) -> Double {
-        Double(nanoseconds - earlier.nanoseconds) / 1e9
-    }
-
-    /// Milliseconds elapsed from `earlier`. The unit every log line and statistic uses.
-    @inlinable public func milliseconds(since earlier: MediaInstant) -> Double {
-        Double(nanoseconds - earlier.nanoseconds) / 1e6
-    }
-
-    @inlinable public static func + (lhs: MediaInstant, rhs: Duration) -> MediaInstant {
-        MediaInstant(nanoseconds: lhs.nanoseconds + rhs.wholeNanoseconds)
-    }
-
-    @inlinable public static func - (lhs: MediaInstant, rhs: Duration) -> MediaInstant {
-        MediaInstant(nanoseconds: lhs.nanoseconds - rhs.wholeNanoseconds)
-    }
-
-    /// The interval between two instants.
-    @inlinable public static func - (lhs: MediaInstant, rhs: MediaInstant) -> Duration {
-        .nanoseconds(lhs.nanoseconds - rhs.nanoseconds)
-    }
-
-    public var description: String { "\(seconds)s" }
-}
-
-public extension Duration {
-    /// Total nanoseconds, saturating rather than trapping. Attoseconds below 1 ns are truncated.
-    @inlinable var wholeNanoseconds: Int64 {
-        let (s, a) = components
-        let fromSeconds = s.multipliedReportingOverflow(by: 1_000_000_000)
-        guard !fromSeconds.overflow else { return s > 0 ? .max : .min }
-        return fromSeconds.partialValue &+ a / 1_000_000_000
-    }
-    @inlinable var milliseconds: Double { Double(wholeNanoseconds) / 1e6 }
-    @inlinable var seconds: Double { Double(wholeNanoseconds) / 1e9 }
-}
-```
-
-```swift
-/// Monotonic time source. The pure layer never calls this: it takes `now: MediaInstant` as a
-/// parameter. Actors in `VigilTransport` / `VigilCore` / `VigilVideo` own a clock and pass its
-/// readings down, which is what makes every pure state machine reproducible from a seed.
-public protocol MonotonicClock: Sendable {
-    func now() -> MediaInstant
-    /// Cancellable sleep. Implementations MUST throw `CancellationError` on task cancellation
-    /// and MUST NOT block a cooperative thread.
-    func sleep(for duration: Duration) async throws
-    /// Cancellable sleep until an absolute instant. Returns immediately if already past.
-    func sleep(until deadline: MediaInstant) async throws
-}
-
-public extension MonotonicClock {
-    func sleep(until deadline: MediaInstant) async throws {
-        let remaining = deadline - now()
-        guard remaining > .zero else { return }
-        try await sleep(for: remaining)
-    }
-}
-
-/// Wall-clock time. Used ONLY for display, for RTCP NTP mapping, and for parsed playback ranges.
-/// Never for control flow, never for timeouts, never for elapsed-time measurement.
-public protocol WallClock: Sendable {
-    var now: Date { get }
-}
-
-/// Production clock. Uses `CLOCK_UPTIME_RAW` on Darwin and `CLOCK_MONOTONIC` on Linux, so it does
-/// not advance across sleep on Darwin â€” which is what we want, because a camera that was
-/// unreachable while the lid was shut has not been "timing out" for eight hours.
-public struct SystemMonotonicClock: MonotonicClock {
-    public init() {}
-    public func now() -> MediaInstant { â€¦ }
-    public func sleep(for duration: Duration) async throws {
-        try await Task.sleep(for: duration)
-    }
-}
-
-public struct SystemWallClock: WallClock {
-    public init() {}
-    public var now: Date { Date() }
-}
-```
-
-```swift
-/// Deterministic randomness. Used for Digest `cnonce`, WS-Discovery probe UUIDs, reconnect jitter
-/// and JPEG-poll jitter. `mutating` so a seeded generator advances reproducibly â€” that is the whole
-/// point: a failing CI run prints its seed and re-running with that seed reproduces it byte for byte.
-///
-/// `RTSPRandomSource` does not exist (API_CONTRACT Â§2 R-09).
-public protocol RandomSource: Sendable {
-    mutating func next() -> UInt64
-}
-
-public extension RandomSource {
-    /// Exactly `count` bytes.
-    mutating func randomBytes(_ count: Int) -> [UInt8] { â€¦ }
-    /// `count` lowercase hex characters. `count` must be even; odd values are rounded up.
-    mutating func hexString(count: Int) -> String { â€¦ }
-    /// Uniform in `0..<upperBound`. `upperBound` must be > 0.
-    mutating func next(upperBound: UInt64) -> UInt64 { â€¦ }
-    /// A multiplier in `1 - fraction ... 1 + fraction`, for backoff jitter.
-    mutating func jitterFactor(_ fraction: Double) -> Double { â€¦ }
-}
-
-public struct SystemRandomSource: RandomSource {
-    public init() {}
-    public mutating func next() -> UInt64 { SystemRandomNumberGenerator().next() }
-}
-
-/// Seeded, reproducible, 64-bit. The generator every test and every fixture uses.
-/// - Note: SplitMix64, as published by Vigna. Not cryptographic; never used for a secret.
-public struct SplitMix64RandomSource: RandomSource {
-    private var state: UInt64
-    public init(seed: UInt64 = 0x2545_F491_4F6C_DD1D) { state = seed }
-    public mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-}
-```
-
-### 3.3 `MediaTimestamp`
-
-```swift
-/// A rational media time: `value / timescale` seconds. Deliberately mirrors `CMTime`'s semantics
-/// without importing CoreMedia, so the pure layer stays Linux-buildable.
-///
-/// - Important: the initialiser **clamps** a non-positive timescale to 1 rather than trapping.
-///   `timescale` derives from the SDP `a=rtpmap` clock rate, which is network data; a camera (or an
-///   attacker on the LAN) advertising `H264/0` must not be able to take the app down. Clock-rate
-///   validation happens once, at `RTPTrackFormat` construction, which throws
-///   `RTPError.invalidClockRate`. See API_CONTRACT Â§2 R-05.
-public struct MediaTimestamp: Hashable, Sendable, Codable, Comparable, CustomStringConvertible {
-
-    /// Numerator, in units of `1 / timescale` seconds.
-    public var value: Int64
-    /// Denominator. Always > 0 after initialisation. 90 000 for RTP video; the sample rate for
-    /// audio; 1 000 000 for host-time conversions; 600 for recorded MP4 tracks.
-    public private(set) var timescale: Int32
-
-    /// The sentinel for "no time". Distinguished from `.zero`, which is a real instant.
-    public static let invalid = MediaTimestamp(value: .min, timescale: 1)
-    public static let zero = MediaTimestamp(value: 0, timescale: 1)
-
-    public init(value: Int64, timescale: Int32) {
-        self.value = value
-        self.timescale = timescale > 0 ? timescale : 1
-    }
-
-    /// Fails rather than clamps. Use at every boundary where a bad timescale is a protocol error
-    /// you want to report instead of absorb.
-    public init?(validating value: Int64, timescale: Int32) {
-        guard timescale > 0 else { return nil }
-        self.init(value: value, timescale: timescale)
-    }
-
-    @inlinable public var seconds: Double { Double(value) / Double(timescale) }
-    @inlinable public var isValid: Bool { self != .invalid }
-
-    /// Exact rescale using 128-bit intermediate arithmetic; rounds half away from zero and
-    /// saturates rather than overflowing.
-    ///
-    /// - Warning: never rescale through `Double`. At a 1/1_000_000 timescale, recorded playback
-    ///   exceeds 2^53 within 285 years but loses sub-microsecond precision far sooner, and seek
-    ///   accuracy is a user-visible feature.
-    public func converted(to newTimescale: Int32) -> MediaTimestamp { â€¦ }
-
-    /// Adds `samples` in the receiver's own timescale.
-    @inlinable public func adding(samples: Int64) -> MediaTimestamp {
-        MediaTimestamp(value: value &+ samples, timescale: timescale)
-    }
-
-    /// Sum in the *receiver's* timescale. `.invalid` is absorbing.
-    public static func + (a: Self, b: Self) -> Self { â€¦ }
-    public static func - (a: Self, b: Self) -> Self { â€¦ }
-
-    /// Cross-multiplied 128-bit comparison. Explicit `(high, low)` lexicographic compare â€”
-    /// do not rely on tuple `<`, which compares element-wise on signed halves and is wrong here.
-    public static func < (a: Self, b: Self) -> Bool { â€¦ }
-
-    public var description: String { "\(value)/\(timescale) (\(seconds)s)" }
-}
-
-public extension UInt64 {
-    /// 128-by-64 division with saturation on overflow. `addend` is added to the 128-bit dividend
-    /// before dividing (used to implement round-half-away-from-zero).
-    /// - Returns: `(quotient, didSaturate)`. On saturation the quotient is `UInt64.max`.
-    static func divideWithOverflowGuard(hi: UInt64, lo: UInt64, by divisor: UInt64,
-                                        addend: UInt64) -> (quotient: UInt64, didSaturate: Bool) { â€¦ }
-}
-```
-
-### 3.4 Codecs
-
-```swift
-/// A video codec Vigil can carry. `mjpeg` is present because F-DEC-05 and the class-D
-/// JPEG-poll tile mode both name it; it is not NAL-based and has no parameter sets.
-public enum VideoCodec: String, Sendable, Hashable, Codable, CaseIterable {
-    case h264, h265, mjpeg
-
-    /// Bytes of NAL header preceding the RBSP: 1 for H.264, 2 for H.265, 0 for MJPEG.
-    @inlinable public var nalHeaderLength: Int {
-        switch self { case .h264: 1; case .h265: 2; case .mjpeg: 0 }
-    }
-    @inlinable public var isNALBased: Bool { self != .mjpeg }
-
-    /// Relative hardware-decode cost per pixel per second, normalised to H.264 = 1.0.
-    /// The bit-depth surcharge is applied separately by `DecodeCost` (API_CONTRACT Â§2 R-58).
-    @inlinable public var decodeWeight: Double {
-        switch self { case .h264: 1.00; case .h265: 1.35; case .mjpeg: 0.45 }
-    }
-}
-
-public enum AudioCodec: String, Sendable, Hashable, Codable, CaseIterable {
-    case aac, g711A, g711U, g726, pcmS16LE
-
-    /// True when the codec can be muxed into MP4 without re-encoding. Only AAC can.
-    /// G.711 in a `.mov` is legal; in an `.mp4` it is not, which is why `ClipRecorder` picks the
-    /// container from the audio codec unless the user forced one.
-    @inlinable public var isMP4Muxable: Bool { self == .aac }
-    /// True when `VigilRTP` decodes it to `.pcmS16LE` in the pure layer.
-    @inlinable public var isDecodedInPureLayer: Bool { self == .g711A || self == .g711U || self == .g726 }
-    @inlinable public var defaultSampleRate: Int32 {
-        switch self { case .aac: 16_000; case .g726: 8_000; default: 8_000 }
-    }
-}
-
-/// The flat union carried by `EncodedFrame`. Two narrow enums plus one union beats one wide enum,
-/// because `ParameterSets` and `VideoFormatInfo` genuinely cannot be audio (API_CONTRACT Â§2 R-04).
-public enum MediaCodec: Sendable, Hashable, Codable, CustomStringConvertible {
-    case video(VideoCodec)
-    case audio(AudioCodec)
-
-    @inlinable public var video: VideoCodec? { if case .video(let c) = self { c } else { nil } }
-    @inlinable public var audio: AudioCodec? { if case .audio(let c) = self { c } else { nil } }
-    @inlinable public var isVideo: Bool { video != nil }
-    public var description: String { video?.rawValue ?? audio?.rawValue ?? "unknown" }
-}
-```
-
-### 3.5 The media boundary: `ParameterSets`, `AudioFormatInfo`, `EncodedFrame`
-
-```swift
-/// Codec configuration NAL units for one video stream.
-///
-/// **Canonical storage form â€” binding, no exceptions.** Every `Data` element is:
-/// 1. **With** its NAL header (1 byte H.264, 2 bytes H.265).
-/// 2. **Without** any Annex-B start code and **without** any length prefix.
-/// 3. In **escaped, on-wire form** â€” emulation-prevention `0x03` bytes are still present.
-/// 4. Byte-identical to what the camera sent, or to what base64-decoding `sprop-parameter-sets`
-///    / `sprop-vps` / `sprop-sps` / `sprop-pps` produced.
-///
-/// This is exactly the form `avcC`, `hvcC` and
-/// `CMVideoFormatDescriptionCreateFrom{H264,HEVC}ParameterSets` require. Parsing always unescapes
-/// into a throwaway buffer; we never store unescaped RBSP.
-///
-/// Ordering within each array is ascending parameter-set id. A re-sent set with an id we already
-/// hold **replaces** it in place â€” Hikvision re-sends SPS/PPS before every IDR, usually identical,
-/// occasionally changed after a resolution change.
-public struct ParameterSets: Sendable, Hashable, Codable {
-    public var codec: VideoCodec
-    /// H.265 only; always empty for H.264 and MJPEG.
-    public var vps: [Data]
-    public var sps: [Data]
-    public var pps: [Data]
-
-    public init(codec: VideoCodec, vps: [Data] = [], sps: [Data] = [], pps: [Data] = [])
-
-    /// True when there are enough bytes to build a format description. VPS is optional for H.264
-    /// and required in practice (though not by CoreMedia) for H.265.
-    /// - Note: `isComplete` is about *bytes*, not parsability. A parameter set we cannot parse is
-    ///   still stored and still forwarded; `VideoFormatInfo == nil` must never block decoding.
-    @inlinable public var isComplete: Bool { !sps.isEmpty && !pps.isEmpty }
-
-    /// In the order CoreMedia wants: `[SPS, PPS]` for H.264, `[VPS, SPS, PPS]` for H.265.
-    @inlinable public var orderedForCoreMedia: [Data] {
-        codec == .h265 ? vps + sps + pps : sps + pps
-    }
-
-    /// FNV-1a over every byte, in `orderedForCoreMedia` order. The cheap change detector.
-    public var fingerprint: UInt64 { â€¦ }
-}
-```
-
-```swift
-/// Everything a decoder needs about an audio stream that is not in the samples themselves.
-public struct AudioFormatInfo: Sendable, Hashable, Codable {
-    public var codec: AudioCodec
-    public var sampleRate: Int32
-    public var channels: Int32
-    /// 1024 for AAC-LC, 960 for AAC-LC/960, 1 for PCM and G.711.
-    public var framesPerPacket: Int32
-    /// AAC `AudioSpecificConfig`, verbatim, for `kAudioConverterDecompressionMagicCookie`.
-    /// **Never** smuggled through `ParameterSets.sps[0]` (API_CONTRACT Â§2 R-54).
-    public var magicCookie: Data?
-
-    public init(codec: AudioCodec, sampleRate: Int32, channels: Int32,
-                framesPerPacket: Int32, magicCookie: Data? = nil)
-}
-
-/// How droppable a frame is under queue pressure. Derived by `VigilRTP` while depacketizing,
-/// because that is the only place the NAL headers are already in hand.
-public enum FrameDropClass: UInt8, Sendable, Hashable, Codable, Comparable {
-    /// Referenced by later frames. Dropping it corrupts everything until the next IRAP.
-    case required = 0
-    /// H.264: every VCL NAL of the AU had `nal_ref_idc == 0`.
-    case droppableNonReference = 1
-    /// H.265: `nuh_temporal_id > 0` with `sps_temporal_id_nesting_flag == 1`.
-    case droppableTemporal = 2
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-}
-```
-
-```swift
-/// One access unit (video) or one audio buffer.
-///
-/// **This is the only media type that crosses from the pure layer into `VigilVideo`.**
-/// Foundation-only by construction. `spec-rtp.md`, `spec-bitstream.md` and
-/// `spec-video-pipeline.md` all restate it; this declaration is the normative one
-/// (API_CONTRACT Â§2 R-02).
-public struct EncodedFrame: Sendable, Equatable {
-
-    // MARK: - Payload
-
-    /// Video: concatenated NAL units, each preceded by a **4-byte big-endian length**
-    /// (AVCC/HVCC style, `nalUnitHeaderLength == 4`). **Never Annex-B.** Start codes never appear.
-    /// There is no configuration knob and no conversion step on the live path: the depacketizers
-    /// write the 4-byte length directly as they reassemble, and `VigilVideo` hands `data`
-    /// straight to `CMBlockBufferCreateWithMemoryBlock`.
-    ///
-    /// Audio, `.aac`: one raw AAC access unit â€” no ADTS header, no length prefix.
-    /// Audio, `.pcmS16LE`: interleaved signed 16-bit little-endian samples.
-    /// Video, `.mjpeg`: one complete JPEG, SOI to EOI, no length prefix.
-    public var data: Data
-
-    public var codec: MediaCodec
-
-    // MARK: - Time
-
-    public var pts: MediaTimestamp
-    /// `nil` when the stream does not reorder â€” which is every Hikvision live profile and all
-    /// audio. Populated only for recorded content with B-frames, where `dts <= pts` is guaranteed.
-    /// `VigilVideo` treats `nil` as "dts == pts" and must never synthesise a decode order
-    /// (API_CONTRACT Â§2 R-06).
-    public var dts: MediaTimestamp?
-    /// Always present for audio; present for video only when the frame rate is known.
-    public var duration: MediaTimestamp?
-    /// Arrival of the **last** packet of this access unit. The anchor for the glass-to-glass
-    /// latency estimate.
-    public var receivedAt: MediaInstant
-
-    // MARK: - Classification
-
-    /// IDR (H.264 NAL type 5) or IRAP (H.265 types 16â€“23). **Not** "an I-slice"
-    /// â€” that distinction drives sync samples in recordings and the `NotSync` attachment.
-    public var isKeyframe: Bool
-    public var dropClass: FrameDropClass
-    /// True when at least one NAL was lost or truncated. `VigilVideo` drops these unless
-    /// `AppSettings.decodeCorruptFrames` is on (default off).
-    public var isCorrupt: Bool
-
-    // MARK: - Format
-
-    /// Non-`nil` **only on the first frame after the sets changed**, including the very first
-    /// frame. `VigilVideo` must retain the last non-`nil` value for the lifetime of the stream
-    /// and must not expect a resend after a decoder reset (API_CONTRACT Â§2 R-53).
-    public var parameterSets: ParameterSets?
-    /// Non-`nil` on the first audio frame and whenever the audio configuration changes.
-    public var audioFormat: AudioFormatInfo?
-
-    // MARK: - Accounting
-
-    /// Extended (unwrapped) RTP sequence numbers of the first and last packet that fed this frame.
-    /// `nil` for frames produced from a file rather than from RTP.
-    public var sequenceRange: ClosedRange<UInt32>?
-    /// Monotonic access-unit counter for this stream, starting at 0 and never reset except by
-    /// `Depacketizer.reset()`. Gap accounting compares consecutive values.
-    public var accessUnitIndex: UInt64
-    /// Number of NAL units in `data`, so `VigilVideo` can size scratch arrays without rescanning.
-    public var nalCount: Int
-
-    @inlinable public var byteCount: Int { data.count }
-    @inlinable public var videoCodec: VideoCodec? { codec.video }
-
-    public init(data: Data, codec: MediaCodec, pts: MediaTimestamp,
-                dts: MediaTimestamp? = nil, duration: MediaTimestamp? = nil,
-                receivedAt: MediaInstant, isKeyframe: Bool,
-                dropClass: FrameDropClass = .required, isCorrupt: Bool = false,
-                parameterSets: ParameterSets? = nil, audioFormat: AudioFormatInfo? = nil,
-                sequenceRange: ClosedRange<UInt32>? = nil, accessUnitIndex: UInt64 = 0,
-                nalCount: Int = 0)
-}
-```
-
-### 3.6 Geometry, colour and format
-
-```swift
-/// Integer pixel dimensions. The one size type in Vigil: used for stream resolution, display
-/// resolution and tile backing size alike. `PixelSize` does not exist (API_CONTRACT Â§2 R-57).
-public struct Resolution: Sendable, Hashable, Codable, Comparable, CustomStringConvertible {
-    public var width: Int
-    public var height: Int
-    public init(width: Int, height: Int)
-
-    @inlinable public var pixels: Int { width * height }
-    @inlinable public var megapixels: Double { Double(pixels) / 1_000_000 }
-    @inlinable public var aspect: Double { height == 0 ? 0 : Double(width) / Double(height) }
-    /// `min(width, height)`. The input to the tile-class table (API_CONTRACT Â§2 R-21).
-    @inlinable public var shortEdge: Int { Swift.min(width, height) }
-
-    public static let uhd4K  = Resolution(width: 3840, height: 2160)
-    public static let hd1080 = Resolution(width: 1920, height: 1080)
-    public static let hd720  = Resolution(width: 1280, height: 720)
-    public static let d1     = Resolution(width: 704, height: 576)
-    public static let cif    = Resolution(width: 352, height: 288)
-
-    /// Nearest human label: "4K", "5MP", "1080p", "720p", "D1", "CIF", else "WÃ—H".
-    public var shortLabel: String { â€¦ }
-    public var description: String { "\(width)Ã—\(height)" }
-    /// Ordered by pixel count, then width.
-    public static func < (a: Self, b: Self) -> Bool { â€¦ }
-}
-
-public enum FieldOrder: UInt8, Sendable, Hashable, Codable {
-    case progressive, topFieldFirst, bottomFieldFirst
-}
-
-/// Colour description carried from the SPS/VPS VUI to the renderer. Pure integers and enums, so
-/// `VigilBitstream` computes it on Linux and `VigilRenderTests` can assert on it without a GPU.
-public struct ColorInfo: Sendable, Hashable, Codable {
-    public enum Matrix: UInt8, Sendable, Hashable, Codable { case bt601, bt709, bt2020ncl, unspecified }
-    public enum Range: UInt8, Sendable, Hashable, Codable { case video, full }
-    public enum Transfer: UInt8, Sendable, Hashable, Codable {
-        case bt709, smpte170m, srgb, pq, hlg, unspecified
-    }
-    public enum Primaries: UInt8, Sendable, Hashable, Codable {
-        case bt709, bt2020, smpte170m, unspecified
-    }
-    public enum ChromaSiting: UInt8, Sendable, Hashable, Codable { case left, center, topLeft }
-
-    public var matrix: Matrix
-    public var range: Range
-    public var transfer: Transfer
-    public var primaries: Primaries
-    public var chromaSiting: ChromaSiting
-
-    /// The default when the VUI is absent, which is most Hikvision firmware:
-    /// BT.709, video range, left siting. BT.601 is substituted when `codedHeight < 576`.
-    public static let bt709Video = ColorInfo(matrix: .bt709, range: .video, transfer: .bt709,
-                                             primaries: .bt709, chromaSiting: .left)
-    public static let bt601Video = ColorInfo(matrix: .bt601, range: .video, transfer: .smpte170m,
-                                             primaries: .smpte170m, chromaSiting: .left)
-    /// True only for PQ or HLG. EDR is enabled only for these, and only on a screen whose
-    /// `maximumExtendedDynamicRangeColorComponentValue > 1.0`.
-    @inlinable public var isHDR: Bool { transfer == .pq || transfer == .hlg }
-    public init(matrix: Matrix, range: Range, transfer: Transfer,
-                primaries: Primaries, chromaSiting: ChromaSiting)
-}
-
-/// Coded geometry, clean aperture and sample aspect ratio for one video stream.
-///
-/// **Report cropped display size; allocate from coded size.** 1080p H.264 is coded 1920Ã—1088 and
-/// displayed 1920Ã—1080. `VigilRender`, `VigilUI` and `ClipRecorder` read `displaySize`, never the
-/// pixel buffer's extent.
-public struct FrameGeometry: Sendable, Hashable, Codable {
-    /// Allocation size, in luma samples. Always a multiple of the codec's macroblock/CTB size.
-    public var codedWidth: Int
-    public var codedHeight: Int
-    /// Clean aperture inside the coded frame, origin top-left, in luma samples.
-    public var cropLeft: Int
-    public var cropTop: Int
-    public var cropWidth: Int
-    public var cropHeight: Int
-    /// Sample (pixel) aspect ratio. `1:1` when the VUI is absent or says square.
-    public var sarWidth: Int
-    public var sarHeight: Int
-    /// 8 or 10. Values outside `8...12` are a parse error.
-    public var bitDepth: Int
-    public var fieldOrder: FieldOrder
-    public var color: ColorInfo
-
-    public init(codedWidth: Int, codedHeight: Int,
-                cropLeft: Int = 0, cropTop: Int = 0, cropWidth: Int, cropHeight: Int,
-                sarWidth: Int = 1, sarHeight: Int = 1, bitDepth: Int = 8,
-                fieldOrder: FieldOrder = .progressive, color: ColorInfo = .bt709Video)
-
-    @inlinable public var codedSize: Resolution { Resolution(width: codedWidth, height: codedHeight) }
-    /// The cropped picture, before SAR correction.
-    @inlinable public var croppedSize: Resolution { Resolution(width: cropWidth, height: cropHeight) }
-    @inlinable public var pixelAspectRatio: Double { Double(sarWidth) / Double(sarHeight) }
-    /// The size the picture should occupy on a square-pixel display. **This is what the tile,
-    /// the window and the recorder use.**
-    @inlinable public var displaySize: Resolution {
-        Resolution(width: Int((Double(cropWidth) * pixelAspectRatio).rounded()), height: cropHeight)
-    }
-    @inlinable public var displayAspect: Double {
-        cropHeight == 0 ? 0 : Double(cropWidth) * pixelAspectRatio / Double(cropHeight)
-    }
-    @inlinable public var isProgressive: Bool { fieldOrder == .progressive }
-}
-```
-
-```swift
-/// The neutral, platform-independent description of a decoded video format.
-///
-/// `VigilBitstream` produces it from SPS/VPS/PPS; `VigilVideo` converts it to a
-/// `CMVideoFormatDescription` in exactly one file; `VigilRender` reads `geometry`.
-/// `VigilVideo.VideoFormat` does not exist (API_CONTRACT Â§2 R-50).
-public struct VideoFormatInfo: Sendable, Hashable, Codable {
-    public var codec: VideoCodec
-    public var geometry: FrameGeometry
-    /// Parsed from the VUI. **Metadata only** â€” RTP timestamps drive the live clock and the
-    /// container drives recorded playback. The fallback chain is VUI â†’ RTP-measured â†’ ISAPI â†’ 25.0.
-    /// H.264 divides by `2 Ã— num_units_in_tick`; H.265 does not divide by 2.
-    public var frameRate: Double?
-
-    public var profileIDC: UInt8
-    /// H.264 only: the eight `constraint_setN_flag` bits.
-    public var constraintFlags: UInt8
-    public var levelIDC: UInt8
-    /// H.265 only. 0 = Main tier, 1 = High tier.
-    public var tier: UInt8
-    /// 0 monochrome, 1 = 4:2:0, 2 = 4:2:2, 3 = 4:4:4. Vigil decodes 1 and (H.265) 2.
-    public var chromaFormatIDC: UInt8
-    public var maxNumReorderFrames: Int
-    public var maxDecFrameBuffering: Int
-    public var minSpatialSegmentationIDC: Int
-    public var numTemporalLayers: Int
-    public var temporalIDNested: Bool
-    /// "High", "Main 10", "Baseline"â€¦ For the inspector, never for control flow.
-    public var profileName: String
-    /// "4.1", "5.1"â€¦ For the inspector.
-    public var levelName: String
-
-    // Passthroughs so `spec-bitstream.md`'s prose still reads correctly.
-    @inlinable public var codedWidth: Int { geometry.codedWidth }
-    @inlinable public var codedHeight: Int { geometry.codedHeight }
-    @inlinable public var displayWidth: Int { geometry.displaySize.width }
-    @inlinable public var displayHeight: Int { geometry.displaySize.height }
-    @inlinable public var sarWidth: Int { geometry.sarWidth }
-    @inlinable public var sarHeight: Int { geometry.sarHeight }
-    @inlinable public var bitDepthLuma: Int { geometry.bitDepth }
-    @inlinable public var isProgressive: Bool { geometry.isProgressive }
-    @inlinable public var pixelAspectRatio: Double { geometry.pixelAspectRatio }
-    @inlinable public var displayAspectRatio: Double { geometry.displayAspect }
-    @inlinable public var codedPixels: Int { geometry.codedWidth * geometry.codedHeight }
-
-    /// **A format change is exactly this and nothing else:** codec, coded width, coded height,
-    /// chroma format, or luma bit depth. Anything else (crop, SAR, colour, frame rate, level)
-    /// bumps the `generation` counter â€” rebuild the format description, keep the decode session.
-    @inlinable public func isDecoderCompatible(with other: VideoFormatInfo) -> Bool {
-        codec == other.codec
-            && geometry.codedWidth == other.geometry.codedWidth
-            && geometry.codedHeight == other.geometry.codedHeight
-            && chromaFormatIDC == other.chromaFormatIDC
-            && geometry.bitDepth == other.geometry.bitDepth
-    }
-}
-```
-
-### 3.7 Stream identity, quality and decode policy
-
-```swift
-/// Which of a device's encoders a stream comes from.
-///
-/// There is **no `.auto` case**: "automatic" is the absence of an override, spelled
-/// `StreamQuality?` (API_CONTRACT Â§2 R-55). `StreamProfile.Kind` and `StreamIndex` do not exist.
-public enum StreamQuality: Int, Sendable, Hashable, Codable, CaseIterable, Comparable {
-    case main = 1, sub = 2, third = 3
-    public var stringValue: String { switch self { case .main: "main"; case .sub: "sub"; case .third: "third" } }
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-    // Codable as the lowercase string, not the integer.
-    public init(from decoder: any Decoder) throws { â€¦ }
-    public func encode(to encoder: any Encoder) throws { â€¦ }
-}
-
-/// What a decode pipeline, an audio route and a budget grant are keyed by. A camera alone is not
-/// enough: during the 150 ms keyframe-gated crossfade of a quality switch, main and sub are both
-/// live (API_CONTRACT Â§2 R-63). `StreamIdentifier` does not exist.
-public struct StreamKey: Sendable, Hashable, Codable, CustomStringConvertible {
-    public var camera: CameraID
-    public var quality: StreamQuality
-    public init(camera: CameraID, quality: StreamQuality)
-    public var description: String { "\(camera.short)/\(quality.stringValue)" }
-}
-
-public enum RTSPTransportKind: String, Sendable, Hashable, Codable, CaseIterable {
-    /// `Transport: RTP/AVP/TCP;unicast;interleaved=0-1`. **The default** â€” it traverses every LAN
-    /// and needs no inbound ports.
-    case tcpInterleaved
-    case udpUnicast
-    case udpMulticast
-    /// `rtsps`, port 322, trust-on-first-use leaf pinning shared with ISAPI.
-    case tcpTLS
-    @inlinable public var isUDP: Bool { self == .udpUnicast || self == .udpMulticast }
-    @inlinable public var defaultPort: Int { self == .tcpTLS ? 322 : 554 }
-}
-
-/// Jitter-buffer depth / decode-queue trade-off, chosen per camera.
-public enum LatencyPreset: String, Sendable, Hashable, Codable, CaseIterable {
-    /// 40 ms / 8 packets, decode queue 2, aggressive drop-to-keyframe.
-    case low
-    /// 120 ms / 24 packets, decode queue 3. **The default.**
-    case balanced
-    /// 350 ms / 64 packets, decode queue 5, never drop unless the queue is full.
-    case quality
-    @inlinable public var jitterBufferDepth: Duration { â€¦ }
-    @inlinable public var jitterBufferPackets: Int { â€¦ }
-    @inlinable public var decodeQueueDepth: Int { â€¦ }
-}
-```
-
-```swift
-/// How hard a stream is being run, independent of which stream it is.
-/// Axis 2 of the tile policy (API_CONTRACT Â§2 R-21).
-public enum DecodeMode: Int, Sendable, Hashable, Codable, Comparable, CaseIterable {
-    case paused = 0
-    case jpegPoll = 1
-    case keyframesOnly = 2
-    /// 15 fps ceiling on a 25/30 fps stream. `ReducedFrameDelivery = 0.5`.
-    case fpsCapped = 3
-    /// Drop droppable frames under transient pressure; not a steady state.
-    case trim = 4
-    case full = 5
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-    /// Multiplier on the DU cost. `paused` and `jpegPoll` cost zero hardware-decode budget.
-    @inlinable public var costWeight: Double {
-        switch self {
-        case .paused, .jpegPoll: 0
-        case .keyframesOnly: 0.12
-        case .fpsCapped: 0.55
-        case .trim: 0.80
-        case .full: 1.00
-        }
-    }
-}
-
-/// Which stream a tile wants, or none.
-public enum StreamChoice: Sendable, Hashable, Codable {
-    case stream(StreamQuality)
-    /// ISAPI JPEG poll at the given interval. No RTSP session, no decode session, 0 DU.
-    case jpegPoll(interval: Duration)
-    case none
-}
-
-/// Admission priority. Ties break on `orderIndex` ascending. One enum, not two
-/// (`TilePriority` does not exist â€” API_CONTRACT Â§2 R-49).
-public enum StreamPriority: Int, Sendable, Hashable, Codable, Comparable, CaseIterable {
-    /// Fullscreen, or the single focused tile, or the audio-solo camera.
-    case focused = 400
-    /// On-screen tile with a short edge â‰¥ 480 backing px.
-    case visibleLarge = 300
-    /// On-screen tile with a short edge < 480 backing px.
-    case visibleSmall = 200
-    /// Video-wall tile on a secondary display.
-    case wall = 175
-    case pictureInPicture = 150
-    /// **Never demoted, never occlusion-paused.** A recording must not be sacrificed for a preview.
-    case recording = 350
-    /// In the layout but scrolled off, occluded, or pre-warming.
-    case offscreen = 100
-    case sidebarThumbnail = 50
-    /// `Camera.isPinnedLive` and nothing else.
-    case background = 10
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-}
-
-/// Hardware-decode cost in **decode units**. 1 DU = one 1080p30 H.264 stream.
-public struct DecodeCost: Sendable, Hashable, Codable, Comparable, CustomStringConvertible {
-    /// Always a non-negative multiple of 0.25.
-    public let units: Double
-    public init(units: Double)
-
-    /// `ceil( codedPixels Ã— fps / (1920Ã—1080Ã—30) Ã— codecWeight Ã— depthWeight Ã— modeWeight Ã— 4 ) / 4`
-    /// where `depthWeight` is 1.26 above 8-bit and 1.0 otherwise, plus 0.05 additive when
-    /// downscale-on-decode is active (API_CONTRACT Â§2 R-58). Uses **coded** pixels, not display
-    /// pixels: the decoder allocates 1088 lines and that is what costs bandwidth.
-    public static func estimate(geometry: FrameGeometry, codec: VideoCodec, fps: Double,
-                                mode: DecodeMode, isDownscaling: Bool = false) -> DecodeCost { â€¦ }
-
-    public static let zero = DecodeCost(units: 0)
-    public static func + (a: Self, b: Self) -> Self { DecodeCost(units: a.units + b.units) }
-    public static func < (a: Self, b: Self) -> Bool { a.units < b.units }
-    public var description: String { String(format: "%.2f DU", units) }
-}
-
-/// A granted reservation. Releasing is idempotent and MUST happen in a `defer` or an actor
-/// `deinit`-equivalent path; a leaked lease starves every other camera.
-public struct DecodeLease: Sendable, Hashable, Identifiable {
-    public let id: UUID
-    public let key: StreamKey
-    public private(set) var cost: DecodeCost
-    public private(set) var mode: DecodeMode
-}
-
-public enum DenialReason: String, Sendable, Hashable, Codable {
-    case insufficientBudget, sessionLimitReached, thermalCritical, hardwareUnavailable
-}
-
-public enum BudgetPressure: String, Sendable, Hashable, Codable, Comparable, CaseIterable {
-    /// < 70 % of budget committed.
-    case none
-    /// 70â€“95 %.
-    case moderate
-    /// > 95 %, or any stream currently demoted by admission.
-    case severe
-    public static func < (a: Self, b: Self) -> Bool { â€¦ }
-}
-
-/// The admission authority, declared here so `StreamCoordinator`'s planner is Linux-testable.
-/// The single implementation is `VigilVideo.DecodeBudget`, a `@globalActor actor`
-/// (API_CONTRACT Â§2 R-49).
-public protocol DecodeAdmitting: Sendable {
-    /// Total DU available right now, after thermal and low-power multipliers.
-    func currentBudget() async -> DecodeCost
-    /// Hard ceiling on simultaneous `VTDecompressionSession`s / `AVSampleBufferDisplayLayer`s,
-    /// which VideoToolbox exhausts long before the DU budget does on small streams.
-    func maxConcurrentSessions() async -> Int
-    /// Reserves capacity, possibly at a cheaper mode than requested.
-    func admit(key: StreamKey, cost: DecodeCost, mode: DecodeMode,
-               priority: StreamPriority, isPreemptible: Bool) async -> AdmissionResult
-    /// Re-prices an existing lease after a tile resize or a format change.
-    func update(_ lease: DecodeLease, cost: DecodeCost, mode: DecodeMode,
-                priority: StreamPriority) async -> AdmissionResult
-    func release(_ lease: DecodeLease) async
-    /// Reserves headroom for a transient (strategy switch, one-shot snapshot session).
-    func reserveTransient(_ cost: DecodeCost, for duration: Duration) async -> Bool
-    /// Demotion orders pushed to pipelines. A factory, not a property (API_CONTRACT Â§2 R-65).
-    func budgetChanges() -> AsyncStream<BudgetChange>
-    func snapshot() async -> BudgetSnapshot
-}
-
-public enum AdmissionResult: Sendable, Hashable {
-    case granted(DecodeLease)
-    /// Admitted, but at a cheaper mode than asked for. The caller MUST surface a visible badge
-    /// and an inspector note: silent degradation is a defect (FEATURES.md honesty requirement).
-    case grantedDegraded(DecodeLease, DecodeMode)
-    case denied(DenialReason)
-}
-
-public enum BudgetChange: Sendable, Hashable {
-    case demote(StreamKey, to: DecodeMode, reason: DenialReason)
-    case promote(StreamKey, to: DecodeMode)
-    case pressureChanged(BudgetPressure)
-    case budgetChanged(DecodeCost, reason: String)
-}
-
-public struct BudgetSnapshot: Sendable, Hashable, Codable {
-    public var budget: DecodeCost
-    public var committed: DecodeCost
-    public var sessionCount: Int
-    public var maxSessions: Int
-    public var pressure: BudgetPressure
-    public var modes: [StreamKey: DecodeMode]
-}
-```
-
-```swift
-/// Tile size class. Axis 1 of the tile policy (API_CONTRACT Â§2 R-21).
-/// The input is the tile's **short edge in backing pixels**.
-public enum TileClass: String, Sendable, Hashable, Codable, CaseIterable, Comparable {
-    /// â‰¥ 1080 px. 1-up, fullscreen, PiP, video wall.
-    case a
-    /// 480â€“1079 px. Sub, promoted to main when the sub is visibly soft and budget allows.
-    case b
-    /// 96â€“479 px. Sub. The 4Ã—4 case.
-    case c
-    /// 1â€“95 px. ISAPI JPEG poll, no decode session at all.
-    case d
-    /// Hidden, occluded, or the window is minimised.
-    case e
-    public static func < (a: Self, b: Self) -> Bool { â€¦ }
-}
-
-public struct TileContext: Sendable, Hashable {
-    /// Backing pixels, i.e. points Ã— `backingScaleFactor`, rounded to integers. Supplied by
-    /// `TileRenderState.pixelSize`; never points.
-    public var pixelSize: Resolution
-    public var isVisible: Bool
-    public var isOccluded: Bool
-    public var isFocused: Bool
-    public var isSidebarThumbnail: Bool
-    public var isOffscreenScroll: Bool
-    public var isRecording: Bool
-    /// Coded height of the device's sub stream, for the class-B promotion test. `nil` when unknown.
-    public var subStreamHeight: Int?
-    /// Some analog NVR channels have no sub stream.
-    public var deviceSupportsSubStream: Bool
-    /// The user's per-tile lock. When non-`nil`, automatic switching is disabled for this tile
-    /// and the UI shows "Main (locked)".
-    public var qualityOverride: StreamQuality?
-    public var jpegPollIntervalOverride: Duration?
-
-    public init(pixelSize: Resolution, isVisible: Bool = true, isOccluded: Bool = false,
-                isFocused: Bool = false, isSidebarThumbnail: Bool = false,
-                isOffscreenScroll: Bool = false, isRecording: Bool = false,
-                subStreamHeight: Int? = nil, deviceSupportsSubStream: Bool = true,
-                qualityOverride: StreamQuality? = nil, jpegPollIntervalOverride: Duration? = nil)
-}
-
-/// The class Aâ€“E table, as a pure function. Deterministic, allocation-free, unit-tested on Linux.
-public enum TilePolicy {
-
-    public static let dwell: Duration = .milliseconds(750)
-    public static let deadBand: Double = 0.15
-    /// Class boundaries in backing pixels of the tile's short edge.
-    public static let classAFloor = 1080
-    public static let classBFloor = 480
-    public static let classCFloor = 96
-    /// Class-B promotion fires when the sub stream's coded height is below this fraction of the
-    /// tile's short edge â€” i.e. the sub is visibly soft.
-    public static let promotionSoftnessRatio = 0.75
-
-    public static func tileClass(for context: TileContext) -> TileClass
-    /// Which stream to pull. Does not consider the decode budget â€” that is Axis 2.
-    public static func choice(for context: TileContext) -> StreamChoice
-    /// True when a change from `current` to `proposed` clears the 15 % dead band.
-    public static func clearsDeadBand(current: TileClass, proposed: TileClass,
-                                      shortEdge: Int) -> Bool
-    /// JPEG cadence for class D and for non-tile surfaces.
-    /// Stage tile 1 s, sidebar row 5 s, offscreen / menu-bar 15 s, scaled by the number of
-    /// simultaneously polling surfaces so a device never sees more than 1 request per second.
-    public static func jpegInterval(for context: TileContext, pollingSurfaces: Int) -> Duration
-}
-```
-
-### 3.8 `StreamStatistics`
-
-```swift
-/// Per-stream telemetry. **Shape is fixed here; `VigilRTP` owns the update algebra**
-/// (fps EWMA Î± 0.10, kbps EWMA Î± 0.25 over a 500 ms window, keyframe-interval EWMA Î± 0.20, loss
-/// fraction over 2 s, jitter per RFC 3550 A.8 converted from timescale units to milliseconds).
-/// `VigilVideo` writes the four decode fields through `RTPTrackReceiver`'s setters.
-///
-/// Sampled at 1 Hz by `HealthMonitor` into a fixed 600-slot ring per camera.
-public struct StreamStatistics: Sendable, Hashable, Codable {
-    // Throughput
-    public var framesDecoded: UInt64 = 0
-    public var framesPerSecond: Double = 0
-    public var bitsPerSecond: Double = 0
-    public var keyframeIntervalSeconds: Double = 0
-    // Loss and order
-    public var packetsReceived: UInt64 = 0
-    public var packetsLost: UInt64 = 0
-    public var packetsOutOfOrder: UInt64 = 0
-    public var packetsDuplicated: UInt64 = 0
-    /// Over the last 2 s window, 0...1.
-    public var lossFraction: Double = 0
-    public var gapCount: UInt32 = 0
-    // Timing
-    public var jitterMilliseconds: Double = 0
-    public var jitterBufferDepthPackets: Int = 0
-    public var jitterBufferDepthMilliseconds: Double = 0
-    /// Captureâ†’display estimate, RTCP-anchored. Must land within Â±25 ms of the physical rig.
-    public var estimatedLatencyMilliseconds: Double = 0
-    // Decode â€” written by VigilVideo
-    public var decodeQueueDepth: Int = 0
-    public var framesDroppedPreDecode: UInt64 = 0
-    public var framesDroppedPreDisplay: UInt64 = 0
-    public var decodeMillisecondsP50: Double = 0
-    public var decodeMillisecondsP99: Double = 0
-    /// **Measured**, from `kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder` â€”
-    /// never the requested value. Honesty is a shipping requirement.
-    public var isHardwareAccelerated: Bool = false
-    // Session
-    public var uptimeSeconds: Double = 0
-    public var reconnectCount: UInt32 = 0
-    /// A `diagnosticCode` such as `VG-RTSP-0401`, never a message.
-    public var lastErrorCode: String?
-
-    public init()
-}
-```
-
-### 3.9 Errors
-
-```swift
-/// Everything an error must be able to tell us: how to log it, what to show a human, and whether
-/// to retry. `VigilErrorDescribing` does not exist (API_CONTRACT Â§2 R-11).
-public protocol VigilFailure: Error, Sendable {
-    /// Stable machine code, `VG-<DOMAIN>-NNNN`. Appears in logs, the diagnostics bundle and the
-    /// Stream Doctor's "copy details". **Stable forever; never reuse a retired code.**
-    var diagnosticCode: String { get }
-    var severity: ErrorSeverity { get }
-    var disposition: RetryDisposition { get }
-    /// One sentence, sentence case, no jargon, no error numbers. Localised.
-    var userMessage: String { get }
-    /// One imperative sentence telling the user what to do, or `nil` if there is nothing to do.
-    var userRemedy: String? { get }
-    /// Extra key/values for the log line. MUST already be redacted.
-    var logMetadata: [String: String] { get }
-}
-
-public enum ErrorSeverity: Int, Sendable, Hashable, Codable, Comparable {
-    case degraded, recoverable, fatal
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-}
-
-public enum RetryDisposition: Sendable, Hashable, Codable {
-    /// Transient: network blip, timeout, camera reboot. Uses the 0.5/1/2/4/8/15/30 s ladder.
-    case retryWithBackoff
-    /// Stale Digest nonce, 401 with a new nonce, `kVTInvalidSessionErr`. One free retry.
-    case retryImmediatelyOnce
-    /// Wrong password, camera not activated, unsupported codec. **Never auto-retry.**
-    case retryAfterUserAction
-    /// Programmer error, unsupported OS feature.
-    case noRetry
-}
-
-/// The root error. Every domain enum it wraps is declared in `VigilProtocols` too â€” otherwise
-/// `VigilProtocols` would have to import `VigilRTSP`, which imports `VigilProtocols`, and nothing
-/// would build (API_CONTRACT Â§2 R-10).
-public enum VigilError: Error, Sendable, Hashable, VigilFailure {
-    case transport(TransportError)
-    case rtsp(RTSPError)
-    case rtp(RTPError)
-    case bitstream(BitstreamError)
-    case isapi(ISAPIError)
-    case discovery(DiscoveryError)
-    case decode(DecodeError)
-    case render(RenderError)
-    case storage(StorageError)
-    case credential(CredentialError)
-    case recording(RecordingError)
-    case cancelled
-    case internalInvariant(String, file: StaticString, line: UInt)
-}
-
-/// Throws instead of trapping. We never take the whole window down because one camera sent
-/// something odd; these bytes come from the network, so a crash is a security bug.
-@inline(__always)
-public func vigilRequire(_ condition: Bool, _ message: @autoclosure () -> String,
-                         file: StaticString = #fileID, line: UInt = #line) throws(VigilError) {
-    guard !condition else { return }
-    throw VigilError.internalInvariant(message(), file: file, line: line)
-}
-```
-
-The eleven domain enums live in `Errors/DomainErrors.swift`. Each is
-`public enum â€¦: Error, Sendable, Hashable, VigilFailure`. Case lists are normative; a module spec
-may document a case's meaning but may not add or rename one without amending this table.
-
-| Enum | Cases | Severity | Disposition |
-|---|---|---|---|
-| `TransportError` | `.connectTimeout`, `.connectRefused`, `.hostUnreachable`, `.peerClosed`, `.readIdleTimeout`, `.tlsFailed(String)`, `.tlsUntrusted(fingerprint: String)`, `.tlsPinMismatch(host: String)`, `.multicastBlocked`, `.localNetworkDenied`, `.egressBlocked(host: String)`, `.network(String)` | recoverable; `.localNetworkDenied`, `.egressBlocked`, `.tlsPinMismatch` fatal | backoff; the three fatals â†’ user action |
-| `RTSPError` | `.malformedResponse`, `.headerTooLarge(bytes: Int)`, `.unexpectedStatus(code: Int)`, `.unauthorized`, `.authRejected`, `.accessForbidden`, `.credentialsMissing`, `.methodNotSupported`, `.noSuitableTrack`, `.sdpParse(String)`, `.transportRejected`, `.sessionNotFound`, `.pathNotFound`, `.interleaveDesync(recovered: Bool)`, `.commandQueueOverflow`, `.tooManyRedirects`, `.timeout(RTSPTimerID)` | `.authRejected`, `.accessForbidden`, `.credentialsMissing` fatal; `.interleaveDesync(recovered: true)` degraded; rest recoverable | `.unauthorized` â†’ immediately once; the three fatals â†’ user action; rest â†’ backoff |
-| `RTPError` | `.shortPacket(length: Int)`, `.badVersion(UInt8)`, `.truncatedCSRC`, `.truncatedExtension`, `.badPaddingLength(UInt8)`, `.unknownPayloadType(UInt8)`, `.badFragment`, `.aggregationOverflow`, `.jitterBufferOverflow(dropped: Int)`, `.gap(count: Int)`, `.unsupportedEncoding(String)`, `.missingRequiredFmtp(String)`, `.unsupportedAACMode(String)`, `.malformedAudioConfig(String)`, `.invalidClockRate(Int32)` | degraded; the last five recoverable | none (counted in stats, never fails a session); the last five â†’ user action |
-| `BitstreamError` | `.emptyNALUnit`, `.tooLarge(bytes: Int)`, `.unexpectedEndOfData(atBit: Int)`, `.malformedExpGolomb(leadingZeros: Int)`, `.valueOutOfRange(field: String, value: UInt64)`, `.wrongNALType(expected: UInt8, found: UInt8)`, `.forbiddenBitSet`, `.invalidTemporalID`, `.negativeSkip`, `.invalidCropping`, `.unsupportedSyntax(String)`, `.unsupportedProfile(idc: UInt8)`, `.unsupportedChromaFormat(idc: UInt8)`, `.truncatedSEI`, `.truncatedLengthPrefix(atOffset: Int)`, `.unsupportedRecordVersion(UInt8)`, `.unsupportedLengthSize(UInt8)`, `.invalidBase64`, `.noParameterSets` | recoverable | `.noParameterSets` â†’ wait for the next IRAP; rest â†’ backoff |
-| `ISAPIError` | `.notConnected(String)`, `.timedOut(resource: String, seconds: Double)`, `.cancelled`, `.responseTooLarge(bytes: Int)`, `.authenticationFailed(username: String)`, `.accountLocked(retryAfter: Double?)`, `.authBlockedLocally(failures: Int)`, `.unsupportedAuthentication(String)`, `.insufficientPermission(resource: String)`, `.deviceNotActivated`, `.http(status: Int, resource: String)`, `.device(statusCode: Int, sub: String?)`, `.notSupported(resource: String)`, `.notFound(resource: String)`, `.deviceBusy`, `.rebootRequired`, `.malformedResponse(String)`, `.unexpectedContentType(expected: String, got: String?)`, `.multipartProtocolError(String)`, `.streamEnded(afterBytes: Int)`, `.partTooLarge(bytes: Int, limit: Int)`, `.tlsUnavailableOnThisPlatform` | `.accountLocked`, `.authenticationFailed`, `.authBlockedLocally`, `.deviceNotActivated`, `.insufficientPermission` fatal | `.deviceBusy` â†’ backoff; `.notSupported`/`.notFound` â†’ no retry, cache the negative for 24 h |
-| `DiscoveryError` | `.interfaceEnumerationFailed(errno: Int32)`, `.noEligibleInterfaces`, `.arpReadFailed(errno: Int32)`, `.multicastUnavailable(MulticastUnavailableReason)`, `.channelBindFailed(port: UInt16, String)`, `.prefixTooWide(bits: UInt8, hostCount: Int)`, `.probeSendFailed`, `.budgetExhausted(BudgetKind)`, `.cancelled` | recoverable | `.multicastUnavailable` â†’ fall back to a unicast sweep, surface a one-time notice |
-| `DecodeError` | `.vt(status: Int32)`, `.badData`, `.invalidSession`, `.malfunction`, `.formatChangeUnsupported`, `.noHardwareDecoder`, `.budgetDenied(DenialReason)`, `.missingParameterSets`, `.emptyParameterSet(index: Int)`, `.tooManyParameterSets(count: Int)`, `.formatDescriptionFailed(status: Int32)`, `.blockBufferFailed(status: Int32)`, `.sampleBufferFailed(status: Int32)`, `.pixelBufferPoolFailed(status: Int32)`, `.unsupportedFormat(codec: VideoCodec, detail: String)` | `.noHardwareDecoder` degraded | `.invalidSession`/`.malfunction` â†’ immediately once (recreate, wait for IDR); `.badData` â†’ drop to the next keyframe, **no** session restart |
-| `RenderError` | `.metalUnavailable`, `.shaderCompilationFailed(String)`, `.pipelineCompileFailed(String)`, `.textureCacheFailed(status: Int32)`, `.textureCreationFailed`, `.drawableUnavailable`, `.commandBufferFailed(code: Int, detail: String)`, `.deviceRemoved`, `.unsupportedPixelFormat(UInt32)`, `.captureFailed(String)`, `.atlasTooLarge(requested: Resolution, max: Int)` | `.metalUnavailable` degraded (fall back to ASBDL) | no retry |
-| `StorageError` | `.notWritable(path: String)`, `.corruptDocument(String)`, `.schemaTooNew(found: Int, supported: Int)`, `.missingMigration(from: Int)`, `.notAnObject`, `.diskFull(needBytes: Int64)`, `.atomicReplaceFailed`, `.documentTooLarge(bytes: Int)` | `.schemaTooNew` fatal | user action |
-| `CredentialError` | `.keychainStatus(Int32, operation: String)`, `.notFound`, `.duplicate`, `.userCancelledUnlock`, `.keychainLocked`, `.missingEntitlement`, `.decodeFailed` | recoverable | user action |
-| `RecordingError` | `.firstSampleNotKeyframe`, `.writerFailed(String)`, `.destinationUnwritable(path: String)`, `.spaceBelowReserve(freeBytes: Int64)`, `.folderUnavailable`, `.formatChangedMidClip` | recoverable | user action |
-
-`LocalizedError` conformance for all of the above is added by an extension in `VigilCore` so the
-pure layer stays Foundation-minimal while AppKit alerts still work.
-
-### 3.10 Logging and redaction
-
-```swift
-public enum LogLevel: Int, Sendable, Hashable, Codable, Comparable, CaseIterable {
-    case debug, info, notice, warning, error, fault
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-}
-
-/// The complete, fixed set. Thirteen, from `ARCHITECTURE.md` Â§8.1. Do not invent strings at call
-/// sites and do not add a fourteenth (API_CONTRACT Â§2 R-15, R-60).
-public enum LogCategory: String, Sendable, Hashable, Codable, CaseIterable {
-    case app, discovery, rtsp, rtp, bitstream, isapi, transport
-    case video, render, core, storage, ui, perf
-}
-
-public struct LogEvent: Sendable {
-    public var level: LogLevel
-    public var category: LogCategory
-    public var message: String
-    /// MUST be pre-redacted by the caller. `OSLogLogger` interpolates it as `.public`, which is
-    /// only correct because of that guarantee.
-    public var metadata: [String: String]
-    public var file: StaticString
-    public var line: UInt
-    public init(level: LogLevel, category: LogCategory, message: String,
-                metadata: [String: String] = [:], file: StaticString = #fileID, line: UInt = #line)
-}
-
-/// The pure layer cannot `import OSLog`, so it logs through this. Every pure type takes
-/// `logger: any LoggerProtocol = NullLogger()` in its initialiser. Never a global.
-public protocol LoggerProtocol: Sendable {
-    /// Cheap gate so callers skip building strings for disabled levels.
-    func isEnabled(_ level: LogLevel, _ category: LogCategory) -> Bool
-    func log(_ event: LogEvent)
-}
-
-public extension LoggerProtocol {
-    @inline(__always)
-    func debug(_ category: LogCategory, _ message: @autoclosure () -> String,
-               _ metadata: @autoclosure () -> [String: String] = [:],
-               file: StaticString = #fileID, line: UInt = #line) {
-        guard isEnabled(.debug, category) else { return }
-        log(LogEvent(level: .debug, category: category, message: message(),
-                     metadata: metadata(), file: file, line: line))
-    }
-    // info, notice, warning, error, fault â€” identical shape.
-}
-
-public struct NullLogger: LoggerProtocol {
-    public init() {}
-    public func isEnabled(_: LogLevel, _: LogCategory) -> Bool { false }
-    public func log(_: LogEvent) {}
-}
-
-/// Decorator: at most `limit` events per key per `window`, then a
-/// "â€¦ suppressed N similar" summary when the window closes. Every repeated-error path
-/// (jitter overflow, bad data, gap, malformed packet) MUST be wrapped in it.
-public struct RateLimitedLogger: LoggerProtocol {
-    public init(wrapping base: any LoggerProtocol, limit: Int = 5,
-                window: Duration = .seconds(10), clock: any MonotonicClock)
-}
-```
-
-```swift
-/// The one redaction implementation. `Redaction`, `LogRedaction` and
-/// `String.redactingSecrets()` do not exist (API_CONTRACT Â§2 R-15).
-///
-/// Every rule below is a hard requirement from `FEATURES.md` Â§20.6 and `ARCHITECTURE.md` Â§8.6, and
-/// is covered by a fuzz test that seeds secrets in several encodings and asserts none survives any
-/// log-formatting path. Redaction is **idempotent** and never lengthens a string past 2Ã—.
-public enum Redact {
-    /// Passwords, `Authorization` / `WWW-Authenticate` values, Digest `nonce`/`cnonce`/`opaque`/
-    /// `response`, `Basic <b64>`, `password=`, `pwd=`, and the ISAPI XML elements
-    /// `<password>`, `<macAddress>`, `<serialNumber>`, `<challenge>`, `<salt>`, `<iv>`,
-    /// `<securityVer*>`, `<sessionID>`. Elements keep their tags; contents become `<redacted/>`.
-    public static func secrets(in text: String) -> String
-
-    /// An RTSP `Session:` id â†’ a stable 4-hex FNV-1a tag: `sess#7f3a`.
-    public static func sessionID(_ raw: String) -> String
-    /// A serial number â†’ last 4 characters: `â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢4C21`.
-    public static func serial(_ raw: String) -> String
-    /// A MAC â†’ last 2 octets at `info` and above; full only at `debug`.
-    public static func mac(_ raw: String, level: LogLevel) -> String
-    /// Strips userinfo; keeps scheme, host, port and path. Query values for keys matching the
-    /// secret patterns are elided.
-    public static func url(_ raw: String) -> String
-    /// Replaces the user's home directory with `~`. Used in the diagnostics bundle.
-    public static func path(_ raw: String) -> String
-    /// Stable pseudonym for the diagnostics bundle: `192.168.1.64` â†’ `cam-3f9c`.
-    /// Local logs keep real addresses â€” they are LAN addresses and are needed to diagnose.
-    public static func host(_ raw: String, salt: UInt64) -> String
-    /// Convenience: `secrets` over the message and every metadata value.
-    public static func event(_ event: LogEvent) -> LogEvent
-}
-```
-
-### 3.11 Bytes and bits
-
-```swift
-/// Bounds-checked, big-endian-by-default sequential reader over a byte buffer.
-/// Never traps: every accessor throws or returns `nil`. This code parses bytes from the network.
-public struct ByteReader: Sendable {
-    public private(set) var offset: Int
-    public var count: Int { get }
-    public var remaining: Int { get }
-    public var isAtEnd: Bool { get }
-
-    public init(_ data: Data)
-    public init(_ bytes: [UInt8])
-
-    public mutating func u8() throws(BitstreamError) -> UInt8
-    public mutating func u16BE() throws(BitstreamError) -> UInt16
-    public mutating func u24BE() throws(BitstreamError) -> UInt32
-    public mutating func u32BE() throws(BitstreamError) -> UInt32
-    public mutating func u64BE() throws(BitstreamError) -> UInt64
-    public mutating func u16LE() throws(BitstreamError) -> UInt16
-    public mutating func u32LE() throws(BitstreamError) -> UInt32
-    /// Returns a **copy**, never a slice: a slice retains the whole parent buffer, and a 12-byte
-    /// header slice holding a 1 MB read alive is a real leak.
-    public mutating func bytes(_ n: Int) throws(BitstreamError) -> Data
-    public mutating func skip(_ n: Int) throws(BitstreamError)
-    public mutating func seek(to offset: Int) throws(BitstreamError)
-    /// Peeks without advancing. Returns `nil` past the end rather than throwing, because callers
-    /// use it for lookahead.
-    public func peek(_ n: Int) -> Data?
-    public func peekU8(at relativeOffset: Int) -> UInt8?
-    /// The remaining bytes, as a copy.
-    public mutating func rest() -> Data
-    /// Scans forward for a byte pattern. Returns the absolute offset, or `nil`.
-    public func firstIndex(of pattern: [UInt8], from: Int) -> Int?
-    /// Reads a CRLF- or LF-terminated line as ASCII, up to `limit` bytes. The terminator is
-    /// consumed and not returned. Throws `.tooLarge` past `limit`.
-    public mutating func line(limit: Int) throws(BitstreamError) -> String
-}
-
-/// Growable big-endian-by-default writer. Used by record builders, the SADP/WS-Discovery encoders,
-/// the RTCP report builder and `VigilTestKit`'s synthetic generators.
-public struct ByteWriter: Sendable {
-    public private(set) var data: Data
-    public var count: Int { data.count }
-    public init(capacity: Int = 0)
-    public mutating func u8(_ v: UInt8)
-    public mutating func u16BE(_ v: UInt16)
-    public mutating func u24BE(_ v: UInt32)
-    public mutating func u32BE(_ v: UInt32)
-    public mutating func u64BE(_ v: UInt64)
-    public mutating func u16LE(_ v: UInt16)
-    public mutating func u32LE(_ v: UInt32)
-    public mutating func bytes(_ v: some Sequence<UInt8>)
-    public mutating func ascii(_ s: String)
-    /// Reserves 4 bytes, runs `body`, then back-patches the big-endian length of what `body` wrote.
-    /// The only sanctioned way to write a length-prefixed NAL.
-    public mutating func lengthPrefixed32(_ body: (inout ByteWriter) -> Void)
-    public mutating func align(to multiple: Int, pad: UInt8 = 0)
-}
-```
-
-```swift
-/// MSB-first bit reader. API fixed by `spec-bitstream.md` Â§7 and reproduced verbatim; the sole
-/// consumer is `VigilBitstream.RBSPBitReader`, plus the RTP slice-header probe.
-///
-/// Exp-Golomb and emulation-prevention removal live in `VigilBitstream`, **not** here.
-public struct BitReader: Sendable {
-    public let bytes: [UInt8]
-    public private(set) var bitOffset: Int
-    private let totalBits: Int
-
-    public init(_ bytes: [UInt8]) {
-        self.bytes = bytes
-        self.bitOffset = 0
-        self.totalBits = bytes.count * 8
-    }
-
-    /// Convenience for callers holding `Data`. Copies once.
-    public init(_ data: Data) { self.init([UInt8](data)) }
-
-    @inlinable public var bitsRemaining: Int { totalBits - bitOffset }
-    @inlinable public var isByteAligned: Bool { bitOffset & 7 == 0 }
-    @inlinable public var bytePosition: Int { bitOffset >> 3 }
-
-    /// Reads `n` in `0...32` bits, MSB first.
-    /// - Throws: `BitstreamError.unexpectedEndOfData` past the end.
-    /// - Note: `n` outside `0...32` is programmer error against a constant table and is the one
-    ///   sanctioned `precondition` in this type; it cannot come from network data.
-    public mutating func u(_ n: Int) throws(BitstreamError) -> UInt32 {
-        precondition(n >= 0 && n <= 32, "BitReader.u supports 0...32 bits")
-        if n == 0 { return 0 }
-        guard bitOffset + n <= totalBits else {
-            throw BitstreamError.unexpectedEndOfData(atBit: bitOffset)
-        }
-        var result: UInt32 = 0
-        var remaining = n
-        while remaining > 0 {
-            let byteIndex = bitOffset >> 3
-            let bitInByte = bitOffset & 7
-            let available = 8 - bitInByte
-            let take = min(available, remaining)
-            let byte = UInt32(bytes[byteIndex])
-            let shifted = byte >> UInt32(available - take)
-            let mask: UInt32 = (1 << UInt32(take)) - 1        // take <= 8, no overflow
-            result = (result << UInt32(take)) | (shifted & mask)
-            bitOffset += take
-            remaining -= take
-        }
-        return result
-    }
-
-    /// Reads `n` in `0...64` bits. Required for `general_constraint_indicator_flags` (48 bits).
-    public mutating func u64(_ n: Int) throws(BitstreamError) -> UInt64 {
-        precondition(n >= 0 && n <= 64)
-        if n <= 32 { return UInt64(try u(n)) }
-        let high = try u(n - 32)
-        let low = try u(32)
-        return (UInt64(high) << 32) | UInt64(low)
-    }
-
-    @inlinable public mutating func flag() throws(BitstreamError) -> Bool { try u(1) == 1 }
-
-    public mutating func skip(_ n: Int) throws(BitstreamError) {
-        guard n >= 0 else { throw BitstreamError.negativeSkip }
-        guard bitOffset + n <= totalBits else {
-            throw BitstreamError.unexpectedEndOfData(atBit: bitOffset)
-        }
-        bitOffset += n
-    }
-
-    /// Discards bits up to the next byte boundary. Does not validate their value.
-    public mutating func alignToByte() { bitOffset = (bitOffset + 7) & ~7 }
-
-    /// Peeks without advancing.
-    public func peek(_ n: Int) throws(BitstreamError) -> UInt32 { var c = self; return try c.u(n) }
-}
-
-/// MSB-first bit writer. Exists for `VigilTestKit`'s synthetic SPS generator and for record
-/// building; it is never on the frame path.
-public struct BitWriter: Sendable {
-    public private(set) var bytes: [UInt8]
-    public var bitCount: Int { get }
-    public init(capacity: Int = 0)
-    public mutating func u(_ value: UInt32, _ n: Int)
-    public mutating func flag(_ value: Bool)
-    public mutating func ue(_ value: UInt32)
-    public mutating func se(_ value: Int32)
-    /// Appends `rbsp_stop_one_bit` then zeros to the byte boundary.
-    public mutating func rbspTrailingBits()
-    /// Finished bytes, zero-padded to the byte boundary.
-    public func finish() -> [UInt8]
-}
-```
-
-### 3.12 Crypto
-
-All five are pure Swift, streaming, allocation-light, and tested on Linux against published
-vectors. **`import CryptoKit` is forbidden in every target** (API_CONTRACT Â§2 R-16).
-
-```swift
-/// RFC 1321. Used **only** where a protocol mandates it: HTTP/RTSP Digest authentication.
-/// Never for anything security-bearing of our own choosing.
-public struct MD5: Sendable {
-    public init()
-    public mutating func update(_ bytes: some Sequence<UInt8>)
-    public mutating func update(_ data: Data)
-    public mutating func update(_ string: String)          // UTF-8
-    public mutating func finalize() -> [UInt8]             // 16 bytes
-    public static func digest(_ data: Data) -> [UInt8]
-    public static func hex(_ data: Data) -> String         // 32 lowercase hex chars
-    public static func hex(_ string: String) -> String
-}
-
-/// FIPS 180-4. Needed by ONVIF WS-UsernameToken, which is parsed in `VigilDiscovery` â€” a pure,
-/// Linux-tested target.
-public struct SHA1: Sendable { /* same shape; 20 bytes */ }
-
-/// FIPS 180-4. Needed by the encrypted config export and by the TOFU SPKI pin shared between
-/// `VigilRTSP` and `VigilISAPI` (`Camera.tlsPinSPKI256`), which must be computable in a Linux test.
-public struct SHA256: Sendable { /* same shape; 32 bytes */ }
-
-/// Padding-tolerant Base64. Foundation's decoder **rejects** Hikvision's unpadded `sprop-*`
-/// values, which is why this exists.
-public enum Base64 {
-    /// Tolerates: missing `=` padding, embedded whitespace and newlines, and the URL-safe
-    /// alphabet (`-`/`_`). Rejects any other non-alphabet byte, and rejects `length % 4 == 1`.
-    public static func decode(_ string: String) -> Data?
-    /// Splits an SDP `sprop-parameter-sets` value on `,` and decodes each part leniently.
-    /// An empty part yields an empty `Data`, which is legal.
-    public static func decodeList(_ string: String) -> [Data]?
-    public static func encode(_ data: Data, padded: Bool = true) -> String
-}
-
-/// IEEE 802.3 CRC-32, for fixture checksums and the diagnostics manifest. Not a hash.
-public enum CRC32 {
-    public static func compute(_ data: Data) -> UInt32
-}
-```
-
-### 3.13 Network primitives
-
-```swift
-/// Host-order IPv4 address. Deliberately **not** `Network.IPv4Address`, which does not exist on
-/// Linux. In any file that also imports `Network`, spell it `VigilProtocols.IPv4Address` â€” the
-/// ambiguity is a compile error at best and a silent wrong type at worst.
-public struct IPv4Address: Hashable, Sendable, Codable, Comparable,
-                           CustomStringConvertible, LosslessStringConvertible {
-    /// Host byte order: `192.168.1.64 == 0xC0A80140`.
-    public let rawValue: UInt32
-    public init(rawValue: UInt32)
-    public init(_ a: UInt8, _ b: UInt8, _ c: UInt8, _ d: UInt8)
-    /// Strict dotted-quad parse. Rejects leading zeros (`192.168.01.1`), more than 3 digits per
-    /// octet, octets > 255, anything but exactly 4 octets, surrounding whitespace, and non-digits.
-    public init?(_ description: String)
-    public var octets: (UInt8, UInt8, UInt8, UInt8) { get }
-    public var description: String { get }
-    @inlinable public var isLoopback: Bool { rawValue >> 24 == 127 }
-    @inlinable public var isLinkLocal: Bool { rawValue >> 16 == 0xA9FE }
-    @inlinable public var isMulticast: Bool { rawValue >> 28 == 0xE }
-    @inlinable public var isUnspecified: Bool { rawValue == 0 }
-    @inlinable public var isPrivate: Bool { â€¦ }   // 10/8, 172.16/12, 192.168/16
-    public static func < (l: Self, r: Self) -> Bool { l.rawValue < r.rawValue }
-}
-
-/// 48-bit MAC packed into the low 48 bits of a `UInt64`. Canonical form is lowercase,
-/// colon-separated.
-public struct MACAddress: Hashable, Sendable, Codable,
-                          CustomStringConvertible, LosslessStringConvertible {
-    public let rawValue: UInt64
-    /// `nil` if any bit above 47 is set.
-    public init?(rawValue: UInt64)
-    /// - Precondition: `bytes.count == 6`.
-    public init?(bytes: [UInt8])
-    /// Accepts every separator Hikvision, Dahua and Axis firmware emits, case-insensitively:
-    /// `c4:2f:90:ab:cd:ef`, `C4-2F-90-AB-CD-EF`, `c42f90abcdef`, `c42f.90ab.cdef`.
-    /// Rejects anything that does not reduce to exactly 12 hex nibbles.
-    public init?(_ description: String)
-    public var bytes: [UInt8] { get }
-    public var description: String { get }
-    public var oui: UInt32 { get }
-    @inlinable public var isLocallyAdministered: Bool { bytes[0] & 0x02 != 0 }
-    @inlinable public var isMulticast: Bool { bytes[0] & 0x01 != 0 }
-    /// All-zero, broadcast and multicast MACs are never valid identities.
-    public var isUsableIdentity: Bool { get }
-}
-
-/// An IPv4 network. `IPv4CIDR` does not exist (API_CONTRACT Â§2 R-18).
-public struct IPv4Subnet: Hashable, Sendable, Codable, CustomStringConvertible {
-    /// Already masked.
-    public let network: IPv4Address
-    public let prefixLength: UInt8      // 0...32
-    public init(network: IPv4Address, prefixLength: UInt8)
-    /// `nil` when `mask` is not a contiguous netmask (e.g. `255.0.255.0`).
-    public init?(address: IPv4Address, mask: IPv4Address)
-    /// Strict CIDR parse: `192.168.1.0/24`.
-    public init?(cidr: String)
-    public var mask: IPv4Address { get }
-    public var broadcast: IPv4Address { get }
-    /// `1 << (32 - prefixLength)`, saturating at `Int.max` for `/0`.
-    public var addressCount: Int { get }
-    /// Excludes network and broadcast for `prefixLength <= 30`; for `/31` and `/32`, all addresses.
-    public var usableHostCount: Int { get }
-    @inlinable public func contains(_ a: IPv4Address) -> Bool {
-        a.rawValue & mask.rawValue == network.rawValue
-    }
-    /// Lazy, allocation-free ascending sequence over usable hosts.
-    public var hosts: IPv4HostSequence { get }
-    public var description: String { "\(network)/\(prefixLength)" }
-}
-
-public struct IPv4HostSequence: Sequence, Sendable {
-    public func makeIterator() -> AnyIterator<IPv4Address>
-}
-```
-
-```swift
-public enum HostClass: String, Sendable, Hashable, Codable {
-    case loopback, privateLAN, linkLocal, multicast, publicInternet, invalid
-    /// The only classes Vigil may open a socket to.
-    @inlinable public var isEgressPermitted: Bool { self != .publicInternet && self != .invalid }
-}
-
-/// The single LAN-only egress gate. Pure, Linux-tested, and consulted **before** any socket is
-/// created â€” in `VigilTransport`, `VigilISAPI` and `VigilDiscovery` alike (API_CONTRACT Â§2 R-71).
-///
-/// This is what makes "zero egress with no cameras configured" a code property rather than a
-/// packet-capture ritual, and it is why there is no telemetry to opt out of.
-public enum HostPolicy {
-    /// Accepts an IPv4 literal, a bracketed or bare IPv6 literal, or a DNS name.
-    /// A DNS name that is not `*.local` and not an mDNS/Bonjour name classifies as
-    /// `.publicInternet` **until resolved**; the caller re-checks the resolved address.
-    public static func classify(_ host: String) -> HostClass
-    public static func classify(_ address: IPv4Address) -> HostClass
-    /// Throws `TransportError.egressBlocked` for a disallowed destination.
-    public static func requirePermitted(_ host: String) throws(TransportError)
-}
-```
-
-```swift
-/// Where a device's ISAPI control plane lives.
-public struct ISAPIEndpoint: Sendable, Hashable, Codable {
-    /// IPv4 literal, IPv6 literal **without** brackets, or a DNS name.
-    public var host: String
-    public var port: Int                 // 80 http, 443 https
-    public var useTLS: Bool
-    /// Almost always `/ISAPI`. Devices behind a reverse proxy may need `/cam1/ISAPI`; the field
-    /// exists so nothing string-concatenates blindly.
-    public var pathPrefix: String
-    public init(host: String, port: Int = 80, useTLS: Bool = false, pathPrefix: String = "/ISAPI")
-    /// `resource` is written **without** the prefix, e.g. `/System/deviceInfo`. Query items are
-    /// percent-encoded per RFC 3986 with `+` encoded as `%2B` â€” Hikvision does not decode `+` as
-    /// a space. IPv6 hosts are bracketed exactly once here; `host` stays unbracketed.
-    public func url(_ resource: String, query: [URLQueryItem] = []) throws(ISAPIError) -> URL
-}
-
-/// Where a stream lives. Credentials are **never** part of an RTSP URL.
-public struct RTSPEndpoint: Sendable, Hashable, Codable {
-    public var host: String
-    public var port: Int                 // 554, or 322 for tcpTLS
-    public var path: String              // absolute, e.g. "/Streaming/Channels/101"
-    public var transport: RTSPTransportKind
-    public init(host: String, port: Int = 554, path: String,
-                transport: RTSPTransportKind = .tcpInterleaved)
-}
-```
-
-```swift
-/// Case-insensitive ordered HTTP header container.
-public struct HTTPHeaders: Sendable, Hashable, Codable, Sequence {
-    public init()
-    public init(_ pairs: [(String, String)])
-    public subscript(_ name: String) -> String? { get set }   // first value, case-insensitive
-    public func all(_ name: String) -> [String]
-    public mutating func append(_ name: String, _ value: String)
-    public mutating func remove(_ name: String)
-    public func makeIterator() -> IndexingIterator<[(name: String, value: String)]>
-}
-
-/// Per-device request lane. Hikvision devices run a small HTTP worker pool; more than a handful of
-/// concurrent requests reliably produces 503 `deviceBusy` and, on 5.4.x firmware, can stall the
-/// RTSP service for seconds. Separate lanes stop a snapshot burst from starving PTZ.
-public enum HTTPLane: String, Sendable, Hashable, Codable, CaseIterable {
-    case control, snapshot, stream, audio
-}
-
-public struct HTTPRequest: Sendable {
-    public var url: URL
-    public var method: String
-    public var headers: HTTPHeaders
-    public var body: Data?
-    public var timeout: Duration
-    public var lane: HTTPLane
-    public init(url: URL, method: String = "GET", headers: HTTPHeaders = .init(),
-                body: Data? = nil, timeout: Duration = .seconds(8), lane: HTTPLane = .control)
-}
-
-public struct HTTPResponse: Sendable {
-    public let statusCode: Int
-    public let headers: HTTPHeaders
-    public let body: Data
-    public var contentType: String? { headers["Content-Type"] }
-}
-
-/// The injection seam that keeps `VigilISAPI` tests off the network, and lets `VigilDiscovery`'s
-/// ONVIF `GetStreamUri` fallback work without importing `VigilISAPI`.
-/// `ISAPIHTTPTransporting` does not exist (API_CONTRACT Â§2 R-17).
-public protocol HTTPTransporting: Sendable {
-    func perform(_ request: HTTPRequest) async throws(ISAPIError) -> HTTPResponse
-    /// Long-lived byte stream (`alertStream`, two-way audio download). Back-pressured:
-    /// `.bufferingNewest(64)`, and `.terminated`/`.dropped` cancels the underlying task.
-    func stream(_ request: HTTPRequest) async throws(ISAPIError)
-        -> (status: Int, headers: HTTPHeaders, bytes: AsyncThrowingStream<Data, any Error>)
-    /// Chunked upload with a caller-driven body (two-way audio push).
-    func upload(_ request: HTTPRequest) async throws(ISAPIError) -> any HTTPUploadHandle
-}
-
-public protocol HTTPUploadHandle: Sendable {
-    func send(_ chunk: Data) async throws(ISAPIError)
-    func finish() async
-    var isOpen: Bool { get async }
-}
-```
-
-```swift
-/// A username and a password, in memory only.
-///
-/// **Not `Codable`. Deliberately.** `Camera` has no password property to accidentally encode â€”
-/// enforced by the type, not by discipline, and asserted by a test that reflects over
-/// `Camera.CodingKeys`. `ISAPICredential` does not exist (API_CONTRACT Â§2 R-14).
-public struct Credential: Sendable, Hashable, CustomStringConvertible, CustomDebugStringConvertible {
-    public let ref: CredentialRef
-    public let account: String
-    public let secret: String
-    public init(ref: CredentialRef = .init(), account: String, secret: String)
-    public var description: String { "Credential(account: \(account), secret: ****)" }
-    public var debugDescription: String { description }
-}
-
-/// Opaque, stable handle to a Keychain item. This is what appears in `library.json`; it reveals
-/// nothing, not even the username.
-public struct CredentialRef: Hashable, Sendable, Codable, CustomStringConvertible {
-    public let rawValue: UUID
-    public init(_ rawValue: UUID = UUID())
-    public var description: String { rawValue.uuidString }
-    /// The `kSecAttrPath` value that locates the item independently of host, port and account,
-    /// so a camera can move without orphaning its password.
-    public var keychainPath: String { "/vigil/credential/\(rawValue.uuidString)" }
-}
-```
-
-### 3.14 Identifiers
-
-```swift
-/// Every Vigil identifier encodes as a **bare JSON string**, never as `{"rawValue": â€¦}`.
-/// `CameraID`, `GroupID`, `LayoutID`, `EventID`, `ClipID` and `BookmarkID` are all this shape.
-public struct CameraID: Hashable, Sendable, Codable, CustomStringConvertible {
-    public let rawValue: UUID
-    public init(_ rawValue: UUID = UUID())
-    public var description: String { rawValue.uuidString }
-    /// First 8 characters. The form that appears in log lines and queue names.
-    public var short: String { String(description.prefix(8)) }
-    public init(from decoder: any Decoder) throws {
-        rawValue = try decoder.singleValueContainer().decode(UUID.self)
-    }
-    public func encode(to encoder: any Encoder) throws {
-        var c = encoder.singleValueContainer(); try c.encode(rawValue)
-    }
-}
-
-/// `NSWindow.windowNumber`, wrapped so `VigilCore` can reason about occlusion without AppKit.
-public struct WindowID: Hashable, Sendable, Codable { public let rawValue: Int }
-```
-
-```swift
-/// 1-based **video input** channel. Cameras are always 1; an NVR has one per input.
-/// Used by `/Image/channels/{ch}`, `/PTZCtrl/channels/{ch}`,
-/// `/System/Video/inputs/channels/{ch}`, motion configuration and `EventNotificationAlert`.
-public struct ChannelID: Sendable, Hashable, Codable, ExpressibleByIntegerLiteral,
-                         CustomStringConvertible, Comparable {
-    public let value: Int
-    public init(_ value: Int)
-    public init(integerLiteral value: Int)
-    public var description: String { String(value) }
-    public static func < (a: Self, b: Self) -> Bool { a.value < b.value }
-}
-
-/// `channel * 100 + quality.rawValue`. Used by `/Streaming/channels/{id}`,
-/// `/Streaming/channels/{id}/picture` and the RTSP path. **Not interchangeable with `ChannelID`.**
-public struct StreamingChannelID: Sendable, Hashable, Codable, CustomStringConvertible, Comparable {
-    public let value: Int
-    public init(channel: ChannelID, quality: StreamQuality) {
-        value = channel.value * 100 + quality.rawValue
-    }
-    /// Rejects values below 101 and quality digits outside `1...3`.
-    public init?(rawValue: Int)
-    public var channel: ChannelID { ChannelID(value / 100) }
-    public var quality: StreamQuality { StreamQuality(rawValue: value % 100) ?? .main }
-    public var description: String { String(value) }
-    public static func < (a: Self, b: Self) -> Bool { a.value < b.value }
-}
-
-/// The same numeric space as `StreamingChannelID`, but a **distinct type**: tracks are a recording
-/// concept and the two are not interchangeable across firmware. Used by
-/// `/ContentMgmt/record/tracks`, `CMSearchDescription.trackIDList` and `/Streaming/tracks/{id}`.
-public struct TrackID: Sendable, Hashable, Codable, CustomStringConvertible, Comparable {
-    public let value: Int
-    public init(_ value: Int)
-    public var description: String { String(value) }
-    public static func < (a: Self, b: Self) -> Bool { a.value < b.value }
-}
-```
-
-```swift
-/// The **only** sanctioned firmware-workaround channel (API_CONTRACT Â§2 R-27a).
-///
-/// Detected by the protocol modules, persisted by `VigilCore` on the camera record, and consulted
-/// in **exactly four places**: the path builder, the body builder, the parser configuration, and
-/// the request gate. A firmware `if` anywhere else â€” in a decoder, in a view â€” is a
-/// review-blocking defect.
-public struct DeviceQuirks: Sendable, Hashable, Codable {
-    public var schemaVersion: Int = 1
-
-    // Protocol shape
-    public var digestNoQOP: Bool = false
-    public var requiresBasicAuth: Bool = false
-    public var closesOnGetParameter: Bool = false
-    public var interleavedOnly: Bool = false
-    public var noMulticast: Bool = false
-    public var unreliableMarkerBit: Bool = false
-    public var sdpMissingParameterSets: Bool = false
-    public var rtspPathLegacyH264: Bool = false
-    public var streamingChannelIDIsSingleDigit: Bool = false
-
-    // ISAPI shape
-    public var requiresXMLDeclarationInBody: Bool = true
-    public var sharpnessElementIsCapitalized: Bool = true
-    public var snapshotIgnoresResolutionQuery: Bool = false
-    public var jpegSnapshotNeedsChannelSuffix: Bool = false
-    public var channelListPagedAt64: Bool = false
-    public var inputProxyStatusListUnsupported: Bool = false
-    public var recordTypeFilterUnsupported: Bool = false
-    public var playbackTimesAreDeviceLocal: Bool = false
-    public var dailyDistributionPath: String? = nil
-    public var eventSchedulePath: String? = nil
-    public var alertStreamBoundaryFromSniff: Bool = false
-    public var alertStreamNoTerminalBoundary: Bool = false
-    public var alertStreamDropsWithoutTraffic: Bool = false
-
-    // Behaviour
-    public var momentaryUnsupported: Bool = false
-    public var ptzContinuousNeedsStopCommand: Bool = false
-    /// `nil` until Â§13.5 calibration determines it.
-    public var ptz3DOriginIsTopLeft: Bool? = nil
-    public var motionRegionYAxisInverted: Bool = false
-    public var reportsWrongFPSInISAPI: Bool = false
-    /// Overrides `maxConcurrentControlRequests`; 1 for firmware that rejects concurrent ISAPI.
-    public var maxConcurrentRequestsOverride: Int? = nil
-
-    public init()
-    /// Quirks are **sticky**: never auto-cleared. Reset only by Inspector â†’ Info â†’ "Re-probe device".
-    public mutating func merge(_ observed: DeviceQuirks)
-}
-```
-
-```swift
-public enum EventKind: String, Sendable, Hashable, Codable, CaseIterable {
-    case motion, lineCrossing, intrusion, regionEntrance, regionExiting, faceDetection
-    case tamper, io, videoLoss, diskFull, diskError, sceneChange, audioException
-    case unattendedBaggage, attendedBaggage, peopleCounting
-    /// Synthesised by Vigil, not by a device.
-    case streamLost, authFailure, eventStorm
-    case unknown
-
-    /// Lenient mapping from the wire `eventType` string. Case-insensitive; never throws.
-    public init(isapiEventType: String)
-    /// Localisation key, e.g. `event.kind.motion`.
-    public var displayNameKey: String { "event.kind.\(rawValue)" }
-    public var defaultSeverity: EventSeverity { â€¦ }
-}
-
-public enum EventSeverity: Int, Sendable, Hashable, Codable, Comparable {
-    case info = 0, notice = 1, warning = 2, alarm = 3
-    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-}
-```
-
-### 3.15 Shared concurrency and buffer utilities
-
-```swift
-/// Multi-consumer fan-out over one bounded source. **Every** `AsyncStream` accessor in Vigil is a
-/// factory over one of these; a stored `AsyncStream` property has exactly one consumer and the
-/// second caller silently gets nothing (API_CONTRACT Â§2 R-27, R-65).
-public actor Broadcaster<Element: Sendable> {
-    public init(replaysLatest: Bool = false,
-                bufferingPolicy: AsyncStream<Element>.Continuation.BufferingPolicy = .bufferingNewest(64))
-    /// A fresh stream, registered as a new consumer. `onTermination` deregisters.
-    public nonisolated func stream() -> AsyncStream<Element>
-    public func yield(_ element: Element)
-    public func finish()
-    public var consumerCount: Int { get }
-}
-
-/// FIFO, priority-aware, cancellation-safe permit gate. Never `DispatchSemaphore`, which blocks a
-/// cooperative thread and deadlocks the pool under Swift 6.
-public actor ConcurrencyLimiter {
-    public init(limit: Int, name: String)
-    public func withPermit<T: Sendable>(priority: StreamPriority = .visibleSmall,
-                                        _ body: @Sendable () async throws -> T) async rethrows -> T
-    public func setLimit(_ limit: Int)
-    public var inFlight: Int { get }
-    public var queueDepth: Int { get }
-}
-
-/// Fixed-capacity ring. Preallocated at construction; O(1) append; **zero allocation** afterwards.
-/// Used by `HealthRing`, the RTP reorder buffer, `FrameQueue` and the statistics reservoirs.
-public struct RingBuffer<Element>: Sendable where Element: Sendable {
-    public let capacity: Int
-    public private(set) var count: Int
-    public init(capacity: Int, repeating: Element)
-    /// Overwrites the oldest element when full. Returns the evicted element, if any.
-    @discardableResult public mutating func append(_ element: Element) -> Element?
-    public mutating func removeFirst() -> Element?
-    public func ordered() -> [Element]                     // oldest â†’ newest
-    public func suffix(_ n: Int) -> [Element]
-    public subscript(_ i: Int) -> Element { get }          // 0 == oldest
-    public mutating func removeAll()
-}
-```
-
-## 4. Per-module public API surface
-
-Declarations without bodies, for all twelve targets plus `VigilTestKit`. **This is the contract:
-nothing may be added later without a note in this section and a line in the commit message.**
-A type not named here does not exist â€” do not invent one, raise it.
-
-Everything in Â§3 is available to every module. Nothing in Â§4 may be redeclared in another module.
-
-### 4.1 `VigilProtocols`
-
-Exactly Â§3, nothing more. It has no logic beyond the crypto, the readers/writers, `TilePolicy`,
-`HostPolicy`, `Redact`, `Broadcaster`, `ConcurrencyLimiter` and `RingBuffer`.
-
-### 4.2 `VigilBitstream` â€” H.264/H.265 syntax
-
-Depends on `VigilProtocols`. Zero classes, zero actors, zero shared state, 100 % value types.
-
-```swift
-// NAL tables and headers
-public enum H264NALType: UInt8, Sendable, Hashable, CaseIterable { â€¦ }   // 1 slice â€¦ 5 IDR â€¦ 7 SPS, 8 PPS
-public enum H265NALType: UInt8, Sendable, Hashable, CaseIterable { â€¦ }   // 16â€“23 IRAP, 32 VPS, 33 SPS, 34 PPS
-public struct NALUnitRef: Sendable, Hashable {
-    public let range: Range<Int>      // into the source buffer, NAL header included
-    public let typeCode: UInt8
-    public let layerID: UInt8         // H.265; 0 for H.264
-    public let temporalID: UInt8      // H.265; 0 for H.264
-}
-public enum NALHeader {
-    public static func decodeH264(_ b0: UInt8) throws(BitstreamError) -> (type: UInt8, refIdc: UInt8)
-    public static func decodeHEVC(_ b0: UInt8, _ b1: UInt8)
-        throws(BitstreamError) -> (type: UInt8, layerID: UInt8, temporalID: UInt8)
-    public static func encodeHEVC(type: UInt8, layerID: UInt8, temporalID: UInt8) -> (UInt8, UInt8)
-    @inlinable public static func typeCode(_ nal: UnsafeRawBufferPointer,
-                                           codec: VideoCodec) throws(BitstreamError) -> UInt8
-}
-
-// Annex-B â†” length-prefixed. Annex-B appears at exactly two edges: reading a raw .h264/.h265
-// fixture, and writing a debug dump. NEVER on the live path.
-public enum AnnexB {
-    public static func findStartCode(in buffer: UnsafeRawBufferPointer,
-                                     from: Int) -> (index: Int, length: Int)?
-    public static func enumerateNALUnits(in buffer: UnsafeRawBufferPointer,
-                                         _ body: (Range<Int>) throws -> Void) rethrows
-    public static func nalRanges(_ bytes: [UInt8]) -> [Range<Int>]
-    public static func toLengthPrefixed(_ annexB: [UInt8]) -> Data
-    public static func fromLengthPrefixed(_ prefixed: Data,
-                                          startCodeLength: Int = 4) throws(BitstreamError) -> [UInt8]
-}
-public enum LengthPrefixed {
-    public static func enumerate(_ bytes: UnsafeRawBufferPointer, codec: VideoCodec,
-                                 _ body: (Range<Int>, UInt8) throws -> Void) throws(BitstreamError)
-    public static func validate(_ bytes: UnsafeRawBufferPointer) -> Bool
-    /// Writes `nal` prefixed by its 4-byte big-endian length. **The one function `VigilRTP` uses.**
-    @inlinable public static func append(nal: UnsafeRawBufferPointer, to out: inout ByteWriter)
-}
-
-// RBSP
-public enum RBSP {
-    public static func unescape(_ nal: UnsafeRawBufferPointer,
-                                skippingHeaderBytes: Int) throws(BitstreamError) -> [UInt8]
-    public static func escape(_ rbsp: [UInt8]) -> [UInt8]
-    public static func escapeByteCount(_ nal: UnsafeRawBufferPointer, skippingHeaderBytes: Int) -> Int
-}
-/// Adds emulation-prevention removal, Exp-Golomb (`ue`, `se`) and `moreRBSPData()` over
-/// `VigilProtocols.BitReader`. Exp-Golomb lives HERE, not in `VigilProtocols`.
-public struct RBSPBitReader: Sendable { â€¦ }
-
-// Parsers
-public enum H264Parser {
-    public static func parseSPS(_ nal: UnsafeRawBufferPointer) throws(BitstreamError) -> H264SPS
-    public static func parsePPS(_ nal: UnsafeRawBufferPointer) throws(BitstreamError) -> H264PPS
-    public static func parseSPS(base64: String) throws(BitstreamError) -> H264SPS
-    /// Splits an SDP `sprop-parameter-sets` value (`<b64>,<b64>`) into NAL units, leniently.
-    public static func parseSpropParameterSets(_ value: String) throws(BitstreamError) -> [Data]
-}
-public enum H265Parser {
-    public static func parseVPS(_ nal: UnsafeRawBufferPointer) throws(BitstreamError) -> H265VPS
-    public static func parseSPS(_ nal: UnsafeRawBufferPointer) throws(BitstreamError) -> H265SPS
-    public static func parsePPS(_ nal: UnsafeRawBufferPointer) throws(BitstreamError) -> H265PPS
-    public static func parseSPS(base64: String) throws(BitstreamError) -> H265SPS
-}
-public struct ProfileTierLevel: Sendable, Hashable, Codable { â€¦ }
-public struct H264SPS: Sendable, Hashable, Codable { â€¦ }
-public struct H264PPS: Sendable, Hashable, Codable { â€¦ }
-public struct H265VPS: Sendable, Hashable, Codable { â€¦ }
-public struct H265SPS: Sendable, Hashable, Codable { â€¦ }
-public struct H265PPS: Sendable, Hashable, Codable { â€¦ }
-
-/// The bridge to Â§3.6. `VigilBitstream` publishes `VideoFormatInfo`, NEVER a
-/// `CMVideoFormatDescription`. Report cropped display size, allocate from coded size.
-public extension VideoFormatInfo {
-    init(_ sps: H264SPS)
-    init(_ sps: H265SPS, vps: H265VPS?, pps: H265PPS?)
-}
-
-// Records. `lengthSizeMinusOne` is ALWAYS 3.
-public struct AVCDecoderConfigurationRecord: Sendable, Hashable {
-    public var avcProfileIndication: UInt8
-    public var profileCompatibility: UInt8
-    public var avcLevelIndication: UInt8
-    public var lengthSizeMinusOne: UInt8            // always 3
-    public var sequenceParameterSets: [Data]
-    public var pictureParameterSets: [Data]
-    public var chromaFormat: UInt8?
-    public var bitDepthLumaMinus8: UInt8?
-    public var bitDepthChromaMinus8: UInt8?
-    public var sequenceParameterSetExt: [Data]
-    public init(sps: [Data], pps: [Data], spsExt: [Data] = []) throws(BitstreamError)
-    public init(parsing data: Data) throws(BitstreamError)
-    public func serialized() -> Data
-    public var parameterSets: ParameterSets { get }
-}
-public struct HEVCDecoderConfigurationRecord: Sendable, Hashable {
-    public struct NALArray: Sendable, Hashable {
-        public var arrayCompleteness: Bool
-        public var nalUnitType: UInt8
-        public var nalUnits: [Data]
-    }
-    public var ptl: ProfileTierLevel
-    public var minSpatialSegmentationIDC: UInt16
-    public var parallelismType: UInt8
-    public var chromaFormat: UInt8
-    public var bitDepthLumaMinus8: UInt8
-    public var bitDepthChromaMinus8: UInt8
-    public var avgFrameRate: UInt16                 // fps Ã— 256
-    public var constantFrameRate: UInt8
-    public var numTemporalLayers: UInt8
-    public var temporalIDNested: Bool
-    public var lengthSizeMinusOne: UInt8            // always 3
-    /// Ascending `nalUnitType`: 32 VPS, 33 SPS, 34 PPS, optionally 39 SEI.
-    public var arrays: [NALArray]
-    public init(vps: [Data], sps: [Data], pps: [Data], sei: [Data] = [],
-                parsedSPS: H265SPS, parsedPPS: H265PPS?) throws(BitstreamError)
-    public init(parsing data: Data) throws(BitstreamError)
-    public func serialized() -> Data
-    public var parameterSets: ParameterSets { get }
-}
-
-// SEI
-public enum SEI {
-    public static func enumerate(nalUnit: UnsafeRawBufferPointer, codec: VideoCodec,
-                                 _ body: (Int, ArraySlice<UInt8>) throws -> Void) throws(BitstreamError)
-    public static func parseRecoveryPoint(_ payload: ArraySlice<UInt8>,
-                                          codec: VideoCodec) throws(BitstreamError) -> RecoveryPoint
-    public static func parsePictureTiming(_ payload: ArraySlice<UInt8>,
-                                          sps: H264SPS) throws(BitstreamError) -> PictureTiming
-}
-public struct RecoveryPoint: Sendable, Hashable { â€¦ }
-public struct PictureTiming: Sendable, Hashable { public var picStruct: UInt8 }
-
-// Classification and gating â€” the surfaces VigilRTP depends on (R-01).
-public enum SliceHeader {
-    /// H.264 `first_mb_in_slice == 0`, H.265 `first_slice_segment_in_pic_flag`.
-    /// **The authoritative access-unit boundary predicate.** Never duplicate it.
-    @inlinable public static func isFirstSliceOfPicture(nalUnit: UnsafeRawBufferPointer,
-                                                        codec: VideoCodec) -> Bool
-    /// H.264 `slice_type`, when cheaply available. Advisory only.
-    public static func sliceType(nalUnit: UnsafeRawBufferPointer, codec: VideoCodec) -> UInt8?
-}
-public struct AccessUnitSummary: Sendable { â€¦ }
-/// Starts **closed** on every PLAY, reconnect and decoder reset. `VigilCore` acts on
-/// `shouldRequestKeyframe`; `VigilUI` renders "Connecting", never black, while it is closed.
-/// For H.265, RASL pictures after a CRA start are dropped.
-public struct IRAPGate: Sendable {
-    public private(set) var isOpen: Bool
-    public private(set) var shouldRequestKeyframe: Bool
-    public mutating func reset()
-    public mutating func admit(_ summary: AccessUnitSummary) -> Bool
-}
-/// Merge-not-replace parameter-set store with format-change detection. A `struct`, owned by
-/// whichever actor drives the stream (API_CONTRACT Â§2 R-67).
-public struct ParameterSetStore: Sendable {
-    public private(set) var sets: ParameterSets?
-    public private(set) var format: VideoFormatInfo?
-    public private(set) var generation: UInt32
-    public mutating func ingest(_ incoming: ParameterSets) -> ParameterSetChange
-    public mutating func reset()
-}
-public enum ParameterSetChange: Sendable, Hashable {
-    case unchanged
-    case firstSet
-    /// Same decoder can be reused; rebuild only the format description and bump `generation`.
-    case compatible(previous: VideoFormatInfo?)
-    /// Codec, coded size, chroma format or luma bit depth changed. Drain and recreate.
-    case incompatible(previous: VideoFormatInfo?)
-}
-public enum SampleAspectRatio { public static let table: [UInt8: (Int, Int)] }
-```
-
-### 4.3 `VigilRTSP` â€” messages, auth, SDP, session machine
-
-Depends on `VigilProtocols`. Pure `struct`s; no sockets, no timers, no `Task`.
-**Never builds a `MediaTimestamp`** and never depends on `VigilRTP`.
-
-```swift
-public enum RTSPMethod: String, Sendable, Hashable, CaseIterable { â€¦ }      // 11 methods
-public struct RTSPStatus: RawRepresentable, Hashable, Sendable { â€¦ }        // 30 named codes
-public struct RTSPHeaders: Sendable, Equatable, Sequence { â€¦ }              // ordered, ASCII-folded
-public struct RTSPRequest: Sendable, Equatable { â€¦ }
-public struct RTSPResponse: Sendable, Equatable { â€¦ }
-public enum RTSPIncoming: Sendable, Equatable {
-    case response(RTSPResponse), request(RTSPRequest)
-    case interleaved(channel: UInt8, payload: Data)
-}
-
-/// Hand-written, because `URLComponents` mangles `trackID=1` path segments and rejects some
-/// Hikvision query forms. Credentials NEVER appear in `requestLineForm` or `description`.
-public struct RTSPURL: Sendable, Hashable, CustomStringConvertible {
-    public var scheme: String            // "rtsp" | "rtsps"
-    public var host: String
-    public var port: Int                 // 554, or 322 for rtsps
-    public var path: String
-    public var query: String?
-    public init?(string: String)
-    public init(endpoint: RTSPEndpoint)
-    public var requestLineForm: String { get }
-    public var description: String { get }
-    public func appendingControl(_ control: String) -> RTSPURL
-}
-
-public struct RTSPWireDecoder: Sendable {
-    public struct Limits: Sendable, Hashable {
-        public var maxStartLine = 4_096
-        public var maxHeaderLine = 8_192
-        public var maxHeaderBlock = 32_768
-        public var maxHeaderFields = 128
-        public var maxBody = 262_144
-        public var receiveHighWater = 2 << 20
-        public var maxResyncScan = 131_072
-        public var maxResyncsPerMinute = 3
-    }
-    public init(limits: Limits = .init())
-    /// Incremental. Never throws; framing failures surface as `.malformed` events the caller maps.
-    public mutating func ingest(_ bytes: some Collection<UInt8>) -> [RTSPIncoming]
-    public private(set) var statistics: DecoderStatistics
-}
-public struct DecoderStatistics: Sendable, Equatable { â€¦ }
-
-public struct RTSPChallenge: Sendable, Hashable {
-    public var scheme: String            // "Digest" | "Basic"
-    public var realm: String
-    public var nonce: String?
-    public var opaque: String?
-    public var qop: [String]             // empty â‡’ RFC 2069 no-qop, the primary Hikvision path
-    public var algorithm: String         // "MD5" | "MD5-sess"
-    public var stale: Bool
-    /// Tolerates unquoted values, a comma inside a quoted `realm`, and two challenges in one header.
-    public static func parseAll(_ headerValue: String) -> [RTSPChallenge]
-}
-
-/// Basic + Digest state. `nc` is 8 lowercase hex from `00000001`, per (realm, nonce), never reused;
-/// a nonce change resets it. `cnonce` is 16 hex chars from the injected `RandomSource`.
-/// **The Digest URI must equal the request-line URI byte for byte.**
-public struct RTSPAuthenticator: Sendable {
-    public init(credential: Credential?, random: any RandomSource)
-    public mutating func absorb(_ challenges: [RTSPChallenge])
-    public mutating func authorization(for method: RTSPMethod,
-                                       uri: String) -> String?
-    /// Consecutive credentialed 401s. **Two is terminal** (API_CONTRACT Â§2 R-25).
-    public private(set) var failureCount: Int
-    public mutating func reset()
-}
-
-// SDP
-public struct SDPDocument: Sendable, Equatable { â€¦ }
-public struct SDPMediaDescription: Sendable, Equatable {
-    public enum Kind: String, Sendable { case video, audio, application }
-    public var kind: Kind
-    public var payloadType: UInt8
-    public var encodingName: String
-    public var clockRate: Int32
-    public var channels: Int32?
-    /// **Keys are lower-cased**, values verbatim. Contract for `VigilRTP` (R-01 companion).
-    public var fmtp: [String: String]
-    public var control: String?
-    public var parameterSets: ParameterSets?     // base64-decoded sprop-*; may legitimately be empty
-    public var bandwidthKbps: Int?
-}
-public struct SDPParser: Sendable {
-    /// Lenient: unknown attributes are ignored, bare LF is accepted, a trailing NUL is stripped,
-    /// non-UTF-8 `s=` is replaced. Never throws on an unknown line.
-    public static func parse(_ body: Data) throws(RTSPError) -> SDPDocument
-}
-/// Precedence: `Content-Base` â†’ `Content-Location` â†’ request URI, then **append-with-slash merge**
-/// (not RFC 3986 merge), carrying the base query onto track URIs.
-public enum ControlURLResolver {
-    public static func resolve(control: String?, contentBase: String?,
-                               contentLocation: String?, requestURI: RTSPURL) -> String
-}
-
-// Headers
-public struct TransportHeader: Sendable, Equatable { â€¦ }
-public struct SessionHeader: Sendable, Equatable { public var id: String; public var timeout: Duration }
-public struct RTPInfoHeader: Sendable, Equatable { â€¦ }
-public struct RTSPRange: Sendable, Equatable { â€¦ }       // npt / clock / smpte
-
-// Session machine â€” the complete surface.
-public struct RTSPSessionConfig: Sendable { â€¦ }          // Â§2 R-25: maxAuthAttemptsPerRequest = 2
-public enum RTSPTimerID: Hashable, Sendable {
-    case keepalive, requestTimeout(cseq: UInt32), firstMediaTimeout, dataIdle
-    case sessionExpiry, teardownGrace
-}
-public enum RTSPCloseReason: Sendable, Equatable { case normal, error, redirect, ladderAdvance }
-public struct RTSPTrack: Sendable, Equatable, Identifiable { â€¦ }
-/// Raw seed values only. `VigilRTSP` performs **no** modular arithmetic on RTP timestamps and
-/// never compares `rtptime` across tracks (API_CONTRACT Â§2 R-26).
-public struct RTSPTrackTiming: Sendable, Equatable {
-    public var trackID: Int
-    public var clockRate: UInt32
-    public var initialSequence: UInt16?
-    public var initialRTPTimestamp: UInt32?
-    /// Absolute media time of `initialRTPTimestamp`; recorded playback only.
-    public var absoluteStart: Date?
-    public var scale: Double
-    public var isRateControlDisabled: Bool
-    public var playResponseInstant: MediaInstant
-}
-public struct RTSPSessionDescription: Sendable, Equatable { â€¦ }
-public enum RTSPSessionState: Sendable, Equatable { â€¦ }   // 13 states
-public enum RTSPCommand: Sendable, Equatable { â€¦ }        // incl. `.describeOnly` for the R1.2 ladder
-public enum RTSPLogEvent: Sendable, Equatable { â€¦ }       // 22 cases
-public enum RTSPAction: Sendable, Equatable {
-    case send(Data)                                       // ONE atomic write
-    case sendInterleaved(channel: UInt8, payload: Data)   // ONE atomic write
-    case setTimer(RTSPTimerID, deadline: MediaInstant)
-    case cancelTimer(RTSPTimerID)
-    case emitTrack(RTSPTrack)
-    case emitTiming(RTSPTrackTiming)
-    case emitMedia(channel: UInt8, payload: Data)
-    case ready(RTSPSessionDescription)
-    case stateChanged(RTSPSessionState)
-    case log(RTSPLogEvent)
-    case setReadBackpressure(Bool)
-    case fail(RTSPError)
-    case closeTransport(reason: RTSPCloseReason)
-    case reconnect(to: RTSPURL, resetAuthState: Bool)
-}
-
-public struct RTSPSessionMachine: Sendable {
-    public init(config: RTSPSessionConfig, credential: Credential?,
-                random: any RandomSource, now: MediaInstant)
-    public mutating func ingest(_ bytes: some Collection<UInt8>, now: MediaInstant) -> [RTSPAction]
-    public mutating func step(now: MediaInstant) -> [RTSPAction]
-    public mutating func timerFired(_ id: RTSPTimerID, now: MediaInstant) -> [RTSPAction]
-    public mutating func handle(_ command: RTSPCommand, now: MediaInstant) -> [RTSPAction]
-    public mutating func transportReady(isTLS: Bool, now: MediaInstant) -> [RTSPAction]
-    public mutating func connectionClosed(error: String?, now: MediaInstant) -> [RTSPAction]
-    public var state: RTSPSessionState { get }
-    public var tracks: [RTSPTrack] { get }
-    public var sessionID: String? { get }
-    public var negotiatedTransport: RTSPTransportKind { get }
-    public var statistics: RTSPSessionStatistics { get }
-    public var interleavedChannels: Set<UInt8> { get }
-}
-public struct RTSPSessionStatistics: Sendable, Equatable { â€¦ }
-```
-
-**Ordering guarantees the driver may rely on** (normative):
-`.stateChanged` precedes anything caused by the new state Â· every `.emitTrack` precedes that
-track's `.emitTiming`, which precedes any `.emitMedia` on its channels (media arriving before the
-PLAY response is buffered, bounded to **64 frames**, then oldest dropped with a log) Â· `.ready`
-fires exactly once per successful PLAY, after all track/timing actions Â· `.fail` is the **last**
-action ever produced; every later call returns `[]` except one `handle(.teardown)` Â· `.setTimer`
-replaces any timer with the same id Â· concatenated `.send` payloads are exactly the client byte
-stream Â· `.emitMedia` payloads are in arrival order with no coalescing and no cross-channel
-reordering.
-
-**Constants** (normative): default port 554 / rtsps **322** Â· interleave magic `0x24` Â· first
-`CSeq` 1 Â· `nc` starts `00000001` Â· `cnonce` 16 hex chars Â· **max auth attempts 2** Â· session
-timeout default 60 s clamped 10â€¦600 Â· keepalive `clamp(timeout/3, 5 s, 20 s)` via `GET_PARAMETER`
-(`OPTIONS` when `closesOnGetParameter`) Â· request timeout 5 s, `TEARDOWN` 2 s Â· first-media 5 s Â·
-data-idle 8 s Â· UDP first-packet 3 s Â· UDP client ports 51000â€“51998, even Â· max redirects 3 Â·
-command queue 8 Â· pre-PLAY media buffer 64 Â· playback prefetch 120/60 Â· `Scale` serialised to 3
-decimals Â· supported scales Â±1, Â±2, Â±4, Â±8, 16, 0.5, 0.25.
-
-### 4.4 `VigilRTP` â€” depacketization, jitter, RTCP, statistics
-
-Depends on `VigilProtocols` **and `VigilBitstream`** (R-01). Never depends on `VigilRTSP`.
-
-```swift
-public struct RTPPacket: Sendable, Equatable {
-    public var version: UInt8, hasPadding: Bool, hasExtension: Bool, csrcCount: UInt8
-    public var marker: Bool, payloadType: UInt8
-    public var sequenceNumber: UInt16, timestamp: UInt32, ssrc: UInt32
-    public var csrc: [UInt32]
-    public var extensionProfile: UInt16?, extensionData: Data?
-    public var payload: Data
-    public static func parse(_ bytes: Data) throws(RTPError) -> RTPPacket
-}
-
-/// `VigilRTP`'s own input struct. The 6-line adapter from `SDPMediaDescription` lives in
-/// `VigilTransport` (macOS) and in the fixture (Linux) â€” never here, because `VigilRTP` must be
-/// usable for UDP, file replay and unit fixtures with no session at all.
-public struct RTPTrackFormat: Sendable, Hashable {
-    public var payloadType: UInt8
-    public var encodingName: String
-    public var clockRate: Int32
-    public var channels: Int32?
-    public var fmtp: [String: String]            // lower-cased keys
-    public var parameterSets: ParameterSets?
-    public init(payloadType: UInt8, encodingName: String, clockRate: Int32,
-                channels: Int32?, fmtp: [String: String],
-                parameterSets: ParameterSets?) throws(RTPError)
-    public var codec: MediaCodec { get }
-}
-
-public protocol Depacketizer: Sendable {
-    var codec: MediaCodec { get }
-    var clockRate: Int32 { get }
-    /// Never throws: malformed input is counted and reported through `output.events`, because one
-    /// bad packet must never tear down a stream.
-    mutating func push(_ packet: RTPPacket, at now: MediaInstant) -> DepacketizerOutput
-    mutating func flush(at now: MediaInstant) -> [EncodedFrame]
-    /// Full reset: SSRC change, seek, reconnect. Keeps the initial parameter sets.
-    mutating func reset()
-}
-public struct DepacketizerOutput: Sendable {
-    public var frames: [EncodedFrame]
-    public var events: [DepacketizerEvent]
-    public var isEmpty: Bool { get }
-    /// A `static let`, so the ~97 % of packets that are mid-frame fragments allocate nothing.
-    public static let none = DepacketizerOutput()
-}
-
-public enum DepacketizerEvent: Sendable, Equatable {
-    case packetLoss(range: ClosedRange<UInt16>, count: Int)
-    case keyframeNeeded(reason: KeyframeReason)
-    case awaitingKeyframe(droppedAccessUnits: Int)
-    case accessUnitDropped(reason: DropReason)
-    case parameterSetsChanged(ParameterSets)
-    case audioConfigChanged(AudioFormatInfo)
-    case ssrcChanged(old: UInt32, new: UInt32)
-    case timestampDiscontinuity(seconds: Double)
-    case senderReport(SenderReport)
-    case bye(reason: String?)
-    case endOfStream
-    case boundaryPolicyChanged(slice: SliceProfile, marker: MarkerTrust)
-    case jitterPolicyEscalated(ReorderBuffer.Mode)
-    case malformed(MalformedReason)
-    case unsupported(UnsupportedFeature)
-}
-public enum KeyframeReason: String, Sendable, Equatable, Codable {
-    case streamStart, packetLoss, corruptAccessUnit, decoderReset, formatChange
-    case recordingStart, snapshotRequest, qualitySwitch, userRequest
-}
-public enum DropReason: Sendable, Equatable { â€¦ }
-public enum MalformedReason: Sendable, Equatable { â€¦ }
-public enum UnsupportedFeature: Sendable, Equatable { â€¦ }
-public enum SliceProfile: Sendable, Equatable { â€¦ }
-public enum MarkerTrust: Sendable, Equatable { case untrusted, learnedReliable, learnedUnreliable }
-
-public struct ReorderBuffer: Sendable {
-    public enum Mode: Sendable, Equatable { case passthrough, adaptive }
-    /// TCP interleaved uses `.passthrough` â€” the transport already ordered it.
-    /// UDP starts at 128 packets / 60 ms adaptive and escalates to 512 / 200 ms above 1 % loss.
-    public init(mode: Mode, capacity: Int, maxHold: Duration)
-}
-
-/// The whole surface `VigilTransport` drives: bytes in, frames + events + outbound RTCP out,
-/// plus a deadline to coalesce timers on.
-public struct RTPTrackReceiver: Sendable {
-    public init(format: RTPTrackFormat, reorderMode: ReorderBuffer.Mode,
-                latency: LatencyPreset, cname: String,
-                startTime: MediaInstant) throws(RTPError)
-    public private(set) var statistics: StreamStatistics
-    public private(set) var presentationClock: PresentationClock
-    public var format: RTPTrackFormat { get }
-    public mutating func ingestRTP(_ bytes: Data, at now: MediaInstant) -> RTPIngestResult
-    public mutating func ingestRTCP(_ bytes: Data, at now: MediaInstant) -> RTPIngestResult
-    /// Timer-driven work: buffer drain, AU timeout, RTCP RR generation, statistics windows.
-    public mutating func tick(_ now: MediaInstant) -> RTPIngestResult
-    public var nextDeadline: MediaInstant? { get }
-    public mutating func flush(at now: MediaInstant) -> RTPIngestResult
-    public mutating func reset(at now: MediaInstant)
-    /// Seeds RTP-Info from the PLAY response so the first PTS is right.
-    public mutating func seed(_ timing: RTSPTrackTimingSeed)
-    // Written by VigilVideo (API_CONTRACT Â§2 R-19).
-    public mutating func updateDecodeQueueDepth(_ depth: Int)
-    public mutating func updateDecodeTimings(p50: Double, p99: Double, isHardware: Bool)
-    public mutating func countDroppedPreDisplay(_ n: UInt64)
-}
-/// The shape `VigilTransport` copies `RTSPTrackTiming` into, so `VigilRTP` needs no RTSP import.
-public struct RTSPTrackTimingSeed: Sendable, Hashable {
-    public var clockRate: UInt32
-    public var initialSequence: UInt16?
-    public var initialRTPTimestamp: UInt32?
-    public var absoluteStart: Date?
-    public var scale: Double
-    public var isRateControlDisabled: Bool
-    public var playResponseInstant: MediaInstant
-}
-public struct RTPIngestResult: Sendable {
-    public var frames: [EncodedFrame]
-    public var events: [DepacketizerEvent]
-    /// Payloads only; the transport adds framing.
-    public var outboundRTCP: [Data]
-    public var isEmpty: Bool { get }
-}
-
-// RTCP
-public struct SenderReport: Sendable, Equatable { â€¦ }
-public enum RTCPParser { public static func parseCompound(_ bytes: Data) -> [RTCPPacket] }
-public enum RTCPPacket: Sendable, Equatable { â€¦ }
-public struct RTCPReportBuilder: Sendable { â€¦ }
-
-/// Min-filter + PLL. **Not** used for live pacing â€” live is `AVSampleBufferDisplayLayer` +
-/// `DisplayImmediately` with no timebase. Used for the latency estimate, A/V offset reporting and
-/// recorded playback (API_CONTRACT Â§2 R-26).
-public struct PresentationClock: Sendable { â€¦ }
-
-// Audio helpers, all pure and Linux-tested.
-public enum G711 {
-    public enum Law: Sendable { case aLaw, muLaw }
-    public static func decode(_ bytes: Data, law: Law) -> Data      // â†’ pcmS16LE
-    public static func encode(_ pcm: Data, law: Law) -> Data        // talkback
-}
-public enum G726 { public static func decode32k(_ bytes: Data) -> Data }
-public enum AudioSpecificConfig {
-    public static func parse(_ config: Data) throws(RTPError) -> AudioFormatInfo
-    /// From an SDP `config=` hex string.
-    public static func parse(hex: String) throws(RTPError) -> AudioFormatInfo
-}
-```
-
-**Normative behaviours:** access-unit splitting **never trusts the marker bit** â€” the rule is an RTP
-timestamp change **plus** `SliceHeader.isFirstSliceOfPicture`; marker reliability is *learned* and
-reported as `.boundaryPolicyChanged`. AAC stays compressed (raw AU + cookie); G.711 and G.726 are
-decoded here to `.pcmS16LE`. There is **no RTP packetizer** â€” talk-back is an ISAPI HTTP PUT.
-`VigilRTSP` owns `$` framing; interleaved channel 1 is RTCP; **RTCP is not a keepalive**. Each
-`MalformedReason` and `UnsupportedFeature` is emitted at most once per 5 s per receiver (counters
-keep incrementing). On a new SSRC: emit `.ssrcChanged`, reset the depacketizer, the reorder buffer,
-the source state, the presentation clock, the unwrapper and the IRAP gate. Non-goals: no SRTP, RED,
-FEC, RTX, MTAP, PACI, RTP-JPEG or MP4V-ES.
-
-### 4.5 `VigilISAPI` â€” Hikvision control plane
-
-Depends on `VigilProtocols`. May import `Foundation`, `FoundationNetworking` (Linux) and
-`FoundationXML` (Linux) and **nothing else** â€” never `Security`, `AppKit`, `SwiftUI`, `CoreMedia`,
-`Network` or `OSLog`. This is the one pure module permitted to declare actors (R-32).
-
-```swift
-// XML
-public struct XMLNode: Sendable, Hashable { â€¦ }        // name, key (lowercased), attributes, text, children
-public struct ISAPIDocument: Sendable {
-    /// Hard caps: 8 MiB input, 64 levels deep. `shouldResolveExternalEntities = false` and
-    /// `externalEntityResolvingPolicy = .never` are **mandatory** â€” XXE defence.
-    public init(parsing data: Data) throws(ISAPIError)
-    public let root: XMLNode
-    public subscript(_ path: String) -> XMLValue { get }
-    public func node(_ path: String) -> XMLNode?
-    public func nodes(_ path: String) -> [XMLNode]
-}
-/// Path grammar: `a/b` child chain (case-insensitive) Â· `a|b|c` first alternative Â·
-/// `*` one level Â· `**` zero-or-more, breadth-first Â· `[n]` index Â· `[]` all siblings Â·
-/// `@attr` attribute Â· `.` self Â· `||` whole-path alternation. Paths are relative to the root's
-/// **children**; the root element name is not part of a path. Compiled once and memoised.
-public struct XMLValue: Sendable { â€¦ }                 // string/int/double/bool/date/hexData/base64Data
-public struct XMLBuilder: Sendable { â€¦ }
-public enum ISAPITime {
-    public static func iso8601UTC(_ date: Date) -> String        // CMSearchDescription bodies
-    public static func compactUTC(_ date: Date) -> String        // RTSP playback query strings
-    /// Hikvision's POSIX-inverted zone string: `CST-8:00:00` â‡’ +28800 s.
-    public static func parseTimeZone(_ raw: String) -> Int?
-}
-
-// Status
-public struct ResponseStatus: Sendable, Hashable {
-    public let requestURL: String?
-    public let statusCode: Int          // 1 == OK
-    public let statusString: String?
-    public let subStatusCode: String?   // lower-cased on read
-    public let errorCode: Int?
-    public let errorMsg: String?
-    public var isOK: Bool { statusCode == 1 }
-    /// Tolerates `<ResponseStatus>`, `<userCheck>` and a bare `<statusCode>` root.
-    public init?(document: ISAPIDocument)
-}
-
-// Auth and trust
-public struct DigestChallenge: Sendable, Hashable { â€¦ }
-public actor DigestStore {
-    public func header(for method: String, uri: String, credential: Credential) -> String?
-    public func absorb(_ challenge: DigestChallenge)
-    public func invalidate(reason: String)
-}
-/// Injected because `Security` is macOS-only. `VigilCore` implements it; Linux ships only the
-/// plain-HTTP conformance used by tests.
-public protocol ServerTrustEvaluating: Sendable {
-    /// `chainDER` is leaf-first. Called once per TLS handshake.
-    func evaluate(host: String, port: Int, chainDER: [Data]) -> ServerTrustDecision
-}
-public enum ServerTrustDecision: Sendable, Equatable { case trust, reject(String) }
-
-// Client
-public actor ISAPIClient {
-    public struct Configuration: Sendable {
-        public var maxConcurrentControlRequests = 3
-        public var maxConcurrentSnapshotRequests = 2
-        public var connectTimeout: Duration = .seconds(4)
-        public var controlTimeout: Duration = .seconds(8)
-        public var searchTimeout: Duration = .seconds(15)
-        public var snapshotTimeout: Duration = .seconds(6)
-        public var streamIdleTimeout: Duration = .seconds(30)
-        public var userAgent = "Vigil/1.0 (macOS)"
-        public var maxTransientRetries = 2
-        public var allowBasicFallbackOverTLS = true
-        public var maxUnaryBodyBytes = 8 << 20
-        public init()
-    }
-    public typealias Lane = HTTPLane
-    public init(endpoint: ISAPIEndpoint, credential: Credential,
-                configuration: Configuration = .init(), quirks: DeviceQuirks = .init(),
-                transport: any HTTPTransporting, trustEvaluator: any ServerTrustEvaluating,
-                clock: any MonotonicClock, logger: any LoggerProtocol)
-    public func get(_ resource: String, query: [URLQueryItem] = [],
-                    lane: Lane = .control) async throws(ISAPIError) -> HTTPResponse
-    public func put(_ resource: String, query: [URLQueryItem] = [], body: Data?,
-                    contentType: String = "application/xml",
-                    lane: Lane = .control) async throws(ISAPIError) -> HTTPResponse
-    public func post(_ resource: String, query: [URLQueryItem] = [], body: Data?,
-                     contentType: String = "application/xml",
-                     lane: Lane = .control) async throws(ISAPIError) -> HTTPResponse
-    public func delete(_ resource: String, query: [URLQueryItem] = [],
-                       lane: Lane = .control) async throws(ISAPIError) -> HTTPResponse
-    public func getXML(_ resource: String, query: [URLQueryItem] = [],
-                       lane: Lane = .control) async throws(ISAPIError) -> ISAPIDocument
-    public func putXML(_ resource: String, body: XMLBuilder,
-                       query: [URLQueryItem] = []) async throws(ISAPIError) -> ResponseStatus
-    public func postXML(_ resource: String, body: XMLBuilder, query: [URLQueryItem] = [],
-                        lane: Lane = .control) async throws(ISAPIError) -> ISAPIDocument
-    public func byteStream(_ resource: String, method: String = "GET",
-                           query: [URLQueryItem] = [], headers: HTTPHeaders = .init())
-        async throws(ISAPIError) -> (headers: HTTPHeaders, bytes: AsyncThrowingStream<Data, any Error>)
-    public func chunkedUpload(_ resource: String,
-                              contentType: String) async throws(ISAPIError) -> any HTTPUploadHandle
-    /// Consecutive credentialed 401s, shared across every lane. **Two is terminal** and the client
-    /// refuses all requests until `VigilCore` supplies a new credential (API_CONTRACT Â§2 R-25).
-    public var authFailureCount: Int { get }
-    public func setCredential(_ credential: Credential)
-}
-public struct URLSessionHTTPTransport: HTTPTransporting, Sendable {
-    /// Four `URLSessionConfiguration.ephemeral` sessions, one per lane. Delegate state lives in an
-    /// actor (API_CONTRACT Â§2 R-52) â€” not behind `@unchecked Sendable`.
-    public init(logger: any LoggerProtocol)
-}
-
-// The single RTSP path builder (API_CONTRACT Â§2 R-23, R-69). Returns PATHS, never URLs.
-public enum HikvisionURL {
-    public static func livePath(_ id: StreamingChannelID) -> String
-    public static func playbackPath(_ track: TrackID) -> String
-    /// The R1.2 probe ladder, in order. `VigilCore` composes these into an `RTSPURL`.
-    public static func candidates(channel: ChannelID, quality: StreamQuality) -> [RTSPPathCandidate]
-    public static func snapshotPath(_ id: StreamingChannelID) -> String
-}
-public struct RTSPPathCandidate: Sendable, Hashable, Codable {
-    public enum Family: String, Sendable, Codable {
-        case channelsCompact      // /Streaming/Channels/101      current firmware, cameras + NVRs
-        case channelsBare         // /Streaming/Channels/1        some 5.x firmware
-        case tracks               // /Streaming/tracks/101        NVR playback-capable paths
-        case legacyH264           // /h264/ch1/main/av_stream     legacy 4.x
-        case legacyMPEG4          // /mpeg4/ch1/sub/av_stream     legacy 4.x
-        case onvifGetStreamURI    // ask ONVIF; non-Hikvision or unknown firmware
-    }
-    public var family: Family
-    public var path: String
-    public var order: Int
-}
-
-// Device session â€” one per device, memoizing caches and the alert stream.
-public actor ISAPIDeviceSession {
-    public init(endpoint: ISAPIEndpoint, credential: Credential,
-                configuration: ISAPIClient.Configuration = .init(), quirks: DeviceQuirks = .init(),
-                transport: any HTTPTransporting, trustEvaluator: any ServerTrustEvaluating,
-                clock: any MonotonicClock, logger: any LoggerProtocol)
-    // Identity and inventory
-    public func deviceInfo(force: Bool = false) async throws(ISAPIError) -> DeviceInfo
-    public func status() async throws(ISAPIError) -> DeviceStatus
-    public func time(force: Bool = false) async throws(ISAPIError) -> DeviceTime
-    public func capabilities(force: Bool = false) async throws(ISAPIError) -> DeviceCapabilitiesWire
-    public func networkInterfaces() async throws(ISAPIError) -> [NetworkInterfaceWire]
-    public func checkCredentials() async throws(ISAPIError) -> UserCheckResult
-    /// R1.3: `/ContentMgmt/InputProxy/channels` + `/System/Video/inputs/channels`, every populated
-    /// channel returned pre-checked.
-    public func channels(force: Bool = false) async throws(ISAPIError) -> [DeviceChannel]
-    public func users() async throws(ISAPIError) -> [DeviceUser]
-    // Streaming
-    public func streamingChannels(force: Bool = false) async throws(ISAPIError) -> [StreamingChannelConfig]
-    public func streamingChannel(_ id: StreamingChannelID) async throws(ISAPIError) -> StreamingChannelConfig
-    /// **Read-modify-write on the full element, then re-GET to confirm** (API_CONTRACT Â§2 R-30).
-    /// Returns the device's clamped values, not the requested ones.
-    public func updateStream(_ id: StreamingChannelID,
-                             _ patch: StreamingChannelPatch) async throws(ISAPIError) -> StreamingChannelConfig
-    public func snapshot(_ request: SnapshotWireRequest) async throws(ISAPIError) -> Data
-    /// The primary response to a detected gap. `VigilCore` calls it; `VigilRTP`/`VigilVideo`
-    /// only *emit* `.keyframeNeeded` (API_CONTRACT Â§2 R-24).
-    public func requestKeyFrame(channel: ChannelID) async throws(ISAPIError)
-    // PTZ
-    public func ptzCapabilities(channel: ChannelID) async throws(ISAPIError) -> PTZCapabilitiesWire
-    public func ptzController(channel: ChannelID) async throws(ISAPIError) -> PTZController
-    // Events â€” exactly one monitor per device, never per channel (API_CONTRACT Â§2 R-28)
-    public func alertStream() -> AlertStreamMonitor
-    public func eventTriggers(force: Bool = false) async throws(ISAPIError) -> [EventTrigger]
-    public func motionDetection(channel: ChannelID) async throws(ISAPIError) -> MotionDetectionConfig
-    public func setMotionDetection(channel: ChannelID, enabled: Bool?, sensitivity: Int?,
-                                   grid: MotionGrid?) async throws(ISAPIError)
-    // Playback â€” only `POST /ISAPI/ContentMgmt/search` may paint a timeline (R-29)
-    public func recordTracks(force: Bool = false) async throws(ISAPIError) -> [RecordTrack]
-    public func searchRecordings(_ q: RecordSearchQuery) async throws(ISAPIError) -> [RecordSegment]
-    public func dayIndex(track: TrackID, dayStartUTC: Date,
-                         force: Bool = false) async throws(ISAPIError) -> RecordDayIndex
-    public func monthCalendar(track: TrackID, year: Int,
-                              month: Int) async throws(ISAPIError) -> MonthRecordCalendar
-    public func storage(force: Bool = false) async throws(ISAPIError) -> StorageInfo
-    // Audio
-    public func twoWayAudioChannels() async throws(ISAPIError) -> [TwoWayAudioChannel]
-    public func openTwoWayAudio(channel: Int) async throws(ISAPIError) -> TwoWayAudioSession
-    // Image
-    public func imageSettings(channel: ChannelID) async throws(ISAPIError) -> ImageSettings
-    public func setImageColor(channel: ChannelID, brightness: Int?, contrast: Int?,
-                              saturation: Int?, hue: Int?) async throws(ISAPIError)
-    public func setSharpness(channel: ChannelID, _ level: Int) async throws(ISAPIError)
-    public func setWDR(channel: ChannelID, _ setting: WDRSetting) async throws(ISAPIError)
-    public func setIRCut(channel: ChannelID, _ setting: IRCutSetting) async throws(ISAPIError)
-    public func resetImageDefaults(channel: ChannelID) async throws(ISAPIError)
-    // Lifecycle
-    public func reboot() async throws(ISAPIError)
-    public func invalidateCaches()
-    public func shutdown() async
-    /// Quirks observed during this session. `VigilCore` persists them on the camera record.
-    public var observedQuirks: DeviceQuirks { get }
-}
-
-public actor PTZController {
-    /// Continuous motion needs a **400 ms keep-alive** re-send and a **triple zero-stop** on
-    /// cancel or quit; a runaway camera is unacceptable.
-    public func continuous(pan: Int, tilt: Int, zoom: Int) async throws(ISAPIError)
-    public func stop() async throws(ISAPIError)
-    public func momentary(pan: Int, tilt: Int, zoom: Int, duration: Duration) async throws(ISAPIError)
-    public func absolute(_ position: PTZAbsolutePosition) async throws(ISAPIError)
-    public func relative(_ move: PTZRelativeMove) async throws(ISAPIError)
-    /// 0â€“255 space, **lower-left origin** unless `DeviceQuirks.ptz3DOriginIsTopLeft`.
-    public func position3D(_ box: PTZ3D) async throws(ISAPIError)
-    /// Presets **33â€“105 are reserved device commands** and are blocked for writes.
-    public func gotoPreset(_ n: Int) async throws(ISAPIError)
-    public func setPreset(_ n: Int, name: String) async throws(ISAPIError)
-    public func presets() async throws(ISAPIError) -> [PTZPreset]
-    public func status() async throws(ISAPIError) -> PTZStatus
-}
-
-public actor AlertStreamMonitor {
-    public func start() async
-    public func stop() async
-    /// Heartbeat parts are suppressed at the parser. A factory, not a property (R-65).
-    public func notifications() -> AsyncStream<EventNotificationAlert>
-    public func stateChanges() -> AsyncStream<AlertStreamState>
-    public var state: AlertStreamState { get }
-}
-public enum AlertStreamState: Sendable, Hashable {
-    case notSupported, idle, connecting, streaming(since: Date)
-    case polling(interval: Duration), authFailed
-    case failed(reason: String, retryAt: Date)
-}
-public struct EventNotificationAlert: Sendable, Hashable { â€¦ }
-public struct MultipartStreamParser: Sendable { â€¦ }
-public actor TwoWayAudioSession { â€¦ }
-
-// Wire models (all `Sendable, Hashable, Codable` value types)
-public struct DeviceInfo: Sendable, Hashable, Codable { â€¦ }
-public struct DeviceStatus: Sendable, Hashable, Codable { â€¦ }
-public struct DeviceTime: Sendable, Hashable, Codable { â€¦ }
-public struct DeviceCapabilitiesWire: Sendable, Hashable, Codable { â€¦ }
-public struct DeviceChannel: Sendable, Hashable, Codable { â€¦ }
-public struct DeviceUser: Sendable, Hashable, Codable { â€¦ }
-public struct UserCheckResult: Sendable, Hashable, Codable { â€¦ }
-public struct NetworkInterfaceWire: Sendable, Hashable, Codable { â€¦ }
-public struct StreamingChannelConfig: Sendable, Hashable, Codable { â€¦ }
-public struct StreamingChannelPatch: Sendable, Hashable { â€¦ }
-public struct SnapshotWireRequest: Sendable, Hashable { â€¦ }
-public struct PTZCapabilitiesWire: Sendable, Hashable, Codable { â€¦ }
-public struct PTZVelocity: Sendable, Hashable { â€¦ }
-public struct PTZAbsolutePosition: Sendable, Hashable, Codable { â€¦ }
-public struct PTZRelativeMove: Sendable, Hashable { â€¦ }
-public struct PTZ3D: Sendable, Hashable { â€¦ }
-public struct PTZPreset: Sendable, Hashable, Codable { â€¦ }
-public struct PTZPatrol: Sendable, Hashable, Codable { â€¦ }
-public struct PTZStatus: Sendable, Hashable, Codable { â€¦ }
-public struct EventTrigger: Sendable, Hashable, Codable { â€¦ }
-public struct MotionDetectionConfig: Sendable, Hashable, Codable { â€¦ }
-public struct MotionGrid: Sendable, Hashable, Codable { â€¦ }
-public struct RecordTrack: Sendable, Hashable, Codable { â€¦ }
-public struct RecordSearchQuery: Sendable, Hashable { â€¦ }
-public struct RecordSegment: Sendable, Hashable, Codable { â€¦ }
-public struct RecordDayIndex: Sendable, Hashable, Codable { â€¦ }
-public struct MonthRecordCalendar: Sendable, Hashable, Codable { â€¦ }
-public struct StorageInfo: Sendable, Hashable, Codable { â€¦ }
-/// Rewrites scheme/host/port and keeps **path + query verbatim** (API_CONTRACT Â§2 R-29).
-public struct PlaybackLocator: Sendable, Hashable, Codable { â€¦ }
-public struct TwoWayAudioChannel: Sendable, Hashable, Codable { â€¦ }
-public struct ImageSettings: Sendable, Hashable, Codable { â€¦ }
-public enum WDRSetting: Sendable, Hashable, Codable { â€¦ }
-public enum IRCutSetting: Sendable, Hashable, Codable { â€¦ }
-```
-
-**Wire units, restated because every one has been got wrong in the field:** `maxFrameRate` = fps Ã—
-100 Â· `keyFrameInterval` = **milliseconds** Â· `GovLength` = **frames** Â· storage capacity =
-**decimal MB** Â· region coordinates 0â€“1000 (some smart cameras use 0â€“10000; detect by magnitude).
-**Concurrency:** 3 control requests per device (1 when `maxConcurrentRequestsOverride == 1`), plus
-separate snapshot / stream / audio lanes; app-wide snapshot cap **6**, excess **dropped, not
-queued**. PTZ, and only PTZ, may over-subscribe the control gate by exactly one slot.
-**Negative capability cache:** any `403 notSupport`, `404 notFound` or `405 methodNotAllowed` on a
-capability-bearing resource is cached by resource template for 24 h or until reboot, and later calls
-throw `.notSupported` with **no network round trip**.
-
-### 4.6 `VigilDiscovery` â€” SADP, WS-Discovery, subnet sweep
-
-Depends on `VigilProtocols` **only** â€” deliberately **no** edge to `VigilRTSP`; it carries its own
-~70-line lenient `StartLineHeaderScanner`. Every socket lives in `VigilTransport/Discovery/`.
-
-```swift
-// Injected capabilities â€” the seven Sendable transport protocols. NONE has a credential parameter,
-// anywhere, which is how "discovery never sends credentials" is enforced mechanically (R-31).
-public protocol DatagramChannel: Sendable {
-    var localPort: UInt16 { get }
-    var interfaceName: String? { get }
-    func send(_ payload: Data, to host: IPv4Address, port: UInt16) async throws(DiscoveryError)
-    func inboundDatagrams() -> AsyncStream<InboundDatagram>
-    func close() async
-}
-public protocol TCPProbing: Sendable {
-    func probe(_ host: IPv4Address, port: UInt16, timeout: Duration,
-               interfaceName: String?) async -> TCPProbeOutcome
-}
-public protocol ByteExchanging: Sendable {
-    func exchange(host: IPv4Address, port: UInt16, useTLS: Bool, request: Data,
-                  readLimit: Int, timeout: Duration,
-                  interfaceName: String?) async throws(DiscoveryError) -> Data
-}
-public protocol InterfaceEnumerating: Sendable {
-    func interfaces() throws(DiscoveryError) -> [NetworkInterfaceInfo]
-}
-public protocol ARPTableProviding: Sendable {
-    func snapshot() throws(DiscoveryError) -> [ARPEntry]
-}
-public protocol ServiceBrowsing: Sendable {
-    func browse(types: [String]) -> AsyncStream<BonjourService>
-}
-/// Discovery gets its own clock protocol because it needs `uptime` for elapsed maths and a
-/// virtual implementation turns a 12 s run into 2 ms.
-public protocol DiscoveryClock: Sendable {
-    var wallNow: Date { get }
-    func now() -> MediaInstant
-    func sleep(for duration: Duration) async throws
-}
-
-public struct DiscoveryEnvironment: Sendable { â€¦ }      // the eleven injected values
-public struct MulticastGroupSpec: Sendable, Hashable {
-    public var group: IPv4Address       // 239.255.255.250
-    public var port: UInt16             // 37020 (SADP) | 3702 (WS-Discovery)
-    public var preferredLocalPort: UInt16
-    public var localAddress: IPv4Address        // added; Â§11 used it without declaring it (R-67)
-    public var interfaceName: String
-    public var hopLimit: Int            // 1 â€” keep SADP/WSD on-link
-}
-public struct InboundDatagram: Sendable, Hashable { â€¦ }
-public struct NetworkInterfaceInfo: Sendable, Hashable, Codable { â€¦ }
-public struct ARPEntry: Sendable, Hashable, Codable { â€¦ }
-public struct BonjourService: Sendable, Hashable { â€¦ }
-public enum TCPProbeOutcome: Sendable, Hashable {
-    case open
-    /// RST â€” the host is alive and the port is closed. Valuable.
-    case refused
-    case timedOut
-    case unreachable(POSIXCode)
-    /// Local-network permission denied, or the sandbox refused. Feeds the Â§9.4 heuristic.
-    case blockedByPolicy
-}
-public struct POSIXCode: Sendable, Hashable, Codable, CustomStringConvertible {
-    public let rawValue: Int32
-}
-
-// Model
-public enum DiscoverySource: String, Sendable, Hashable, Codable, CaseIterable { â€¦ }  // + `trust`
-public enum DeviceVendor: String, Sendable, Hashable, Codable { â€¦ }                   // + `supportsISAPI`
-public enum DeviceClass: String, Sendable, Hashable, Codable { â€¦ }
-public enum ActivationState: String, Sendable, Hashable, Codable { case activated, notActivated, unknown }
-public enum Reachability: String, Sendable, Hashable, Codable {
-    case reachable, addressableNoPorts, offSubnet, unknown
-}
-public enum DeviceIdentity: Sendable, Hashable, Codable { â€¦ }     // mac > serial > onvifUUID > endpoint
-public enum DeviceFieldKey: String, Sendable, Hashable, Codable, CaseIterable { â€¦ }
-public struct FieldStamp: Sendable, Hashable, Codable { â€¦ }
-public struct ONVIFScopes: Sendable, Hashable, Codable { â€¦ }
-public struct DiscoveredDevice: Sendable, Hashable, Codable, Identifiable { â€¦ }
-public struct DeviceObservation: Sendable { â€¦ }
-public enum FieldValue: Sendable, Hashable, Codable { â€¦ }
-public struct KnownDeviceSnapshot: Sendable, Hashable, Codable { â€¦ }
-
-// Coordination
-public struct DiscoveryConfiguration: Sendable { â€¦ }
-public struct DiscoveryPlan: Sendable, Hashable { â€¦ }
-public enum SweepPlanner {
-    public static func plan(interfaces: [NetworkInterfaceInfo], arp: [ARPEntry],
-                            configuration: DiscoveryConfiguration)
-        -> Result<DiscoveryPlan, DiscoveryError>
-}
-public enum SweepPolicy {
-    /// **Hard floor. Not user-overridable.** Wider than /16 is 65 536+ hosts and is refused.
-    public static let minimumPrefixLength: UInt8 = 16
-    /// /16â€“/21 is narrowed to our own /24 plus every /24 with at least one ARP entry.
-    public static let confirmationPrefixLength: UInt8 = 22
-}
-public actor DiscoveryCoordinator {
-    public init(environment: DiscoveryEnvironment, configuration: DiscoveryConfiguration = .default)
-    /// One run per instance. The returned stream is the run's only consumer, which is the single
-    /// sanctioned exception to R-65.
-    public func start() -> AsyncStream<DiscoveryEvent>
-    public func cancel()
-    public var snapshot: [DiscoveredDevice] { get }
-    public var progress: DiscoveryProgress { get }
-    public var diagnostics: [DiscoveryDiagnostic] { get }
-}
-public enum DiscoveryEvent: Sendable {
-    case started(DiscoveryPlan)
-    case progress(DiscoveryProgress)
-    /// **Exactly one per record, ever.** Later changes are `.deviceUpdated` / `.deviceMerged`.
-    case deviceFound(DiscoveredDevice)
-    case deviceUpdated(DiscoveredDevice, changes: Set<DeviceFieldKey>)
-    case deviceMerged(absorbed: [DeviceIdentity], into: DeviceIdentity)
-    case addressChanged(DeviceIdentity, from: IPv4Address, to: IPv4Address)
-    /// A **new MAC at an old IP**. Must never re-point a saved camera.
-    case addressReused(IPv4Address, previous: DeviceIdentity, now: DeviceIdentity)
-    case phaseCompleted(DiscoveryPhase, PhaseSummary)
-    case diagnostic(DiscoveryDiagnostic)
-    case finished(DiscoverySummary)
-}
-public enum DiscoveryPhase: String, Sendable, Hashable, Codable, CaseIterable { â€¦ }
-public struct DiscoveryProgress: Sendable, Hashable, Codable { â€¦ }
-public struct PhaseSummary: Sendable, Hashable { â€¦ }
-public struct DiscoverySummary: Sendable, Hashable { â€¦ }
-public enum DiscoveryDiagnostic: Sendable, Hashable, Codable {
-    // 15 cases; each has `userFacingMessage: String?` and `severity: Severity`.
-    public enum Severity: String, Sendable, Hashable, Codable { case info, warning, actionRequired }
-}
-public enum MulticastUnavailableReason: String, Sendable, Hashable, Codable { â€¦ }
-public enum BudgetKind: String, Sendable, Hashable, Codable {
-    case datagrams, tcpConnects, httpRequests, fileDescriptors
-}
-
-// Codecs â€” pure, total, never throwing on garbage
-public enum SADPCodec {
-    public static func encodeProbe(uuid: UUID) -> Data           // the 121-byte probe
-    public static func decode(_ payload: Data, from source: IPv4Address,
-                              expectedUUID: UUID?, receivedAt: Date) -> SADPDecodeResult
-    public static func observation(from match: SADPProbeMatch,
-                                   source: DiscoverySource) -> DeviceObservation
-    /// `DS-2CD2143G0-I20200114AAWRD12345678` â†’ (`DS-2CD2143G0-I`, `20200114AAWRD12345678`).
-    public static func splitSerial(_ sn: String) -> (model: String?, remainder: String)
-}
-public enum SADPDecodeResult: Sendable, Equatable { â€¦ }
-public struct SADPProbeMatch: Sendable, Hashable, Codable { â€¦ }
-public struct SADPOpaquePayload: Sendable, Hashable, Codable { â€¦ }
-public enum WSDiscoveryCodec {
-    public static func encodeProbe(messageID: UUID, types: WSDProbeTypes) -> Data
-    public static func decodeProbeMatches(_ payload: Data, from source: IPv4Address,
-                                          expectedMessageIDs: Set<String>,
-                                          receivedAt: Date) -> WSDDecodeOutcome
-    public static func parseScopes(_ raw: String) -> ONVIFScopes
-    public static func observation(from match: WSDProbeMatch) -> DeviceObservation
-}
-public enum WSDProbeTypes: Sendable, Equatable { â€¦ }
-public enum WSDDecodeOutcome: Sendable, Equatable { â€¦ }
-public struct WSDProbeMatch: Sendable, Hashable, Codable { â€¦ }
-public enum FingerprintCodec {
-    public static func rtspOptionsRequest(host: IPv4Address, port: UInt16) -> Data
-    public static func isapiDeviceInfoRequest(host: IPv4Address) -> Data
-    public static func rootRequest(host: IPv4Address) -> Data
-    public static func classifyRTSP(_ response: Data) -> RTSPFingerprint
-    public static func classifyHTTP(_ response: Data) -> HTTPFingerprint
-}
-public struct RTSPFingerprint: Sendable, Hashable { â€¦ }
-public struct HTTPFingerprint: Sendable, Hashable { â€¦ }
-public enum VendorClassifier {
-    public static func classify(_ e: ClassificationEvidence) -> ClassificationVerdict
-}
-public struct ClassificationEvidence: Sendable, Hashable { â€¦ }
-public struct ClassificationVerdict: Sendable, Hashable {
-    public var vendor: DeviceVendor
-    public var deviceClass: DeviceClass
-    public var confidenceDelta: Int
-}
-public struct HostProbeResult: Sendable, Hashable { â€¦ }
-/// Deliberately duplicated here rather than importing `VigilRTSP` (~70 lines). Never throws,
-/// never crashes: tolerates bare LF, a missing reason phrase, no body, non-UTF-8 bytes
-/// (decoded as ISO-8859-1) and colonless header lines (skipped).
-public struct StartLineHeaderScanner: Sendable { â€¦ }
-public enum ARPTableDecoder {
-    public static func decodeRouteDump(_ raw: UnsafeRawBufferPointer, byteCount: Int) -> [ARPEntry]
-    public static func decodeARPText(_ text: String) -> [ARPEntry]
-}
-public enum IdentityNormalizer {
-    public static func serialKey(_ raw: String) -> String?
-    public static func onvifKey(_ raw: String) -> String?
-}
-```
-
-**Normative numbers:** SADP group `239.255.255.250:37020`, WS-Discovery `239.255.255.250:3702`,
-hop limit 1, max datagram 8 192 B, `SO_REUSEADDR`+`SO_REUSEPORT`, `disableUnicast: false` (ProbeMatches
-arrive as unicast from arbitrary source ports). Port tiers **A** `[554, 80]` â†’ every planned host;
-**B** `[8000, 443, 8080]` â†’ hosts where A found anything, plus ARP hosts, plus hosts named by
-SADP/WSD/Bonjour; **C** `[37777, 2020, 8554]` â†’ only when A/B answered and vendor is still unknown.
-TCP connect timeout **350 ms**, fingerprint 600 ms, per-host fingerprint budget 1 200 ms, read cap
-4 096 B. In flight **128** (192 degraded), clamped by
-`min(configured, max(16, (rlim_cur - 96) / 2))`. Probe schedules `[0, 500, 1000] ms`, listen tail
-2 500 ms, settle 750 ms, overall deadline `min(180, 12 + 8 Ã— log2(hosts/254))` s. Per host: â‰¤ 3
-HTTP/RTSP requests, â‰¤ 8 TCP connects, one connect per (host, port) per run, **no retries**.
-Identity ladder MAC(4) > serial(3) > ONVIF UUID(2) > `ip:httpPort`(1), resolved by union-find;
-UUID- and TXT-derived MACs are **hints only** and never form an identity.
-
-### 4.7 `VigilTransport` â€” sockets, TLS, timers (macOS)
-
-Depends on `VigilProtocols`, `VigilRTSP`, `VigilDiscovery`. Every file wrapped in `#if os(macOS)`.
-
-```swift
-/// Owns one `NWConnection`, the `RTSPSessionMachine`, and its timers. Writes each `.send` /
-/// `.sendInterleaved` as **one atomic write**, and supports `pauseReads()`/`resumeReads()`
-/// independently of writes (Rate-Control has no flow control).
-public actor RTSPConnection {
-    public init(endpoint: RTSPEndpoint, quirks: DeviceQuirks, trust: any ServerTrustEvaluating,
-                clock: any MonotonicClock, logger: any LoggerProtocol)
-    public func connect() async throws(TransportError)
-    public func write(_ data: Data) async throws(TransportError)
-    public func bytes() -> AsyncThrowingStream<Data, any Error>
-    public func pauseReads()
-    public func resumeReads()
-    public func close() async
-    public var isTLS: Bool { get }
-    /// SPKI SHA-256 of the leaf, for trust-on-first-use pinning shared with ISAPI.
-    public var leafSPKI256: Data? { get }
-}
-/// Even/odd port pairs allocated from **51000â€“51998**.
-public actor UDPMediaSocketPair { â€¦ }
-public actor MulticastResponder { â€¦ }
-/// The 6-line adapter that keeps `VigilRTP` free of any RTSP import.
-public enum RTPTrackFormatAdapter {
-    public static func make(from media: SDPMediaDescription) throws(RTPError) -> RTPTrackFormat
-    public static func seed(from timing: RTSPTrackTiming) -> RTSPTrackTimingSeed
-}
-public struct SystemServerTrustEvaluator: ServerTrustEvaluating, Sendable { â€¦ }
-/// `Discovery/` â€” the seven conformances, one per protocol, plus the live environment.
-public actor MulticastDatagramChannel: DatagramChannel { â€¦ }
-public actor UnicastDatagramChannel: DatagramChannel { â€¦ }
-public struct TCPConnectProber: TCPProbing, Sendable { â€¦ }
-public struct NWByteExchanger: ByteExchanging, Sendable { â€¦ }
-public struct SystemInterfaceEnumerator: InterfaceEnumerating, Sendable { â€¦ }
-public struct SystemARPTableReader: ARPTableProviding, Sendable { â€¦ }
-public struct BonjourBrowser: ServiceBrowsing, Sendable { â€¦ }
-public enum EntitlementInspector {
-    public static func multicastEntitlementPresent() -> Bool
-    public static func localNetworkPermission() -> LocalNetworkPermission
-}
-public enum LiveDiscoveryEnvironment { public static func make(logger: any LoggerProtocol) -> DiscoveryEnvironment }
-/// Raises `RLIMIT_NOFILE` to `min(4096, rlim_max)` when `rlim_cur < 4096`. Called once at launch.
-public enum FileDescriptorBudget { public static func raiseLimit() }
-```
-
-Every destination passes `HostPolicy.requirePermitted(_:)` **before** the socket is created (R-71).
-Each `RTSPConnection` creates one serial `.userInitiated` `DispatchQueue` named
-`com.vigil.net.<cameraShortID>` and bridges to `async` immediately; `withTaskCancellationHandler`
-wraps every receive so cancelling the task calls `connection.cancel()`.
-
-### 4.8 `VigilCore` â€” domain, persistence, orchestration (macOS)
-
-Depends on everything except `VigilRender` and `VigilUI`. See Â§5 for the file list; the surface:
-
-```swift
-public struct CoreDependencies: Sendable { â€¦ }          // Â§2 of spec-core.md, with Â§3 protocol names
-public protocol FileSystemProtocol: Sendable { â€¦ }      // writeDurably MUST F_FULLFSYNC
-public protocol KeychainProtocol: Sendable { â€¦ }
-public protocol DiskSpaceProbing: Sendable { â€¦ }
-public protocol NetworkPathMonitoring: Sendable { func paths() -> AsyncStream<NetworkPathState>; var current: NetworkPathState { get async } }
-public protocol OcclusionObserving: Sendable { func occlusionEvents() -> AsyncStream<OcclusionEvent> }
-public protocol PowerEventObserving: Sendable { func powerEvents() -> AsyncStream<PowerEvent>; var conditions: PowerConditions { get async } }
-public protocol NotificationScheduling: Sendable { â€¦ }
-public protocol PasteboardWriting: Sendable { func write(_ data: Data, type: String); func writeString(_ s: String) }
-public protocol FrameTap: Sendable { func captureCurrentFrame() async -> VideoFrame? }
-public struct NetworkPathState: Sendable, Hashable { â€¦ }
-public struct PowerConditions: Sendable, Hashable { â€¦ }  // isOnBattery, isLowPower, thermalState
-public enum OcclusionEvent: Sendable, Hashable { â€¦ }
-public enum PowerEvent: Sendable, Hashable { â€¦ }
-public struct FileAttributes: Sendable, Hashable { public var size: Int64; public var modified: Date }
-
-// Domain model â€” all `Sendable, Codable, Hashable`, all with explicit `CodingKeys`.
-public struct Camera: Identifiable, Sendable, Codable, Hashable { â€¦ }   // no password property, ever
-public struct StreamProfile: Identifiable, Sendable, Codable, Hashable { â€¦ }  // `id: StreamQuality`
-public struct DeviceCapabilities: Sendable, Codable, Hashable { â€¦ }     // includes `quirks: DeviceQuirks`
-public struct CameraGroup: Identifiable, Sendable, Codable, Hashable { â€¦ }
-public struct Layout: Identifiable, Sendable, Codable, Hashable { â€¦ }
-public enum LayoutMode: Sendable, Codable, Hashable {
-    case single, grid(columns: Int, rows: Int), onePlusFive, onePlusSeven, twoPlusEight
-    case custom([GridCell])
-    public var cellCount: Int { get }
-    /// **Integer rectangles on the 12 Ã— 12 unit grid** (API_CONTRACT Â§2 R-56). One geometry source.
-    public func cells() -> [GridCell]
-}
-public struct GridCell: Sendable, Codable, Hashable { public var x, y, w, h: Int }   // 0...12
-public struct CellAssignment: Sendable, Codable, Hashable { â€¦ }
-public struct CycleSettings: Sendable, Codable, Hashable { â€¦ }
-public struct DisplayBinding: Sendable, Codable, Hashable { â€¦ }
-public struct Bookmark: Identifiable, Sendable, Codable, Hashable { â€¦ }
-public struct EventRecord: Identifiable, Sendable, Codable, Hashable { â€¦ }
-public struct NormalizedRect: Sendable, Codable, Hashable { â€¦ }
-public struct RecordingClip: Identifiable, Sendable, Codable, Hashable { â€¦ }
-public enum ClipContainer: String, Sendable, Codable { case mp4, mov }
-public enum RecordingTrigger: String, Sendable, Codable, CaseIterable { â€¦ }
-public struct AppSettings: Sendable, Codable, Hashable { â€¦ }
-public struct Library: Sendable, Codable, Hashable { public static let currentSchemaVersion = 3 }
-public enum OrderIndex { public static let step = 1024 }
-
-// Persistence
-public actor ConfigStore { â€¦ }                 // load / snapshot / mutate / flush / changes() / export / import
-public actor EventLog { â€¦ }                    // separate events.json ring, capacity 5000
-public protocol SchemaMigration: Sendable { â€¦ }
-public enum SchemaMigrator { â€¦ }               // 1â†’2â†’3, chain never a jump table
-public actor CredentialStore { â€¦ }             // the ONLY user of Security.framework
-
-// Streaming
-public actor StreamController: Identifiable { â€¦ }         // Â§7 of spec-core.md; 58-row table
-public enum StreamState: String, Sendable, Codable, CaseIterable { â€¦ }   // 11 states
-public enum StreamEvent: Sendable { â€¦ }
-public struct StateDetail: Sendable, Hashable { â€¦ }
-public struct StreamFormat: Sendable, Hashable { â€¦ }
-public struct ReconnectPolicy: Sendable, Equatable { â€¦ }  // 0.5/1/2/4/8/15/30 Â±20 %, reset after 60 s
-public struct StreamError: Error, Sendable, Hashable { â€¦ }
-public actor StreamCoordinator { â€¦ }
-public struct Viewport: Sendable, Hashable { â€¦ }          // `Tile.pixelSize: Resolution`, backing px
-public struct LivePlan: Sendable, Hashable { â€¦ }
-public enum DeliveryMode: Sendable, Hashable { â€¦ }
-/// R1.2: candidates concurrently, **bounded to 3 in flight**; `200` + parseable SDP with a
-/// supported video codec wins; `404`/`455` advance; **`401` does NOT advance** â€” the path is right
-/// and the credentials need applying. The winner is persisted on `Camera`.
-public actor StreamProbe {
-    public func findWorkingPath(camera: Camera, credential: Credential?,
-                                quality: StreamQuality) async -> RTSPPathCandidate?
-}
-@MainActor @Observable public final class LiveViewState { â€¦ }
-public struct TileState: Sendable, Hashable { â€¦ }
-public enum GlobalBanner: Sendable, Hashable { â€¦ }
-
-// Capture, events, health, diagnostics, automation
-public actor ClipRecorder { â€¦ }                // passthrough muxing ONLY; outputSettings: nil
-public struct PreRollBuffer: Sendable { â€¦ }    // whole GOPs, 96 MiB / 240 GOPs per camera
-public enum RecordingNaming { â€¦ }
-public actor SnapshotService { â€¦ }
-public struct SnapshotOptions: Sendable, Hashable { â€¦ }
-public struct SnapshotResult: Sendable, Hashable { â€¦ }
-public actor EventCenter { â€¦ }
-public actor HealthMonitor { â€¦ }
-public struct HealthSample: Sendable, Codable, Hashable { â€¦ }    // exactly 24 bytes
-public struct HealthSummary: Sendable, Hashable { â€¦ }
-public enum HealthGrade: String, Sendable, Codable { case good, fair, poor, offline }
-public actor StreamDoctor { â€¦ }                // 13 steps, 25 s budget, nine R1.5 diagnoses
-public enum DoctorStep: String, Sendable, Codable, CaseIterable { â€¦ }
-public enum DoctorCause: String, Sendable, Codable, CaseIterable { â€¦ }
-public struct DoctorReport: Sendable, Hashable { â€¦ }
-public enum DoctorAction: Sendable, Hashable { â€¦ }
-public actor DiagnosticsBundleBuilder { â€¦ }
-public enum DiagnosticsRedactor { â€¦ }
-public enum DeepLink: Sendable, Hashable {
-    /// Total function: never throws, never traps.
-    public static func parse(_ url: URL) -> Result<DeepLink, DeepLinkError>
-    public var isWriteAction: Bool { get }
-}
-public enum DeepLinkError: Sendable, Hashable, Error { â€¦ }
-public struct OSLogLogger: LoggerProtocol, Sendable { â€¦ }
-```
-
-`VigilCore` also provides the `LocalizedError` extensions for every Â§3.9 error enum, and the
-`DeviceQuirks` merge point: protocol modules **detect**, `VigilCore` **persists**, `VigilCore`
-**injects** on the next connect.
-
-### 4.9 `VigilVideo` â€” VideoToolbox, CoreMedia, audio (macOS)
-
-Depends on `VigilProtocols`, `VigilBitstream`. **Exclusively creates** every
-`CMFormatDescription`, `CMSampleBuffer`, `CVPixelBuffer`, `VTDecompressionSession` and
-`AVSampleBufferDisplayLayer` in the app.
-
-```swift
-/// One decoded picture. `DecodedFrame` and `DecodedVideoFrame` do not exist (R-51).
-/// `@unchecked Sendable` #2 of 3 (R-52).
-public struct VideoFrame: @unchecked Sendable {
-    public let pixelBuffer: CVPixelBuffer      // 420v / 420f / x420 / xf20, IOSurface-backed
-    public let format: VideoFormatInfo
-    public let pts: MediaTimestamp
-    public let duration: MediaTimestamp?
-    public let capturedAt: MediaInstant?       // RTCP-derived sender time, for glass-to-glass
-    public let decodedAt: MediaInstant
-    public let sequence: UInt64                // monotonic per stream, for drop accounting
-    public let isKeyframe: Bool
-    /// Bumps on every format change; renderers discard stale generations.
-    public let generation: UInt32
-}
-
-/// The one sink protocol (R-51). `VigilRender.VideoTileView` is the only implementer.
-public protocol VideoSink: AnyObject, Sendable {
-    /// Must return in < 2 ms and must not block. Called from the pipeline's presenter task.
-    nonisolated func enqueue(_ frame: VideoFrame)
-    /// The `AVSampleBufferDisplayLayer` fast path. No box needed: both sides are `nonisolated`
-    /// and the call is synchronous, so no isolation boundary is crossed.
-    nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
-                             generation: UInt32)
-    /// The renderer MUST pin its last texture between these two and show no black frame.
-    nonisolated func willChangeFormat(from old: VideoFormatInfo?, to new: VideoFormatInfo,
-                                      generation: UInt32)
-    nonisolated func didChangeFormat(to new: VideoFormatInfo, generation: UInt32)
-    nonisolated func streamDidReset()
-    nonisolated func streamDidEnd(reason: StreamEndReason)
-    nonisolated func didDropFrames(_ count: Int, reason: FrameDropReason)
-    nonisolated func didStall(since: MediaInstant)
-    nonisolated func didRecover()
-}
-public extension VideoSink {
-    // No-op defaults for the six observability members, so a minimal sink is three lines.
-    nonisolated func willChangeFormat(from: VideoFormatInfo?, to: VideoFormatInfo, generation: UInt32) {}
-    nonisolated func didChangeFormat(to: VideoFormatInfo, generation: UInt32) {}
-    nonisolated func didDropFrames(_: Int, reason: FrameDropReason) {}
-    nonisolated func didStall(since: MediaInstant) {}
-    nonisolated func didRecover() {}
-}
-public enum StreamEndReason: String, Sendable, Hashable, Codable {
-    case stopped, failed, formatUnsupported, budgetReleased, peerClosed
-}
-public enum FrameDropReason: String, Sendable, Hashable, Codable {
-    case queueFull, awaitingKeyframe, badData, decoderDropped, formatChange, noFormat, policy
-}
-public enum PacingMode: String, Sendable, Hashable { case live, paced }
-
-/// **The single conversion site** from `ParameterSets` to CoreMedia. Order `[SPS, PPS]` /
-/// `[VPS, SPS, PPS]`, `nalUnitHeaderLength: 4`, parameter-set count hard-capped at 8.
-public enum FormatDescriptionFactory {
-    public static func make(codec: VideoCodec, parameterSets: ParameterSets,
-                            info: VideoFormatInfo?) throws(DecodeError) -> CMVideoFormatDescription
-}
-public enum SampleBufferBuilder {
-    public static func make(_ frame: EncodedFrame,
-                            format: CMVideoFormatDescription) throws(DecodeError) -> CMSampleBuffer
-}
-
-public enum DisplayStrategy: String, Sendable, Hashable, Codable {
-    /// Default live path: `AVSampleBufferDisplayLayer` + `DisplayImmediately`, **no timebase**.
-    case sampleBufferLayer
-    /// Explicit `VTDecompressionSession` + Metal. Only when pixels are actually needed.
-    case pixelBufferMetal
-}
-public struct StrategyInputs: Sendable, Hashable {
-    public var needsPixelAccess: Bool          // zoom â‰  1, adjustments, deinterlace, privacy mask, atlas
-    public var isRecordedPlayback: Bool
-    public var rate: Double
-    public var tileCount: Int
-    public var metalAvailable: Bool
-    public var isInterlaced: Bool
-    public var isHDR: Bool
-    public init(â€¦)                              // explicit public init (R-67)
-}
-public func selectStrategy(_ i: StrategyInputs) -> DisplayStrategy
-
-public actor DecodePipeline {
-    public init(key: StreamKey, configuration: DecodePipelineConfiguration, sink: any VideoSink,
-                budget: any DecodeAdmitting, requestKeyframe: @escaping @Sendable () async -> Void,
-                jpegProvider: (@Sendable (Resolution) async throws -> Data)? = nil,
-                clock: any MonotonicClock, logger: any LoggerProtocol)
-    public func start() async throws(DecodeError)
-    public func stop() async
-    public func events() -> AsyncStream<PipelineEvent>          // factory (R-65)
-    /// Never throws, never suspends on I/O, never blocks the caller. Applies the drop policy.
-    public func submit(_ frame: EncodedFrame)
-    public func submitAudio(_ frame: EncodedFrame)              // same type (R-64)
-    public func setStrategy(_ strategy: DisplayStrategy) async throws(DecodeError)
-    public func setMode(_ mode: DecodeMode) async
-    public func setTileContext(_ context: TileContext) async
-    public func setPaused(_ paused: Bool, reason: PauseReason) async
-    public func flushAndRequestKeyframe() async
-    public func setAudioEnabled(_ enabled: Bool) async
-    public func statistics() -> DecodeStatistics
-    public func currentFormat() -> VideoFormatInfo?
-    public func snapshot(_ source: SnapshotSource) async throws(DecodeError) -> VideoFrame
-    /// The layer for `VigilRender` to host. Never added to a view hierarchy here.
-    public func displayLayer() async -> AVSampleBufferDisplayLayer?
-}
-public struct DecodePipelineConfiguration: Sendable {
-    public var isLive = true
-    public var queueCapacity = 6                // recorded 12, reverse 72
-    public var targetQueueDepth = 2
-    public var requireHardwareDecode = false
-    public var allowDownscaleOnDecode = true
-    public var initialStrategy: DisplayStrategy = .sampleBufferLayer
-    public var audioEnabled = false
-    public var maximumKeyframeRequestsPerMinute = 10
-    public init()                                // explicit (R-67)
-    public static let live = DecodePipelineConfiguration()
-    public static let thumbnail: DecodePipelineConfiguration
-}
-public enum PipelineEvent: Sendable { â€¦ }        // 18 cases, incl. `.idleTeardownAdvised`, `.strategySwitchFailed`
-public enum PauseReason: String, Sendable, Hashable { case occluded, offscreen, budget, user, thermal }
-public enum ModeChangeReason: String, Sendable, Hashable { case tileSize, budget, thermal, user, latency }
-public enum SnapshotSource: String, Sendable, Hashable { case displayed, freshDecode, deviceJPEG }
-public enum LatencyLevel: Int, Sendable, Hashable, Codable, Comparable {
-    case normal = 0, trim = 1, skipToKeyframe = 2, degrade = 3
-}
-public struct DecodeStatistics: Sendable, Codable, Hashable { â€¦ }
-
-/// **The single admission authority.** Conforms to `VigilProtocols.DecodeAdmitting` (R-49).
-@globalActor public actor DecodeBudget: DecodeAdmitting {
-    public static let shared = DecodeBudget()
-    public func calibrate(_ observation: CalibrationObservation) async
-}
-public struct CalibrationObservation: Sendable, Hashable { â€¦ }
-public enum MachineClass: String, Sendable, Hashable, Codable, CaseIterable { â€¦ }   // the R-59 table
-
-public actor PlaybackPipeline { â€¦ }
-public protocol PlaybackTransportControl: Sendable { â€¦ }
-public enum PlaybackRate: Double, Sendable, CaseIterable { case r0_25 = 0.25, r0_5 = 0.5, r1 = 1, r2 = 2, r4 = 4, r8 = 8 }
-public enum PlaybackDirection: Sendable { case forward, reverse }
-public enum PlaybackState: Sendable, Equatable { â€¦ }
-public enum PlaybackEvent: Sendable { â€¦ }
-
-public actor AudioPlaybackEngine { â€¦ }
-public actor AudioRouter {
-    /// D8: only the focused camera is audible by default; **at most 4** unmuted at once; the 5th
-    /// unmute mutes the least-recently-unmuted with a toast.
-    public func setFocused(_ key: StreamKey?) async
-    public func setUserMuted(_ key: StreamKey, _ muted: Bool) async
-    public func setSolo(_ key: StreamKey?) async
-    public func setVolume(_ key: StreamKey, _ gain: Float) async
-    public func setFollowFocus(_ enabled: Bool) async
-    public var audible: Set<StreamKey> { get async }
-}
-public struct AudioStatistics: Sendable, Codable, Hashable { â€¦ }
-public enum AudioError: String, Sendable, Hashable, Error, Codable { â€¦ }
-public actor TalkbackController { â€¦ }
-public enum TalkbackError: String, Sendable, Hashable, Error, Codable { â€¦ }
-public enum SnapshotEncoder {
-    public static func encode(_ frame: VideoFrame, format: SnapshotFormat, quality: Double,
-                              metadata: SnapshotMetadata) throws(DecodeError) -> Data
-    public static func decodeJPEG(_ data: Data) throws(DecodeError) -> VideoFrame
-}
-public enum SnapshotFormat: String, Sendable, Hashable, Codable, CaseIterable { case png, jpeg, heic }
-public struct SnapshotMetadata: Sendable, Hashable { â€¦ }
-/// `@unchecked Sendable` #1 of 3 (R-52). The only sanctioned bridge out of the VT callback.
-final class DecodeSinkBox: @unchecked Sendable { â€¦ }
-```
-
-**Live has no A/V-sync buffering.** Queue capacity 6, target depth 2, adaptive ladder
-`normal â†’ trim â†’ skipToKeyframe â†’ degrade` at depth EWMA **3.0 / 5.0** and latency **220 / 400 ms**,
-with **5 s** recovery hysteresis and a one-level-per-5-s step down. The app's own contribution to
-glass-to-glass must stay **under 55 ms at p99**. Format changes and occlusion resumes use
-`flush()` only â€” **never** `flush(removingDisplayedImage: true)`; that is the "no black flash" rule.
-`AsyncStream.Continuation` is the only sanctioned bridge out of a C callback.
-
-### 4.10 `VigilRender` â€” Metal, layers, interaction (macOS)
-
-Depends on `VigilProtocols`, `VigilVideo`. **Never** imports `VigilCore`, `VigilUI`, `VigilISAPI`,
-`VigilRTSP` or `VigilRTP`. Everything is `@MainActor` except the value types and `LatestFrameBox`;
-the only `nonisolated` entry points are the two `enqueue` overloads.
-
-```swift
-public struct TileGeometry: Sendable, Equatable { â€¦ }        // codedSize, cropRect, PAR, displaySize
-public struct TileTransform: Sendable, Equatable { â€¦ }       // zoom 1â€¦8, NDC translation, flipVertical
-public struct TileCoordinateMap: Sendable { â€¦ }              // content â†” view, visibleContentRect
-public enum VideoGravity: String, Sendable, Codable, CaseIterable { case fit, fill, stretch }
-public enum NormalizedOrigin: String, Sendable, Codable { case topLeft, bottomLeft }
-/// Camera 0â€¦1000 rect â†’ content-normalized. **Rect flip is `y' = 1 âˆ’ (y + h)`, never `1 âˆ’ y`.**
-/// Polygon flip is per-vertex `y' = 1 âˆ’ y` then `reversed()`, to preserve winding.
-public func contentRect(cameraRect: CGRect, origin: NormalizedOrigin) -> CGRect
-public func contentPolygon(cameraPolygon: [CGPoint], origin: NormalizedOrigin) -> [CGPoint]
-
-public struct ImageAdjustments: Sendable, Codable, Equatable { â€¦ }
-public enum DeinterlaceMode: UInt8, Sendable, Codable, CaseIterable { case auto, none, bob, blend }
-public struct TileRenderOptions: Sendable, Equatable { â€¦ }
-public enum TileBackend: String, Sendable, Equatable { case metal, sampleBufferLayer }
-public enum TileInteractionMode: Sendable, Equatable {
-    case normal, position3D, privacyEdit, clickToCenter, inert
-}
-public struct MotionBox: Sendable, Equatable, Identifiable { â€¦ }
-public struct PrivacyRegion: Sendable, Equatable, Codable, Identifiable { â€¦ }
-public struct PrivacyMaskSet: Sendable, Equatable, Codable {
-    public var regions: [PrivacyRegion]
-    public var origin: NormalizedOrigin
-    public var isEnabled: Bool
-    public static let disabled: PrivacyMaskSet          // was referenced, never declared (R-66)
-}
-
-@MainActor public final class RenderContext {
-    public static let shared: RenderContext?
-    public let device: any MTLDevice
-    public let commandQueue: any MTLCommandQueue
-    public let capabilities: RenderCapabilities
-    public static func makeForTesting(device: any MTLDevice) -> RenderContext?
-    public func flushCaches()
-    public func purgePipelineCache()
-}
-public struct RenderCapabilities: Sendable, Equatable { â€¦ }
-
-@MainActor public final class VideoTileView: NSView, VideoSink { â€¦ }
-@MainActor @Observable public final class TileRenderState {
-    /// `bounds Ã— backingScaleFactor`, integer. **The authoritative input to the class Aâ€“E table**
-    /// (API_CONTRACT Â§2 R-21). Published after the presented frame's uniforms are built and before
-    /// `present()`, coalesced to at most one per display refresh.
-    public private(set) var pixelSize: Resolution
-    public private(set) var geometry: TileGeometry
-    public private(set) var transform: TileTransform
-    public private(set) var coordinateMap: TileCoordinateMap
-    public private(set) var backend: TileBackend
-    public private(set) var isReceivingFrames: Bool
-    public private(set) var stats: RenderStats
-    public var suppressesEventOverlays: Bool
-}
-public struct RenderStats: Sendable, Equatable { â€¦ }
-/// One `TileRenderer` per cell in atlas mode; the wall's per-slot handle (R-66).
-@MainActor public final class TileRenderer { â€¦ }
-@MainActor public final class WallCompositorView: NSView { â€¦ }
-public struct WallCell: Sendable, Identifiable, Equatable { â€¦ }
-public struct VideoTile: NSViewRepresentable { â€¦ }
-public struct VideoWall: NSViewRepresentable { â€¦ }
-/// Lets `VigilCore` attach a stream's frames to whichever view SwiftUI creates, without
-/// `VigilRender` importing `VigilCore`.
-public final class FrameStreamHandle: @unchecked Sendable { â€¦ }
-@MainActor public protocol TileInteractionDelegate: AnyObject { â€¦ }   // 14 members
-public enum PTZDirection: Sendable, Equatable, CaseIterable {
-    case up, down, left, right, upLeft, upRight, downLeft, downRight, zoomIn, zoomOut
-    /// âˆ’1/0/+1 pair for the ISAPI continuous command. (Was `isaptiltPan` â€” R-67.)
-    public var isapiPanTilt: (pan: Int, tilt: Int) { get }
-}
-public struct Position3DGesture: Sendable, Equatable { â€¦ }
-public enum TileDrop: Sendable, Equatable { case cameraRef(CameraRefTransfer), tileAssignment(TileAssignmentTransfer) }
-public struct TileAssignmentTransfer: Codable, Transferable, Sendable { â€¦ }
-public struct CameraRefTransfer: Codable, Transferable, Sendable { â€¦ }
-public extension UTType {
-    static let vigilTileAssignment = UTType(exportedAs: "com.vigil.tile-assignment")
-    static let vigilCameraRef = UTType(exportedAs: "com.vigil.camera-ref")
-}
-/// `@unchecked Sendable` #3 of 3 (R-52).
-final class LatestFrameBox: @unchecked Sendable { â€¦ }
-```
-
-**Layout size forces the decode strategy:** â‰¤ **6** tiles get one `CAMetalLayer` each and may use
-`AVSampleBufferDisplayLayer`; â‰¥ **7** tiles use a single-layer atlas, which requires pixel access and
-therefore forces `VTDecompressionSession` for **every** tile in that layout. Hysteresis: promote at
-`N â‰¥ 7`, demote at `N â‰¤ 5`; 6â†’7â†’6â†’7 produces exactly **2** changes, not 4. ASBDL is allowed only
-when `zoom == 1 && adjustments.isIdentity && no privacy mask && progressive && SDR`. Backend
-oscillation guard: more than 4 switches in 10 s locks Metal (the superset) for 5 s.
-
-**Overlay ownership:** `VigilUI` draws timestamp, name chip, recording dot, status, focus ring,
-hover chrome, stats HUD, PTZ indicator, the 3D drag rect and **â‰¤ 32** motion boxes;
-`VigilRender` draws privacy masks, **> 32** motion boxes and every wall-mode overlay (cap 48 boxes
-per tile, keep the 48 largest, `+N` chip beyond). All overlay coordinates are **content-normalized
-`[0,1]Â²` top-left against the cropped, SAR-corrected picture** â€” never the coded buffer â€” and always
-come from `TileRenderState.coordinateMap`, never recomputed.
-
-**SwiftUI must not wrap video in an offscreen pass:** no `.drawingGroup()`, `.opacity(<1)`,
-`.shadow`, `.blur`, `.mask`, `.clipShape` or `.rotationEffect` on `VideoTile`/`VideoWall`. Corner
-radius is an in-shader SDF via `TileRenderOptions.cornerRadii`; shadows go on sibling views.
-
-### 4.11 `VigilUI` â€” design system and screens (macOS)
-
-Depends on `VigilProtocols`, `VigilCore`, `VigilRender`. **Every top-level type carries an explicit
-`@MainActor`** (R-40).
-
-```swift
-public enum VTheme {
-    public enum Color { â€¦ }          // Layer, Text, Stroke, Semantic, Ident, Scrim
-    public enum Typography { â€¦ }     // 9 steps + Mono track + Reserved widths
-    public enum Space  { public static let hair: CGFloat = 2, xxs = 4, xs = 6, sm = 8,
-                                          md = 12, lg = 16, xl = 20, xxl = 24, huge = 32, jumbo = 48 }
-    public enum Radius { public static let xs: CGFloat = 4, sm = 6, md = 8, lg = 10, xl = 14, xxl = 20 }
-    public enum Border { public static let thin: CGFloat = 1, focus = 2, selected = 2, recording = 3 }
-    /// Control heights and the structural dimensions settled by R-34, R-35, R-68.
-    public enum Metrics {
-        public static let xs: CGFloat = 20, sm = 24, md = 28, lg = 32, xl = 40   // five, no others
-        public static let sidebarWidth: CGFloat = 264, sidebarMin = 208, sidebarMax = 380
-        public static let sidebarRail: CGFloat = 68
-        public static let inspectorWidth: CGFloat = 320, inspectorMin = 288, inspectorMax = 440
-        public static let toolbarHeight: CGFloat = 52
-        public static let tileGutter: CGFloat = 2, wallGutter: CGFloat = 0, stageInset: CGFloat = 8
-        public static let minHitTarget: CGFloat = 24
-        /// Row heights are a SEPARATE group from control heights (R-37).
-        public enum Row { public static let camera: CGFloat = 44, event = 36, channel = 32, settings = 28 }
-    }
-    public enum Icon { public static let xs: CGFloat = 11, sm = 12, md = 13, lg = 15, xl = 17, hero = 32 }
-    public enum Elevation { â€¦ }      // e0â€¦e3
-    public enum Motion {
-        public static let micro      = Animation.spring(response: 0.22, dampingFraction: 0.86, blendDuration: 0)
-        public static let standard   = Animation.spring(response: 0.34, dampingFraction: 0.82, blendDuration: 0)
-        public static let expressive = Animation.spring(response: 0.50, dampingFraction: 0.70, blendDuration: 0)
-        public static let snap       = Animation.spring(response: 0.16, dampingFraction: 1.00, blendDuration: 0)
-        public static let glide      = Animation.spring(response: 0.42, dampingFraction: 0.95, blendDuration: 0.10)
-        public static let rubber     = Animation.spring(response: 0.30, dampingFraction: 0.62, blendDuration: 0)
-        public static let fadeIn     = Animation.timingCurve(0.00, 0.00, 0.20, 1.00, duration: 0.18)
-        public static let fadeOut    = Animation.timingCurve(0.40, 0.00, 1.00, 1.00, duration: 0.12)
-        public static let crossfade  = Animation.easeInOut(duration: 0.24)
-        public static let emphasized = Animation.timingCurve(0.32, 0.72, 0.00, 1.00, duration: 0.28)
-        public static let breathe    = Animation.easeInOut(duration: 1.0).repeatForever(autoreverses: true)
-        public static let shimmer    = Animation.linear(duration: 1.15).repeatForever(autoreverses: false)
-        public static let spin       = Animation.linear(duration: 0.90).repeatForever(autoreverses: false)
-        public enum Delay { â€¦ }
-        public static func resolved(_ a: Animation, reduced: Bool,
-                                    fallback: Animation? = .easeInOut(duration: 0.12)) -> Animation?
-        public static func stagger(_ index: Int) -> Double     // min(index, 12) Ã— 0.018
-    }
-    public enum Health { â€¦ }
-}
-```
-
-**`VTheme` is the only place literals exist.** Dynamic colours come from
-`NSColor(name:dynamicProvider:)` because SwiftUI's `Color` has no light/dark initialiser.
-Accent is Iris `#7B61FF` dark / `#5B44E0` light; the system accent is deliberately ignored.
-Six layers: well `#000000`, canvas `#0B0C0F`, surface `#16181D`, raised `#1D2026`, overlay
-`#252932`. Scrim ladder Î± 0.45 / 0.62 / 0.82, **inside the chip shape only**, never a full-tile
-gradient (R-36). Radii are always `.continuous`. Every changing number is `monospacedDigit()` with
-a reserved width. Three `matchedGeometryEffect` namespaces declared once in `MainWindowView` and
-passed via `\.vNamespaces`; the stage namespace is keyed **by camera** (R-56).
-
-```swift
-@MainActor @Observable public final class AppModel { â€¦ }
-public enum SidebarSelection: Hashable, Codable, Sendable { â€¦ }
-public enum InspectorTab: String, CaseIterable, Codable, Sendable { â€¦ }
-@MainActor @Observable public final class ShortcutStore { â€¦ }
-public struct ShortcutSpec: Codable, Hashable, Sendable { â€¦ }
-public enum ShortcutAction: String, Codable, CaseIterable, Sendable { â€¦ }
-/// Normative ranking: matched char 12, adjacency (runâˆ’1)Ã—18, word-start 25, first-char +40,
-/// gap âˆ’min(60, gapsÃ—2), tail âˆ’0.5Ã—(lenâˆ’last), title prefix +400, exact title +1000, acronym +350,
-/// subtitle-only Ã—0.55, unavailable Ã—0.35, live camera +30, category weight
-/// (camera 1.05, action 1.00, layout 0.95, preset 0.95, event 0.90, setting 0.85, help 0.75),
-/// frecency min(120, 40Â·log2(1+count)) + 80Â·exp(âˆ’age/(7Â·86400)); **cutoff â‰¥ 30**; â‰¤ 32 backtracks;
-/// order score â†“, title length â†‘, localized title â†‘, id â†‘; cap 50 results;
-/// **2 000 items in < 2 ms**, asserted by `PaletteRankingTests.testScoreThroughput`.
-public enum FuzzyMatcher {
-    public static func score(query: [UInt8], item: PaletteItem, now: Date,
-                             usage: UsageStats) -> MatchResult?
-}
-public struct PaletteItem: Identifiable, Sendable { â€¦ }
-public struct MatchResult: Sendable { public let score: Int; public let ranges: [Range<Int>] }
-/// Degrades animation in four tiers when any stream drops below 60 fps or UI p99 exceeds 8 ms
-/// at 120 Hz; recovers one tier per 3 s of clean frames. Publishes `\.vMotionTier`.
-@MainActor @Observable public final class VMotionGovernor { â€¦ }
-public enum VMotionTier: Int, Sendable, Comparable { case t0, t1, t2, t3 }
-/// **All tile geometry transitions go through this** â€” still `CGImage` proxy, layer hidden, bounds
-/// set once. Never per-frame layer-bounds mutation.
-@MainActor public struct VTileTransitionProxy: ViewModifier { â€¦ }
-```
-
-The 28 `V*` components (`VButton` â€¦ `VProgressRing`) are enumerated in Â§5.
-
-### 4.12 `Vigil` â€” the executable (macOS)
-
-```swift
-// Sources/Vigil/main.swift â€” top-level code, NOT @main (ARCHITECTURE Â§4.2 Rule 3, R-41)
-#if os(macOS)
-VigilApp.main()
-#else
-import Foundation
-FileHandle.standardError.write(Data("Vigil requires macOS 14.0 or later.\n".utf8))
-exit(EXIT_FAILURE)
-#endif
-```
-
-```swift
-struct VigilApp: App { â€¦ }              // no @main; scenes per UX.md Â§2
-public enum SceneID {
-    public static let main = "main", playback = "playback", discovery = "discovery"
-    public static let wall = "wall", about = "about"
-}
-public struct PlaybackRequest: Codable, Hashable, Sendable { â€¦ }
-struct VigilCommands: Commands { â€¦ }
-enum AppEnvironment { static func bootstrap() -> CoreDependencies }
-struct MenuBarExtraContent: View { â€¦ }
-enum URLSchemeHandler { static func handle(_ url: URL, model: AppModel, deps: CoreDependencies) }
-final class AppDelegate: NSObject, NSApplicationDelegate { â€¦ }
-```
-
-### 4.13 `VigilTestKit` â€” fixtures and doubles (pure, test-only)
-
-Depends on `VigilProtocols`, `VigilRTSP`, `VigilRTP`, `VigilBitstream`. **Never linked by the app**;
-`Scripts/lint.sh` asserts it appears only in test-target dependency lists.
-
-```swift
-public struct VirtualClock: MonotonicClock, DiscoveryClock, Sendable { â€¦ }   // explicit advance(by:)
-public final class ManualClock: MonotonicClock, @unchecked Sendable { â€¦ }    // exempt from R-52
-public struct RecordingLogger: LoggerProtocol, Sendable { â€¦ }                // records for assertions
-public struct FixtureHTTPTransport: HTTPTransporting, Sendable {
-    /// **Fails the test suite if any request carries an `Authorization` header or a
-    /// `user:pass@host` form.** This is how R-31 is enforced mechanically.
-    public var recordedRequests: [HTTPRequest] { get }
-}
-public struct MockDatagramChannel: DatagramChannel, Sendable { â€¦ }
-public struct MockTCPProber: TCPProbing, Sendable { â€¦ }
-public struct MockExchanger: ByteExchanging, Sendable { â€¦ }   // same credential assertion
-public actor ScriptedRTSPPeer { â€¦ }        // fixture transcript + configurable chunking
-public struct SyntheticCamera: Sendable { â€¦ }
-public struct SyntheticRTPGenerator: Sendable { â€¦ }   // targets RTPTrackReceiver exactly
-public struct SyntheticSPSBuilder: Sendable { â€¦ }     // BitWriter-based, for geometry tests
-public enum Fixture {
-    public static func data(_ name: String, in bundle: Bundle) throws -> Data
-    public static func hex(_ name: String, in bundle: Bundle) throws -> Data
-}
-public enum GoldenVectors { â€¦ }            // RFC 1321 / 3174 / 6234 / 2617 tables
-```
-
-## 5. The complete file manifest
-
-**233 rows.** Paths are exact. `LoC` is a budget, not a target â€” a row that lands at half its budget
-is fine; a row that doubles it must be split at a `// MARK:` boundary into `Type+Feature.swift`.
-**No file exceeds 600 lines** (Â§7.2).
-
-**Waves.** W1 unblocks everything (RTSP, ISAPI and ONVIF all block on the crypto). W2 is the pure
-protocol layer and is where the Linux test suite lives. W3â€“W6 are macOS and cannot be compiled in
-the development container at all, so their rows are written against Â§3/Â§4 and type-checked on a Mac.
-
-| Wave | Contents | Gate to leave the wave |
-|---|---|---|
-| **W1** | `VigilProtocols` + crypto | `swift build --product VigilPure` green; `VigilProtocolsTests` â‰¥ 120 tests green on Linux |
-| **W2** | `VigilBitstream`, `VigilRTSP`, `VigilRTP`, `VigilISAPI`, `VigilDiscovery`, `VigilTestKit` + their tests | `swift test` green on Linux; `VigilPipelineTests` end-to-end green |
-| **W3** | `VigilTransport`, `VigilVideo`, `VigilRender` | `swift build` green on macOS; `swift build` still green on Linux (empty modules) |
-| **W4** | `VigilCore` | `VigilCoreTests` green on macOS |
-| **W5** | `VigilUI` | `VigilUITests` green; token gallery renders |
-| **W6** | `Vigil`, `Scripts/`, CI, entitlements, `Info.plist` | `Scripts/build-app.sh` produces a launching `Vigil.app`; R1 acceptance run |
-
-Rows are ordered so an agent can take a contiguous block. `Deps` lists the *other rows in this
-manifest* a row needs, not the module dependency (which Â§1 fixes).
-
-### 5.1 Repository root â€” W1 (scaffolding) and W6 (build)
-
-> **Supervisor ruling, after implementation.** `Info.plist`, the three entitlements files and the
-> app icon live in **`Resources/`**, not at the repository root as the rows below say. Keeping six
-> Apple packaging files out of the root is worth the stale paths, and `Scripts/build-app.sh` and
-> `project.yml` both reference `Resources/` consistently. Treat the directory in the rows below as
-> `Resources/` wherever a `.plist`, `.entitlements` or `.icns` is named.
->
-> **Do not use XcodeGen's `info:` or `entitlements:` blocks in `project.yml`.** They *generate*
-> those files, overwriting the handwritten ones and silently dropping `NSBonjourServices`, the ATS
-> local-networking exception and the exported UTIs â€” each of which is a feature that then fails
-> without an error message. `INFOPLIST_FILE` and `CODE_SIGN_ENTITLEMENTS` point at the real files
-> instead.
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Package.swift` | **Exists and is green. Â§6 reproduces it. Do not modify** without amending Â§6 in the same commit | 265 | â€” | W1 âœ… |
-| `.gitattributes` | **Exists.** `*.rtsp`/`*.sdp`/`*.rtsp.txt` marked `-text` so CRLF survives checkout | 4 | â€” | W1 âœ… |
-| `.gitignore` | **Exists.** `.build*`, `dist/`, `*.xcodeproj` | 12 | â€” | W1 âœ… |
-| `.swift-format` | Formatter config: 110 columns, 4-space indent, no tabs | 40 | â€” | W1 |
-| `Package.resolved` | Committed, empty pin list â€” the machine-checkable proof of "zero dependencies" | 6 | â€” | W6 |
-| `README.md` | What Vigil is, how to build, the two build worlds | 120 | â€” | W6 |
-| `LICENSE` | â€” | 20 | â€” | W6 |
-| `Info.plist` | Â§2 R-39: bundle keys, `NSLocalNetworkUsageDescription`, `NSBonjourServices` `["_rtsp._tcp", "_http._tcp", "_axis-video._tcp"]`, `NSAppTransportSecurity/NSAllowsLocalNetworking`, `CFBundleURLTypes` (`vigil`), 3 `UTExportedTypeDeclarations` | 150 | â€” | W6 |
-| `Vigil.entitlements` | Sandboxed shipping: app-sandbox, network.client, **network.server**, developer.networking.multicast, files.user-selected.read-write, device.audio-input | 40 | â€” | W6 |
-| `Vigil-Dev.entitlements` | Unsandboxed dev build; adds `get-task-allow`. Never distributed | 20 | â€” | W6 |
-| `Vigil-nomulticast.entitlements` | Fallback when no multicast provisioning profile is available | 30 | â€” | W6 |
-| `project.yml` | XcodeGen input; **one** target that links the local package. No `.pbxproj` is ever committed | 45 | â€” | W6 |
-| `Scripts/build-app.sh` | The 15-step bundle contract. `set -euo pipefail`. Emits `build-manifest.json` | 320 | â€” | W6 |
-| `Scripts/lint.sh` | Import allow-list per target; banned patterns (`!`, `try!`, `as!`, `print`, `TODO`, `CryptoKit`, `DispatchSemaphore`, `nonisolated(unsafe)`, `@preconcurrency`); `@MainActor` check for `VigilUI`; `@unchecked Sendable` count â‰¤ 3 | 260 | â€” | W6 |
-| `Scripts/test-linux.sh` | Runs the pure suite; **fails if a pure target reports zero tests** | 70 | â€” | W2 |
-| `Scripts/test-macos.sh` | Full suite + coverage | 60 | â€” | W6 |
-| `Scripts/coverage.sh` | Floors: 90 % pure, 70 % macOS | 70 | â€” | W6 |
-| `Scripts/bench.sh` | Signpost-driven latency/CPU benchmark; asserts the Â§19 gates | 180 | â€” | W6 |
-| `Scripts/gen-shader-source.swift` | Regenerates `ShaderSource.swift` from the `.metal` files (R-38) | 90 | â€” | W3 |
-| `Scripts/gen-xcode.sh` | `xcodegen generate` | 25 | â€” | W6 |
-| `Scripts/make-icon.sh` | `iconutil` from `AppIcon.iconset` | 30 | â€” | W6 |
-| `.github/workflows/linux.yml` | `swift:6.1-noble`: `--product VigilPure`, `--product VigilTestKit`, full build, `swift test --parallel`, `test-linux.sh` | 45 | â€” | W6 |
-| `.github/workflows/macos.yml` | `macos-14`: build, test+coverage, lint, `build-app.sh`, `bench.sh --smoke` | 50 | â€” | W6 |
-| `.github/workflows/lint.yml` | `swift format lint --strict` + `Scripts/lint.sh` | 30 | â€” | W6 |
-| `docs/ACCEPTANCE.md` | The R1 checklist: launch â†’ visible moving picture in â‰¤ 10 s, password only | 180 | â€” | W6 |
-
-### 5.2 `Sources/VigilProtocols` â€” W1 (40 files, ~4 400 LoC)
-
-Everything here is Â§3. This is the wave that unblocks the whole project; it should be done by **two
-agents in parallel** (crypto + everything else) and merged before W2 starts.
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Time/MediaInstant.swift` | `MediaInstant`, `Duration` helpers | 110 | â€” | W1 |
-| `Time/Clocks.swift` | `MonotonicClock`, `WallClock`, `SystemMonotonicClock`, `SystemWallClock` | 120 | MediaInstant | W1 |
-| `Time/MediaTimestamp.swift` | `MediaTimestamp` + 128-bit rescale and compare | 230 | â€” | W1 |
-| `Time/RandomSource.swift` | `RandomSource` + extension, `SystemRandomSource`, `SplitMix64RandomSource` | 130 | â€” | W1 |
-| `Media/Codecs.swift` | `VideoCodec`, `AudioCodec`, `MediaCodec` | 140 | â€” | W1 |
-| `Media/ParameterSets.swift` | `ParameterSets` + `fingerprint` | 110 | Codecs | W1 |
-| `Media/EncodedFrame.swift` | `EncodedFrame`, `FrameDropClass`, `AudioFormatInfo` | 190 | ParameterSets, MediaTimestamp | W1 |
-| `Media/FrameGeometry.swift` | `FrameGeometry`, `ColorInfo`, `FieldOrder`, `Resolution` | 260 | â€” | W1 |
-| `Media/VideoFormatInfo.swift` | `VideoFormatInfo` + passthroughs + `isDecoderCompatible` | 190 | FrameGeometry, Codecs | W1 |
-| `Streams/StreamQuality.swift` | `StreamQuality`, `StreamKey`, `RTSPTransportKind`, `LatencyPreset` | 170 | Identifiers | W1 |
-| `Streams/DecodePolicy.swift` | `DecodeMode`, `StreamPriority`, `DecodeCost`, `DecodeAdmitting`, `DecodeLease`, `AdmissionResult`, `BudgetChange`, `BudgetSnapshot`, `DenialReason`, `BudgetPressure` | 300 | StreamQuality, FrameGeometry | W1 |
-| `Streams/TilePolicy.swift` | `TileClass`, `TileContext`, `TilePolicy`, `StreamChoice` â€” the class Aâ€“E table, pure | 220 | StreamQuality, Resolution | W1 |
-| `Stats/StreamStatistics.swift` | `StreamStatistics` (31 fields) | 140 | â€” | W1 |
-| `Stats/RingBuffer.swift` | `RingBuffer<Element>` | 120 | â€” | W1 |
-| `Errors/VigilError.swift` | `VigilFailure`, `ErrorSeverity`, `RetryDisposition`, `VigilError`, `vigilRequire` | 200 | DomainErrors | W1 |
-| `Errors/DomainErrors.swift` | **All eleven domain enums** (R-10). The largest W1 file; split into `DomainErrors+Protocol.swift` / `+Media.swift` / `+App.swift` if it exceeds 600 | 560 | â€” | W1 |
-| `Errors/DiagnosticCodes.swift` | The `VG-<DOMAIN>-NNNN` tables and the `diagnosticCode`/`userMessage`/`userRemedy` mappings | 420 | DomainErrors | W1 |
-| `Logging/LoggerProtocol.swift` | `LogLevel`, `LogCategory`, `LogEvent`, `LoggerProtocol` + level extensions, `NullLogger` | 170 | â€” | W1 |
-| `Logging/RateLimitedLogger.swift` | Decorator: N per key per window + suppression summary | 130 | LoggerProtocol, Clocks | W1 |
-| `Logging/Redact.swift` | `Redact` â€” the one redaction implementation | 260 | â€” | W1 |
-| `Bytes/ByteReader.swift` | `ByteReader` | 230 | DomainErrors | W1 |
-| `Bytes/ByteWriter.swift` | `ByteWriter` incl. `lengthPrefixed32` | 170 | â€” | W1 |
-| `Bytes/BitReader.swift` | `BitReader` â€” verbatim from Â§3.11 | 130 | DomainErrors | W1 |
-| `Bytes/BitWriter.swift` | `BitWriter` incl. `ue`/`se`/`rbspTrailingBits` | 130 | â€” | W1 |
-| `Crypto/MD5.swift` | RFC 1321, streaming, hex helper | 170 | â€” | W1 |
-| `Crypto/SHA1.swift` | FIPS 180-4, streaming | 150 | â€” | W1 |
-| `Crypto/SHA256.swift` | FIPS 180-4, streaming | 180 | â€” | W1 |
-| `Crypto/Base64.swift` | Padding-, whitespace- and URL-safe-tolerant decode; `decodeList` for `sprop-*` | 180 | â€” | W1 |
-| `Crypto/CRC32.swift` | IEEE 802.3, table-driven | 70 | â€” | W1 |
-| `Net/IPv4Address.swift` | `IPv4Address` | 160 | â€” | W1 |
-| `Net/MACAddress.swift` | `MACAddress` with four separator forms | 150 | â€” | W1 |
-| `Net/IPv4Subnet.swift` | `IPv4Subnet`, `IPv4HostSequence` | 180 | IPv4Address | W1 |
-| `Net/HostPolicy.swift` | `HostPolicy`, `HostClass` â€” the LAN-only egress gate | 150 | IPv4Address, DomainErrors | W1 |
-| `Net/Endpoints.swift` | `ISAPIEndpoint`, `RTSPEndpoint` | 140 | DomainErrors | W1 |
-| `Net/HTTP.swift` | `HTTPHeaders`, `HTTPRequest`, `HTTPResponse`, `HTTPLane`, `HTTPTransporting`, `HTTPUploadHandle` | 220 | Endpoints | W1 |
-| `Net/Credential.swift` | `Credential`, `CredentialRef` | 90 | â€” | W1 |
-| `Identity/Identifiers.swift` | `CameraID`, `GroupID`, `LayoutID`, `EventID`, `ClipID`, `BookmarkID`, `WindowID` | 190 | â€” | W1 |
-| `Identity/DeviceIdentifiers.swift` | `ChannelID`, `StreamingChannelID`, `TrackID` | 160 | StreamQuality | W1 |
-| `Identity/DeviceQuirks.swift` | `DeviceQuirks` â€” 28 flags + `merge` | 190 | â€” | W1 |
-| `Identity/EventKind.swift` | `EventKind` + `init(isapiEventType:)`, `EventSeverity` | 200 | â€” | W1 |
-| `Concurrency/Broadcaster.swift` | `Broadcaster<Element>` | 130 | â€” | W1 |
-| `Concurrency/ConcurrencyLimiter.swift` | `ConcurrencyLimiter` FIFO permit gate | 150 | StreamPriority | W1 |
-
-### 5.3 `Sources/VigilBitstream` â€” W2 (22 files, ~4 100 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `NAL/H264NALType.swift` | Type table 0â€“31 + `isVCL`, `isIDR`, `isParameterSet` | 130 | â€” | W2 |
-| `NAL/H265NALType.swift` | Type table 0â€“63 + IRAP 16â€“23, RASL, RADL | 150 | â€” | W2 |
-| `NAL/NALHeader.swift` | `NALHeader`, `NALUnitRef` | 140 | â€” | W2 |
-| `NAL/Limits.swift` | Security bounds: max NAL 4 MiB, max sets 8, max scaling-list entries | 60 | â€” | W2 |
-| `Convert/AnnexB.swift` | Start-code scan, `enumerateNALUnits`, `toLengthPrefixed`, `fromLengthPrefixed` | 260 | Limits | W2 |
-| `Convert/LengthPrefixed.swift` | `enumerate`, `validate`, `append(nal:to:)` â€” the one function `VigilRTP` uses | 140 | ByteWriter | W2 |
-| `Convert/RBSP.swift` | `unescape`, `escape`, `escapeByteCount` | 160 | â€” | W2 |
-| `Convert/RBSPBitReader.swift` | Exp-Golomb `ue`/`se`, `moreRBSPData`, trailing-bit check | 230 | BitReader, RBSP | W2 |
-| `H264/H264SPS.swift` | The parsed model | 170 | â€” | W2 |
-| `H264/H264SPSParser.swift` | ITU-T H.264 Â§7.3.2.1, full, incl. scaling lists, VUI, cropping | 420 | RBSPBitReader, H264SPS | W2 |
-| `H264/H264PPS.swift` | Model + minimal parse (Â§7.3.2.2) | 150 | RBSPBitReader | W2 |
-| `H265/ProfileTierLevel.swift` | Â§7.3.3, incl. the 48-bit constraint flags | 190 | RBSPBitReader | W2 |
-| `H265/H265VPS.swift` | Model + parse (Â§7.3.2.1) | 160 | ProfileTierLevel | W2 |
-| `H265/H265SPS.swift` | Model | 190 | â€” | W2 |
-| `H265/H265SPSParser.swift` | Â§7.3.2.2.1, full, incl. short-term RPS, VUI, conformance window | 460 | ProfileTierLevel, H265SPS | W2 |
-| `H265/H265PPS.swift` | Model + minimal parse for `parallelismType` | 130 | RBSPBitReader | W2 |
-| `Format/VideoFormatInfo+Parse.swift` | `VideoFormatInfo.init(_ sps:)` for both codecs, incl. the fps rules and SAR table | 300 | H264SPS, H265SPS | W2 |
-| `Format/SampleAspectRatio.swift` | The `aspect_ratio_idc` â†’ `(w, h)` table | 70 | â€” | W2 |
-| `Records/AVCDecoderConfigurationRecord.swift` | Build + parse + serialize | 250 | H264SPS | W2 |
-| `Records/HEVCDecoderConfigurationRecord.swift` | Build + parse + serialize, `NALArray` | 300 | H265SPS, ProfileTierLevel | W2 |
-| `SEI/SEI.swift` | `enumerate`, `parseRecoveryPoint`, `parsePictureTiming` | 220 | RBSPBitReader | W2 |
-| `Gate/SliceHeader.swift` | `isFirstSliceOfPicture`, `sliceType` â€” **the AU-boundary predicate** | 170 | NALHeader, RBSPBitReader | W2 |
-| `Gate/AccessUnitSummary.swift` | `AccessUnitSummary`, `IRAPGate`, RASL-after-CRA drop | 210 | SliceHeader | W2 |
-| `Gate/ParameterSetStore.swift` | Merge-not-replace, `ParameterSetChange`, format-change detection | 210 | VideoFormatInfo+Parse | W2 |
-
-### 5.4 `Sources/VigilRTSP` â€” W2 (21 files, ~4 300 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Model/RTSPMethod.swift` | `RTSPMethod`, `RTSPStatus` (30 named codes) | 190 | â€” | W2 |
-| `Model/RTSPHeaders.swift` | Ordered case-insensitive container, ASCII-only folding (`Ä°` â‰  `i`) | 210 | â€” | W2 |
-| `Model/RTSPMessage.swift` | `RTSPRequest`, `RTSPResponse`, `RTSPIncoming`, byte-exact serializer | 280 | RTSPHeaders | W2 |
-| `Model/RTSPURL.swift` | Hand-written URL value type; `requestLineForm`, credential-free `description` | 230 | Endpoints | W2 |
-| `Wire/RTSPHeaderScanner.swift` | Token / quoted-string / parameter-list primitives | 190 | â€” | W2 |
-| `Wire/RTSPWireDecoder.swift` | Incremental parse + `$` demux + resync; every limit enforced | 480 | RTSPHeaderScanner | W2 |
-| `Wire/RTSPRequestBuilder.swift` | Canonical request emission, header order, `Content-Length` rules | 210 | RTSPMessage | W2 |
-| `Auth/RTSPChallenge.swift` | `WWW-Authenticate` parsing; two challenges in one header; comma in `realm` | 200 | RTSPHeaderScanner | W2 |
-| `Auth/RTSPAuthenticator.swift` | Basic + Digest; `nc`/`cnonce`/`opaque`/`stale`; RFC 2069 no-qop first-class; **2-attempt cap** | 300 | MD5, RTSPChallenge | W2 |
-| `SDP/SDPDocument.swift` | Line model | 150 | â€” | W2 |
-| `SDP/SDPParser.swift` | Lenient parser: bare LF, trailing NUL, unknown attributes, non-UTF-8 `s=` | 340 | SDPDocument, Base64 | W2 |
-| `SDP/SDPMediaDescription.swift` | `rtpmap`/`fmtp`(lower-cased keys)/`control`, `sprop-*` decode | 260 | Base64 | W2 |
-| `SDP/ControlURLResolver.swift` | `Content-Base` â†’ `Content-Location` â†’ request URI, append-with-slash merge | 190 | RTSPURL | W2 |
-| `Headers/TransportHeader.swift` | Parse + build; interleaved, unicast, multicast, `mode`, `ssrc` | 230 | RTSPHeaderScanner | W2 |
-| `Headers/SessionHeader.swift` | Opaque id + `timeout` | 90 | â€” | W2 |
-| `Headers/RTPInfoHeader.swift` | `url`/`seq`/`rtptime`; absolute, relative and quoted forms | 170 | RTSPURL | W2 |
-| `Headers/RangeHeader.swift` | `npt`/`clock`/`smpte`, `Scale`, `Rate-Control` | 260 | â€” | W2 |
-| `Machine/RTSPSessionConfig.swift` | Config + `RTSPTimerID` + `RTSPCloseReason` | 150 | â€” | W2 |
-| `Machine/RTSPAction.swift` | `RTSPAction`, `RTSPLogEvent`, `RTSPTrack`, `RTSPTrackTiming`, `RTSPSessionDescription` | 280 | â€” | W2 |
-| `Machine/RTSPCommand.swift` | `RTSPCommand`, `RTSPSessionState` | 130 | â€” | W2 |
-| `Machine/RTSPSessionMachine.swift` | The state machine + transport ladder + probe support | 580 | everything above | W2 |
-| `Machine/RTSPSessionMachine+Playback.swift` | Seek, scale, frame-step, `ANNOUNCE`/`Notice`, backpressure | 320 | RTSPSessionMachine | W2 |
-
-### 5.5 `Sources/VigilRTP` â€” W2 (24 files, ~4 400 LoC)
-
-`SliceHeaderPeek.swift` is **deleted** by R-01; use `VigilBitstream.SliceHeader`.
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Packet/RTPPacket.swift` | RFC 3550 Â§5.1 header parse, padding, CSRC, extension | 230 | ByteReader | W2 |
-| `Packet/RTPHeaderExtension.swift` | One-byte and two-byte header extensions | 120 | RTPPacket | W2 |
-| `Packet/SequenceNumber.swift` | 16-bit modular compare, extended (unwrapped) sequence | 130 | â€” | W2 |
-| `Packet/TimestampUnwrapper.swift` | 32-bit RTP timestamp â†’ monotonic `Int64` before any `MediaTimestamp` | 150 | â€” | W2 |
-| `Track/RTPTrackFormat.swift` | Format struct + payload-type binding + factory | 240 | Codecs | W2 |
-| `Track/RTPTrackReceiver.swift` | The surface `VigilTransport` drives | 420 | everything below | W2 |
-| `Track/Depacketizer.swift` | Protocol, `DepacketizerOutput`, `AnyDepacketizer` enum for the hot path | 180 | â€” | W2 |
-| `Track/AccessUnitBuilder.swift` | AU assembly, 4-byte length prefixing, corruption marking | 260 | LengthPrefixed | W2 |
-| `Track/BoundaryPolicy.swift` | **Never trust the marker bit**; learned marker reliability | 210 | SliceHeader | W2 |
-| `H264/H264Depacketizer.swift` | RFC 6184: single NAL, STAP-A, FU-A. No MTAP | 340 | AccessUnitBuilder | W2 |
-| `H265/H265Depacketizer.swift` | RFC 7798: single NAL, AP, FU. No PACI, no interleaved mode | 360 | AccessUnitBuilder | W2 |
-| `Audio/AACDepacketizer.swift` | RFC 3640 `mode=AAC-hbr`; AU-headers-length, sizeLength/indexLength | 280 | AudioSpecificConfig | W2 |
-| `Audio/AudioSpecificConfig.swift` | ASC parse from bytes and from SDP `config=` hex | 200 | BitReader | W2 |
-| `Audio/ADTS.swift` | ADTS header build, for debug dumps and fixtures only | 110 | â€” | W2 |
-| `Audio/G711.swift` | Âµ-law and A-law tables, decode and encode, decoded in the pure layer | 190 | â€” | W2 |
-| `Audio/G726.swift` | 32 kbit/s (4-bit) only | 210 | â€” | W2 |
-| `Jitter/ReorderBuffer.swift` | `.passthrough` for TCP; UDP 128/60 ms adaptive â†’ 512/200 ms above 1 % loss | 280 | SequenceNumber, RingBuffer | W2 |
-| `Jitter/GapPolicy.swift` | Gap detection, keyframe-request throttling, drop-to-keyframe | 170 | â€” | W2 |
-| `RTCP/RTCPPacket.swift` | SR, RR, SDES, BYE, APP models | 190 | â€” | W2 |
-| `RTCP/RTCPParser.swift` | Compound-packet parse, strict length validation | 220 | RTCPPacket | W2 |
-| `RTCP/RTCPReportBuilder.swift` | RR generation on the RFC 3550 interval rules | 210 | RTPSourceState | W2 |
-| `RTCP/RTPSourceState.swift` | Per-SSRC loss, jitter (A.8), sequence-cycle state | 230 | SequenceNumber | W2 |
-| `Clock/PresentationClock.swift` | Min-filter + PLL. **Not** used for live pacing | 240 | TimestampUnwrapper | W2 |
-| `Stats/StatisticsAccumulator.swift` | The fixed EWMA constants; writes `StreamStatistics` | 230 | StreamStatistics | W2 |
-
-### 5.6 `Sources/VigilISAPI` â€” W2 (30 files, ~6 200 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `XML/XMLNode.swift` | `XMLNode`, path compilation and memoisation | 300 | â€” | W2 |
-| `XML/ISAPIDocument.swift` | Parser: 8 MiB / 64-level caps, **XXE off**, explicit stack, truncation-tolerant | 320 | XMLNode | W2 |
-| `XML/XMLValue.swift` | Lenient accessors, the bool vocabulary, clamped ints, required variants | 280 | â€” | W2 |
-| `XML/XMLBuilder.swift` | Escapes `& < > " '` only; no pretty-printing; element order preserved | 170 | â€” | W2 |
-| `XML/ISAPITime.swift` | Hand-rolled ASCII date scanner (no `DateFormatter`), POSIX-inverted zones | 240 | â€” | W2 |
-| `Client/ISAPIClient.swift` | The actor: verbs, XML convenience, lanes, coalescing, retry table | 470 | HTTPTransporting | W2 |
-| `Client/RequestGate.swift` | FIFO permit actor; PTZ may over-subscribe by exactly one | 140 | â€” | W2 |
-| `Client/DigestStore.swift` | Nonce cache, `nc` per (realm, nonce), pre-emptive auth | 230 | MD5 | W2 |
-| `Client/DigestChallenge.swift` | Parse; RFC 2069 no-qop first-class | 160 | â€” | W2 |
-| `Client/ServerTrust.swift` | `ServerTrustEvaluating`, `ServerTrustDecision`, the TOFU SPKI rule | 90 | â€” | W2 |
-| `Client/URLSessionHTTPTransport.swift` | Four ephemeral sessions, one per lane; delegate state in an actor | 420 | HTTP | W2 |
-| `Client/ResponseValidation.swift` | The four-step `validate`; `ResponseStatus` extraction; Â§9.3 mapping | 300 | ResponseStatus | W2 |
-| `Model/ResponseStatus.swift` | `ResponseStatus`, the 7 status codes, sub-status vocabulary | 150 | â€” | W2 |
-| `Endpoints/HikvisionURL.swift` | The **single** RTSP path builder + `RTSPPathCandidate` ladder | 200 | DeviceIdentifiers | W2 |
-| `Endpoints/DeviceIdentity.swift` | `deviceInfo`, `status`, `time`, `capabilities`, `userCheck`, `networkInterfaces` | 420 | XML | W2 |
-| `Endpoints/ChannelInventory.swift` | `InputProxy/channels` + `Video/inputs/channels`, paging at 64 | 320 | XML | W2 |
-| `Endpoints/StreamingChannels.swift` | Config read + **read-modify-write** PUT + re-GET; wire units | 400 | XMLBuilder | W2 |
-| `Endpoints/Snapshots.swift` | `/picture`, SOI sniffing, size query, per-device rate cap | 180 | â€” | W2 |
-| `Endpoints/PTZController.swift` | Continuous + 400 ms keep-alive + triple zero-stop; presets 33â€“105 blocked | 460 | XMLBuilder | W2 |
-| `Endpoints/ImageSettings.swift` | Colour, sharpness, WDR, IR-cut, defaults | 300 | XMLBuilder | W2 |
-| `Endpoints/RecordSearch.swift` | `POST /ContentMgmt/search`, one `searchID`, `searchResultPostion`, `MORE` paging | 380 | XMLBuilder | W2 |
-| `Endpoints/StorageInfo.swift` | Volumes, capacity in decimal MB, health | 160 | XML | W2 |
-| `Endpoints/PlaybackLocator.swift` | Rewrites scheme/host/port, keeps path+query **verbatim** | 130 | â€” | W2 |
-| `Endpoints/TwoWayAudio.swift` | Channel list, open/close, chunked upload session | 300 | HTTPUploadHandle | W2 |
-| `Events/MultipartStreamParser.swift` | Boundary sniffing, bare-LF tolerance, fixed memory budget | 330 | â€” | W2 |
-| `Events/AlertStreamMonitor.swift` | **One per device**; heartbeat suppression; 403 â‡’ `.unsupported`; terminal `.authFailed` | 340 | MultipartStreamParser | W2 |
-| `Events/EventNotificationAlert.swift` | The wire model + region magnitude sniffing | 280 | EventKind | W2 |
-| `Events/MotionDetection.swift` | Grid read/write, `gridMap` origin | 240 | XMLBuilder | W2 |
-| `Session/ISAPIDeviceSession.swift` | The device actor: cache TTLs, negative-capability cache, memoised alert stream | 500 | all endpoints | W2 |
-| `Session/QuirkResolver.swift` | The firmware matrix; the **four** consultation points | 260 | DeviceQuirks | W2 |
-
-### 5.7 `Sources/VigilDiscovery` â€” W2 (22 files, ~4 300 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Model/DiscoveredDevice.swift` | `DiscoveredDevice`, `DeviceIdentity`, `DeviceFieldKey`, `FieldStamp`, derived properties | 380 | IPv4Address, MACAddress | W2 |
-| `Model/DiscoveryEnums.swift` | `DiscoverySource` (+`trust`), `DeviceVendor`, `DeviceClass`, `ActivationState`, `Reachability` | 240 | â€” | W2 |
-| `Model/ONVIFScopes.swift` | Scope URI model + percent decoding | 130 | â€” | W2 |
-| `Model/DiscoveryConfiguration.swift` | Config, port tiers, timeouts, budgets | 230 | â€” | W2 |
-| `Model/DiscoveryEvents.swift` | `DiscoveryEvent`, `DiscoveryPhase`, `DiscoveryProgress`, `PhaseSummary`, `DiscoverySummary` | 300 | â€” | W2 |
-| `Model/DiscoveryDiagnostic.swift` | 15 cases + `userFacingMessage` + `Severity` | 240 | â€” | W2 |
-| `Transport/Protocols.swift` | The seven injected protocols + `DiscoveryEnvironment` + `MulticastGroupSpec` + `InboundDatagram` | 280 | â€” | W2 |
-| `Transport/NetworkInterfaceInfo.swift` | `NetworkInterfaceInfo`, `ARPEntry`, `TCPProbeOutcome`, `POSIXCode` | 160 | IPv4Subnet | W2 |
-| `SADP/SADPCodec.swift` | Probe encode, decode, `SADPDecodeResult`, opaque-payload entropy | 380 | XML-lite | W2 |
-| `SADP/SADPProbeMatch.swift` | The wire model + `splitSerial` | 260 | â€” | W2 |
-| `SADP/SADPXMLReader.swift` | Tiny lenient XML reader (SADP only; not the ISAPI one) | 220 | â€” | W2 |
-| `WSDiscovery/WSDiscoveryCodec.swift` | SOAP probe build, ProbeMatches/Hello/Bye decode, correlation | 420 | â€” | W2 |
-| `WSDiscovery/WSDProbeMatch.swift` | Model + scope parsing + XAddrs | 200 | ONVIFScopes | W2 |
-| `Sweep/IPv4HostOrder.swift` | Van der Corput ordering, gateway/`.64` priming | 150 | IPv4Subnet | W2 |
-| `Sweep/SweepPlanner.swift` | Interface filtering, the **/16 hard guard**, /16â€“/21 narrowing | 320 | IPv4HostOrder | W2 |
-| `Sweep/ARPTableDecoder.swift` | `rt_msghdr` walk with bounds checks; `arp -an` text fallback | 260 | ARPEntry | W2 |
-| `Fingerprint/StartLineHeaderScanner.swift` | ~70-line lenient scanner; **deliberately not `VigilRTSP`** | 180 | â€” | W2 |
-| `Fingerprint/FingerprintCodec.swift` | RTSP `OPTIONS`, ISAPI `deviceInfo`, `/` requests + classification | 340 | StartLineHeaderScanner | W2 |
-| `Fingerprint/VendorClassifier.swift` | The confidence-delta table, OUI seed lookup | 260 | â€” | W2 |
-| `Merge/IdentityNormalizer.swift` | Serial and ONVIF-UUID normalisation rules | 170 | â€” | W2 |
-| `Merge/MergeEngine.swift` | Union-find over the identity ladder; field precedence; confidence | 420 | IdentityNormalizer | W2 |
-| `Coordinator/DiscoveryCoordinator.swift` | Phase orchestration, budgets, deadline, cancellation | 480 | everything above | W2 |
-| `Resources/oui-seed.json` | `{"c42f90": "hikvision", â€¦}` â€” declared as `.copy("Resources")` if used; **if added, the directory must exist from the same commit** | â€” | â€” | W2 |
-
-### 5.8 `Sources/VigilTestKit` â€” W2 (13 files, ~2 400 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Doubles/VirtualClock.swift` | `MonotonicClock` + `DiscoveryClock`, explicit `advance(by:)` | 160 | Clocks | W2 |
-| `Doubles/ManualClock.swift` | Lock-based class clock for concurrent tests; exempt from R-52 | 90 | Clocks | W2 |
-| `Doubles/RecordingLogger.swift` | Records every `LogEvent` for assertions | 110 | LoggerProtocol | W2 |
-| `Doubles/FixtureHTTPTransport.swift` | Route table + recorded requests; **fails on any credential** | 260 | HTTPTransporting | W2 |
-| `Doubles/MockDatagramChannel.swift` | Scripted `(delay, datagram)` replay + send log | 180 | DatagramChannel | W2 |
-| `Doubles/MockTCPProber.swift` | `[IPv4Address: [UInt16: TCPProbeOutcome]]` with artificial latency | 110 | TCPProbing | W2 |
-| `Doubles/MockExchanger.swift` | Table-driven; **fails on any credential** | 130 | ByteExchanging | W2 |
-| `Synthetic/ScriptedRTSPPeer.swift` | Fixture transcript, digest recomputation, configurable chunking | 340 | VigilRTSP | W2 |
-| `Synthetic/SyntheticCamera.swift` | Full RTSP + RTP script generator, per-firmware quirk profiles | 420 | ScriptedRTSPPeer | W2 |
-| `Synthetic/SyntheticRTPGenerator.swift` | Targets `RTPTrackReceiver` exactly: H.264/H.265/AAC/G.711 | 380 | VigilRTP | W2 |
-| `Synthetic/SyntheticSPSBuilder.swift` | `BitWriter`-built SPS/PPS/VPS with chosen geometry and VUI | 260 | BitWriter | W2 |
-| `Harness/Fixture.swift` | `data(_:)`, `hex(_:)`, comment-stripping hex parser | 90 | â€” | W2 |
-| `Harness/GoldenVectors.swift` | RFC 1321 / 3174 / 6234 / 2617 tables + the Exp-Golomb table | 220 | â€” | W2 |
-
-### 5.9 `Sources/VigilTransport` â€” W3 (18 files, ~3 400 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `RTSPConnection.swift` | The actor: connect, atomic write, `pauseReads`/`resumeReads`, timers | 460 | RTSPSessionMachine | W3 |
-| `RTSPConnection+Timers.swift` | `RTSPTimerID` â†’ cancellable `Task`; one timer per id | 160 | RTSPConnection | W3 |
-| `UDPMediaSocketPair.swift` | Even/odd ports 51000â€“51998, RTP + RTCP | 300 | â€” | W3 |
-| `MulticastResponder.swift` | `NWListener` on 37020 / 3702 | 220 | â€” | W3 |
-| `RTPTrackFormatAdapter.swift` | `SDPMediaDescription` â†’ `RTPTrackFormat`, `RTSPTrackTiming` â†’ seed | 90 | VigilRTP | W3 |
-
-> **Superseded.** This row is wrong and cannot be built as written: it places the adapter in
-> `VigilTransport` with a `VigilRTP` dependency that `Package.swift` does not give that target, and
-> the mistake is invisible on Linux because the file would sit inside `#if os(macOS)`. The pure
-> logic now lives in `Sources/VigilRTP/Track/RTPTrackFormatAdapter.swift`, where it has 26 tests,
-> and the RTSP-typed overloads in `Sources/VigilCore/Streaming/RTPTrackFormatAdapter+RTSP.swift` â€”
-> `VigilCore` being the only shipping target that imports both.
-
-| `TLS/ServerTrustEvaluator.swift` | TOFU SPKI-256 leaf pinning shared by RTSP and ISAPI | 280 | SHA256 | W3 |
-| `TLS/CertificateSummary.swift` | Chain summary for the UI; `SecTrustEvaluateWithError` diagnostics only | 160 | â€” | W3 |
-| `FileDescriptorBudget.swift` | `setrlimit` to `min(4096, rlim_max)` at launch | 70 | â€” | W3 |
-| `EgressGuard.swift` | Wraps every socket creation in `HostPolicy.requirePermitted` | 110 | HostPolicy | W3 |
-| `Discovery/MulticastDatagramChannel.swift` | `NWConnectionGroup`, `disableUnicast: false`, hop limit 1, port reuse | 340 | Protocols | W3 |
-| `Discovery/UnicastDatagramChannel.swift` | Ephemeral-port unicast fallback | 200 | Protocols | W3 |
-| `Discovery/TCPConnectProber.swift` | `NWConnection` probe; `.waiting` is terminal; POSIX classification | 230 | Protocols | W3 |
-| `Discovery/NWByteExchanger.swift` | One request/response; TLS verify-block accepts anything (fingerprint only) | 250 | Protocols | W3 |
-| `Discovery/SystemInterfaceEnumerator.swift` | `getifaddrs` + `SCNetworkInterface` wireless detection | 200 | Protocols | W3 |
-| `Discovery/SystemARPTableReader.swift` | `sysctl` route dump â†’ `ARPTableDecoder` | 140 | ARPTableDecoder | W3 |
-| `Discovery/BonjourBrowser.swift` | `NWBrowser` over the three service types | 190 | Protocols | W3 |
-| `Discovery/EntitlementInspector.swift` | `SecCode` entitlement read; local-network permission heuristic | 180 | â€” | W3 |
-| `Discovery/LiveDiscoveryEnvironment.swift` | Assembles the eleven injected values | 90 | all of `Discovery/` | W3 |
-
-### 5.10 `Sources/VigilVideo` â€” W3 (36 files, ~6 800 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Support/VideoFrame.swift` | `VideoFrame` (`@unchecked Sendable` #2) | 130 | VideoFormatInfo | W3 |
-| `Support/VideoSink.swift` | The protocol + no-op defaults, `StreamEndReason`, `FrameDropReason`, `PacingMode` | 170 | VideoFrame | W3 |
-| `Support/DecodeSinkBox.swift` | The VT-callback â†’ `AsyncStream` bridge (`@unchecked Sendable` #1) | 140 | â€” | W3 |
-| `Format/FormatDescriptionFactory.swift` | **The single CoreMedia conversion site**; `withParameterSetPointers` | 320 | ParameterSets | W3 |
-| `Format/FormatOverrides.swift` | `avcC`/`hvcC` atom rebuild for colour and aperture overrides | 240 | Records | W3 |
-| `Format/FormatChangeCoordinator.swift` | Compatible vs incompatible; `generation`; the **no black flash** rule | 280 | ParameterSetStore | W3 |
-| `Sample/SampleBufferBuilder.swift` | `CMBlockBuffer` + `CMSampleBuffer` + attachments | 300 | FormatDescriptionFactory | W3 |
-| `Sample/SampleAttachments.swift` | `DisplayImmediately`, `NotSync`, `DoNotDisplay` | 130 | â€” | W3 |
-| `Sample/TimestampConversion.swift` | `MediaTimestamp` â†” `CMTime`; duration estimation chain | 150 | MediaTimestamp | W3 |
-| `Decode/DecodePipeline.swift` | The actor: submit, modes, strategy, statistics | 520 | everything below | W3 |
-| `Decode/DecodePipeline+Audio.swift` | Audio submission, routing, decoder lifetime | 260 | AudioPlaybackEngine | W3 |
-| `Decode/LayerDecodeSession.swift` | Strategy A: `AVSampleBufferDisplayLayer` + `sampleBufferRenderer` | 380 | SampleBufferBuilder | W3 |
-| `Decode/SampleBufferRendering.swift` | The renderer protocol + `requestMediaDataWhenReady` pump | 190 | â€” | W3 |
-| `Decode/VTDecodeSession.swift` | Strategy B: session create/configure/decode/invalidate | 420 | FormatDescriptionFactory | W3 |
-| `Decode/VTConfig.swift` | Every property key we set, and why | 200 | â€” | W3 |
-| `Decode/StrategySelection.swift` | `DisplayStrategy`, `StrategyInputs`, `selectStrategy`, switch choreography | 260 | â€” | W3 |
-| `Decode/PixelBufferPool.swift` | IOSurface + Metal-compatible, depth â‰¥ 6, threshold handling | 230 | â€” | W3 |
-| `Decode/FrameQueue.swift` | Capacity 6/12/72, drop order by `dropClass`, `flushToKeyframe` | 240 | RingBuffer | W3 |
-| `Decode/LatencyController.swift` | The four-level ladder, EWMAs, dwell times | 300 | â€” | W3 |
-| `Decode/VTErrorRecovery.swift` | The `OSStatus` â†’ action table, backoff, hardware-requirement drop | 260 | â€” | W3 |
-| `Budget/DecodeBudget.swift` | The `@globalActor`; conforms to `DecodeAdmitting` | 420 | DecodePolicy | W3 |
-| `Budget/MachineClass.swift` | `sysctl` detection + the R-59 seed table + persistence | 220 | â€” | W3 |
-| `Budget/ThermalGovernor.swift` | Thermal and low-power multipliers, announced via `budgetChanges()` | 190 | DecodeBudget | W3 |
-| `Budget/OcclusionMonitor.swift` | The 0 s / 1 s / 30 s / 5 min occlusion ladder | 210 | â€” | W3 |
-| `Budget/JPEGPoller.swift` | Class-D polling with jitter and per-device rate limiting | 230 | â€” | W3 |
-| `Budget/MJPEGDecoder.swift` | `CGImageSource` decode; separate CPU budget; 10 fps cap | 190 | â€” | W3 |
-| `Playback/PlaybackPipeline.swift` | Timebase, rate, seek, step | 460 | DecodePipeline | W3 |
-| `Playback/ReorderHeap.swift` | PTS min-heap for B-frame content | 140 | â€” | W3 |
-| `Playback/RateController.swift` | Server `Scale` vs client-side rate; auto-mute outside 0.5â€¦2.0 | 240 | â€” | W3 |
-| `Playback/ReverseGOPDecoder.swift` | Whole-GOP burst decode, 320 MB ring, one tile at a time | 320 | â€” | W3 |
-| `Audio/AudioPlaybackEngine.swift` | `AVAudioEngine` graph, source node, lifecycle | 380 | AudioRingBuffer | W3 |
-| `Audio/AACDecoder.swift` | `AudioConverterRef`, magic cookie, ASBD constants | 280 | AudioFormatInfo | W3 |
-| `Audio/AudioRingBuffer.swift` | Lock-free SPSC, 400 ms, fade-out on underrun | 200 | â€” | W3 |
-| `Audio/Resampler.swift` | 8 k â†’ 48 k, 31-tap linear-phase FIR via `vDSP` | 180 | â€” | W3 |
-| `Audio/AudioRouter.swift` | D8: focused-only by default, max 4 unmuted, equal-power fades | 280 | â€” | W3 |
-| `Audio/TalkbackController.swift` | Capture â†’ 8 k mono â†’ G.711 â†’ 320-byte chunks at 25 Hz; AEC; PTT | 400 | G711 | W3 |
-| `Snapshot/SnapshotEncoder.swift` | PNG/JPEG/HEIC via ImageIO, EXIF/TIFF/IPTC, clean-aperture crop | 320 | â€” | W3 |
-| `Diagnostics/DecodeStatistics.swift` | Reservoirs, percentiles, `< 20 Âµs` accessor | 220 | â€” | W3 |
-| `Diagnostics/VideoSignposts.swift` | The permanent signpost names | 130 | â€” | W3 |
-| `Diagnostics/HardwareProbe.swift` | **Measured** hardware-decode flag, read 200 ms after the first decode | 110 | â€” | W3 |
-
-### 5.11 `Sources/VigilRender` â€” W3 (33 files, ~6 400 LoC)
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `RenderContext.swift` | Shared device, queue, library, caches, capabilities | 320 | â€” | W3 |
-| `RenderCapabilities.swift` | The capability struct + probes | 150 | â€” | W3 |
-| `Shaders/VigilTileShaders.metal` | The reviewable shader source of truth (resource, not compiled by SwiftPM) | 420 | â€” | W3 |
-| `Shaders/ShaderSource.swift` | Byte-identical embedded copy, generated by `Scripts/gen-shader-source.swift` | 430 | the `.metal` | W3 |
-| `Shaders/TileUniforms.swift` | Swift mirror + a layout self-check test hook | 190 | â€” | W3 |
-| `Shaders/PipelineCache.swift` | `PipelineKey`, `MTLBinaryArchive` persistence keyed by source SHA-256 | 250 | SHA256 | W3 |
-| `Geometry/TileGeometry.swift` | Crop + SAR + display size | 140 | FrameGeometry | W3 |
-| `Geometry/TileTransform.swift` | Zoom 1â€¦8, NDC pan, anchored zoom, clamp | 200 | â€” | W3 |
-| `Geometry/FitRect.swift` | `fit`/`fill`/`stretch`, the normative table | 130 | â€” | W3 |
-| `Geometry/TileCoordinateMap.swift` | content â†” view, `visibleContentRect`, `picturePixel` | 250 | TileTransform | W3 |
-| `Geometry/NormalizedRegions.swift` | 0â€¦1000 and 0â€¦255 conversions, both origins, rect and polygon flips | 190 | â€” | W3 |
-| `Color/ColorConversion.swift` | BT.601/709/2020 matrices, ranges, siting, sample scale | 260 | ColorInfo | W3 |
-| `Color/EDRPolicy.swift` | PQ/HLG only, and only where headroom > 1.0 | 150 | â€” | W3 |
-| `Frames/LatestFrameBox.swift` | The lock-protected slot (`@unchecked Sendable` #3) | 170 | VideoFrame | W3 |
-| `Frames/FramePacer.swift` | `NSView.displayLink`, frame-rate ranges, field doubling | 240 | â€” | W3 |
-| `Frames/FrameStreamHandle.swift` | Attach/detach without importing `VigilCore` | 110 | VideoSink | W3 |
-| `Tile/VideoTileView.swift` | The `NSView`, options, state, `VideoSink` conformance | 480 | RenderContext | W3 |
-| `Tile/VideoTileView+Layer.swift` | Backing layer, contents scale, resize, live-resize | 260 | VideoTileView | W3 |
-| `Tile/VideoTileView+Render.swift` | Encode and present for the Metal backend | 420 | Shaders | W3 |
-| `Tile/VideoTileView+Input.swift` | Events, gestures, cursors, PTZ keys, click-to-centre | 460 | TileCoordinateMap | W3 |
-| `Tile/VideoTileView+DragDrop.swift` | Drag sessions, drop routing, the two UTIs | 260 | TransferTypes | W3 |
-| `Tile/SampleBufferBackend.swift` | The ASBDL path, `flush()` never `flushAndRemoveImage()` | 300 | â€” | W3 |
-| `Tile/BackendSwitcher.swift` | Still-layer crossfade, 400 ms wait, 80 ms fade, oscillation guard | 240 | â€” | W3 |
-| `Tile/TileRenderState.swift` | `@Observable`, publishes `pixelSize` and `coordinateMap` | 200 | â€” | W3 |
-| `Effects/DownsampleChain.swift` | Box halvings then bilinear/bicubic by scale factor | 220 | â€” | W3 |
-| `Effects/PrivacyMaskPass.swift` | Solid / mosaic / blur, pixel-exact under zoom | 260 | â€” | W3 |
-| `Effects/OverlayRectPass.swift` | Instanced boxes for the > 32 case and for wall mode | 200 | â€” | W3 |
-| `Wall/WallCompositorView.swift` | Single-layer atlas, hit testing, per-cell renderers | 420 | AtlasTarget | W3 |
-| `Wall/AtlasTarget.swift` | Atlas allocation, `maxTextureDimension` gate | 240 | â€” | W3 |
-| `Wall/DirtySlotTracker.swift` | Per-drawable dirty union | 150 | â€” | W3 |
-| `Interop/VideoTile.swift` | `NSViewRepresentable` | 200 | VideoTileView | W3 |
-| `Interop/VideoWall.swift` | `NSViewRepresentable` for the wall | 160 | WallCompositorView | W3 |
-| `Interop/TileInteractionDelegate.swift` | The 14-member delegate + `PTZDirection` + `Position3DGesture` | 220 | â€” | W3 |
-| `Interop/TransferTypes.swift` | `UTType` exports, `TileAssignmentTransfer`, `CameraRefTransfer` | 160 | â€” | W3 |
-| `Snapshot/TileSnapshotter.swift` | Offscreen render, overlay composite, `CGImage` | 240 | â€” | W3 |
-| `Diagnostics/RenderStats.swift` | Stats, signposts, debug-HUD model | 240 | â€” | W3 |
-
-### 5.12 `Sources/VigilCore` â€” W4 (58 files, ~11 500 LoC)
-
-The largest target. Split across ~6 agents by directory.
-
-| Path | Responsibility | LoC | Deps | Wave |
-|---|---|---|---|---|
-| `Platform/CoreDependencies.swift` | The struct + `.live` + every injected protocol | 320 | â€” | W4 |
-| `Platform/FileSystem+Real.swift` | `writeDurably` with `F_FULLFSYNC`; `replaceItem` | 220 | â€” | W4 |
-| `Platform/Paths.swift` | **The only place a filesystem URL is constructed**; security-scoped bookmarks | 220 | â€” | W4 |
-| `Platform/Occlusion+AppKit.swift` | One of only three AppKit files in the module | 180 | â€” | W4 |
-| `Platform/Pasteboard+AppKit.swift` | ditto | 90 | â€” | W4 |
-| `Platform/QuickLook+AppKit.swift` | ditto | 90 | â€” | W4 |
-| `Platform/PowerObserver.swift` | Sleep/wake, screensaver, low-power, thermal | 220 | â€” | W4 |
-| `Platform/NetworkPathObserver.swift` | `NWPathMonitor` â†’ `NetworkPathState` with interface fingerprint | 180 | â€” | W4 |
-| `Model/Camera.swift` | `Camera` + validation + `slug` + endpoint helpers | 380 | â€” | W4 |
-| `Model/StreamProfile.swift` | `StreamProfile`, `Origin`, `mergeProfiles` precedence | 300 | â€” | W4 |
-| `Model/DeviceCapabilities.swift` | Capabilities, `ChannelDescriptor`, `PTZCapabilities`, `StorageVolumeInfo`, `RTSPPathTemplate` | 420 | DeviceQuirks | W4 |
-| `Model/CameraGroup.swift` | Group + membership invariants | 140 | â€” | W4 |
-| `Model/Layout.swift` | `Layout`, `LayoutMode` (+ the flat-`type` Codable), `GridCell`, `CellAssignment` | 420 | â€” | W4 |
-| `Model/LayoutGeometry.swift` | `cells()` for all modes on the 12 Ã— 12 grid | 260 | Layout | W4 |
-| `Model/Bookmark.swift` | â€” | 110 | â€” | W4 |
-| `Model/EventRecord.swift` | `EventRecord`, `NormalizedRect`, `CoalesceKey` | 240 | EventKind | W4 |
-| `Model/RecordingClip.swift` | Clip record, container, trigger | 220 | â€” | W4 |
-| `Model/AppSettings.swift` | Every persisted preference, all defaulted | 360 | â€” | W4 |
-| `Model/Library.swift` | The document + `normalize()` + lookups + `OrderIndex` | 340 | all models | W4 |
-| `Persistence/AtomicJSONFile.swift` | The durable-write engine: rotate, temp, `replaceItemAt`, debounce | 300 | FileSystem | W4 |
-| `Persistence/LibraryCoding.swift` | Encoder/decoder config, the three date forms | 180 | â€” | W4 |
-| `Persistence/ConfigStore.swift` | The actor: load ladder, `mutate`, `flush`, `changes()` | 480 | AtomicJSONFile | W4 |
-| `Persistence/RecoveryLadder.swift` | `.bak` â†’ `.bak2` â†’ quarantine â†’ empty-with-banner | 220 | â€” | W4 |
-| `Persistence/SchemaMigrator.swift` | Chain runner, never a jump table | 200 | â€” | W4 |
-| `Persistence/Migration1to2.swift` | `port` split, UNIX dates â†’ ISO-8601 | 160 | â€” | W4 |
-| `Persistence/Migration2to3.swift` | `credentialRef` rekey, `cells` â†’ `assignments` | 200 | â€” | W4 |
-| `Persistence/EventLog.swift` | The separate `events.json` ring, capacity 5000, query | 340 | AtomicJSONFile | W4 |
-| `Persistence/ImportExport.swift` | CSV + JSON + the encrypted `.vigilbackup` (PBKDF2 600 000, AES-GCM-256) | 420 | SHA256 | W4 |
-| `Security/CredentialStore.swift` | **The only user of `Security.framework`** | 420 | Credential | W4 |
-| `Security/LockoutGovernor.swift` | â‰¤ 3 probes per (host, account) per 10 min; the shared 2-failure counter | 180 | â€” | W4 |
-| `Security/ServerTrustBridge.swift` | Implements `ServerTrustEvaluating` over `Camera.tlsPinSPKI256` | 200 | SHA256 | W4 |
-| `Streaming/StreamController.swift` | The actor + public API + the 9-task structured group | 520 | everything | W4 |
-| `Streaming/StreamController+Machine.swift` | **The 58-row transition table**, one function per group of rows | 580 | StreamController | W4 |
-| `Streaming/StreamController+Timers.swift` | The 20 named timeouts | 260 | â€” | W4 |
-| `Streaming/StreamController+Capture.swift` | Snapshot and recording entry points, pre-roll drain | 300 | ClipRecorder | W4 |
-| `Streaming/StreamState.swift` | States, `StateDetail`, narration strings | 190 | â€” | W4 |
-| `Streaming/StreamEvent.swift` | The event enum | 260 | â€” | W4 |
-| `Streaming/StreamError.swift` | `StreamError` + `Code` + the `DoctorCause` bridge | 320 | DomainErrors | W4 |
-| `Streaming/ReconnectPolicy.swift` | The ladder, jitter, reset, cold retry | 160 | RandomSource | W4 |
-| `Streaming/StreamProbe.swift` | **R1.2**: 3-in-flight candidate ladder, `401` does not advance | 300 | HikvisionURL | W4 |
-| `Streaming/ChannelEnumerator.swift` | **R1.3**: ISAPI channels, else `DESCRIBE` probe 1â€¦16 | 240 | ISAPIDeviceSession | W4 |
-| `Streaming/StreamCoordinator.swift` | The actor: viewport, priority, admission, shutdown | 520 | DecodeAdmitting | W4 |
-| `Streaming/LivePlan.swift` | `makePlan` â€” a **pure function**, unit-tested exhaustively | 340 | TilePolicy | W4 |
-| `Streaming/QualityPolicy.swift` | The class Aâ€“E application + hysteresis state per tile | 260 | TilePolicy | W4 |
-| `Streaming/LiveViewState.swift` | `@MainActor @Observable`; the cadence rules; **no pixels ever** | 340 | â€” | W4 |
-| `Recording/ClipRecorder.swift` | `AVAssetWriter` passthrough; `.partial` â†’ rename; fragmented every 2 s | 480 | â€” | W4 |
-| `Recording/PreRollBuffer.swift` | Whole GOPs only; 96 MiB / 240 GOPs; never a partial GOP | 220 | â€” | W4 |
-| `Recording/RecordingNaming.swift` | Template rendering, 200-byte path components, collision suffixes | 200 | â€” | W4 |
-| `Recording/RecordingRecovery.swift` | Crash scan for `.partial`, â‰¤ 5 000 files / 10 s | 190 | â€” | W4 |
-| `Recording/RetentionSweeper.swift` | Days + gigabytes, launch and 6-hourly | 200 | â€” | W4 |
-| `Snapshots/SnapshotService.swift` | Source selection, bounded concurrency, destinations | 340 | SnapshotEncoder | W4 |
-| `Snapshots/BurnInOverlay.swift` | CoreGraphics composite for the snapshot path only | 220 | â€” | W4 |
-| `Events/EventCenter.swift` | Subscription reconciliation, dedupe, notification, auto-record | 480 | AlertStreamMonitor | W4 |
-| `Events/Coalescer.swift` | Pure 3 s window logic | 180 | â€” | W4 |
-| `Events/AutoRecordArbiter.swift` | Pure policy: cooldown, caps, disk, quiet hours | 220 | â€” | W4 |
-| `Events/NotificationScheduler.swift` | `UNUserNotificationCenter` adapter, categories, throttles | 300 | â€” | W4 |
-| `Health/HealthMonitor.swift` | One 1 Hz timer for the whole app | 280 | HealthRing | W4 |
-| `Health/HealthSample.swift` | Exactly 24 bytes; `Flags` option set | 190 | â€” | W4 |
-| `Health/HealthRing.swift` | 600 slots, preallocated | 130 | RingBuffer | W4 |
-| `Diagnostics/StreamDoctor.swift` | The 13 steps, 25 s budget, the nine R1.5 diagnoses | 520 | â€” | W4 |
-| `Diagnostics/DoctorCause.swift` | Cause â†’ message â†’ fix â†’ action table | 340 | â€” | W4 |
-| `Diagnostics/DiagnosticsBundleBuilder.swift` | The tree, the caps, the manifest | 380 | TarWriter | W4 |
-| `Diagnostics/DiagnosticsRedactor.swift` | Pure second-pass redaction over collected logs | 220 | Redact | W4 |
-| `Diagnostics/TarWriter.swift` | POSIX `ustar`, uncompressed | 200 | â€” | W4 |
-| `Diagnostics/LogExporter.swift` | `OSLogStore`, 50 000 entries / 20 MB / 24 h caps | 190 | â€” | W4 |
-| `Automation/DeepLink.swift` | The grammar, total `parse`, write-action gating, 10-per-10 s limit | 420 | â€” | W4 |
-| `Automation/Entities.swift` | `CameraEntity`, `CameraGroupEntity`, `LayoutEntity`, `PTZPresetEntity`, `RecordingClipEntity`, `EventEntity` + queries | 480 | â€” | W4 |
-| `Automation/Intents.swift` | The 16 intents + `VigilShortcuts` (split at 600 lines) | 580 | Entities | W4 |
-| `Logging/OSLogLogger.swift` | The 13-category adapter; applies `Redact` before emitting | 190 | Redact | W4 |
-| `Logging/Signposts.swift` | The permanent signpost names | 140 | â€” | W4 |
-| `Errors/LocalizedError+Vigil.swift` | `LocalizedError` for every Â§3.9 enum | 200 | DomainErrors | W4 |
-
-### 5.13 `Sources/VigilUI` â€” W5 (78 files, ~14 000 LoC)
-
-Every top-level type carries an explicit `@MainActor`. Split across ~6 agents by directory.
-
-| Path | Responsibility | LoC | Wave |
-|---|---|---|---|
-| `Theme/VTheme.swift` | The namespace + `Space`/`Radius`/`Border`/`Metrics`/`Icon` | 260 | W5 |
-| `Theme/Colors.swift` | Every token, via `NSColor(name:dynamicProvider:)`; the 26-row table + idents | 420 | W5 |
-| `Theme/Typography.swift` | Nine steps + Mono track + reserved telemetry widths + `vType` | 280 | W5 |
-| `Theme/Motion.swift` | Six springs, four curves, three repeaters, `Delay`, `resolved`, `stagger` | 220 | W5 |
-| `Theme/Elevation.swift` | `e0`â€¦`e3`, `VGlass`, `VInnerHighlight`, `VVisualEffect` | 300 | W5 |
-| `Theme/Environment.swift` | `\.vPulsePhase`, `\.vShimmerOffset`, `\.vMotionEnabled`, `\.vMotionTier`, `\.vTextScale`, `\.vNamespaces`, `\.vOnVideo` | 200 | W5 |
-| `Theme/TokenGallery.swift` | The debug window that renders every token in 4 appearances. **Build first** | 380 | W5 |
-| `Components/VButton.swift` â€¦ `VProgressRing.swift` | **28 files**, one per component (`VButton`, `VSegmentedControl`, `VToggle`, `VSlider`, `VTextField`, `VSearchField`, `VSelect`, `VBadge`, `VChip`, `VCard`, `VToolbar`, `VSidebarRow`, `VTile`, `VTimeline`, `VPTZPad`, `VCommandPalette`, `VToast`, `VEmptyState`, `VSkeleton`, `VStatPill`, `VSparkline`, `VContextMenu`, `VPopover`, `VSheet`, `VInspectorSection`, `VKeyCap`, `VDivider`, `VProgressRing`), each with a `#Preview` covering **every state in its table** | 28 Ã— ~200 = 5 600 | W5 |
-| `Components/VTileTransitionProxy.swift` | **All** tile geometry transitions go through this | 220 | W5 |
-| `Components/VLiveDot.swift` | Pulse driven by `\.vPulsePhase`, never its own timer | 110 | W5 |
-| `Components/VLayoutGlyph.swift` | The layout-picker icons, drawn from `LayoutMode.cells()` | 160 | W5 |
-| `Components/FocusRing.swift` | `vFocusRing(_:radius:outset:)` | 90 | W5 |
-| `Motion/VMotionGovernor.swift` | Four tiers, one-per-3-s recovery, publishes `\.vMotionTier` | 260 | W5 |
-| `State/AppModel.swift` | The injected `@Observable` faÃ§ade | 300 | W5 |
-| `State/LayoutState.swift` | Mode + assignments + overflow, bridged to `ConfigStore` | 240 | W5 |
-| `State/SidebarSelection.swift` `InspectorTab.swift` | Selection enums | 120 | W5 |
-| `State/PaletteState.swift` | Open/closed, query, mode prefix | 160 | W5 |
-| `State/ToastQueue.swift` | Bounded queue, 320 pt cards | 150 | W5 |
-| `State/ShortcutStore.swift` | Defaults âŠ• overrides, conflict detection, `UserDefaults` persistence | 300 | W5 |
-| `State/FocusedValues.swift` | Focused-camera plumbing for menu commands | 120 | W5 |
-| `Window/MainWindowView.swift` | `NavigationSplitView` + `.inspector`; declares the three namespaces | 320 | W5 |
-| `Window/MainToolbar.swift` | Customisable 52 pt toolbar | 260 | W5 |
-| `Window/WindowAccessor.swift` | Traffic-light inset (20, 26), tabbing off, autosave | 160 | W5 |
-| `Window/CinemaChrome.swift` | Full-screen chrome auto-hide | 180 | W5 |
-| `Sidebar/SidebarView.swift` + 6 files | Rows, groups, filter bar, footer, context menu, inline rename | 900 | W5 |
-| `Stage/StageView.swift` + 9 files | Router, `LayoutEngine`, tile container, chrome, state overlay, empty cell, mosaic editor, patrol, drop delegate | 1 500 | W5 |
-| `Inspector/InspectorView.swift` + 10 files | Six tabs, PTZ pad, preset grid, schedule grid, system overview | 1 700 | W5 |
-| `Playback/PlaybackWindowView.swift` + 9 files | Model, timeline ruler/heatmap/lane, scrub preview, transport, export, date popover | 1 700 | W5 |
-| `Discovery/DiscoveryRootView.swift` + 8 files | Scan, results, credentials, channels, manual add, CSV import, activation | 1 400 | W5 |
-| `Events/EventsFeedView.swift` + 4 files | Feed, row, card, filter bar, watch-mode overlay | 700 | W5 |
-| `Palette/CommandPaletteOverlay.swift` + 4 files | In-window overlay, index, `FuzzyMatcher`, row, actions | 900 | W5 |
-| `Wall/VideoWallView.swift` `ScreenPicker.swift` | Second-display wall | 340 | W5 |
-| `Settings/SettingsView.swift` + 7 panes | General, Streams, Recording, Notifications, Shortcuts, Advanced, About | 1 400 | W5 |
-| `Shared/StreamDoctorSheet.swift` | The live 13-step sheet with per-step outcomes and one-tap fixes | 340 | W5 |
-| `Shared/CheatSheetOverlay.swift` | Renders live from `ShortcutStore`; printable | 220 | W5 |
-| `Shared/Formatters.swift` | Bitrate, duration, bytes, timecode â€” all `monospacedDigit` | 200 | W5 |
-| `Shared/Strings.swift` | Generated key accessors over `Localizable.xcstrings` | 260 | W5 |
-| `Resources/Assets.xcassets` | App icon, custom SF Symbols. **Directory exists** | â€” | W5 |
-| `Resources/AppIcon.iconset` | Source for `make-icon.sh` | â€” | W5 |
-| `Localizations/Localizable.xcstrings` | EN + RU, `surface.subject.variant.part` keys, plural variations for RU | â€” | W5 |
-
-### 5.14 `Sources/Vigil` â€” W6 (7 files, ~1 100 LoC)
-
-| Path | Responsibility | LoC | Wave |
-|---|---|---|---|
-| `main.swift` | Top-level code; `VigilApp.main()` on macOS, stderr + `EXIT_FAILURE` elsewhere. **No `@main`** | 20 | W6 |
-| `VigilApp.swift` | The seven scenes (`Window` Ã—4, `WindowGroup(for: PlaybackRequest.self)`, `Settings`, `MenuBarExtra`) | 280 | W6 |
-| `VigilCommands.swift` | The menu bar; every command routed through `AppModel` | 340 | W6 |
-| `AppEnvironment.swift` | Bootstraps `CoreDependencies.live` and the actors | 200 | W6 |
-| `MenuBarExtraContent.swift` | Status glance + six quick actions; JPEG thumbnails at 15 s | 220 | W6 |
-| `URLSchemeHandler.swift` | `vigil://` â†’ `DeepLink.parse` â†’ consent gate â†’ action | 180 | W6 |
-| `AppDelegate.swift` | Sleep/wake, reopen, dock badge, `applicationWillTerminate` 2 s budget | 200 | W6 |
-
-### 5.15 Tests (45 files, ~11 000 LoC)
-
-All test targets exist with a `Placeholder.swift`. The nine with `.copy("Fixtures")` **already have
-the directory and its `.placeholder`** â€” never delete them (R-70).
-
-| Path | Responsibility | LoC | Wave |
-|---|---|---|---|
-| `Tests/VigilProtocolsTests/CryptoTests.swift` | RFC 1321 (7 vectors) + RFC 3174 + RFC 6234 + RFC 2617 Digest; streaming chunk sizes 1/3/7/13/25/26; 1 MiB input | 340 | W1 |
-| `Tests/VigilProtocolsTests/Base64Tests.swift` | Padded, unpadded, whitespace-laden, URL-safe, illegal char, `len % 4 == 1` | 180 | W1 |
-| `Tests/VigilProtocolsTests/MediaTimestampTests.swift` | Rescale exactness at 90 kHz and 1 MHz, saturation, cross-timescale compare, clamped init | 260 | W1 |
-| `Tests/VigilProtocolsTests/BitReaderTests.swift` | Every boundary, `u(0)`, `u(32)`, `u64(48)`, truncation, `peek` non-mutation | 220 | W1 |
-| `Tests/VigilProtocolsTests/ByteReaderWriterTests.swift` | Round-trip, `lengthPrefixed32`, `line(limit:)` overflow | 200 | W1 |
-| `Tests/VigilProtocolsTests/NetTypesTests.swift` | `IPv4Address` strictness, four MAC forms, subnet maths, `/31` and `/32` | 300 | W1 |
-| `Tests/VigilProtocolsTests/HostPolicyTests.swift` | Every class; the `.publicInternet` refusal | 160 | W1 |
-| `Tests/VigilProtocolsTests/RedactTests.swift` | Fuzz: seeded secrets in several encodings; idempotence; â‰¤ 2Ã— growth | 280 | W1 |
-| `Tests/VigilProtocolsTests/TilePolicyTests.swift` | Every class boundary, both scale factors, dead band, dwell, class-B promotion | 300 | W1 |
-| `Tests/VigilProtocolsTests/DecodeCostTests.swift` | The worked examples; 0.25 rounding; bit-depth surcharge | 180 | W1 |
-| `Tests/VigilProtocolsTests/ErrorTaxonomyTests.swift` | Every code unique, stable, and mapped to a message and a remedy | 200 | W1 |
-| `Tests/VigilBitstreamTests/ExpGolombTests.swift` | Table T-EG-1 verbatim + the 32-zero overflow | 160 | W2 |
-| `Tests/VigilBitstreamTests/H264SPSTests.swift` | Real SPS vectors; 1088-vs-1080 cropping; VUI fps `Ã· 2 Ã— num_units_in_tick` | 320 | W2 |
-| `Tests/VigilBitstreamTests/H265SPSTests.swift` | Main and Main10; conformance window; fps **not** halved | 320 | W2 |
-| `Tests/VigilBitstreamTests/RecordTests.swift` | `avcC`/`hvcC` build â†’ parse â†’ serialize byte-identical | 260 | W2 |
-| `Tests/VigilBitstreamTests/AnnexBTests.swift` | Conversion both ways; 3- and 4-byte start codes; emulation bytes | 240 | W2 |
-| `Tests/VigilBitstreamTests/SliceHeaderTests.swift` | `isFirstSliceOfPicture` on both codecs, incl. hostile input | 200 | W2 |
-| `Tests/VigilBitstreamTests/FuzzTests.swift` | 1 M random inputs per parser; zero crashes, zero hangs | 200 | W2 |
-| `Tests/VigilRTSPTests/HeadersTests.swift` | Case-insensitive lookup, duplicates, order, ASCII-only folding | 200 | W2 |
-| `Tests/VigilRTSPTests/WireDecoderTests.swift` | Split invariance over 200 chunkings; every limit; bare LF; mid-header `$` | 420 | W2 |
-| `Tests/VigilRTSPTests/ResyncTests.swift` | 1/3/4095 B garbage; false `0x24`; scan-limit; rate policy | 220 | W2 |
-| `Tests/VigilRTSPTests/DigestTests.swift` | Every Â§6.5 row; `nc` across 6 requests; no-`qop` property test Ã—100 | 300 | W2 |
-| `Tests/VigilRTSPTests/SDPTests.swift` | All fixtures; missing/duplicate `a=control`; trailing NUL; static PT 8 | 320 | W2 |
-| `Tests/VigilRTSPTests/ControlURLTests.swift` | All six precedence rows plus the query-carrying cases | 200 | W2 |
-| `Tests/VigilRTSPTests/SessionMachineTests.swift` | Exact action arrays from fixtures; determinism Ã—100 chunkings; `.fail` terminal | 480 | W2 |
-| `Tests/VigilRTSPTests/HikvisionURLTests.swift` | Every path row; ladder order; credentials never in `description` | 180 | W2 |
-| `Tests/VigilRTPTests/PacketTests.swift` | Header parse, padding, CSRC, extension, hostile lengths | 240 | W2 |
-| `Tests/VigilRTPTests/H264DepacketizerTests.swift` | STAP-A, FU-A, loss, **marker-bit-unreliable** AU splitting | 340 | W2 |
-| `Tests/VigilRTPTests/H265DepacketizerTests.swift` | AP, FU, IRAP gating, RASL drop | 320 | W2 |
-| `Tests/VigilRTPTests/AudioTests.swift` | AAC-hbr, ASC parse, G.711 both laws over all 65 536 inputs, G.726 | 300 | W2 |
-| `Tests/VigilRTPTests/ReorderTests.swift` | Passthrough vs adaptive; escalation above 1 % loss; wraparound | 280 | W2 |
-| `Tests/VigilRTPTests/RTCPTests.swift` | Compound parse, RR generation intervals, SR NTP mapping | 240 | W2 |
-| `Tests/VigilRTPTests/StatisticsTests.swift` | The exact EWMA algebra against hand-computed series | 220 | W2 |
-| `Tests/VigilISAPITests/XMLTests.swift` | 24 reader cases + 6 builder cases; **XXE refusal**; depth and size caps | 400 | W2 |
-| `Tests/VigilISAPITests/DigestTests.swift` | 14 cases incl. RFC 2069 and `nextnonce` | 220 | W2 |
-| `Tests/VigilISAPITests/ClientTests.swift` | Lanes, gate, coalescing, retry table, **2-failure hard block** | 300 | W2 |
-| `Tests/VigilISAPITests/EndpointTests.swift` | 30 decode cases across 4 device families | 480 | W2 |
-| `Tests/VigilISAPITests/AlertStreamTests.swift` | 18 multipart cases + 12 monitor cases; heartbeat suppression | 380 | W2 |
-| `Tests/VigilISAPITests/SearchTests.swift` | Paging with the real misspelling; `MORE`; timeline assembly | 240 | W2 |
-| `Tests/VigilDiscoveryTests/SADPTests.swift` | 20 cases incl. the XOR-obfuscated and random payloads | 340 | W2 |
-| `Tests/VigilDiscoveryTests/WSDiscoveryTests.swift` | 15 cases incl. Hello, Bye, no-prefix | 300 | W2 |
-| `Tests/VigilDiscoveryTests/SweepPlannerTests.swift` | 15 cases; the **/16 refusal**; /16â€“/21 narrowing; host order | 300 | W2 |
-| `Tests/VigilDiscoveryTests/FingerprintTests.swift` | 14 cases across four vendors | 280 | W2 |
-| `Tests/VigilDiscoveryTests/MergeEngineTests.swift` | 13 cases; `.addressReused` never re-points a saved camera | 320 | W2 |
-| `Tests/VigilDiscoveryTests/CoordinatorTests.swift` | 13 orchestration + 10 degraded-mode cases; **the credential-refusal mock** | 380 | W2 |
-| `Tests/VigilPipelineTests/EndToEndTests.swift` | **The highest-value test in the repo**: synthetic camera â†’ RTSP â†’ RTP â†’ `EncodedFrame`, no sockets, no Mac | 480 | W2 |
-| `Tests/VigilPipelineTests/DeterminismTests.swift` | Same seed â‡’ byte-identical action arrays and frame sequences | 240 | W2 |
-| `Tests/VigilTransportTests/` | Adapter tests + `NWListener` stub server (macOS only) | 400 | W3 |
-| `Tests/VigilVideoTests/` | Format description, sample buffer, budget, tile policy application, audio | 900 | W3 |
-| `Tests/VigilRenderTests/` | Geometry (fitRect table verbatim), colour, effects, atlas, backend, snapshot | 900 | W3 |
-| `Tests/VigilCoreTests/` | 173 numbered cases: model, `ConfigStore`, credentials, the **58 transition rows**, coordinator, recorder, snapshots, events, health, diagnostics, automation | 2 400 | W4 |
-| `Tests/VigilUITests/` | Palette ranking + throughput, layout geometry, shortcut conflicts, localisation parity | 600 | W5 |
-
-## 6. `Package.swift` â€” final
-
-This is the file that is **on disk at the repository root right now**, and it is green under
-`swift build --product VigilPure` and `swift build` on Swift 6.1.2 / Linux. It already contains both
-verified build fixes. Reproduced here so the contract is self-contained; the repository copy is
-authoritative if they ever differ, and `ARCHITECTURE.md` Â§3 is stale where it differs from either.
-
-**Do not modify it** without amending this section in the same commit. In particular: do not add a
-dependency (the package has zero by design, and `Package.resolved`'s empty pin list is the
-machine-checkable proof), do not remove `type: .static`, and do not add
-`.defaultIsolation(MainActor.self)` â€” it does not exist in Swift 6.1.2 (R-40).
-
-```swift
-// swift-tools-version:6.0
-//
-// Vigil â€” native macOS viewer for Hikvision IP cameras and NVRs.
-//
-// ZERO EXTERNAL DEPENDENCIES BY DESIGN. `dependencies:` is empty and must stay empty.
-// Adding an SPM package breaks constraint C1 in docs/ARCHITECTURE.md Â§1.1 and CI will fail.
-//
-// Two build worlds:
-//   macOS  â€” everything builds. `swift build` / Xcode / Scripts/build-app.sh.
-//   Linux  â€” only the Foundation-only targets are meaningful. `swift build --product VigilPure`
-//            builds them; a full `swift build` also succeeds because every file in a macOS-only
-//            target is wrapped in `#if os(macOS)` (see docs/ARCHITECTURE.md Â§4).
-
-import PackageDescription
-
-// MARK: - Build settings
-
-/// Applied to every target in the package.
-///
-/// * `ExistentialAny` forces the `any P` spelling so existential boxing stays visible at call sites,
-///   which matters on the frame path.
-/// * `swiftLanguageModes: [.v6]` is set package-wide below and turns on *complete* concurrency
-///   checking; we never downgrade a target to `.v5` to silence a data-race diagnostic.
-let common: [SwiftSetting] = [
-    .enableUpcomingFeature("ExistentialAny"),
-]
-
-/// Pure targets additionally get a compile-time marker so shared helpers can assert purity.
-let pure: [SwiftSetting] = common + [
-    .define("VIGIL_PURE"),
-]
-
-/// macOS-only targets. `VIGIL_APPLE` is defined only when actually compiling for an Apple platform,
-/// so the `#if os(macOS)` guards and the define always agree.
-let apple: [SwiftSetting] = common + [
-    .define("VIGIL_APPLE", .when(platforms: [.macOS])),
-]
-
-// MARK: - Package
-
-let package = Package(
-    name: "Vigil",
-    platforms: [
-        // Ignored on Linux; constrains the Apple deployment target only.
-        .macOS(.v14),
-    ],
-    products: [
-        // The shipping app binary. Assembled into Vigil.app by Scripts/build-app.sh.
-        .executable(name: "Vigil", targets: ["Vigil"]),
-
-        // The Linux/CI surface: exactly the Foundation-only targets. `swift build --product VigilPure`
-        // is the single command Linux CI runs, and it is the mechanism that keeps the pure layer pure â€”
-        // if someone adds `import CoreMedia` to VigilRTP, this product stops building.
-        .library(
-            name: "VigilPure",
-            // `type:` is REQUIRED here, not cosmetic. A library product with no explicit type is an
-            // "automatic" product, and SwiftPM refuses `swift build --product <automatic library>`:
-            //   warning: '--product' cannot be used with the automatic product 'VigilPure';
-            //            building the default target instead
-            // That silently turns the Linux purity gate into a full-package build, which defeats it.
-            // Verified on Swift 6.1.2 / Linux â€” see docs/BUILD-VERIFICATION.md.
-            type: .static,
-            targets: [
-                "VigilProtocols",
-                "VigilBitstream",
-                "VigilRTSP",
-                "VigilRTP",
-                "VigilISAPI",
-                "VigilDiscovery",
-            ]
-        ),
-
-        // Test-only fixtures. Exposed as a product so `swift build --product VigilTestKit` can be
-        // sanity-checked on Linux independently of the test runner.
-        .library(name: "VigilTestKit", targets: ["VigilTestKit"]),
-
-        // Convenience for embedding the app layer in an Xcode host project (see project.yml).
-        .library(name: "VigilApp", targets: ["VigilUI", "VigilCore", "VigilRender"]),
-    ],
-    dependencies: [
-        // INTENTIONALLY EMPTY. See the header comment.
-    ],
-    targets: [
-
-        // MARK: Pure â€” Foundation only, Linux-testable
-
-        .target(
-            name: "VigilProtocols",
-            path: "Sources/VigilProtocols",
-            swiftSettings: pure
-        ),
-        .target(
-            name: "VigilBitstream",
-            dependencies: ["VigilProtocols"],
-            path: "Sources/VigilBitstream",
-            swiftSettings: pure
-        ),
-        .target(
-            name: "VigilRTSP",
-            dependencies: ["VigilProtocols"],
-            path: "Sources/VigilRTSP",
-            swiftSettings: pure
-        ),
-        .target(
-            name: "VigilRTP",
-            dependencies: ["VigilProtocols", "VigilBitstream"],
-            path: "Sources/VigilRTP",
-            swiftSettings: pure
-        ),
-        .target(
-            name: "VigilISAPI",
-            dependencies: ["VigilProtocols"],
-            path: "Sources/VigilISAPI",
-            swiftSettings: pure
-        ),
-        .target(
-            name: "VigilDiscovery",
-            dependencies: ["VigilProtocols"],
-            path: "Sources/VigilDiscovery",
-            swiftSettings: pure
-        ),
-
-        // MARK: Test fixtures â€” pure, shipped to no product the app links
-
-        .target(
-            name: "VigilTestKit",
-            dependencies: ["VigilProtocols", "VigilRTSP", "VigilRTP", "VigilBitstream"],
-            path: "Sources/VigilTestKit",
-            swiftSettings: pure
-        ),
-
-        // MARK: macOS-only
-
-        .target(
-            name: "VigilTransport",
-            dependencies: ["VigilProtocols", "VigilRTSP", "VigilDiscovery"],
-            path: "Sources/VigilTransport",
-            swiftSettings: apple
-        ),
-        .target(
-            name: "VigilVideo",
-            dependencies: ["VigilProtocols", "VigilBitstream"],
-            path: "Sources/VigilVideo",
-            swiftSettings: apple
-        ),
-        .target(
-            name: "VigilRender",
-            dependencies: ["VigilProtocols", "VigilVideo"],
-            path: "Sources/VigilRender",
-            resources: [
-                // Metal shaders are compiled by SwiftPM into default.metallib inside the bundle.
-                .process("Shaders"),
-            ],
-            swiftSettings: apple
-        ),
-        .target(
-            name: "VigilCore",
-            dependencies: [
-                "VigilProtocols",
-                "VigilRTSP",
-                "VigilRTP",
-                "VigilBitstream",
-                "VigilISAPI",
-                "VigilDiscovery",
-                "VigilTransport",
-                "VigilVideo",
-            ],
-            path: "Sources/VigilCore",
-            swiftSettings: apple
-        ),
-        .target(
-            name: "VigilUI",
-            dependencies: ["VigilProtocols", "VigilCore", "VigilRender"],
-            path: "Sources/VigilUI",
-            resources: [
-                .process("Resources"),        // Assets.xcassets, custom SF Symbols
-                .process("Localizations"),    // en.lproj / ru.lproj .strings + .stringsdict
-            ],
-            swiftSettings: apple
-        ),
-        .executableTarget(
-            name: "Vigil",
-            dependencies: ["VigilUI", "VigilCore"],
-            path: "Sources/Vigil",
-            swiftSettings: apple
-        ),
-
-        // MARK: Tests â€” pure (run on Linux AND macOS)
-
-        .testTarget(
-            name: "VigilProtocolsTests",
-            dependencies: ["VigilProtocols", "VigilTestKit"],
-            path: "Tests/VigilProtocolsTests"
-        ),
-        .testTarget(
-            name: "VigilBitstreamTests",
-            dependencies: ["VigilBitstream", "VigilTestKit"],
-            path: "Tests/VigilBitstreamTests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilRTSPTests",
-            dependencies: ["VigilRTSP", "VigilTestKit"],
-            path: "Tests/VigilRTSPTests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilRTPTests",
-            dependencies: ["VigilRTP", "VigilTestKit"],
-            path: "Tests/VigilRTPTests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilISAPITests",
-            dependencies: ["VigilISAPI", "VigilTestKit"],
-            path: "Tests/VigilISAPITests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilDiscoveryTests",
-            dependencies: ["VigilDiscovery", "VigilTestKit"],
-            path: "Tests/VigilDiscoveryTests",
-            resources: [.copy("Fixtures")]
-        ),
-        // End-to-end pure pipeline: synthetic camera -> RTSP -> RTP -> EncodedFrame. No sockets,
-        // no VideoToolbox, no Mac required. This is the highest-value test target in the repo.
-        .testTarget(
-            name: "VigilPipelineTests",
-            dependencies: ["VigilTestKit", "VigilRTSP", "VigilRTP", "VigilBitstream", "VigilProtocols"],
-            path: "Tests/VigilPipelineTests",
-            resources: [.copy("Fixtures")]
-        ),
-
-        // MARK: Tests â€” macOS only (bodies wrapped in #if os(macOS); empty modules on Linux)
-
-        .testTarget(
-            name: "VigilTransportTests",
-            dependencies: ["VigilTransport", "VigilTestKit"],
-            path: "Tests/VigilTransportTests"
-        ),
-        .testTarget(
-            name: "VigilVideoTests",
-            dependencies: ["VigilVideo", "VigilTestKit"],
-            path: "Tests/VigilVideoTests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilRenderTests",
-            dependencies: ["VigilRender", "VigilTestKit"],
-            path: "Tests/VigilRenderTests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilCoreTests",
-            dependencies: ["VigilCore", "VigilTestKit"],
-            path: "Tests/VigilCoreTests",
-            resources: [.copy("Fixtures")]
-        ),
-        .testTarget(
-            name: "VigilUITests",
-            dependencies: ["VigilUI", "VigilTestKit"],
-            path: "Tests/VigilUITests"
-        ),
-    ],
-    swiftLanguageModes: [.v6]
-)
-```
-
-**One comment in the manifest is wrong and stays wrong for now.** The `.process("Shaders")` comment
-says "Metal shaders are compiled by SwiftPM into default.metallib inside the bundle." SwiftPM does
-**not** invoke `metal`/`metallib` â€” see R-38. The `.metal` files are copied as resources for review
-and for an optional offline compile; the shipping path is runtime `makeLibrary(source:)` from
-`ShaderSource.swift`. Fixing the comment is a W3 task and must not change the `resources:` clause,
-because the directory declaration is what keeps `Sources/VigilRender/Shaders/` from being deleted
-and re-triggering build defect #2.
-
----
-
-## 7. Cross-cutting implementation rules
-
-`.vigil/IMPL_RULES.md` is binding and this section **extends** it. Where you think they conflict,
-`IMPL_RULES.md` wins and this section is the defect â€” say so in your result.
-
-### 7.1 File header â€” exactly this shape, no more, no less
-
-```swift
-//
-//  RTSPSessionMachine.swift
-//  VigilRTSP
-//
-//  Transport-agnostic RTSP 1.0 client state machine. Pure: no sockets, no clock reads, no Task.
-//  See docs/spec-rtsp.md Â§14 and docs/API_CONTRACT.md Â§4.3.
-//
-```
-
-Line 4 onward is a one-to-three-line purpose statement plus a pointer to the spec section **and** the
-`API_CONTRACT.md` section it implements. No author names, no dates, no copyright block (the licence
-lives in `LICENSE`), no Xcode template junk.
-
-macOS-only files add the guard note and wrap the **whole file**:
-
-```swift
-//
-//  DecodePipeline.swift
-//  VigilVideo
-//
-//  VTDecompressionSession ownership and the frame queue.
-//  macOS-only. See docs/ARCHITECTURE.md Â§4.2 Rule 2 and docs/API_CONTRACT.md Â§4.9.
-//
-
-#if os(macOS)
-
-import CoreMedia
-import Foundation
-import VideoToolbox
-
-// â€¦ implementation â€¦
-
-#endif  // os(macOS)
-```
-
-The guard is the **outermost** construct; imports live inside it. Interleaved `#if` inside a type
-body is forbidden â€” split into `Foo.swift` (pure) and `Foo+Apple.swift` (macOS) instead. The one
-sanctioned exception is `VigilISAPI`'s split Foundation:
-
-```swift
-import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
-#if canImport(FoundationXML)
-import FoundationXML
-#endif
-```
-
-### 7.2 Formatting
-
-| Rule | Value |
-|---|---|
-| Indentation | 4 spaces, never tabs |
-| Line length | **110 columns**, hard. Long string literals split with `+` or moved to a constant |
-| Trailing whitespace | forbidden |
-| File length | **â‰¤ 600 lines**. Split at a `// MARK:` boundary into `Type+Feature.swift` |
-| Function length | â‰¤ 60 lines; bitstream parsers may reach 120 with a `// RATIONALE:` note, because splitting them hurts reviewability against the ITU document |
-| Braces | K&R, opening brace on the same line |
-| Statements | one per line; no `;` |
-| Import order | `Foundation` first, then system frameworks alphabetically, then Vigil modules alphabetically, one blank line between groups |
-| Blank lines | one between members, two before a `// MARK: -` |
-| Trailing commas | required in multi-line literals |
-| Trailing closure | only for the last closure argument, and only when the label adds nothing |
-
-### 7.3 `// MARK:` structure
-
-Types over 40 lines use this order and **only** these headings:
-
-```swift
-// MARK: - Nested Types
-// MARK: - Stored Properties
-// MARK: - Computed Properties
-// MARK: - Initialisation
-// MARK: - Public API           (or `Package API` / `Internal API`)
-// MARK: - Private Helpers
-// MARK: - <ProtocolName>       (one per conformance extension)
-```
-
-Protocol conformances go in extensions, one per protocol, each with its own `MARK`. `Codable` with
-custom keys always spells `CodingKeys` explicitly â€” never rely on synthesised names for anything
-persisted, because Â§5's migration fixtures depend on stable keys.
-
-### 7.4 Access control and `Sendable`
-
-| Level | When |
-|---|---|
-| `private` | the default; start here |
-| `fileprivate` | only when two types in one file genuinely share state |
-| `internal` (implicit) | module-internal; never write the keyword |
-| `package` | **use this** for API another Vigil target needs that is not in Â§3 or Â§4 |
-| `public` | only for what Â§3 and Â§4 list |
-| `open` | forbidden |
-
-`final` on every class. `struct` over `class` unless identity or reference semantics are required.
-`enum` with no cases for pure namespaces (`enum VTheme { enum Color { â€¦ } }`), never a `struct` with
-a private `init`.
-
-**Swift 6 strict concurrency, complete checking, zero `@preconcurrency` imports, zero
-`nonisolated(unsafe)` globals.** Everything crossing an isolation boundary is a `Sendable` value
-type. `@unchecked Sendable` is capped at **three** types repo-wide (R-52), each carrying a comment
-of exactly this shape:
-
-```swift
-/// Thread-safe hand-off from VideoToolbox's private queue into the async world.
-///
-/// `@unchecked Sendable` justification: the only mutable state is an
-/// `AsyncStream.Continuation`, which is documented thread-safe for `yield`/`finish`, and an
-/// `OSAllocatedUnfairLock`-protected counter struct. Nothing else is stored.
-/// Reviewed 2026-07. API_CONTRACT.md Â§2 R-52, entry 1 of 3.
-final class DecodeSinkBox: @unchecked Sendable { â€¦ }
-```
-
-Adding a fourth requires amending R-52 in the same commit. `Scripts/lint.sh` counts them.
-
-**`ExistentialAny` is on:** every existential is spelled `any P`. A bare protocol name in type
-position is a compile error, not a warning (R-43).
-
-### 7.5 Naming
-
-* Types `UpperCamelCase`; members `lowerCamelCase`; no `_` prefixes; no Hungarian notation.
-* Abbreviations only from this closed list, in canonical casing: `RTSP RTP RTCP SDP NAL SPS PPS VPS
-  SEI IDR IRAP AU PTS DTS FPS SAR GOP MTU PTZ ISAPI SADP ONVIF URL URI ID UUID JSON XML HTTP HTTPS
-  TCP UDP TLS DNS IP MAC CIDR MD5 SHA CRC AAC PCM YUV RGB HDR EDR UI OSD NVR DVR DU`.
-  Leading acronyms lowercase whole (`rtspPort`, `urlComponents`, `sdpDescription`); elsewhere they
-  stay uppercase (`parseRTSPResponse`, `makeSDPParser`).
-* Booleans read as assertions: `isKeyframe`, `hasParameterSets`, `shouldReconnect`, `canPan`.
-  Never `flag`, never `enabled` (use `isEnabled`), never a negative (`isNotReady` is forbidden).
-* Functions that can fail `throws`; they do not return `Bool`. Value-returning members name the
-  value: `var displaySize`, not `getDisplaySize()`.
-* Factory statics are `makeâ€¦`: `RTSPRequest.makeDescribe(url:cseq:)`.
-* Units in the name when not obvious: `timeoutSeconds`, `bitrateKbps`, `jitterMilliseconds`,
-  `deadlineNanos`. A bare `timeout: Duration` needs no unit â€” the type carries it.
-* Test names describe behaviour: `markerBitUnreliable_stillSplitsAccessUnitsCorrectly()`.
-
-### 7.6 Forbidden constructs in `Sources/`
-
-`!` postfix unwrap Â· `try!` Â· `as!` Â· `unsafeBitCast` Â· `unsafeDowncast` Â· `fatalError` Â·
-`preconditionFailure` Â· `array[i]` where `i` is not provably in range Â· `print` / `debugPrint` /
-`dump` / `NSLog` Â· `TODO:` Â· `Date()` in the pure layer Â· `Thread.sleep` / `usleep` /
-`RunLoop.current.run(until:)` Â· `DispatchSemaphore` / `NSLock` / `pthread_mutex` / `objc_sync_enter`
-(use actors or `OSAllocatedUnfairLock`; `NSLock` is permitted **only** inside `LatestFrameBox` and
-`VigilTestKit`) Â· `nonisolated(unsafe)` Â· `@preconcurrency import` Â· `import CryptoKit` (any target)
-Â· global mutable state and any `static var` that is not `let` Â· a bare English string literal in a
-view Â· `Unmanaged` outside the two documented CF bridges Â· `.unbounded` `AsyncStream` buffering.
-
-`precondition` is permitted only for programmer error that **cannot** come from network data â€” an
-out-of-range index into a constant table, `BitReader.u(n)` with `n > 32` â€” and must carry a message.
-Anything reachable from a packet throws instead. A malformed packet from one camera must never be
-able to crash the app: that is a security property, not merely robustness.
-
-The one `!` exception: a statically exhaustive dictionary built in the same file from a
-`CaseIterable` enum (`OSLogLogger.loggers`), which carries `// swift-format-ignore` and a comment
-naming the invariant.
-
-Allowed in `Tests/` and `Sources/VigilTestKit/`: tests are meant to crash loudly.
-
-### 7.7 Errors
-
-* **Typed throws in the pure layer.** `public mutating func parse(_ data: Data) throws(BitstreamError) -> H264SPS`.
-  At module boundaries and in `VigilCore`, widen to `throws(VigilError)`. Only `VigilUI` and `Vigil`
-  use untyped `throws`.
-* `try?` only where the failure is genuinely uninteresting **and** a comment says so:
-  `try? FileManager.default.removeItem(at: staleTemp)  // best effort cleanup`.
-* Never `catch {}`. Never `catch { print(error) }`. Every `catch` handles, logs at â‰¥ `warning` with
-  the `diagnosticCode`, or rethrows.
-* `Result` is not a return type. Use `throws`. It appears only inside `AsyncThrowingStream` element
-  types and in `DeepLink.parse`, where a total function is the point.
-* No `NSError` construction, no `NSException`, no `assertionFailure` as error handling.
-* Integer arithmetic **expected** to wrap (RTP sequence numbers, 32-bit timestamps) uses `&+`/`&-`
-  **with a comment naming the wrap width**. Everywhere else plain `+`, so a trap surfaces the bug.
-  Never `Int(exactly:)!`; use `guard let`.
-
-### 7.8 Documentation comments
-
-* Every `public` and `package` declaration has a `///` comment. Lint fails otherwise.
-* Shape: one summary sentence ending in a period, a blank `///` line, then detail; then
-  `- Parameters:` (only for 2+ parameters), `- Returns:`, `- Throws:` naming the concrete error
-  type, and `- Complexity:` for anything worse than O(n).
-* **Cite the specification.** `/// - Note: ITU-T H.264 (08/2021) Â§7.3.2.1.1.` Every bitstream and
-  protocol parser function names its clause; that is how a reviewer checks correctness without
-  guessing.
-* `- Warning:` on any concurrency or lifetime precondition ("Must be called from the owning actor",
-  "The returned buffer is valid until the next `push`").
-* **Document what happens on malformed input.** Not optional for anything that touches the network.
-* No commented-out code, ever. Git has history.
-
-### 7.9 Concurrency
-
-* **Pure layer:** no `actor`, no `@MainActor`, no `Task`, no `async` calls (R-32). The sole
-  exception is `VigilISAPI`, whose seven actors are enumerated in R-32.
-* **One actor per concurrent resource**, and nothing else is an actor. If you want to add one, you
-  probably want a `struct` owned by an existing actor.
-* **All UI is `@MainActor`**, written explicitly (R-40).
-* **Nine tasks per live camera**: one root plus eight children in a single
-  `withThrowingTaskGroup` â€” ingest, action pump, keepalive, media, decode, RTCP, stats, watchdogs.
-  Nothing detaches. `stop()` cancels the root and **awaits** it; it does not return until the tree
-  is joined, so there are no orphan sockets and no leaked decode sessions.
-* Every `await` in a loop is cancellation-aware: `try Task.checkCancellation()` at the top of each
-  iteration, `clock.sleep(for:)` never `Thread.sleep`, and `withTaskCancellationHandler` around
-  every `NWConnection` receive so cancelling calls `connection.cancel()`.
-* **Sanctioned GCD, exhaustively:** the VideoToolbox `outputHandler` block; `NWConnection(queue:)`
-  (one serial `.userInitiated` queue per `RTSPConnection`, named `com.vigil.net.<cameraShortID>`);
-  `AVAssetWriterInput.requestMediaDataWhenReady(on:using:)`; `NSView.displayLink`. `DispatchSource`
-  is used nowhere â€” timers are `Task { try await clock.sleep(...) }`.
-* Every callback bridge guarantees **exactly-once** continuation resumption.
-
-### 7.10 Determinism and time
-
-The pure layer never reads a clock or a random generator. Every pure state machine takes
-`now: MediaInstant` as a **parameter** to `step`/`ingest`/`tick`/`handle`. Every retry delay computes
-its jitter from an injected `RandomSource`. The consequence is non-negotiable for a networking app:
-a failing CI run prints its seed, and re-running with that seed reproduces the failure byte for byte.
-
-### 7.11 Performance on the frame path
-
-* No allocation inside a per-packet or per-frame loop. `DepacketizerOutput.none` is a `static let`
-  for exactly this reason.
-* Prefer `withUnsafeBytes` and slices to `Data` copies; every `withUnsafeBytes` block carries a
-  `// SAFETY:` comment naming the lifetime, and the pointer never escapes the block.
-* Never store a `Data` slice long-term without `Data(slice)` â€” a slice retains the whole parent, and
-  a 12-byte header slice holding a 1 MB read alive is a real leak.
-* Comment any non-obvious optimisation. An uncommented clever loop is a future bug.
-* **No main-actor operation may exceed 8 ms** (FEATURES Â§19.3 U6). The debug build has a watchdog
-  that asserts on any main-actor hop over 8 ms, and CI fails on any occurrence in the UI suite.
-
-### 7.12 Logging
-
-* Pure targets log through an injected `any LoggerProtocol`, defaulted to `NullLogger()`. **Never a
-  global.** macOS targets use `VigilCore.OSLogLogger`, subsystem `com.vigil.app`, 13 categories.
-* Redact **at the source**, through `Redact`. `OSLogLogger` interpolates as `privacy: .public`, and
-  that is only correct because of the source-side guarantee. This is the deliberate trade: redact
-  early so diagnostics bundles are useful, instead of relying on `.private` and getting
-  `<private>` in every support log.
-* Per-packet logging is compiled out of release: `#if DEBUG` around `.debug`-level calls on the
-  `rtp` and `rtsp` categories.
-* Every repeated-error path is wrapped in `RateLimitedLogger`.
-* Every `AsyncStream` documents its buffering policy at the creation site.
-
-### 7.13 Localisation and accessibility
-
-* Every user-visible string comes from `Localizable.xcstrings` with a
-  `surface.subject.variant.part` key, through `String(localized:)` / `LocalizedStringResource`.
-  A bare English literal in a view is a review rejection â€” Russian is a P0 requirement.
-* Budget **+35 %** length for Russian; plural variations are required.
-* Every interactive element is keyboard-reachable with a visible focus ring, and carries a VoiceOver
-  label, value and hint; every hover-only affordance has a custom action.
-* Minimum hit target 24 Ã— 24 pt, expanded with `contentShape` where the visual is smaller.
-* Every changing number is `monospacedDigit()` with a reserved width from
-  `VTheme.Typography.Reserved`.
-
-### 7.14 Tests
-
-* **swift-testing** (`import Testing`, `@Test`, `#expect`, `#require`), never XCTest â€” except for
-  `XCTMetric`-based performance assertions on macOS.
-* Prefer **published test vectors** and cite them in a comment. Where you must synthesise a fixture,
-  say so â€” never imply a fabricated value came from real hardware.
-* Cover malformed and hostile input explicitly: truncated buffers, zero length, oversized length
-  fields, integer overflow at boundaries, and values at the exact edge of a range.
-* No test may depend on wall-clock time, network access, or execution order.
-* Every module that parses bytes from the network has a fuzz test: â‰¥ 1 M inputs, zero crashes, zero
-  hangs, bounded by an iteration-count assertion in debug.
-
-### 7.15 What you must not touch
-
-* `Package.swift`, `docs/**`, and anything outside the rows you were assigned.
-* The `Placeholder.swift` files â€” the supervisor removes them (R-70).
-* The 12 `.placeholder` files in resource directories â€” **never** delete them.
-* A sibling agent's file. Do not reformat it, do not "improve" it, do not rename its types.
-
-### 7.16 Progress logging (mandatory)
-
-```
-echo "[$(date -u +%H:%M:%S)] <yourname> | <stage> | <short message>" >> /home/user/camera/.build-progress.log
-```
-
-`START`, then `WRITTEN` when your sources are on disk, then `BUILD` with the **real** build result,
-then `TEST` with the **real** pass/fail counts, then `DONE`. `BLOCKED` with the reason if you are
-stuck. Under 160 characters, no embedded newlines. Report real numbers â€” the supervisor re-runs the
-build and will see a discrepancy.
-
----
-
-## 8. Build and verification checklist
-
-### 8.1 The commands
-
-Always pass your own scratch path. Several agents build concurrently and SwiftPM takes an exclusive
-lock on a shared `.build`; without a private scratch path you will block or fail for reasons that
-have nothing to do with your code.
-
-```bash
-# Your inner loop (Linux container)
-.vigil/swift build --product VigilPure --scratch-path .build-<yourname>
-.vigil/swift test  --filter <YourTestTarget> --scratch-path .build-<yourname>
-
-# The two gates, exactly as CI runs them
-swift build --product VigilPure   -Xswiftc -warnings-as-errors   # the purity gate
-swift build --product VigilTestKit -Xswiftc -warnings-as-errors
-swift build                        -Xswiftc -warnings-as-errors   # proves the #if guards compile
-swift test --parallel
-Scripts/test-linux.sh                                             # fails on a zero-test pure target
-Scripts/lint.sh
-
-# macOS only
-swift build -c debug -Xswiftc -warnings-as-errors
-swift test --parallel --enable-code-coverage
-Scripts/coverage.sh                       # 90 % pure floor, 70 % macOS floor
-Scripts/build-app.sh --configuration release --arch universal
-Scripts/bench.sh --smoke
-```
-
-**`swift build --product VigilPure` is the mechanism, not a formality.** If someone adds
-`import CoreMedia` to `VigilRTP`, that command must stop building. If it ever stops being able to
-fail â€” as it silently did before `type: .static` was added â€” the gate is worse than useless, because
-it is trusted.
-
-### 8.2 Definition of done, per wave
-
-**W1 â€” `VigilProtocols` + crypto**
-- [ ] `swift build --product VigilPure -Xswiftc -warnings-as-errors` green.
-- [ ] `swift test --filter VigilProtocolsTests` green, **â‰¥ 120 tests**, on Linux.
-- [ ] MD5 matches all 7 RFC 1321 vectors **and** the RFC 2617 Digest example, at chunk sizes
-      1/3/7/13/25/26 and on a 1 MiB input. SHA-1 and SHA-256 match their published vectors.
-- [ ] `Base64.decode` accepts unpadded, whitespace-laden and URL-safe input and rejects
-      `length % 4 == 1`.
-- [ ] `MediaTimestamp.converted(to:)` is exact at 90 000 â†’ 1 000 000 â†’ 600 round trips and saturates
-      instead of overflowing; a zero timescale clamps and does not trap.
-- [ ] `TilePolicy` reproduces the class Aâ€“E table at both `backingScaleFactor` 1 and 2, including
-      the 15 % dead band and the class-B promotion rule.
-- [ ] `Redact` fuzz test green: no seeded secret survives any formatting path; idempotent; â‰¤ 2Ã—
-      growth.
-- [ ] `HostPolicy` refuses `.publicInternet` for every non-LAN form tested.
-- [ ] Every `VG-<DOMAIN>-NNNN` code is unique and maps to a `userMessage` and a `userRemedy`.
-- [ ] `Scripts/lint.sh` green: no `!`, `try!`, `as!`, `print`, `TODO`, `CryptoKit`, over-length line.
-
-**W2 â€” the pure protocol layer**
-- [ ] `swift test --parallel` green on Linux, **all six pure suites non-zero**
-      (`Scripts/test-linux.sh` enforces it).
-- [ ] `VigilPipelineTests` green: synthetic camera â†’ RTSP â†’ RTP â†’ `EncodedFrame`, no sockets, no Mac.
-- [ ] Determinism: the same fixture and seed produce a **byte-identical** concatenation of `.send`
-      payloads and an identical action array across 100 different chunkings.
-- [ ] Split invariance: every `.rtsp` fixture decodes identically across 200 pseudorandom chunkings.
-- [ ] Fuzz: â‰¥ 1 M random inputs per parser (RTSP wire, SDP, RTP, H.264 SPS, H.265 SPS, ISAPI XML,
-      SADP, WS-Discovery, ARP dump). Zero crashes, zero hangs.
-- [ ] `MockExchanger` and `FixtureHTTPTransport` **fail the suite** if any discovery request carries
-      a credential. (Deliberately verify this by temporarily adding one.)
-- [ ] Sweep planner refuses any prefix wider than /16 and narrows /16â€“/21 to ARP-backed /24s.
-- [ ] Coverage â‰¥ 90 % on the pure targets; 100 % on `RTSPWireDecoder` and `RTSPAuthenticator`.
-- [ ] `Package.resolved` still has an empty pin list.
-
-**W3 â€” transport, video, render (macOS)**
-- [ ] `swift build -c debug -Xswiftc -warnings-as-errors` green **on macOS**.
-- [ ] `swift build` still green **on Linux** â€” the `#if os(macOS)` guards compile to empty modules.
-- [ ] `Scripts/gen-shader-source.swift` regenerates `ShaderSource.swift` byte-identically; the test
-      that asserts it is green.
-- [ ] `@unchecked Sendable` count in `Sources/` excluding `VigilTestKit` is **exactly 3**, each with
-      the R-52 justification comment.
-- [ ] `FormatDescriptionFactory` builds a description from real 1080p H.264 and H.265 parameter sets
-      and reports `displaySize == 1920Ã—1080` from a `1920Ã—1088` coded frame.
-- [ ] `isHardwareAccelerated` is read from
-      `kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder`, not assumed.
-- [ ] Render geometry tests reproduce the `fitRect` table verbatim, including
-      `1920Ã—1080` in `800Ã—600` `.fit` â‡’ `(0, 75, 800, 450)`.
-- [ ] Atlas hysteresis: 6â†’7â†’6â†’7 produces exactly **2** backend changes, not 4.
-- [ ] No `flush(removingDisplayedImage:)` anywhere except a deliberate black-out path.
-
-**W4 â€” `VigilCore`**
-- [ ] `VigilCoreTests` green on macOS: **173 numbered cases**, including one per row of the 58-row
-      transition table plus a coverage test asserting the exercised `(state, event)` set **equals**
-      the table.
-- [ ] `HealthSample` is **exactly 24 bytes** (`MemoryLayout<HealthSample>.size == 24`).
-- [ ] Migration fixtures `library-v1.json` â†’ `-v2` â†’ `-v3` all migrate and decode; `-v99-future`
-      opens **read-only and writes nothing**; `-truncated` and `-garbage` recover from `.bak` and
-      tell the user.
-- [ ] A test reflects over `Camera.CodingKeys` and asserts **no password-shaped key exists**.
-- [ ] Auth lockout: two credentialed 401s â‡’ terminal, on **one shared counter**; a fresh-nonce 401
-      does not count; `userCheck` probes are capped at 3 per (host, account) per 10 minutes.
-- [ ] `makePlan` is a pure function: identical inputs â‡’ identical plan, asserted over a matrix of
-      tile sizes, visibilities and priorities.
-- [ ] Hysteresis: Â±10 % oscillation over 60 s â‡’ **0** quality changes; a 20 % change held 800 ms â‡’
-      exactly **1**.
-- [ ] A recording continues for 60 s while its tile is closed (priority `.recording` is never
-      demoted and never occlusion-paused).
-- [ ] `DeepLink.parse` is total over 100 000 fuzzed URLs: never traps, never hangs.
-
-**W5 â€” `VigilUI`**
-- [ ] `VigilUITests` green. Palette: 2 000 items scored in **< 2 ms**; ranking matches the normative
-      formula; ordering and the â‰¥ 30 cutoff asserted.
-- [ ] The token gallery renders every token in dark, light, `increaseContrast` and
-      `reduceTransparency`.
-- [ ] Every `V*` component has a `#Preview` covering **every state in its table**, in dark and light,
-      plus `reduceMotion`, `reduceTransparency`, `increaseContrast`, `differentiateWithoutColor`,
-      `textScale 1.15`, and a Russian string at ~1.4Ã— length.
-- [ ] `Scripts/lint.sh` finds **no** literal colour, font, radius, spacing, shadow or animation
-      outside `VTheme`, and **no** un-annotated top-level type in `Sources/VigilUI/`.
-- [ ] No `.drawingGroup()`, `.opacity(<1)`, `.shadow`, `.blur`, `.mask`, `.clipShape` or
-      `.rotationEffect` on a video tile. No `AVSampleBufferDisplayLayer` bounds mutation outside a
-      `VTileTransitionProxy` transition.
-- [ ] Localisation parity: every key present in EN and RU; no missing plural variation.
-
-**W6 â€” app, scripts, acceptance**
-- [ ] `Scripts/build-app.sh --configuration release --arch universal` produces a `Vigil.app` that
-      **launches on the build machine** with ad-hoc signing, and running it twice produces a
-      byte-identical bundle apart from signature and timestamp.
-- [ ] `codesign --verify --deep --strict` clean; entitlements dump matches `Vigil.entitlements`.
-- [ ] `Info.plist` contains `NSLocalNetworkUsageDescription`, `NSBonjourServices`,
-      `NSAllowsLocalNetworking`, the `vigil` URL type and **three** `UTExportedTypeDeclarations`.
-- [ ] Zero-egress test green: no packet leaves the local network, with or without cameras
-      configured, confirmed by `HostPolicy` unit tests **and** a packet capture. Not "no
-      connection" â€” the R1 scan opens LAN sockets at launch by design; see FEATURES Â§20.3
-      and the capture filter in `docs/ACCEPTANCE.md` Â§3.5.
-- [ ] Secret-absence test green over `library.json`, `events.json`, the diagnostics bundle, the CSV
-      export and the log export.
-- [ ] Leak tests: 500 reconnect cycles, 200 decoder start/stops, 100 discovery cycles all return to
-      baseline file-descriptor, task, VT-session and RSS counts.
-- [ ] Performance gates within 10 %: L2 launch â†’ first frame p50 â‰¤ 900 ms; L6 TCP glass-to-glass p95
-      â‰¤ 250 ms; R5 16 Ã— 1080p â‰¤ 35 % CPU / â‰¤ 18 % GPU / â‰¤ 900 MB; U1 p99 â‰¤ 7 ms at 120 Hz; U6 no
-      main-actor operation > 8 ms; R13 ceiling 1.5 GB.
-- [ ] **R1 acceptance, on real hardware:** one factory-default-IP Hikvision camera on the LAN;
-      launch the app; type only the password; reach a **visible moving picture within 10 seconds**.
-      Written up in `docs/ACCEPTANCE.md` and kept green.
-- [ ] Stream Doctor produces all nine R1.5 diagnoses against the six seeded fault modes.
-
-### 8.3 What cannot be verified in the development container, and must be done on a Mac
-
-Be honest about this list; it is the acceptance work that has not happened yet.
-
-| Area | Why it needs a Mac |
-|---|---|
-| Anything importing AppKit, SwiftUI, AVFoundation, VideoToolbox, CoreMedia, Metal, Security, Network | The frameworks are absent on Linux; the `#if os(macOS)` bodies are **never type-checked** in the container |
-| The Metal shaders | Need `metal`/`metallib` from Xcode, or a runtime `makeLibrary(source:)` on a real GPU |
-| `Vigil.app` assembly, code signing, entitlements, hardened runtime | Need `codesign` |
-| Real hardware decode, latency, CPU and thermal numbers | Need Apple silicon and real cameras |
-| The R1 zero-configuration gate | Needs a real Hikvision camera on a real LAN |
-
-Everything in the pure layer â€” RTSP parsing, Digest, SDP, RTP depacketization, jitter buffering,
-H.264/H.265 bitstream parsing, `avcC`/`hvcC`, ISAPI XML, SADP and WS-Discovery codecs, CIDR maths,
-`TilePolicy`, `HostPolicy`, `Redact`, and the synthetic-camera harness â€” **is** verifiable here and
-must be green before the macOS layer is written.
-
-### 8.4 The standing rule
-
-No specification claim about the build system is trusted until it has been executed. When a document
-prescribes a command, run it against the scaffold. `docs/BUILD-VERIFICATION.md` is appended to,
-never rewritten â€” and it is why three defects in this project were found by a compiler instead of by
-twenty blocked agents.
-
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×n;çtèµ©hºÚn¶X§zÍHÈšYÚ[8 %THÛÛ˜XÝ‚ŠŠ”Ý]\Îˆ“Ô“PUU‘Kˆ\ÈØÝ[Y[Ý]˜[šÜÈ]™\žHÝ\ˆØÝ[Y[[ˆØÜËØ^Ù\˜ØÜËÔ‘TURT‘SQS•ËPÕTÕÓQT‹›YŠŠ‚‚•Ù[™HÜXÚYšXØ][ÛœÈÙ\™H]]Ü™Y[ˆ\˜[[[™\™Y›Ü™H\ØYÜ™YH]Z\ˆÙX[\Ëˆ\Èš[H\ÂH\˜š]˜][Û‹ˆÚ\™HHÜXÈ[™\ÈÛÛ˜XÝY™™\‹
+Š\ÈÛÛ˜XÝ\ÈšYÚ[™HÜXÈ]\Ý™B˜[Y[™Y
+ŠŽÈ0©Ìˆ\ÝÈ]™\žH[Y[™Y[ÝÙYˆÚ\™H\ÈÛÛ˜XÝ\ÈÚ[[HÝÛš[™È[Ù[HÜXÂ™ÛÝ™\›œË‚‚ˆÈÈˆÝÈÈ\ÙH\ÈØÝ[Y[‚Ÿ[ÝH\™H™XYŸKK_KK_Ÿ[žH[\[Y[][ÛˆYÙ[0©Ì0©ÌK0©Ìˆ
+ÚÚ[K[ˆ[Ý\ˆ›ÝÜÊK0©ÌÈ
+™\˜˜][JK0©Íˆ0©ÍÈ0©Î[ˆ[ŸHšYÚ[›ÝØÛÛØ[\[Y[\ˆ
+ÌJH0©ÌÈ™\˜˜][H8 %[ÝH\ÝH]ˆ[ˆ0©ÍH›ÝÜÈYÙÙYÌHŸH\™K[[Ù[H[\[Y[\ˆ
+ÌŠH0©ÌË[Ý\ˆ[Ù[IÜÈ0©ÍÝXœÙXÝ[Û‹[Ý\ˆ0©ÍH›ÝÜË0©ÍÈŸHXXÓÔË[[Ù[H[\[Y[\ˆ
+Ìø $ÕÍŠHØ[YK\È0©ÍËŽH
+HÚYˆÜÊXXÓÔÊX[\]JHŸH™]šY]Ù\ˆ0©Ìˆ
+H[[™ÜÈ[ÝH]\Ý[™›Ü˜ÙJK0©ÍÈ
+HÝ[H[ÝH]\Ý™Z™XÝÛŠH‚ˆÈÈÈŒH™XÙY[˜ÙHÜ™\ˆ
+š[™[™ÊB‚ŒKˆØÜËÔ‘TURT‘SQS•ËPÕTÕÓQT‹›Y8 %Ý\ÝÛY\ˆ™\]Z\™[Y[ËˆŒH
+][˜Ú8¡¤ˆ]™HšY[È[ˆLÈÚ]Bˆ\ÜÝÛÜ™\ÈHÛ›H[œ]
+H\ÈHXØÙ\[˜ÙHØ]H[™Ú\\ÈHTHÝ\™˜XÙNˆHTÐÔ’P‘H›Ø™BˆY\‹]]ÛX]XÈÚ[›™[[[Y\˜][Ûˆ[™˜[œÜÜÙ[‹ZX[[™È\™H[
+Šœ™\]Z\™YTJŠ‹›ÝˆÜ[Û˜[Û\Ú‚Œ‹ˆ
+Š•\ÈØÝ[Y[
+Šˆ
+ØÜËÐTWÐÓÓ•PÕ›Y
+H8 %\HÚ\\Ë[Ù[HÝ\™˜XÙ\Ëš[HX[šY™\ÝˆXÚØYÙKœÝÚYÜ›ÜÜËXÝ][™È[\Ë‚ŒËˆØÜËÐ•RSU‘T’Q’PÐUSÓ‹›Y8 %[ž][™ÈXÝX[HÛÛ\[Y™X]È[ž][™ÈY\™[HÜš][‹‚ˆšYÚ[ÒSTÔ•STË›Y8 %š[™[™ÈÝ[KØÛÛ˜Ý\œ™[˜ÞKÝ\Ý[™È[\È›Üˆ[\[Y[][ÛˆYÙ[Ëˆ0©ÍÂˆ\™H
+Š™^[™ÊŠˆ][™™]™\ˆÛÛ˜YXÝÈ]ˆYˆ[ÝH[šÈ]Ù\ËSTÔ•STÈÚ[œÈ[™0©ÍÈ\ÈBˆY™XÝ8 %™\Ü]‚KˆØÜËÐTÒUPÕT‘K›Y8 %ÝXÝ\˜[˜XÚØ›Û™H
+[Ù[HÜ˜\ÛÛ˜Ý\œ™[˜ÞH[Ù[\œ›Üˆ^Û›Û^KˆØœÙ\˜Xš[]K\œÚ\Ý[˜ÙK[][Y[ÊK‚‹ˆHš[™HÛXZ[ˆÜXÜÈ8 %›Ü›X]]™H›Üˆ]™\ž][™È[œÚYHZ\ˆ[Ù[H]\ÈÛÛ˜XÝÙ\È›Ýˆ[ˆÝÛ‹‚ËˆØÜËÓÔS‹PÓÓ‘“PÕË›Y8 %HÛÜšÛ\Ý›ÝÈ[H\ØÚ\™ÙYžH0©Ì‹ˆ]\È\ÝÜšXØ[‚‚ˆÈÈÈŒˆÚ]\È[™XYH™X[[ˆH™\ÜÚ]ÜžB‚•™\šYšYYÛˆÝÚY‹ŒKŒˆÈ—Í][šÛ›ÝÛ‹[[^YÛH
+ØÜËÐ•RSU‘T’Q’PÐUSÓ‹›Y
+N‚‚ŠˆXÚØYÙKœÝÚY]H™\È›ÛÝ\È
+Š˜]]Üš]]]™H[™Ü™Y[ŠŠ‹ˆ0©Íˆ™\›ÙXÙ\È]ˆHÛÜH[‚ˆTÒUPÕT‘K›Y0©ÌÈ\ÈÝ[HÚ\™H^HY™™\‹‚Šˆ[H\™Ù]\™XÝÜšY\È^\ÝXXÚÚ]HXÙZÛ\‹œÝÚY‚Šˆ[LˆXÛ\™Y™\ÛÝ\˜ÙH\™XÝÜšY\È^\ÝXXÚÚ]HœXÙZÛ\˜š[N‚ˆÛÝ\˜Ù\ËÕšYÚ[™[™\‹ÔÚY\œØÛÝ\˜Ù\ËÕšYÚ[RKÔ™\ÛÝ\˜Ù\ØÛÝ\˜Ù\ËÕšYÚ[RKÓØØ[^˜][ÛœØ[™ˆš^\™\ËØ[ˆHš[™H\Ý\™Ù]È]XÛ\™H˜ÛÜJ‘š^\™\ÈŠX‚ŠˆÝÚYZ[K\›ÙXÝšYÚ[\™X[™ÝÚYZ[\™H›ÝÜ™Y[‹‚Šˆ™Ú]]šX]\ØX\šÜÈ
+‹œÜ
+‹œÙ
+‹œÜ\È]^ÛÈÔ“ˆÝ\š]™\ÈÚXÚÛÝ]‚‚ŠŠ•™YHZ[Y™XÝÈÙ\™H›Ý[™žHÛÛ\[[™È[™\™H›ÝÈØYX™X\š[™È[˜\šX[ËˆÈ›Ý[™È[NŠŠ‚‚Ÿ[˜\šX[ÚHŸKK_KK_ŸHšYÚ[\™X›ÙXÝXÛ\™\È\NˆœÝ]XØÚ]Ý]]ÝÚYH™X]È]\È[ˆ
+˜]]ÛX]XÊˆ›ÙXÝ™Y\Ù\ÈK\›ÙXÝšYÚ[\™X[™Ú[[HZ[ÈHÚÛHXÚØYÙH[œÝXY8 %\›š[™ÈH[^\š]HØ]H[ÈHØ]H]Ø[››Ý˜Z[Ÿ]™\žH\™XÝÜžH˜[YY[ˆH™\ÛÝ\˜Ù\Î˜Û]\ÙH^\ÝËÚ]HœXÙZÛ\˜[œÚYHH˜ÛÜJ
+XØœ›ØÙ\ÜÊ
+X]HZ\ÜÚ[™È]\ÈH
+Šš\™Z[\œ›ÜŠŠˆ]›ØÚÜÈ]™\žHÝ\ˆYÙ[›ÝHØ\›š[™ÈŸ]™\žH\™Ù]\™XÝÜžHÛÛZ[œÈ]X\ÝÛ™HœÝÚYš[HÝÚYH\œ›ÜœÈÛˆH\™Ù]Ú]›ÈÛÝ\˜Ù\ËˆXÙZÛ\‹œÝÚYØ]\ÙšY\È\È[[™X[ÛÝ\˜Ù\È[™È
+Š™È›Ý[]H][Ý\œÙ[ŠŠˆ8 %HÝ\\š\ÛÜˆ™[[Ý™\È]‚‹KKB‚ˆÈÈKˆHÚ\HÙˆHÞ\Ý[K[ˆÛ™HYÙB‚˜ˆ8¥#8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ T‘H
+›Ý[™][ÛˆÛ›K[^ÒJH8¥ 8¥ 8¥$ˆšYÚ[›ÝØÛÛÈ8¥ 8¥ 8¥+8¥ 8¥ 8¥­ˆšYÚ[š]Ý™X[H8¥ 8¥ 8¥­ˆšYÚ[•8¥ ‚ˆ8¥'8¥ 8¥ 8¥­ˆšYÚ[•Ô8¥ ‚ˆ8¥'8¥ 8¥ 8¥­ˆšYÚ[TÐTH
+
+È›Ý[™][Û“™]ÛÜšÚ[™ÈÈ›Ý[™][Û–S
+H8¥ ‚ˆ8¥'8¥ 8¥ 8¥­ˆšYÚ[\ØÛÝ™\žH8¥ ‚ˆ8¥%8¥ 8¥ 8¥­ˆšYÚ[\ÝÚ]
+\ÝÈÛ›NÈ™]™\ˆ[šÙYžHH\
+H8¥ ‚ˆ8¥%8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥&ˆ8¥#8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ XXÓÔÈÓ“H
+ÚYˆÜÊXXÓÔÊJH8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥$ˆšYÚ[˜[œÜÜ8¡¤šYÚ[›ÝØÛÛËšYÚ[•ÔšYÚ[\ØÛÝ™\žH8¥ ‚ˆšYÚ[šY[È8¡¤šYÚ[›ÝØÛÛËšYÚ[š]Ý™X[H8¥ ‚ˆšYÚ[™[™\ˆ8¡¤šYÚ[›ÝØÛÛËšYÚ[šY[È8¥ ‚ˆšYÚ[ÛÜ™H8¡¤›ÝØÛÛË•Ô•š]Ý™X[KTÐTK\ØÛÝ™\žK˜[œÜÜšY[È8¥ ‚ˆšYÚ[RH8¡¤šYÚ[›ÝØÛÛËšYÚ[ÛÜ™KšYÚ[™[™\ˆ8¥ ‚ˆšYÚ[
+^JH8¡¤šYÚ[RKšYÚ[ÛÜ™H8¥ ‚ˆ8¥%8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥&˜‚‘›Ü˜šY[ˆYÙ\Ë™\Ý]Y™XØ]\ÙH^H\™HH[\È[ÜÝZÙ[HÈ™Hœ›ÚÙ[Ž‚˜šYÚ[•Ô8¡¦ÈšYÚ[•šYÚ[•8¡¦ÈšYÚ[•ÔšYÚ[ÛÜ™H8¡¦ÈšYÚ[™[™\˜šYÚ[ÛÜ™H8¡¦ÈšYÚ[RX˜šYÚ[šY[È8¡¦ÈšYÚ[•šYÚ[™[™\ˆ8¡¦ÈšYÚ[ÛÜ™XšYÚ[RH8¡¦ÈšYÚ[˜[œÜÜÔ•ÔÔ•˜šYÚ[\ØÛÝ™\žH8¡¦ÈšYÚ[•Ô[žH\™H\™Ù]8¡¦È[žH\Hœ˜[Y]ÛÜšË[ž][™È8¡¦ÈšYÚ[\ÝÚ]›Ý]ÚYH\ÝËØ‚‚•Hœ˜[YH]Ú]H^XÝ\H]]™\žH›Ý[™\žN‚‚˜“•ÐÛÛ›™XÝ[ÛŠ]JH8¡¤–ÕšYÚ[˜[œÜÜx¡¤ˆ•ÔÙ\ÜÚ[Û“XXÚ[™Kš[™Ù\Ý8¡¤ˆ•ÔXÝ[Û‹™[Z]YYXJÚ[›™[œ^[ØYŠBˆ8¡¤ˆ•˜XÚÔ™XÙZ]™\‹š[™Ù\Ý•8¡¤ˆ[˜ÛÙYœ˜[YH
+Xž]H‘H[™Ý\™Yš^YSËYYXU[Y\Ý[\ÊBˆ8¡¤ˆ[˜ÛÙYœ˜[YT]Y]YH
+œ˜[Y\ÈÈML\Ë›Ü]ËZÙ^Yœ˜[YJBˆ8¡¤ˆšYÚ[šY[Îˆ›Ü›X]\ØÜš\[Û‘˜XÝÜžH8¡¤ˆÓTØ[\PY™™\ˆ8¡¤ˆU”Ø[\PY™™\‘\Ü^S^Y\‚ˆÜˆ8¡¤ˆ•XÛÛ\™\ÜÚ[Û”Ù\ÜÚ[Ûˆ8¡¤ˆšY[Ñœ˜[YBˆ8¡¤ˆšYÚ[™[™\ŽˆšY[ÔÚ[šË™[œ]Y]YJÎŠH8¡¤ˆÐSY][^Y\ˆÈTÐ‘
+™\›ÈXZ[‹XXÝÜˆÜÈÛˆHY][]
+B˜‚‹KKB‚ˆÈÈ‹ˆ[[™ÜÂ‚‘]™\žH›ÝÈÙˆØÜËÓÔS‹PÓÓ‘“PÕË›Y\È]™\žHÛÛ˜YXÝ[Ûˆ›Ý[™Ú[HÜš][™È\ÈÛÛ˜XÝ‚‘›Ü›X]ˆ
+ŠÚ]XXÚÜXÈØZY8¡¤ˆH[[™È8¡¤ˆÚH8¡¤ˆÚXÚØÝ[Y[È]\Ý™H[Y[™YŠŠ‚‚H[[™ÈX\šÙY
+Š–Ð•RSJŠˆœ™XZÜÈÛÛ\[][ÛˆÜˆ[šÚ[™ÈYˆYÛ›Ü™Yˆ
+Š–ÔÑSPS•P×JŠˆ›ÙXÙ\ÈÛÙB]ÛÛ\[\È]Z\Ø™Z]™\Ëˆ
+Š–ÐÓÔÓQUP×JŠˆ\ÈHÛÛœÚ\Ý[˜ÞHX]\ˆ]]\ÝÝ[™HÙ]YÛ˜ÙK‚‚ˆÈÈÈ‹ŒH\HÝÛ™\œÚ\[™Ú\B‚ˆÈÈÈÈ‹LH8 %šYÚ[•
+Š™Ù\ÊŠˆ\[™ÛˆšYÚ[š]Ý™X[X
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Ì‹Œˆ[™ÜXËXš]Ý™X[K›Y0©ÌKŒH\ÜÙ\HYÙH^\ÝÈ[™\ÈX[™]ÜžK‚˜ÜXË\›Y0©ÌKŒH\ÜÙ\È]Ù\È›Ý[™›ÜÜÙ\ÈH[[™HØØ[YZÙ\ˆ‚ŠÛÝ\˜Ù\ËÕšYÚ[•ÔÛXÙRXY\”YZËœÝÚY
+HZ[\™XÝHÛˆš]™XY\˜‚‚Š”[[™ÎŠˆ
+ŠHYÙH^\ÝËŠŠˆXÚØYÙKœÝÚY[™XYHXÛ\™\Â˜\™Ù]
+˜[YNˆ•šYÚ[•‹\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[š]Ý™X[H—JX[™]X[šY™\Ý\Â˜ÛÛ\[Y[™Ü™Y[‹ˆšYÚ[•
+Š›]\Ý
+Šˆ\ÙHšYÚ[š]Ý™X[X›ÜŽˆS\XØSS\X˜SXY\‹™XÛÙRØXÛÙRUØØ\PÛÙX[™Ý™Yš^Y˜\[™
+˜[ÎŠX[™˜ÛXÙRXY\‹š\Ñš\œÝÛXÙSÙ”XÝ\™J˜[[š]˜ÛÙXÎŠXˆÛÝ\˜Ù\ËÕšYÚ[•ÔÛXÙRXY\”YZËœÝÚY\ÂŠŠ™[]Yœ›ÛHHX[šY™\Ý
+Šˆ8 %H\XØ]HÛXÙKZXY\ˆ\œÙ\ˆ\ÈH™]šY]ËX›ØÚÚ[™ÈY™XÝ™XØ]\ÙBHÛÈÛÜY\ÈÚ[\ØYÜ™YHÛˆ^XÝHHX[›Ü›YY[œ]]X]\œË‚‚Š•ÚNŠˆHÙXÛÛ™[\[Y[][ÛˆÙˆš\œÝÛX—Ú[—ÜÛXÙXÈš\œÝÜÛXÙWÜÙYÛY[Ú[—ÜX×Ù›YØ\ÈBœÚ[™ÛHYÚ\Ý\š\ÚÈ\XØ][Ûˆ[ˆH™\È8 %XØÙ\ÜË][š]Ü][™È\È[™XYH›Ý[ÝÙYÈ\ÝHX\šÙ\ˆš]ÛÈ\È™YXØ]H
+š\ÊˆHUH›Ý[™\žKˆÛ™H[\[Y[][Û‹Û™HÙ]Ùˆ^žˆ\ÝË‚•HÛZ[YY™[™Yš]
+\˜[[[\[Y[][ÛˆÙˆ•[™š]Ý™X[JH\È›ÝYÚ˜XÚÈžHHØ]™H[Ž‚˜šYÚ[š]Ý™X[X[™šYÚ[•\™H›ÝÌ‹[™šYÚ[•\[™ÈÛ›HÛˆH›Ý\ˆÝ\™˜XÙ\È\ÝY˜X›Ý™KÚXÚ\™HXÛ\™Y[ˆ0©ÍŒÈ[™Ø[ˆ™HÝX˜™Y›Üˆ[ˆY\››ÛÛˆYˆÙ[Z[™[H™XÙ\ÜØ\žK‚‚Š[Y[™ŠˆÜXË\›Y0©ÌKŒH
+\[™[˜ÞHÛZ[JH[™0©ÌKŒˆ
+›ÜÛXÙRXY\”YZËœÝÚY
+NÈ0©ÍËŒÈ™XÛÛY\Â˜H™Y™\™[˜ÙHÈšYÚ[š]Ý™X[K”ÛXÙRXY\˜‚‚ˆÈÈÈÈ‹Lˆ8 %[˜ÛÙYœ˜[YXYYXU[Y\Ý[\[™œšY[™È\™HXÛ\™Y
+Šš\™JŠ‹™\˜˜][H
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Ì‹Ú]™\È[HÈšYÚ[›ÝØÛÛØÈÜXË\›Y0©ÌˆØ[È]Ù[ˆZ\‚˜]]Üš]]]™HYš[š][ÛˆŽÈÜXË]šY[Ë\\[[™K›Y0©Ìˆ™\Ý]\È[NÈÜXËXš]Ý™X[K›Y0©Ìˆ™\Ý]\Â[HY™™\™[KˆH›Ý\ˆ™\œÚ[ÛœÈ\ØYÜ™YHÛŽˆ]X\H
+]XœÈÕR[X
+KÛÙXØ\BŠÛÙXØœÈšY[ÐÛÙXØ
+KØÜ[Û˜[]KH\œš]˜[][YHšY[
+™XÙZ]™Y]ˆ[Û›ÝÛšXÕ[YXœÂ˜™XÙZ]™YÜÝ[YNˆR[
+K[™Ú]\ˆ\˜[Y]\”Ù]ØØ\œšY\ÈÛÙXØ‚‚Š”[[™ÎŠˆ0©ÌÈÙˆ\ÈØÝ[Y[\ÈH
+Š›Û›JŠˆ›Ü›X]]™HXÛ\˜][Û‹ˆ[›Ý\ˆÜXÜÈ™XÛÛYB™^[˜]ÜžKˆHšY[[]™[[[™ÜÈ\™H‹LÈ8 )ˆ‹L‚‚Š•ÚNŠˆ›Ý\ˆ\X[XÛ\˜][ÛœÈÙˆH›Ý[™\žHÝXÝ\ÈHØ[›ÛšXØ[Ø^HÈÙ]ÛÙH]Ù\È›Ý›[šËˆ0©ÌÈ\ÈÜš][ˆÈ™H\ÝY›Ý\˜\˜\ÙY‚‚Š[Y[™ŠˆÜXË\›Y0©Ì‹ÜXË]šY[Ë\\[[™K›Y0©Ì‹ÜXËXš]Ý™X[K›Y0©Ìˆ8 %XXÚ™\XÙ\È]Â™XÛ\˜][ÛˆÚ]HÚ[\ˆÈTWÐÓÓ•PÕ›Y0©ÌÈ[™ÙY\ÈÛ›H]È
+œÙ[X[XÜÊˆ›ÜÙK‚‚ˆÈÈÈÈ‹LÈ8 %]X›ÝÕR[X]]™\žH›Ý[™\žH
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË\›Y\Ù\È]X›Üˆ[˜ÛÙYœ˜[YK™]X[™Ñ]WX›Üˆ\˜[Y]\ˆÙ]ÎÂ˜ÜXËXš]Ý™X[K›Y\Ù\ÈÕR[X[™ÖÕR[WX›ÝYÚÝ][˜ÛY[™È[‚˜UÑXÛÙ\ÛÛ™šYÝ\˜][Û”™XÛÜ™š[š]
+ÜÎœÎœÜÑ^ŠX‚‚Š”[[™ÎŠˆ
+Š˜]X›Üˆ[ž][™ÈÝÜ™Y[ˆH\H]Ü›ÜÜÙ\ÈH[Ù[HÜˆ\ÛÛ][Ûˆ›Ý[™\žKŠŠ‚˜ÕR[X\È\›Z]YÛ›H\ÈH
+›ØØ[ØÜ˜]ÚY™™\Šˆ[œÚYHÛ™H[˜Ý[ÛˆÜˆ\ÈH™]\›ˆÙˆ[‚[™\ØØ\KÜÙ\šX[^™H[\‹ˆÛÛ˜Ü™][N‚‚ŸÚ\™H\HŸKK_KK_Ÿ[˜ÛÙYœ˜[YK™]X]XŸ\˜[Y]\”Ù]ËœËËœÜËËœØÑ]WXŸUÑXÛÙ\ÛÛ™šYÝ\˜][Û”™XÛÜ™ÈUÑXÛÙ\ÛÛ™šYÝ\˜][Û”™XÛÜ™ÝÜ™Y\œ˜^\È[™[š]\˜[\ÈÑ]WXÙ\šX[^™Y
+
+HOˆ]XŸ”Ô[™\ØØ\J‹‹ŠX™]\›‹[›™^‹Ó[™Ý™Yš^Y
+‹‹ŠXÕR[X
+ØÜ˜]Ú
+HŸš]™XY\˜˜XÚÚ[™ÈÝÜ˜YÙHÕR[XÚ]HÛÛ™[šY[˜ÙH[š]
+È]Nˆ]JXŸ\œÙ\ˆ[žHÚ[È[œØY™T˜]ÐY™™\”Ú[\˜
+Ø[›ÝYÚ]KÚ][œØY™Pž]\Ø
+H‚Š•ÚNŠˆ]X\ÈÙ[™X›X\ÈÚ]›Ý[™][Û˜ØT“Ù\ÜÚ[Û˜Ø•ÐÛÛ›™XÝ[Û˜[™\Ë\ÈÚ]˜U\ÜÙ]Üš]\˜[™ÓP›ØÚÐY™™\Ü™X]UÚ]Y[[ÜžP›ØÚØØ[[™]›ÚYÈÛ™H[ÛÜH\ˆœ˜[YH]H˜[œÜÜ›Ý[™\žKˆÕR[X[œÚYHHÙ[™X›X›Ý[™\žHÝXÝYX[œÈHÛÜH[ˆ[™HÛÜHÝ]‚•HÛ™H™X[^˜\™Ùˆ]X8 %HÛXÙH™]Z[š[™ÈHYYØXž]H\™[8 %\È[™YžHH^\Ý[™È[Bš[ˆ0©ÍËˆ
+™]™\ˆÝÜ™HHÛXÙHÛ™Ë]\›HÚ]Ý]]JÛXÙJX
+K‚‚Š[Y[™ŠˆÜXËXš]Ý™X[K›Y0©ÌM‹0©ÌMË0©ÌŒK0©ÌŒˆ
+ÖÕR[WX8¡¤ˆÑ]WXÕR[X8¡¤ˆ]XÛˆÝÜ™Y˜[™™]\›™Y˜[Y\ÊNÈÜXË\›Y0©Ì‹›ÝH]]X\È]X‚‚ˆÈÈÈÈ‹L8 %Û™H›]YYXPÛÙXØÛˆ[˜ÛÙYœ˜[YXÈšY[ÐÛÙXØ[™]Y[ÐÛÙXØ›Ý^\Ý
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Ì‹8¡¤ˆšY[ÐÛÙXØ
+KZœYØ
+H[™]Y[ÐÛÙXØ‚˜ÜXËXš]Ý™X[K›Y8¡¤ˆšY[ÐÛÙXØ
+XÛ›KÚ]˜[XY\“[™Ý
+K‚˜ÜXË\›Y8¡¤ˆHÚ[™ÛHÛÙXØ
+KXXËÛTÌM“X
+H\ÙYžH[˜ÛÙYœ˜[YX‚˜ÜXËZ\Ø\K›Y\[™^ˆ\ÝÈ›ÝšY[ÐÛÙXØ[™]Y[ÐÛÙXØ‚‚Š”[[™ÎŠˆ™YH[[\ËXXÚÚ]Û™H›Ø‹[[ˆšYÚ[›ÝØÛÛØ
+0©ÌË
+N‚‚ŠˆšY[ÐÛÙXØ8 %KZœYØˆØ\œšY\È˜[XY\“[™Ý
+HÈˆÈ
+H[™\ÓS˜\ÙY‚ˆ\ÙYžH\˜[Y]\”Ù]ØšY[Ñ›Ü›X][™›ØTÐTHÝ™X[HÛÛ™šYË›Ü›X]XÚ[™ÙH]XÝ[Û‹‚Šˆ]Y[ÐÛÙXØ8 %XXËÍÌLPKÍÌLUKÍÌ‹ÛTÌM“Xˆ\ÙYžHTÐTHÝ™X[HÛÛ™šYÈ[™]Y[È›Ü›X]‚ŠˆYYXPÛÙXØ8 %H›][š[ÛˆØ\œšYYžH[˜ÛÙYœ˜[YK˜ÛÙXØÚ]˜\ˆšY[ÎˆšY[ÐÛÙXÏØ[™ˆ˜\ˆ]Y[Îˆ]Y[ÐÛÙXÏØœšYÙ\ÈÛÈHšY[Ë\]ÝÚ]ÚÝ^\ÈÛ™H[™K‚‚Š•ÚNŠˆ[˜ÛÙYœ˜[YXÙ[Z[™[HØ\œšY\È›ÝšY[È[™]Y[ËÛÈ]™YYÈH[š[Û‹ˆ\˜[Y]\”Ù]Ø˜[™šY[Ñ›Ü›X][™›ØÙ[Z[™[HØ[››Ý™H]Y[ËÛÈXZÚ[™È[HZÙHH[š[ÛˆÛÝ[\Ú[œ™\™\Ù[X›HÝ]\È[È]™\žH\œÙ\‹ˆZœYØ]\Ý™H[ˆšY[ÐÛÙXØ™XØ]\ÙH‹QPËLH
+R”QÊB˜[™HÛ\ÜËQ”QË\Û[H[ÙH›Ý™Y™\™[˜ÙH]‚‚Š[Y[™ŠˆÜXË\›Y0©Ì‹ŒÈ
+ÛÙXØ8¡¤ˆYYXPÛÙXØYHÛÈ˜\œ›ÝÈ[[\ÊNÂ˜ÜXËXš]Ý™X[K›Y0©Ìˆ
+šY[ÐÛÙXØØZ[œÈZœYØÈÝX\™˜[XY\“[™ÝÛˆ\ÓS˜\ÙY
+K‚‚ˆÈÈÈÈ‹LH8 %YYXU[Y\Ý[\š[š]Û[\ÎÈ]Ù\È
+Š››Ý
+Šˆ™XÛÛ™][Û˜
+Š–ÔÑSPS•PËÙXÝ\š]WJŠ‚‚Š”ØZYŠˆÜXË\›Y0©Ì‹ŒHXÛ\™\Â˜™XÛÛ™][ÛŠ[Y\ØØ[Hˆ˜[YHOH[›Z[‹[Y\ØØ[H]\Ý™HÜÚ]]™HŠX‚‚Š”[[™ÎŠˆH[š]X[\Ù\ˆ
+Š˜Û[\ÈH›Û‹\ÜÚ]]™H[Y\ØØ[HÈJŠˆ[™ØÝ[Y[È]ˆ˜[Y][ÛˆÙˆB[Y\ØØ[H]Ø[YHÙ™ˆHÚ\™H\[œÈ^XÝHÛ˜ÙK]•˜XÚÑ›Ü›X]ÛÛœÝXÝ[Û‹ÚXÚ›ÝÜÂ˜•˜XÚÑ\œ›Ü‹š[˜[YÛØÚÔ˜]JÎŠX‚‚Š•ÚNŠˆ[Y\ØØ[X\È\š]™Yœ›ÛHHÑO\X\ÛØÚÈ˜]H8 %
+Š›™]ÛÜšÈ]JŠ‹ˆHØ[Y\˜H
+Üˆ[‚˜]XÚÙ\ˆÛˆHSŠH]Y™\\Ù\ÈO\X\ŽMˆÌÛÝ[ZÙHHÚÛH\ÝÛˆ›ÝYÚB˜™XÛÛ™][Û˜ˆSTÔ•STË›Y\›Z]È™XÛÛ™][Û˜Û›H›Üˆœ›ÙÜ˜[[Y\ˆ\œ›Üˆ]Ø[››ÝÛÛYB™œ›ÛH™]ÛÜšÈ]HŽÈ\È\ÈHÜÜÚ]KˆTÒUPÕT‘K›Y0©ÍË\È^XÚ]ˆHX[›Ü›YYXÚÙ]œ›ÛB›Û™HØ[Y\˜H]\Ý™]™\ˆÜ˜\ÚH\[™]\ÈHÙXÝ\š]H›Ü\K‚‚Š[Y[™ŠˆÜXË\›Y0©Ì‹ŒK‚‚ˆÈÈÈÈ‹Lˆ8 %Ø\ÈÜ[Û˜[È\˜][Û˜\ÈÜ[Û˜[
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXË\›YÎˆYYXU[Y\Ý[\ØÈÜXËXš]Ý™X[K›YÎˆYYXU[Y\Ý[\Â˜ÜXË]šY[Ë\\[[™K›Y”•Ý\Y\ÈØÛ›HÚ[ˆHÝ™X[H™[Ü™\œÈ‹‚‚Š”[[™ÎŠˆ˜\ˆÎˆYYXU[Y\Ý[\Øš[Ú[ˆHÝ™X[HÙ\È›Ý™[Ü™\ˆ8 %ÚXÚ\È]™\žB’ZÝš\Ú[Ûˆ]™H›Ùš[H[™[]Y[ËˆšYÚ[šY[Ø™X]Èš[\È™ÈOHÈˆ[™]\Ý
+Š››Ý
+Š‚œÞ[\Ú\ÙHHXÛÙHÜ™\‹ˆÚ[ˆ›Û‹Xš[ÈHØ\ÈÝX\˜[YYžHH›ÙXÙ\‹‚‚Š[Y[™ŠˆÜXËXš]Ý™X[K›Y0©Ì‹Œ‹‚‚ˆÈÈÈÈ‹LÈ8 %Û™H[Û›ÝÛšXÈ[œÝ[\NˆYYXR[œÝ[ˆ•Ô[œÝ[•Ô\˜][Û˜[Û›ÝÛšXÕ[YX\™H[]Y
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍKŒL8¡¤ˆ›ÝØÛÛ[Û›ÝÛšXÐÛØÚÈÈ˜\ˆ›ÝÓ˜[›ÜÙXÛÛ™ÎˆR[X‚˜ÜXË\›Y0©Ì‹Œˆ8¡¤ˆÝXÝ[Û›ÝÛšXÕ[YHÈ˜[›ÜÙXÛÛ™Îˆ[X
+È›ÝØÛÛ[Û›ÝÛšXÐÛØÚÈÈ[˜È›ÝÊ
+HOˆ[Û›ÝÛšXÕ[YHX‚˜ÜXË\Ü›Y0©Ì‹8¡¤ˆÝXÝ•Ô[œÝ[
+ÈÝXÝ•Ô\˜][Û˜‚˜ÜXËZ\Ø\K›Y0©ÌH8¡¤ˆ›ÝØÛÛšYÚ[ÛØÚÈÈ˜\ˆ›ÝÎˆ]NÈ[˜ÈÛY\
+›ÜŽŠHX‚‚Š”[[™ÎŠˆšYÚ[›ÝØÛÛØXÛ\™\È^XÝHÛ™H[œÝ[\KYYXR[œÝ[
+˜[›ÜÙXÛÛ™Îˆ[˜\˜š]˜\žH\ØÚ™]™\ˆØ[ÛØÚÊK[™\Ù\ÈH
+ŠœÝ[™\™Xœ˜\žH\˜][Û˜
+Šˆ›Üˆ]™\žH\˜][Û‹‚˜›ÝØÛÛ[Û›ÝÛšXÐÛØÚØ\È›ÝÊ
+XÛY\
+›ÜŽŠX[™ÛY\
+[[ŠXˆ›ÝØÛÛØ[ÛØÚØ\Â˜›ÝÎˆ]X\ÙYÛ›H›Üˆ\Ü^K•Ô•X\[™È[™\œÙY^X˜XÚÈ˜[™Ù\Ë‚˜•Ô[œÝ[•Ô\˜][Û˜[Û›ÝÛšXÕ[YX[™šYÚ[ÛØÚØÈ›Ý^\Ý‚‚Š•ÚNŠˆ›Ý\ˆÜ[[™ÜÈÙˆ›˜[›ÜÙXÛÛ™ÈÚ[˜ÙH›ÛÝˆYX[œÈ›Ý\ˆÛÛ™\œÚ[Ûˆ[\œË[™H•ÔXXÚ[™B˜[™H•™XÙZ]™\ˆ]\Ý[Y\Ý[\YØZ[œÝH
+œØ[YJˆÜšYÚ[ˆÜˆHÛ\ÜË]ËYÛ\ÜÈ][˜ÞH\Ý[X]BŠ‘PUT‘TÈ0¬LH\ÊH\ÈYX[š[™Û\ÜËˆ\˜][Û˜\È[ˆHÝX‹ÛÜšÜÈÛˆ[^Ø\œšY\È]È[š]š[ˆH\H
+Ø]\ÙžZ[™È0©ÍËIÜÈ[š]ËZ[‹]K[˜[YH[HÚ]Ý]H˜[YJK[™[™XYH\X\œÈ[‚˜[Û›ÝÛšXÐÛØÚËœÛY\
+›ÜŽŠX‚‚Š[Y[™ŠˆÜXË\Ü›Y0©Ì‹[™]™\žH•Ô[œÝ[Ø•Ô\˜][Û˜\ÙH
+HYXÚ[šXØ[™[˜[YNÂ˜œÙXÛÛ™ÊJX[™›Z[\ÙXÛÛ™Ê
+X\™H\˜][Û˜˜XÝÜšY\ÈÚ]HØ[YHÜ[[™ÊNÂ˜ÜXË\›Y0©Ì‹ŒŽÈÜXËZ\Ø\K›Y0©ÌH[™0©Í
+šYÚ[ÛØÚØ8¡¤ˆ[Û›ÝÛšXÐÛØÚØ
+ÈØ[ÛØÚØ
+NÂ˜TÒUPÕT‘K›Y0©ÍKŒL‚‚ˆÈÈÈÈ‹L8 %[˜ÛÙYœ˜[YKœ™XÙZ]™Y]ˆYYXR[œÝ[
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË\›Y8¡¤ˆ™XÙZ]™Y]ˆ[Û›ÝÛšXÕ[YXÈÜXËXš]Ý™X[K›Y8¡¤ˆ™XÙZ]™YÜÝ[YNˆR[Š›XXÚØXœÛÛ]WÝ[YHÛXZ[ˆŠK‚‚Š”[[™ÎŠˆ˜\ˆ™XÙZ]™Y]ˆYYXR[œÝ[8 %\œš]˜[ÙˆH
+Š›\Ý
+ŠˆXÚÙ]ÙˆHœ˜[YKÚXÚ\ÈB˜[˜ÚÜˆ›ÜˆHÛ\ÜË]ËYÛ\ÜÈ\Ý[X]KˆXXÚØXœÛÛ]WÝ[YX˜]ÈXÚÜÈ™]™\ˆ\X\ˆ[ˆH\™H\NÂ˜Þ\Ý[S[Û›ÝÛšXÐÛØÚØÛÛ™\ÈÛ˜ÙK‚‚Š[Y[™ŠˆÜXËXš]Ý™X[K›Y0©Ì‹Œ‹‚‚ˆÈÈÈÈ‹LH8 %Û™H˜[™Û[™\ÜÈ›ÝØÛÛˆ˜[™ÛTÛÝ\˜ÙXˆ•Ô˜[™ÛTÛÝ\˜ÙX\È[]Y
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍKŒL8¡¤ˆ›ÝØÛÛ˜[™ÛTÛÝ\˜ÙHÈ]]][™È[˜È™^
+
+HOˆR[XÂ˜ÜXË\Ü›Y0©Ì‹H8¡¤ˆ›ÝØÛÛ•Ô˜[™ÛTÛÝ\˜ÙHÈ[˜È˜[™ÛPž]\ÊÎŠHOˆÕR[HX
+›Û‹[]]][™ÊK‚‚Š”[[™ÎŠˆÛ™H›ÝØÛÛ˜[™ÛTÛÝ\˜ÙX]]][™È[˜È™^
+
+HOˆR[Ú]BŠŠœ›ÝØÛÛ^[œÚ[ÛŠŠˆ›ÝšY[™È]]][™È[˜È˜[™ÛPž]\ÊÈÛÝ[ˆ[
+HOˆÕR[X[™˜]]][™È[˜È^Ýš[™Êž]\ÎŠXˆ•Ô]\›Z[š\ÝXÔ˜[™ÛXÈ•ÔÞ\Ý[T˜[™ÛX™XÛÛYB˜Ü]Z^˜[™ÛTÛÝ\˜ÙX
+ÙYYY[ˆšYÚ[›ÝØÛÛØÛÈ›Ý\ÝÈ[™š^\™\È\ÙH]
+H[™˜Þ\Ý[T˜[™ÛTÛÝ\˜ÙX‚‚Š•ÚNŠˆ]]][™Ø\È™\]Z\™Y›ÜˆHÙYYYÙ[™\˜]ÜˆÈY˜[˜ÙH™\›ÙXÚX›KÚXÚ\ÈH[\™BœÚ[
+TÒUPÕT‘K›Y0©ÍKŒLˆ˜H˜Z[[™ÈÒH[ˆš[ÈHÙYYŠKˆH›Û‹[]]][™È˜[™ÛPž]\Ø™›Ü˜Ù\ÈZ]\ˆHÛ\ÜÈÚ]HØÚÈÜˆH›Û‹\™\›ÙXÚX›HÛÝ\˜ÙKˆYÙ\ÝÛ›Û˜ÙXÙ[™\˜][Ûˆ[ˆ™XYÂ˜›™Ëœ˜[™ÛPž]\Ê
+X[™\È]\›Z[š\ÝXÈ[™\ˆ\Ý‚‚Š[Y[™ŠˆÜXË\Ü›Y0©Ì‹K0©Í‹‚‚ˆÈÈÈÈ‹LL8 %
+Š˜[
+ŠˆÛXZ[ˆ\œ›Üˆ[[\È]™H[ˆšYÚ[›ÝØÛÛØ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍËŒHXÛ\™\È[[HšYÚ[\œ›Ü˜[ˆšYÚ[›ÝØÛÛØÜ˜\[™Â˜•Ô\œ›Ü˜•\œ›Ü˜š]Ý™X[Q\œ›Ü˜TÐTQ\œ›Ü˜\ØÛÝ™\žQ\œ›Ü˜8 )ˆ[™0©Ì‹	ÜÈ™YÚ\ÝžHØ^\Âˆ˜šYÚ[\œ›Ü˜
+È[ÛXZ[ˆ\œ›Üˆ[[\ÈšYÚ[›ÝØÛÛØ‹ˆ]ÜXË\Ü›Y0©ÌMHXÛ\™\Â˜•Ô\œ›Ü˜[œÚYHšYÚ[•ÔÜXËXš]Ý™X[K›Y0©ÌŒˆXÛ\™\Èš]Ý™X[Q\œ›Ü˜[œÚYB˜šYÚ[š]Ý™X[XÜXËZ\Ø\K›Y0©ÎHXÛ\™\ÈTÐTQ\œ›Ü˜[œÚYHšYÚ[TÐTX[™ÜXË\›Y°©ÌMŒÈXÛ\™\È™YH\œ›Üˆ[[\È[œÚYHšYÚ[•‚‚Š”[[™ÎŠˆ
+Š™]™\žH\œ›Üˆ[[H˜[YYžHšYÚ[\œ›Ü˜\ÈXÛ\™Y[ˆšYÚ[›ÝØÛÛØ
+Š‹[‚˜ÛÝ\˜Ù\ËÕšYÚ[›ÝØÛÛËÑ\œ›ÜœËÑÛXZ[‘\œ›ÜœËœÝÚYˆ[Ù[K[ØØ[\œ›ÜœÈ]šYÚ[\œ›Ü˜Ù\È
+››Ý
+‚Ü˜\X^HÝ^H[ˆZ\ˆ[Ù[H
+\™H\™H›Û™H[ˆHÝ\œ™[\ÚYÛŠK‚‚Š•ÚNŠˆ\ÈÛ™H\È›ÝHÝ[H™Y™\™[˜ÙK]\ÈHÞXÛKˆYˆšYÚ[\œ›Ü˜
+[ˆšYÚ[›ÝØÛÛØ
+H\ÈB˜Ø\ÙHœÜ
+•Ô\œ›ÜŠX[™•Ô\œ›Ü˜]™\È[ˆšYÚ[•Ô[ˆšYÚ[›ÝØÛÛØ]\Ý[\Ü˜šYÚ[•ÔÚXÚ[\ÜÈšYÚ[›ÝØÛÛØˆÝÚYH™Z™XÝÈHÞXÛH[™›Ý[™ÈZ[ËˆB˜[\›˜]]™\ÈÙ\™HÛÛœÚY\™Y[™™Z™XÝYˆ
+JHšYÚ[\œ›Ü‹Ü˜\Y
+[žHšYÚ[˜Z[\™JX\Ý›Þ\Â˜\]X]X›XØ\ÚX›XØÛÙX›XÛÛ™›Ü›X[˜ÙH[™XZÙ\ÈÝÚ]ÚÛˆHØ]\ÙH[\ÜÜÚX›K[™]™\žBœ™]žHXÚ\Ú[Ûˆ[ˆÝ™X[PÛÛ›Û\˜ÝÚ]Ú\ÈÛˆHØ]\ÙNÈ
+ŠH›È›ÛÝ[[H][YX[œÈ]™\žB˜›ÝÜÊšYÚ[\œ›ÜŠX›Ý[™\žH™XÛÛY\È[\YÛÛ˜YXÝ[™È0©ÍËË‚‚ÛÛœÙ\]Y[˜ÙH›ÜˆHØ]™H[ŽˆH\œ›Üˆ^Û›Û^H\È
+Š•ÌHÛÜšËÛ™HÛ˜ÙKžHHšYÚ[›ÝØÛÛØ˜YÙ[
+Š‹œ›ÛHHØ\ÙH\ÝÈ[ˆTÒUPÕT‘K›Y0©ÍËŒˆ\ÈXXÚ[Ù[HÜXÉÜÈ\œ›ÜˆÙXÝ[Û‹ˆ]\ÂHÚ[™ÛH\™Ù\ÝÌHš[HY\ˆHÜž\ÈÙ]ˆ0©ÌËŒLHš^\ÈHÚ\H[™HÛÛ\]HØ\ÙH\Ý‚‚Š[Y[™ŠˆÜXË\Ü›Y0©ÌMKÜXË\›Y0©ÌMŒËÜXËXš]Ý™X[K›Y0©ÌŒ‹ÜXËZ\Ø\K›Y0©ÎK˜ÜXËY\ØÛÝ™\žK›Y0©ÌL‹ÜXËXÛÜ™K›YÜXË]šY[Ë\\[[™K›YÜXË\™[™\‹›Y8 %XXÚÙY\È]Â˜Ø\ÙH\Ý\ÈØÝ[Y[][Ûˆ[™Ý]\È]HXÛ\˜][Ûˆ\È[ˆšYÚ[›ÝØÛÛØ‚‚ˆÈÈÈÈ‹LLH8 %H\ØÜšXš[™È›ÝØÛÛ\È˜[YYšYÚ[˜Z[\™X
+Š–ÐÓÔÓQUP×JŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍËŒH8¡¤ˆ›ÝØÛÛšYÚ[\œ›Ü‘\ØÜšXš[™ØÈÜXË\Ü›Y0©ÌNH8¡¤ˆB˜šYÚ[˜Z[\™X›ÝØÛÛ‹‚‚Š”[[™ÎŠˆšYÚ[˜Z[\™XˆØ[YHY[X™\œÈ\ÈšYÚ[\œ›Ü‘\ØÜšXš[™Ø
+XYÛ›ÜÝXÐÛÙXÙ]™\š]X˜\ÜÜÚ][Û˜\Ù\“Y\ÜØYÙX\Ù\”™[YYXÙÓY]Y]X
+KˆšYÚ[\œ›Ü˜[™]™\žHÛXZ[ˆ[[B˜ÛÛ™›Ü›KˆØØ[^™Y\œ›Ü˜ÛÛ™›Ü›X[˜ÙH\ÈYYžH[ˆ^[œÚ[Ûˆ[ˆšYÚ[ÛÜ™XÛÈH\™H^Y\ˆÝ^\Â‘›Ý[™][Û‹[Z[š[X[Ú[H\Ú][\ÈÝ[ÛÜšË‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÍËŒK‚‚ˆÈÈÈÈ‹LLˆ8 %œ˜[YQÙ[ÛY]žXÛÛÜ’[™›ØšY[Ü™\˜]™H[ˆšYÚ[›ÝØÛÛØ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË\™[™\‹›Y0©Ìˆ8¡¤ˆšYÚ[›ÝØÛÛØ
+\™K›ÈÛÜ™UšY[ÎÈšYÚ[š]Ý™X[XÛÛ\]\È[B™œ›ÛHÔËÕ”È•RKÛÈ^H\™H[^]\ÝX›JKˆÜXË]šY[Ë\\[[™K›Y[\Y\ÈšYÚ[šY[ØžBœXÚ[™È[Ù[ÛY]žHÛÜšÈ™^ÈÕ”^[Y™™\˜‚‚Š”[[™ÎŠˆ
+Š˜šYÚ[›ÝØÛÛØ
+Š‹\ˆÜXË\™[™\‹›Yˆ^H\™H\™H\š]Y]XÈÝ™\ˆ[YÙ\œÈ[™œ˜][ÜÈ
+ÛÙYÚ^™KÛX[ˆ\\\™KÐT‹š[X\šY\ËÝ˜[œÙ™\‹ÛX]š^ÛÙ\ÊH[™\™H›ÙXÙYžB˜šYÚ[š]Ý™X[Xœ›ÛHH•RKÚXÚ[œÈÛˆ[^ˆšYÚ[šY[Ø[™šYÚ[™[™\˜ÛÛœÝ[YH[NÂ˜šYÚ[™[™\˜Y][Û˜[H\š]™\È]È^Y\ˆ˜[œÙ›Ü›\Èœ›ÛH[H]XÛ\™\È›ÈÙ[ÛY]žH\K‚‚Š•ÚNŠˆYˆÙ[ÛY]žH]™Y[ˆšYÚ[šY[Ø]ÛÝ[›Ý™H[š]]\ÝYÛˆ[^[™H\ÜXÝ\˜][ÈÂ˜ÛX[‹X\\\™HX]È\È^XÝHHÚ[™Ùˆ[™È]™YYÈH[™™YX›KYš]™[ˆ\ÝØ\Ù\Ëˆ]\Â˜[ÛÈ™\]Z\™YžHH™XÛÜ™\ˆ[™žHHœ™\ÜÜ›ÜY\Ü^HÚ^™K[ØØ]Hœ›ÛHÛÙYÚ^™H‚œ[K›ÝÙˆÚXÚ]™H›Û‹[XXÓÔË\ÜXÚYšXÈÙÚXË‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©Ìˆ[™0©Í
+ÛÛœÝ[YKÈ›ÝXÛ\™JK‚‚ˆÈÈÈÈ‹LLÈ8 %™YHY[YšY\ˆ\\Ë[ˆšYÚ[›ÝØÛÛØÈÝ™X[R[™^™XÛÛY\ÈÝ™X[T]X[]X
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËZ\Ø\K›Y0©ÌLKŒÈXÛ\™\ÈÚ[›™[QÝ™X[R[™^Ý™X[Z[™ÐÚ[›™[Q[™˜XÚÒQš[ˆšYÚ[TÐTXˆÜXËXÛÜ™K›Y[™HRH›Ý™YYÝ™X[T]X[]XˆTÒUPÕT‘K›Y0©Ì‹Ù\È›Ý›\Ý[žHÙˆ[K‚‚Š”[[™ÎŠˆ[›Ý\ˆ[Ý™HÈšYÚ[›ÝØÛÛØ[™Ý™X[R[™^\È™[˜[YY
+Š˜Ý™X[T]X[]X
+Š‚ŠXZ[ˆHKÝXˆH‹\™HØ
+KˆH™YK]Ø^H\Ý[˜Ý[Ûˆ\È™\Ù\™Y[™\ÈØYX™X\š[™Î‚‚Ÿ\HÜXÙH\ÙYžHŸKK_KK_KK_ŸÚ[›™[QKX˜\ÙYšY[È
+Šš[œ]
+ŠˆÚ[›™[Ò[XYÙKØÚ[›™[ËÞØÚXÔÝ›ØÚ[›™[ËÞØÚXÔÞ\Ý[KÕšY[ËÚ[œ]ËØÚ[›™[ËÞØÚX[Ý[ÛˆÛÛ™šYË]™[›ÝYšXØ][Û[\˜Ú[›™[QŸÝ™X[Z[™ÐÚ[›™[QÚ
+ˆL
+È]X[]Kœ˜]Õ˜[YXÔÝ™X[Z[™ËØÚ[›™[ËÞÚYXÔÝ™X[Z[™ËØÚ[›™[ËÞÚYKÜXÝ\™XH•Ô]Ÿ˜XÚÒQØ[YH[Y\šXÈÜXÙKY™™\™[ÛÛ˜Ù\ÐÛÛ[YÛ]Ü™XÛÜ™Ý˜XÚÜØÓTÙX\˜Ú\ØÜš\[Û‹˜XÚÒQ\ÝÔÝ™X[Z[™ËÝ˜XÚÜËÞÚYX‚•^H\™H
+Š››Ý
+Šˆ[\˜Ú[™ÙXX›H[™›Û™H\È^™\ÜÚX›PžR[YÙ\“]\˜[^Ù\Ú[›™[Q‚‚Š•ÚNŠˆšYÚ[ÛÜ™X\œÚ\ÝÈ[HÛˆØ[Y\˜X
+ÛÈ^H]\Ý™HÛÙX›X[™š\ÚX›HÚ]Ý][\Ü[™Â˜šYÚ[TÐTXœ›ÛHHÛÙX›H[Ù[
+KšYÚ[RX\Ü^\È[KšYÚ[•Ô™XÙZ]™\ÈHZ[][™˜šYÚ[\ØÛÝ™\žX™\ÜÈÚ[›™[ÛÝ[ËˆH\H]›Ý\ˆ[Ù[\È™YY\ÈHšYÚ[›ÝØÛÛØ\HžBHÝ[™[™È[H[ˆTÒUPÕT‘K›Y0©Ì‹ˆH™[˜[YH™[[Ý™\ÈH\™Ü[[™ÈÙˆHØ[YB˜ÛÛ˜Ù\
+Ý™X[R[™^ÈÝ™X[T]X[]XÈœÝ™X[H[™^ŠK‚‚Š[Y[™ŠˆÜXËZ\Ø\K›Y0©ÌLKŒÈ[™\[™^ŽÈÜXËXÛÜ™K›Y0©Í‚‚ˆÈÈÈÈ‹LM8 %Û™HÜ™Y[X[ÈTÐTPÜ™Y[X[\È[]YÈØ[Y\˜X\È›È\ÜÝÛÜ™
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Ì‹8¡¤ˆÜ™Y[X[[ˆšYÚ[›ÝØÛÛØ˜[YH\HÛ›K‚˜ÜXËZ\Ø\K›Y0©ÌÈ8¡¤ˆTÐTPÜ™Y[X[[ˆšYÚ[TÐTX[X™\˜][H›ÝÛÙX›X‚˜ÜXËXÛÜ™K›Y0©Íˆ8¡¤ˆÜ™Y[X[
+›ÝÛÙX›XÙ^XÚZ[‹[Û›JK\ÈÜ™Y[X[™Y˜[™˜Ü™Y[X[\ØÜš\Ü˜ˆ‘PUT‘TË›Y0©ÌŒŒˆ8¡¤ˆÙ^XÚZ[ˆÛ›KØ[Y\˜X\È›È\ÜÝÛÜ™›Ü\K‚‚Š”[[™ÎŠˆšYÚ[›ÝØÛÛØXÛ\™\ÈÜ™Y[X[
+\Ù\›˜[YH
+È\ÜÝÛÜ™
+Š››Ý
+ŠˆÛÙX›X™YXÝ[™Â˜\ØÜš\[Û˜
+˜[™
+ˆXYÑ\ØÜš\[Û˜
+H[™Ü™Y[X[™Y˜
+[ˆÜ\]YHURQÛÙX›XØY™HÂœ\œÚ\Ý
+KˆTÐTPÜ™Y[X[\È[]YˆÜ™Y[X[\ØÜš\Ü˜
+HÙ^XÚZ[ˆ]Y\žHÚ\JHÝ^\È[‚˜šYÚ[ÛÜ™X™XØ]\ÙH]˜[Y\ÈÙ^XÚZ[ˆ]šX]\ËˆØ[Y\˜XÝÜ™\ÈÜ™Y[X[™YŽˆÜ™Y[X[™YØ[™š\È›È\ÜÝÛÜ™\Ú\Y›Ü\H8 %[™›Ü˜ÙYžHH\K[™žHH\Ý]™Y›XÝÈÝ™\‚˜Ø[Y\˜X	ÜÈÛÙ[™ÒÙ^\Ø‚‚Š[Y[™ŠˆÜXËZ\Ø\K›Y0©ÌË0©Í0©ÌN[™\[™^ˆ
+TÐTPÜ™Y[X[8¡¤ˆÜ™Y[X[
+K‚‚ˆÈÈÈÈ‹LMH8 %Û™HÙÙÚ[™È›ÝØÛÛˆÙÙÙ\”›ÝØÛÛLÈØ]YÛÜšY\Ë[™Û™H™YXÝ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÎŒKð©ÎŒˆ8¡¤ˆÙÙÙ\”›ÝØÛÛÙÓ]™[ÙÐØ]YÛÜžXÙÑ]™[Ú]ŠŠŒLÊŠˆØ]YÛÜšY\È
+\\ØÛÝ™\žKÜš]Ý™X[K\Ø\K˜[œÜÜšY[Ë™[™\‹ÛÜ™KœÝÜ˜YÙKZK\™˜
+H[™Ýš[™Ëœ™YXÝ[™ÔÙXÜ™]Ê
+X\ÈH™YXÝ[Û‹œÝÚYˆÜXËZ\Ø\K›Y0©ÌH8¡¤‚˜šYÚ[ÙÙÙ\˜
+È™YXÝ[Û‹›X\ÚÊÎŠXˆÜXËXÛÜ™K›Y0©ÌMH8¡¤ˆÙÔ™YXÝ[Û˜ˆ‘PUT‘TË›Y0©ÌŒˆ8¡¤ˆÛ™Bœ\™H™YXÝ[ˆšYÚ[›ÝØÛÛØ[™H
+Š™Y™™\™[MY[žJŠˆØ]YÛÜžH\Ý
+\\ØÛÝ™\žKÜœš]Ý™X[KXÛÙK™[™\‹\Ø\K]™[Ë™XÛÜ™^X˜XÚËX[ÝÜ™KÙXÝ\š]X
+K‚‚Š”[[™ÎŠˆÙÙÙ\”›ÝØÛÛÈÙÓ]™[ÈÙÐØ]YÛÜžXÈÙÑ]™[^XÝH\Â˜TÒUPÕT‘K›Y0©ÎŒ‹Ú]TÒUPÕT‘K›Y	ÜÈ
+ŠŒLÈØ]YÛÜšY\ÊŠ‹ˆ™YXÝ[Ûˆ\ÈÛ™H\K˜[[H™YXÝ[ˆÛÝ\˜Ù\ËÕšYÚ[›ÝØÛÛËÓÙÙÚ[™ËÔ™YXÝœÝÚYˆšYÚ[ÙÙÙ\˜ÙÔ™YXÝ[Û˜˜™YXÝ[Û˜[™Ýš[™Ëœ™YXÝ[™ÔÙXÜ™]Ê
+XÈ›Ý^\Ý‚‚˜‘PUT‘TË›Y	ÜÈ^˜HØ]YÛÜšY\ÈX\ÛÈHLÎˆXÛÙH8¡¤ˆšY[Ø]™[È8¡¤ˆÛÜ™X˜™XÛÜ™8¡¤ˆÛÜ™X^X˜XÚÈ8¡¤ˆÛÜ™XX[8¡¤ˆ\™˜ÝÜ™H8¡¤ˆÝÜ˜YÙXÙXÝ\š]H8¡¤ˆÛÜ™X‚‚Š•ÚNŠˆHLËXØ]YÛÜžH\Ý\ÈHÛ™HÚ]ÛÜšÚ[™ÈÛÙH™\ÚYH]
+ÔÓÙÓÙÙÙ\˜0©ÎŒŠH[™]\ÈB›\ÝHXYÛ›ÜÝXÜÈ[™H[™HÙË[]™[Ù][™ÜÈ[™H[™^ˆÛÈ\ÝÈYX[œÈÙÈš[\œÈ]œÚ[[HX]Ú›Ý[™Ëˆ™YXÝ
+H‘PUT‘TË›Y˜[YJHÚ[œÈÝ™\ˆ™YXÝ[Û˜ØÙÔ™YXÝ[Û˜™XØ]\ÙB˜‘PUT‘TË›Y0©ÌŒˆXZÙ\È™YXÝ[ÛˆH
+œÚ\[™È™\]Z\™[Y[
+ˆÚ]H^žˆ\Ý[™˜[Y\È]‚‚Š[Y[™Šˆ‘PUT‘TË›Y0©ÌŒˆ
+Ø]YÛÜžH\Ý
+NÈÜXËZ\Ø\K›Y0©ÌNÈÜXËXÛÜ™K›Y0©ÌMNÂ˜TÒUPÕT‘K›Y0©Îˆ
+Ýš[™Ëœ™YXÝ[™ÔÙXÜ™]Ê
+X8¡¤ˆ™YXÝ
+K‚‚ˆÈÈÈÈ‹LMˆ8 %\™HÒKLH[™ÒKLMˆ[ˆšYÚ[›ÝØÛÛØÈÜž\ÒÚ]\È˜[›™Y]™\ž]Ú\™H
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÌMŽH8¡¤ˆQH
+ÈÔÌÌˆ
+ÈH[ˆ˜\ÙMÜ˜\\ˆ[ˆšYÚ[›ÝØÛÛØ[™ˆ˜ÒKLM˜Ú[ˆ™YYY›ÜˆÈÙ\YšXØ]Hš[™Ù\œš[\Ü^KÛÛY\Èœ›ÛHÜž\ÒÚ][ˆB›XXÓÔË[Û›H\™Ù]‹ˆ‘PUT‘TË›Y8¡¤ˆ
+Š“QKÒKLH[™ÒKLMŠŠ‹\™HÝÚY[ˆšYÚ[›ÝØÛÛØ[™ˆ››ÈÝ\ˆ[Ù[HX^H[\[Y[H\Ú‹ˆÜXË\Ü›Y0©ÌH8¡¤ˆQH\ÈH
+ŠœY[™Ë]Û\˜[
+Šˆ˜\ÙM˜™XØ]\ÙH›Ý[™][Û‰ÜÈXÛÙ\ˆ™Z™XÝÈZÝš\Ú[Û‰ÜÈ[œYYÜ›ÜJ˜ˆÜXËZ\Ø\K›Y8¡¤ˆQK‚˜ÔS‹PÓÓ‘“PÕË›YÍH8¡¤ˆ[›Ý\ˆš[\È[ˆšYÚ[›ÝØÛÛËÐÜž\ËØš\œÝØ]™K‚‚Š”[[™ÎŠˆÛÝ\˜Ù\ËÕšYÚ[›ÝØÛÛËÐÜž\ËØÚ\ÈQKœÝÚYÒLKœÝÚYÒLM‹œÝÚY˜˜\ÙMœÝÚY
+Y[™Ë]Û\˜[Ú]\ÜXÙK]Û\˜[T“\ØY™K]Û\˜[
+H[™ÔÌÌ‹œÝÚY[\™B”ÝÚY[Ý™X[Z[™ËXØ\X›K[\ÝYYØZ[œÝX›\ÚY‘È™XÝÜœÈÛˆ[^ˆ
+Š˜[\ÜÜž\ÒÚ]š\È›Ü˜šY[ˆ[ˆ]™\žH\™Ù]
+Š‹[˜ÛY[™ÈXXÓÔÈÛ™\ËˆÈš[™Ù\œš[\Ü^H\Ù\Â˜šYÚ[›ÝØÛÛË”ÒLM˜‚‚Š•ÚNŠˆÒKLH\È™YYY›ÜˆÓ•’QˆÔËU\Ù\›˜[YUÚÙ[‹ÚXÚ\È\œÙY[ˆšYÚ[\ØÛÝ™\žX8 %H\™K“[^]\ÝY\™Ù]ˆÒKLMˆ\È™YYY›ÜˆH[˜Üž\YÛÛ™šYÈ^Ü
+˜[™
+ˆ›ÜˆHÑ•HÔÒH[‚]ÜXËZ\Ø\K›Y0©Íˆ[™ÜXË\Ü›YÚ\™HšXHØ[Y\˜KÔ[”ÔÒLM˜ÈH[ˆ]\Ý™B˜ÛÛ\]X›H[ˆH[^\ÝÈ™H\ÝX›H][ˆ[ÝÚ[™ÈÜž\ÒÚ]›ÜˆÛ™HÙˆH™YHÛÝ[›YX[ˆÛÈÒKLMˆ[\[Y[][ÛœÈ[™H[[HÚ][ˆ^Ù\[Û‹ÚXÚ\ÈÝÈH\™Û™H\X\œË‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÌMŽH
+›ÜHÜž\ÒÚ]Ù[[˜ÙNÈØÜš\ËÛ[œÚ˜[œÈÜž\ÒÚ]œ™\Ë]ÚYHÚ]›È^Ù\[ÛœÊK‚‚ˆÈÈÈÈ‹LMÈ8 %˜[œÜÜ[™Ø[™]È™\]Y\ÝÜ™\ÜÛœÙH\\È]™H[ˆšYÚ[›ÝØÛÛØ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Ì‹8¡¤ˆ˜[œÜÜ[™Ø[ˆšYÚ[›ÝØÛÛØ
+š[š™XÝ[ÛˆÙX[HÛÂ˜šYÚ[TÐTX\ÝÈ™]™\ˆÝXÚH™]ÛÜšÈŠKˆÜXËZ\Ø\K›Y0©ÍŒH8¡¤ˆTÐTR˜[œÜÜ[™Ø˜TÐTT˜]Ô™\]Y\ÝTÐTT™\ÜÛœÙXXY\œØTÐTU\ØY[™X[™]ÈH[™H[[H[œÚYB˜TÐTPÛY[
+TÐTPÛY[“[™X
+KÚXÚTÐTT˜]Ô™\]Y\Ý[ˆ™Y™\™[˜Ù\Ë‚‚Š”[[™ÎŠˆšYÚ[›ÝØÛÛØXÛ\™\ÈXY\œØ™\]Y\Ý™\ÜÛœÙX[™X[™˜›ÝØÛÛ˜[œÜÜ[™ØˆTÐTPÛY[“[™X™XÛÛY\È\X[X\È[™HH[™X›Üˆ™XYXš[]H]˜Ø[Ú]\ËˆT“Ù\ÜÚ[Û’˜[œÜÜ
+H›ÙXÝ[ÛˆÛÛ™›Ü›X[˜ÙJH]™\È[ˆšYÚ[TÐTXÂ˜š^\™R˜[œÜÜ]™\È[ˆšYÚ[\ÝÚ]
+›Ý[ˆH\Ý\™Ù]8 %šYÚ[ÛÜ™U\ÝØ[™˜šYÚ[\[[™U\ÝØ™YY]ÛÊK‚‚Š•ÚNŠˆTÐTT˜]Ô™\]Y\Ý™Y™\™[˜Ú[™ÈTÐTPÛY[“[™XÚ[HTÐTPÛY[ÛÈ[‚˜[žHTÐTR˜[œÜÜ[™Ø\ÈH™\ÝY]\HÞXÛH]ÛÛ\[\È]™XYÈ\œšX›K[™B˜[œÜÜÙX[H\È[ÛÈØ[YžHšYÚ[\ØÛÝ™\žX	ÜÈÓ•’QˆÙ]Ý™X[U\šX˜[˜XÚÈ
+ŒKŒˆØ[™Y]HŠKÚXÚ]\Ý›Ý[\ÜšYÚ[TÐTXˆXY\œØTÐTPÚ[šÙY\ØY[™TÐTU\ØY[™X\™B›˜[YY[ˆÜXËZ\Ø\K›Y\[™^ˆ]
+Š›™]™\ˆXÛ\™Y[ž]Ú\™JŠˆ[ˆ]È0©ÌËŒM[™0©ÍHXÛ\™B[H\™K‚‚Š[Y[™ŠˆÜXËZ\Ø\K›Y0©ÍŒK0©ÍŒˆ[™\[™^‹‚‚ˆÈÈÈÈ‹LN8 %TY™\ÜØPPÐY™\ÜØTÝX›™]]™H[ˆšYÚ[›ÝØÛÛØÈTÒQ˜\È™[˜[YY
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËY\ØÛÝ™\žK›Y0©ÌÈ8¡¤ˆTY™\ÜØ
+R[Ì‹X˜XÚÙY
+H[™PPÐY™\ÜØ
+R[X˜XÚÙY
+H[‚˜šYÚ[›ÝØÛÛØÚ]H[œÝXÝ[ÛˆÈÜš]HšYÚ[›ÝØÛÛË’TY™\ÜØ[ˆš[\È][ÛÈ[\Ü˜™]ÛÜšØˆTÒUPÕT‘K›Y0©Ì‹8¡¤ˆTÒQ˜[ˆšYÚ[\ØÛÝ™\žX‚‚Š”[[™ÎŠˆTY™\ÜØPPÐY™\ÜØ[™TÝX›™]
+H™]È˜[YH›ÜˆTÒQ˜
+H\™H[XÛ\™Yš[ˆšYÚ[›ÝØÛÛØˆ[ˆ[žHš[H][\ÜÈ™]ÛÜšØÜ[H\B˜šYÚ[›ÝØÛÛË’TY™\ÜØ8 %™]ÛÜšË’TY™\ÜØ^\ÝÈ[™H[XšYÝZ]H\ÈHÛÛ\[H\œ›Üˆ]˜™\Ý[™HÚ[[Ü›Û™Ë]\H]ÛÜœÝ‚‚Š•ÚNŠˆØ[Y\˜K›\ÝÛ›ÝÛY™\ÜØÜÝÛXÞK˜Û\ÜÚYžXHÝÙY\[›™\‹HT”™XY\‹Bˆ˜Y™\ÜÈ™]\ÙYˆÝX\™[™šYÚ[ÛÜ™X	ÜÈ™XXÚXš[]HÚXÚÜÈ[™YY[KÜ[›š[™È›Ý\ˆ[Ù[\Ë‚˜TÝX›™]™XYÈ\ÈÚ]]\ÎÈTÒQ˜˜[Y\ÈH›Ý][Û‹›ÝH˜[YK‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©Ì‹ÈÜXËY\ØÛÝ™\žK›Y0©ÌÈ[™0©Íˆ
+TÒQ˜8¡¤ˆTÝX›™]
+K‚‚ˆÈÈÈÈ‹LNH8 %Ý™X[TÝ]\ÝXÜØÚ\H\ÈTÒUPÕT‘K›Y0©ÎÈšYÚ[•ÝÛœÈH[ÙXœ˜H
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Îš^\ÈHÚ\H
+ÌHšY[ËÛÙX›X
+NÈÜXË\›Y0©ÌLÈÝÛœÈB\]H[ÙXœ˜H[™[ÛÈXÛ\™\È]ÈÜXË\›Y0©ÌMŒˆ\È•˜XÚÔ™XÙZ]™\‹œÝ]\ÝXÜÎ‚”Ý™X[TÝ]\ÝXÜØ[™šYÚ[šY[Ø\Ú\ÈXÛÙT]Y]YQ\[‹‚‚Š”[[™ÎŠˆÚ\H\ˆTÒUPÕT‘K›Y0©Î™\›ÙXÙY™\˜˜][H[ˆ0©ÌËŒLXÛ\™Y[‚˜šYÚ[›ÝØÛÛØˆšYÚ[•ÝÛœÈ]™\žH\]H[NˆœÈUÓPH3¬HHŒLØœÈUÓPH3¬HHŒHÝ™\ˆBL\ÈÚ[™ÝËÙ^Yœ˜[YKZ[\˜[UÓPH3¬HHŒŒÜÜÈœ˜XÝ[ÛˆÝ™\ˆHˆÈÚ[™ÝËš]\ˆ\ˆ‘ÈÍMLKŽÛÛ™\Yœ›ÛH[Y\ØØ[H[š]ÈÈZ[\ÙXÛÛ™ËˆšYÚ[šY[ØÜš]\ÈXÛÙT]Y]YQ\˜œ˜[Y\Ñ›ÜY™Q\Ü^XXÛÙSZ[\ÙXÛÛ™ÔLÔNX[™\Ò\™Ø\™PXØÙ[\˜]Y›ÝYÚ˜•˜XÚÔ™XÙZ]™\‹\]QXÛÙT]Y]YQ\
+ÎŠX[™HÚX›[™ÈÙ]\œÈ[ˆ0©ÍŽK‚˜\Ò\™Ø\™PXØÙ[\˜]Y\ÈH
+Š›YX\Ý\™Y
+Šˆ˜[YHœ›ÛB˜Õ•XÛÛ\™\ÜÚ[Û”›Ü\RÙ^WÕ\Ú[™Ò\™Ø\™PXØÙ[\˜]YšY[ÑXÛÙ\˜™]™\ˆH™\]Y\ÝYÛ™H8 %˜‘PUT‘TË›YXZÙ\ÈÛ™\ÝHHÚ\[™È™\]Z\™[Y[‚‚ˆÈÈÈÈ‹LŒ8 %Xœ˜\žKšœÛÛ˜\ÈØÚ[XH
+ŠŒÊŠ‹Ú]HÙ\\˜]H]™[ËšœÛÛ˜š[™È
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÎKŒÈ8¡¤ˆXœ˜\žQØÝ[Y[˜Ý\œ™[ØÚ[XU™\œÚ[ÛˆHXˆÜXËXÛÜ™K›Y0©ÍH8¡¤‚œØÚ[XHËÚ]HÙ\\˜]H]™[ËšœÛÛ˜š[™Ë™XY[Û›HYˆHÛ‹Y\ÚÈØÚ[XH\È™]Ù\‹‚‚Š”[[™ÎŠˆ
+ŠœØÚ[XHËŠŠˆÜXËXÛÜ™K›Y\ÈH\œÚ\Ý[˜ÙHÝÛ™\ˆ[™Ø\ÈÛÛ\]Y\ÝÈ]Yš[™\ÂHŒx¡¤Œ¸¡¤ŒÈZYÜ˜][ÛˆÚZ[ˆ[™Hš^\™\ËˆHÝ\ˆ[\ÈÝ[™[˜Ú[™ÙY[™\™H™\Ý]Y˜™XØ]\ÙH^H\™HX\ÞHÈÜÙNˆ˜˜ZØ›Ý][Ûˆ™Y›Ü™H]™\žHÜš]NÈÜš]HÈHÚX›[™È[\š[H[‚˜š[SX[˜YÙ\‹œ™\XÙR][P]ÈL\ÈX›Ý[˜ÙHÚ]HÝX\˜[YYš[˜[Üš]H[™[ˆ]ØZ]Y›\Ú
+
+XÛ‚œ]Z]ÈØÚ[XU™\œÚ[ÛˆˆÝ\œ™[8¡¤ˆÝÜ˜YÙQ\œ›Ü‹œØÚ[XUÛÓ™]Ø
+Š›Ü[ˆ™XY[Û›H[™Üš]H›Ý[™ÊŠŽÂ˜›Ýš[\È[œ™XYX›H8¡¤ˆ]X\˜[[™HÈÛÜœ\ÛXœ˜\žKOTÓÎŒO‹šœÛÛ˜Ý\[\K[™
+[B\Ù\Š‹ˆ]™[È]™H[ˆ]™[ËšœÛÛ˜
+\ÝLš[™ÊHÛÈH\™ÙH]™[ÙÈØ[ˆ™]™\ˆ[™[™Ù\ˆB˜Ø[Y\˜H\Ýˆ™XÛÜ™[™ËÜÛ˜\ÚÝ›Û\œÈ\™H™XXÚY›ÝYÚ
+ŠœÙXÝ\š]K\ØÛÜY›ÛÚÛX\šÜÊŠˆÝÜ™Y[‚˜›Û\›ÛÚÛX\šÜØ8 %H˜\™H]Ýš[™ÈÚ[[H˜Z[ÈÈÜš]H[™\ˆHØ[™›Þ‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÎKŒË‚‚ˆÈÈÈ‹ŒˆH[K\Ú^™HÛXÞH8 %Û™HX›KÛ™H[š]‚ˆÈÈÈÈ‹LŒH8 %Û™HÛXÞHX›KÙ^YYÛˆ
+Š[HÚÜYÙH[ˆ˜XÚÚ[™È^[ÊŠˆ
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆ™YHY™™\™[X›\È
+Š˜[™™YHY™™\™[[š]ÊŠ‹‚‚Šˆ‘PUT‘TË›Y‹TÕ‹LŽˆ
+ŠœÚÜYÙH[ˆ\ÚXØ[
+ŠˆHZ[ŠÚYZYÚ
+H0åÈ˜XÚÚ[™ÔØØ[Q˜XÝÜ˜‚ˆXÚÙ]Èx $ÎMX”QÈÛH‹M¸ $ÍÎXÝX‹8 $ÌLÎXÝX‹]Ú]\›Û[Ý[Û‹8¢iLLXZ[ŽÈ\ÂˆY[‹ÛØØÛYY8¡¤ˆ]\ÙYˆÍL\ÈÙ[
+ÈMH	HXYX˜[™ÈÝÚ]ÚØ]YÛˆH™]ÈÝ™X[IÜÈš\œÝˆÙ^Yœ˜[YHÚ]HML\ÈÜ›ÜÜÙ˜YK™]™\ˆH›XÚÈœ˜[YK‚ŠˆÜXË]šY[Ë\\[[™K›Y0©ÌL‹Nˆ
+Š˜˜XÚÚ[™È
+ÚY
+ŠŠ‹XÚÙ]È8¢iLMŒXZ[‹Ù[MŒ8 $ÌMNNXˆXZ[‹ZY‹x¢i][\ËY[ÙK\ÝX‹8 $ÎMNXÝX‹Î8 $ÍŒÎXÝXˆœËXØ\YMKŒ8 $ÌÎØÝX‚ˆÙ^Yœ˜[Y\Ë[Û›KŒ”QÈÛˆÎÈÚYX˜\ˆHËÙ™œØÜ™Y[ˆMHËØØÛYY]\ÙY‚ŠˆÜXËXÛÜ™K›Y0©ÎNˆ
+ŠÝ[˜XÚÚ[™È^[ÊŠ‹Û\ÜÙ\È
+Šx $ÑŠŠŽˆ8¢iLWÍLÌXZ[‹ˆÍLÌ8 $ÌWÍNWÎNNXÝX‹[Ü‹[XZ[‹ŒÌ8 $ÌÍWÎNNXÝXˆœËXØ\YMKL—Ì8 $ÍNWÎNNXˆÙ^Yœ˜[YK[Û›KL—Ì”QÈÛˆËY[ˆ8¡¤ˆ]\ÙYˆMH	H
+ÈÍL\È\Ý\™\Ú\Ë‚‚Š”[[™È8 %H[š]Šˆ
+ŠH[IÜÈÚÜYÙH[ˆ˜XÚÚ[™È
+]šXÙJH^[ÊŠ‹K™K‚˜Z[Š^[Ú^™KÚY^[Ú^™KšZYÚ
+XÚ\™H^[Ú^™HH›Ý[™È0åÈ˜XÚÚ[™ÔØØ[Q˜XÝÜ˜›Ý[™YÂš[YÙ\œËˆÜXË\™[™\‹›Y[™XYHXÛ\™\È[T™[™\”Ý]Kœ^[Ú^™XH]]Üš]]]™H[œ]œX›\ÚY›ÝYÚ[JÎ™YÚ[™ÙT^[Ú^™Nš\Õš\ÚX›NŠX[™]Ø\œšY\È
+Š˜›Ý
+Šˆ[Y[œÚ[ÛœËÛÂ™]™\žHØ[™Y]H[š]\È\š]˜X›Hœ›ÛH]8 %\È\ÈH˜[Z[™È›Ø›[K›ÝHYX\Ý\™[Y[›Ø›[K‚‚”ÚÜYÙH™X]È˜XÚÚ[™È
+ÚY
+ˆ™XØ]\ÙHHK]\[HÛˆHÜ˜Z]\Ü^H[™HJÍX\›ÈÙ[\™B˜›ÝÚY\ˆ[ˆ^H\™H[[™]\ÈH
+œÚÜ\Šˆ[Y[œÚ[Ûˆ]XÚY\ÈÚ]\ˆHÌŒ[[™BœÝX‹\Ý™X[H\È[›ÝYÚ[™\ÈÈÛÚÈÚ\œˆÚÜYÙH™X]È
+Ý[^[Êˆ8 %\Ü]B˜ÜXËXÛÜ™K›Y	ÜÈ\™Ý[Y[]›Û‹\Ü]X\™HÙ[Èœ™XZÈÚY8 %™XØ]\ÙHÝ[^[ÈÛÛ™›]\ÈBŒNLŒ0åÌLÍH]\˜›ÞÝš\
+NHÈ
+HÚ]H0åÍMÙ[
+NHÈ
+K[™ÜÙHÛÈ™YYÜÜÚ]B™XÚ\Ú[ÛœËˆÜXËXÛÜ™K›Y	ÜÈÝÛˆ0©ÌMËˆ\ÝˆÛÛ˜YXÝÈ]ÈÝÛˆ0©ÎHX›HžHÛ™HÛ\ÜÈ[ˆ
+Š˜›Ý
+Š‚™\™XÝ[ÛœÈ
+]Ø[ÈMŒ0åÍMÛ\ÜÈÈÚ\™HHX›IÜÈÝÛˆ^[\HØ[È]Û\ÜÈ‹[™0åÌÌ˜Û\ÜÈÚ\™HHX›IÜÈÝÛˆ^[\HØ[È]Û\ÜÈÊKÚXÚ\È]šY[˜ÙHÜÙH›Ý[™\šY\ÈÙ\™H›ÝœÙ]YˆÛ\ÜÈ]\œÈ\™HÙ\™XØ]\ÙHÝ™X[PÛÛÜ™[˜]Ü˜	ÜÈ[ˆ\ÈH\™H[˜Ý[Ûˆ[™˜Û\ÜÐ—Ü›Û[Ý\ÕÚ[”ÝX’\ÔÛÙ\•[•[X\ÈH˜\ˆ™]\ˆ\Ý˜[YH[ˆÌLÎWË‹‹˜‚‚•[ˆHÛÈ^\È\™HÙ\\˜]YÚXÚ\ÈÚ]H™YHX›\ÈÙ\™H™X[HÛÛ™›][™Î‚‚ŠŠ^\ÈH8 %[HÚ^™HXÚY\ÈÚXÚÝ™X[HÈ[ŠŠˆÛ™HX›K‘PUT‘TË›Y	ÜÈ™\ÚÛËÚ]˜ÜXËXÛÜ™K›Y	ÜÈÛ\ÜÈ]\œÈ]XÚYÛÈHÛÙH[™HÜXÜÈØ[ˆ˜[YHHXÚÙ]Î‚‚ŸÛ\ÜÈ[HÚÜYÙH
+˜XÚÚ[™È
+HÛÝ\˜ÙH›Ý\ÈŸKK_KK_KK_KK_Ÿ
+ŠJŠˆ8¢iHL
+Š“XZ[ŠŠˆÝ™X[HK]\[ØÜ™Y[‹TšY[ÈØ[Ÿ
+ŠŠŠˆ8 $ÈLÎH
+Š”ÝXŠŠ‹›Û[ÝYÈXZ[ˆYˆHÝXˆÝ™X[IÜÈÛÙYZYÚÍH0åÈ[HÚÜYÙH
+Š˜[™
+ŠˆHXÛÙHYÙ]YZ]È]]›ÚYÈš\ÚX›HÛÙ™\ÜÈ]ðåÌÈŸ
+ŠÊŠˆMˆ8 $ÈÎH
+Š”ÝXŠŠˆH0åÍØ\ÙHŸ
+Š‘
+ŠˆH8 $ÈMH
+Š’TÐTH”QÈÛ
+Š‹›ÈXÛÙHÙ\ÜÚ[Ûˆ][ZXÜ›Ë][X›˜Z[ÈŸ
+Š‘JŠˆY[ˆÈØØÛYYÈÚ[™ÝÈZ[š[Z^™Y
+Š”]\ÙY
+Šˆ8 %•ÔUTÑXÙ\ÜÚ[ÛˆÙ\[]™KÜ›ˆÝÛˆY\ˆŒÈ™XÛÜ™[™Ë\š[Üš]HÝ™X[\È\™H^[\
+‹QPËLˆ[HJH‚’”QË\ÛØY[˜ÙH›ÜˆÛ\ÜÈ[™›Üˆ›Û‹][HÝ\™˜XÙ\Ëœ›ÛHÜXË]šY[Ë\\[[™K›Y‚‚ŸÝ\™˜XÙH[\˜[ŸKK_KK_ŸÝYÙH[H[ˆÛ\ÜÈHÈŸÚYX˜\ˆ›ÝÈ[X›˜Z[HÈŸÙ™œØÜ™Y[ˆÈY[KX˜\ˆ[X›˜Z[MHÈ‚ŠŠ^\Èˆ8 %XÛÙKXYÙ]™\ÜÝ\™HXÚY\ÈÝÈ\™È[ˆHÝ™X[H[ÝH[™XYH]™KŠŠˆ\È\ÂÚ\™HÜXË]šY[Ë\\[[™K›Y	ÜÈš[™\ˆ[™ÜÈ]™K[™^H\™H
+››Ý
+ˆH[˜Ý[ÛˆÙˆ[HÚ^™N‚‚˜›Ü›X[8¡¤ˆš[H8¡¤ˆœÐØ\
+MJH8¡¤ˆÙ^Yœ˜[Y\ÓÛ›H8¡¤ˆÚÚ\ÒÙ^Yœ˜[YH8¡¤ˆ[[ÝUÔÝXˆ8¡¤ˆœYÔÛ8¡¤ˆ]\ÙY‚‘[žKÙ^]›ÜˆHš\œÝ›Ý\ˆ[™ÜÈ\ÈH]Y]YKY\Û][˜ÞHY\ˆ[‚˜ÜXË]šY[Ë\\[[™K›Y0©ÌLˆ
+\UÓPHËŒÈKŒ][˜ÞHŒŒÈ\ËHÈ™XÛÝ™\žH\Ý\™\Ú\ÊNÂH\Ý™YH\™HÝ™X[PÛÛÜ™[˜]Ü˜[[Ý[ÛœÈ[™\ˆ‹QPËL˜ˆ]™\žH[™È™[ÝÈ›Ü›X[]\Ý™BŠŠš\ÚX›JŠˆ
+[H˜YÙJH[™
+Š™^Z[™Y
+Šˆ
+[œÜXÝÜˆ›ÝJH8 %Ú[[YÜ˜Y][Ûˆ\ÈHY™XÝ‚‚ŠŠ’\Ý\™\Ú\Ë›Ý^\ÎŠŠˆHÚ[™ÙH™\]Z\™\ÈH™]ÈXÚÙ]ÈÛ›Üˆ8¢iH
+ŠÍL\ÊŠˆ[™Hš]š[™Â˜[YHÈ[Ý™H8¢iH
+ŠŒMH	JŠˆ\ÝH™\ÚÛˆHÛÛ[[Ý\ÈÚ[™ÝÈ˜YÈœ›ÛH0åÍÈK]\]\Ý›ÙXÙBŠŠ˜][ÜÝÛ™JŠˆÝ™X[HÝÚ]ÚÈH\Ý]™\^\ÈHŒYœ˜[YH™\Ú^™H[š[X][Ûˆ[™\ÜÙ\È\È\Â›X[™]ÜžKˆHÝÚ]Ú™[™\œÈHÛÝ™X[H[[H™]ÈÝ™X[IÜÈš\œÝÙ^Yœ˜[YHXÛÙ\Ë[‚˜Ü›ÜÜÙ˜Y\ÈÝ™\ˆML\Ëˆ\™H\È›È›XÚÈœ˜[YK]™\‹‚‚Š•ÚNŠˆ‘PUT‘TË›YÝÛœÈH™[X\ÙHØ]\È[™HXØÙ\[˜ÙHÜš]\šXK]ÈX›H\ÈB˜Ý\ÝÛY\‹]š\ÚX›H™Z]š[Ý\‹[™]È›Ý\ˆXÚÙ]ÈX\Û™K]Ë[Û™HÛÈH›Ý\ˆÝ™X[HÛÝ\˜Ù\È]˜XÝX[H^\ÝÛˆHZÝš\Ú[Ûˆ]šXÙH
+XZ[ˆÈÝXˆÈ\™[Ü‹R”QÈÈ›Û™JKˆÜXË]šY[Ë\\[[™K›Y	ÜÂ™^˜H[™ÜÈ\™HÙ[Z[™[H˜[XX›H8 %[ˆœÈØ\[™HÙ^Yœ˜[Y\Ë[Û›H[ÙH\™HHšYÚ™\ÜÛœÙ\ÈÂŠ˜YÙ]
+ˆ™\ÜÝ\™HÛˆHM‹][HØ[8 %]^™\ÜÚ[™È[H\ÈÚ^™HXÚÙ]ÈXYHHÎ[H™Z]™B™Y™™\™[Hœ›ÛHHÎ[K\[™[™ÈÛˆÚXÚØÝ[Y[[ÝH™XYˆÙ\\˜][™ÈH^\ÈÙY\È]™\žB›YXÚ[š\ÛH[™YH]]ÜœÈØ[Y[™™[[Ý™\ÈHÛÛ˜YXÝ[Û‹ˆÜXËXÛÜ™K›Y	ÜÈÛ\ÜÈ]\œÈ\™BšÙ\™XØ]\ÙHÝ™X[PÛÛÜ™[˜]Ü˜	ÜÈ[ˆ\ÈH\™H[˜Ý[ÛˆÚÜÙH\Ý˜[Y\È™XY]XÚ™]\ˆ\Âˆ˜Û\ÜÐ—Ü›Û[Ý\ÕÚ[”ÝX’\ÔÛÙ\•[•[Hˆ[ˆ\ÈÌLÎWË‹‹ˆ‹‚‚•\™H\È
+Š››ÈÛ\ÜÈŠŠŽˆÜXËXÛÜ™K›Y	ÜÈÚ^]Ø^HÜ]ÛÛ\Ù\ÈÈš]™H™XØ]\ÙH]È™œËXØ\YMH‚˜[™šÙ^Yœ˜[YK[Û›Hˆ[™ÜÈ[Ý™HÈ^\È‹Ú\™H^H™[Û™Ë‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©ÌL‹H
+™\XÙHHÚ^™HX›HÚ]^\Èˆ[™HÚ[\ˆ\™JNÂ˜ÜXËXÛÜ™K›Y0©ÎH
+Û\ÜÙ\Èx $ÑˆÛˆÝ[^[È8¡¤ˆx $ÑHÛˆÚÜYÙJH[™0©ÌMËˆ\Ýˆ
+š^HÛÂœÚYYÛ\ÜÈ]\œÊNÈ‘PUT‘TË›Y‹TÕ‹Lˆ
+YHÛ\ÜÈ]\œËH”QËXØY[˜ÙHÝX‹]X›K˜[™HÚ[\ˆÈ^\ÈŠK‚‚ˆÈÈÈÈ‹LŒˆ8 %XÛÙHYÙ]ˆ
+ŠŒJŠˆ\HÚ[XÛÛ‹
+ŠŒLJŠˆ[[ÈXÛÙPYÙ]\È[ˆšYÚ[šY[Ø
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXË]šY[Ë\\[[™K›Y0©ÌLˆ8¡¤ˆœÙYY
+ŠŒŒJŠˆÈÙ\ÜÚ[ÛœÈÛˆ˜\ÙHLK[[YKXØ[Xœ˜]Y‹˜XÛÙPYÙ]\ÈHÛØ˜[XÝÜ˜[ˆšYÚ[šY[Ø[™HÚ[™ÛHYZ\ÜÚ[Ûˆ]]Üš]K‚˜‘PUT‘TË›Y‹QPËLˆ8¡¤ˆ•Ý[YÙ]ˆ
+ŠŒJŠˆÛˆ\HÚ[XÛÛ‹
+ŠŒLJŠˆÛˆ[[]XÝY]›][˜ÚšXHÞ\ØÝž[˜[YJšË›Ü[Û˜[˜\›MŠX\ÈÛÜ™HÛÝ[È\Ù\‹[Ý™\œšYX›H[ˆÙ][™ÜÈ‹‚‚Š”[[™ÎŠˆH[X™\œÈ\™H
+ŠŒHÛˆ\HÚ[XÛÛˆÈLHÛˆ[[
+Š‹\Ù\‹[Ý™\œšYX›KÚ]H\™˜ÛÛ˜Ý\œ™[\Ù\ÜÚ[ÛˆØ\Ùˆ
+ŠŒ
+Šˆ•XÛÛ\™\ÜÚ[Û”Ù\ÜÚ[Û˜È™YØ\™\ÜÈÙˆKˆ[[YHØ[Xœ˜][ÛˆX^BŠ›ÝÙ\ŠˆHÙYYY\ˆYX\Ý\š[™Ë™]™\ˆ˜Z\ÙH]X›Ý™HHÙYYˆHHHLÌÂ˜ÛÜÝHÙZ[
+
+ÚY0åÈZYÚ0åÈœÊHÈ
+NLŒ0åÈL0åÈÌ
+H0åÈ
+HÈ
+ŒHHÜ˜[[\š]JKˆÝÛ™\œÚ\š\È[˜Ú[™ÙYˆXÛÙPYÙ]\ÈHÛØ˜[XÝÜˆXÝÜ˜[ˆšYÚ[šY[ØHÚ[™ÛHYZ\ÜÚ[Û‚˜]]Üš]NÈÝ™X[PÛÛÜ™[˜]Ü˜Ý\Y\Èš[Üš]KÛÛœÝ[Y\È[[Ý[ÛœË[™ÙY\È
+Š››ÊŠˆYÙ]Ùˆ]Â›ÝÛ‹ˆšYÚ[ÛÜ™X™XXÚ\È]Û›H›ÝYÚ›ÝØÛÛXÛÙPYZ][™Ø
+0©ÍŽJKÚXÚ\ÈÚ]XZÙ\Â˜Ý™X[PÛÛÜ™[˜]Ü˜\ÝX›HÚ]Ý]šY[ÕÛÛ›Þ‚‚Š•ÚNŠˆ‘PUT‘TË›Y[X™\œÈ\™H™[X\ÙHØ]\ÈÚ][ˆ[[][™HÙ][™ÜÈÛÛ›Û™Z[™[NÂ˜ÜXË]šY[Ë\\[[™K›Y	ÜÈŒØ\ÈH[™][™YÙYY›ÜˆÛ™HXXÚ[™KˆÙY\[™ÈHÙ\ÜÚ[ÛˆØ\]œ™\Ù\™\ÈH™X[ÛÛœÝ˜Z[ÜXË]šY[Ë\\[[™K›YØ\È›ÝXÝ[™È
+šY[ÕÛÛ›ÞÝÜÈÜ™X][™ÂœÙ\ÜÚ[ÛœÈÛ™È™Y›Ü™HHHYÙ]\È^]\ÝYÛˆÛX[Ý™X[\ÊK‚‚”š[Üš]HÜ™\‹^XÝH\È‘PUT‘TË›Y‹QPËLˆ
+Y\Èœ›ÚÙ[ˆžH\ØÙ[™[™ÈÜ™\’[™^
+N‚˜›ØÝ\ÙYˆš\ÚX›KZ[‹[XZ[‹]Ú[™ÝÈˆØ[ˆTˆ™XÛÜ™[™È
+™]™\ˆ[[ÝY™]™\ˆØØÛ\Ú[Û‹\]\ÙY
+H‚›Ù™œØÜ™Y[‹Ü™]Ø\›HˆÚYX˜\ˆ[X›˜Z[
+”QÈÛJX‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©ÌL‹‚‚ˆÈÈÈ‹ŒÈÝÛ™\œÚ\Ùˆ™Z]š[Ý\‚‚ˆÈÈÈÈ‹LŒÈ8 %šYÚ[TÐTK’ZÝš\Ú[Û•T“\ÈHÚ[™ÛH•Ô]Z[\‹[™]]\Ý^ÜÙHH
+Š›Y\ŠŠˆ
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXËY\ØÛÝ™\žK›Y0©ÌLˆÛZ[\ÈH™[™Üˆ]X›H\È™]\ØX›NÈÜXËZ\Ø\K›Y0©ÌL‹™XÛ\™\ÈZÝš\Ú[Û•T“HÚ[™ÛH•Ô]Z[\ˆŽÈÜXË\Ü›Y0©ÌLÛÛZ[œÈH]]Üš]]]™Bœ\‹Yš\›]Ø\™HT“X›K‚‚Š”[[™ÎŠˆZÝš\Ú[Û•T“[ˆšYÚ[TÐTX\ÈH
+Š›Û›JŠˆ[\[Y[][Û‹ˆÜXË\Ü›Y0©ÌL	ÜÈX›H\Â™ØÝ[Y[][ÛˆÙˆHÚ\™H›Ü›X]Ë›ÝHÙXÛÛ™[\[Y[][Û‹ˆšYÚ[\ØÛÝ™\žXÙY\ÈÛ›HHÛØ\œÙB™[™Üˆ8¡¤ˆš\œÝYÝY\ÜË\]X\]™YYÈ›Üˆ
+™š[™Ù\œš[[™Êˆ[™]\Ý™]™\ˆ™H\ÙYÈZ[HÝ™X[B•T“8 %[™›Ü˜ÙYžHHZ\ÜÚ[™ÈšYÚ[\ØÛÝ™\žH8¡¤ˆšYÚ[TÐTXYÙK‚‚™XØ]\ÙHŒKŒˆ™\]Z\™\ÈH
+Šœ›Ø™HY\ŠŠ‹ZÝš\Ú[Û•T“]\Ý^ÜÙHØ[™Y]\Ë›ÝÛ™H]‚‚˜ÝÚYœX›XÈÝ]XÈ[˜ÈØ[™Y]\ÊÚ[›™[ˆÚ[›™[Q]X[]NˆÝ™X[T]X[]JHOˆÔ•Ô]Ø[™Y]WB˜‚š[ˆ^XÝHHŒKŒˆÜ™\ˆ
+ÔÝ™X[Z[™ËÐÚ[›™[ËÞØÚLÜ_XÔÝ™X[Z[™ËÐÚ[›™[ËÞØÚX˜ÔÝ™X[Z[™ËÝ˜XÚÜËÞØÚLXÚØÚØÚKÞÛXZ[ŸÝXŸKØ]—ÜÝ™X[XÛ\YÍØÚØÚKÜÝX‹Ø]—ÜÝ™X[X[ˆHÓ•’QˆÙ]Ý™X[U\šXX\šÙ\ŠKˆZÝš\Ú[Û•T“™]\›œÈ
+Šœ]Ýš[™ÜÊŠŽÂ˜šYÚ[ÛÜ™XÛÛ\ÜÙ\È[H[È[ˆ•ÔT“™XØ]\ÙHšYÚ[•Ô\È›ÈYÙHÈšYÚ[TÐTX[™]\Ý››ÝØZ[ˆÛ™KˆHÚ[›š[™È[\]H\È\œÚ\ÝYÛˆHØ[Y\˜X™XÛÜ™ÛÈHY\ˆ[œÈ][ÜÝ›Û˜ÙH\ˆ]šXÙK]™\‹‚‚Š[Y[™ŠˆÜXËY\ØÛÝ™\žK›Y0©ÌLŽÈÜXË\Ü›Y0©ÌL
+X\šÈHX›H[™›Ü›X]]™JNÂ˜ÜXËZ\Ø\K›Y0©ÌL‹
+YØ[™Y]\Ø
+K‚‚ˆÈÈÈÈ‹L8 %HÙ^Yœ˜[YK\™\]Y\ÝÚZ[ˆ\Èš^Y[™\È›ÈÚÜÝ]
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË\›Y0©ÍÈ8¡¤ˆšYÚ[TÐTX]\Ý^ÜÙH™\]Y\ÝÙ^Qœ˜[YJÚ[›™[QŠX[™]\ÈBœš[X\žH™\ÜÛœÙHÈH]XÝYØ\ˆÜXË]šY[Ë\\[[™K›Y0©ÌLˆ8¡¤ˆšYÚ[ÛÜ™XÝÛœÈHÚ\™HØ[[™˜šYÚ[šY[ØÛ›H\ÚÜÈšXH[ˆ[š™XÝYÛÜÝ\™K‚‚Š”[[™ÎŠˆ^HÛÛ\ÜÙNÈHÚZ[ˆ\È›Ü›X]]™H[™\È^XÝH\ÙH[šÜÎ‚‚˜•šYÚ[•[Z]È\XÚÙ]^™\‘]™[šÙ^Yœ˜[YS™YYY
+™X\ÛÛŽŠH8¥ 8¥$•šYÚ[šY[È[Z]ÈXÛÙQ]™[šÙ^Yœ˜[YS™YYY
+™X\ÛÛŽŠH8¥ 8¥)ˆ8¥'8¥ 8¥­ˆÝ™X[PÛÛ›Û\ˆ
+šYÚ[ÛÜ™JBˆ8¥ ˆ8¥'8¥ 8¥­ˆTÐTQ]šXÙTÙ\ÜÚ[Û‹œ™\]Y\ÝÙ^Qœ˜[YJÚ[›™[ŠHÜš[X\žWBˆ8¥ ˆ8¥%8¥ 8¥­ˆ•ÔÛÛ[X[™œÙ]\˜[Y]\ŠšÙ^Qœ˜[YT™\]Y\ÝŠHÙ˜[˜XÚ×B•šYÚ[™[™\ˆ™]™\ˆ\XÚ\]\Ëˆ8¥ 8¥&˜‚˜šYÚ[•8¡¤ˆšYÚ[TÐTX[™šYÚ[šY[È8¡¤ˆšYÚ[TÐTX\™H
+Š™›Ü˜šY[ˆYÙ\ÊŠŽÈÚ\š[™ÈÛ™H\ÈBœ™]šY]ËX›ØÚÚ[™ÈY™XÝ]™[ˆÝYÚ]ÛÝ[ÛÛ\[H›ÝYÚšYÚ[ÛÜ™X	ÜÈ\[™[˜ÞH\Ýˆ˜]H[Z]‚˜][ÜÝÛ™HÙ^Yœ˜[YH™\]Y\Ý\ˆØ[Y\˜H\ˆ
+ŠŒˆÊŠ‹[™][ÜÝH[ˆ[žHÌË[ˆÝÜ\ÚÚ[™È[™™\ØØ[]HÈH™XÛÛ›™XÝ8 %HÙ^Yœ˜[YK\™\]Y\ÝÝÜ›H\ÈÝÈ[ÝHXZÙH[ˆ•”ˆ[œ™\ÜÛœÚ]™K‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©ÌLˆ
+˜[YHHÚZ[ŠNÈÜXË\›Y0©ÍÈ
+Ý]H]šYÚ[•Û›BŠ™[Z]ÊŠK‚‚ˆÈÈÈÈ‹LH8 %]]ØÚÛÝ]ˆ
+ŠŒŠŠˆÜ™Y[X[Y\È\ˆ]šXÙH\È\›Z[˜[ÛˆÛ™HÚ\™YÛÝ[\ˆ
+Š–ÔÑSPS•PËØY™]WJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍËH8¡¤ˆX^
+ŠŒŠŠˆ]][XØ]Y][\ËÛ™HÚ\™Y\‹Y]šXÙHÛÝ[\‚˜XÜ›ÜÜÈ•Ô[™TÐTKˆÜXË\Ü›Y0©ÌMŒˆ8¡¤ˆ•ÔÙ\ÜÚ[ÛÛÛ™šYË›X^]]][\Ô\”™\]Y\ÝH‚˜ÜXËZ\Ø\K›Y0©ÍÈ8¡¤ˆ\™X›ØÚÈY\ˆ
+ŠŒŠŠˆÛÛœÙXÝ]]™H˜Z[\™\È\ˆ
+ÜÝ\Ù\›˜[YJKXœÛÛ]B˜XÜ›ÜÜÈ[[™\ËˆÜXËXÛÜ™K›Y8¡¤ˆ\›Z[˜[Y\ˆÛÈœ™\Ú[›Û˜ÙH\ËÚ]][ÜÝ
+ŠŒÊŠˆÜ™Y[X[œ›Ø™\È\ˆÜÝ
+ØXØÛÝ[\ˆLZ[]\Ë‚‚Š”[[™ÎŠ‚‚ŒKˆHXÚÜÙHÕÕËP]][XØ]X›Û˜ÙHY™™\œÈœ›ÛHHÛ™HÙH\ÙYÜˆÚXÚØ\œšY\ÂˆÝ[O]YX\È
+Š››Ý
+ŠˆH˜Z[YÙÚ[‹ˆ™]žH[[YYX][KÛ˜ÙKˆ]Ù\È›ÝÛÝ[‚Œ‹ˆHX[œÝÙ\š[™ÈH™\]Y\Ý][™XYHØ\œšYYH]\ÚX›H]]Üš^˜][Û˜XY\ˆÛÝ[È\ÈÛ™Bˆ][\ˆH
+ŠœÙXÛÛ™
+ŠˆÝXÚX8¡äˆ\›Z[˜[]]™Z™XÝYÈ]][XØ][Û‘˜Z[Yˆ›È™]žHÛ‚ˆ[žHØÚY[K]™\‹[[H\Ù\ˆÝ\Y\ÈH™]ÈÜ™Y[X[‚ŒËˆX^]]][\Ô\”™\]Y\Ý\È
+ŠŒŠŠ‹›Ý‚ˆ
+Š“Û™HÛÝ[\ˆ\ˆ]šXÙJŠ‹[žHÝ™X[PÛÛÜ™[˜]Ü˜Ú\™YžHÝ™X[PÛÛ›Û\˜[™]™\žBˆTÐTQ]šXÙTÙ\ÜÚ[Û˜[™KÛÈ•Ô[™TÐTHØ[››ÝXXÚ\›ˆ][\È[™\[™[K‚KˆÑUÒTÐTKÔÙXÝ\š]KÝ\Ù\ÚXÚØ\ÈHÚX\™KY›YÚ›Ø™H™Y›Ü™H[žH™XÛÛ›™XÝÛˆHØ[Y\˜BˆÚÜÙHÜ™Y[X[ÈÙ\™H\ÝY]Y™XØ]\ÙH]™\ÜÈØÚÛÝ]Ý]H[™™[XZ[š[™È][\Ëˆ]\Âˆ˜]K[[Z]YÈ
+ŠŒÈ›Ø™\È\ˆ
+ÜÝXØÛÝ[
+H\ˆLZ[]\ÊŠ‹‚‹ˆ]]˜Z[\™H
+Š›™]™\ŠŠˆ]]Ë\™]šY\È[™[Ø^\È›Û\Ëˆ™]žQ\ÜÜÚ][Û‹œ™]žPY\•\Ù\XÝ[Û˜‚‚Š•ÚNŠˆZÝš\Ú[Ûˆš\›]Ø\™HØÚÜÈ[ˆXØÛÝ[›ÜˆÌZ[]\ÈY\ˆHÛÛœÙXÝ]]™H˜Z[YÙÚ[œÂŠ[YØ[ÙÚ[“ØÚØ
+K[˜ÛY[™ÈHØ[Y\˜IÜÈÝÛˆÙXˆRKˆHX][\YÙ]ÛˆÛÈ[™\[™[˜ÛÝ[\œÈ\È][\ËÚXÚØÚÜÈH\Ù\ˆÝ]ÙˆZ\ˆÝÛˆØ[Y\˜Kˆ]\ÈHÚ[™ÛHÛÜœÝœÜÜÚX›H˜Z[\™HÙˆ\È\[™]\ÈHÛË[[™Hš^‚‚Š[Y[™ŠˆÜXË\Ü›Y0©ÌMŒˆ[™0©Í‹È
+8¡¤ˆŠK‚‚ˆÈÈÈÈ‹Lˆ8 %šYÚ[•Ô[Z]È•Ô˜XÚÕ[Z[™ØÈšYÚ[•ÝÛœÈ[[Y\Ý[\X]È
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXË\Ü›Y0©ÎKð©ÌNH8¡¤ˆšYÚ[•Ô™]™\ˆZ[ÈHYYXU[Y\Ý[\È][Z]Â˜•Ô˜XÚÕ[Z[™Ø
+˜]ÈÙ\X[YXÛØÚÔ˜]XXœÛÛ]TÝ\ØØ[X˜\Ô˜]PÛÛ›Û\ØX›Y^T™\ÜÛœÙR[œÝ[
+KˆÜXË\›Y0©ÌLH8¡¤ˆÝÛœÈH[Ü˜\\‹™\Ù[][Û‚˜ÛØÚÈ[™‚‚Š”[[™ÎŠˆYÜY\ÈÝ]YˆšYÚ[•Ô\™›Ü›\È
+Š››ÊŠˆ[Ù[\ˆ\š]Y]XÈÛˆ•[Y\Ý[\È[™›™]™\ˆÛÛ\\™\È[YXXÜ›ÜÜÈ˜XÚÜËˆšYÚ[•™K][Ü˜\ÈHÌ‹Xš]Ü˜\\›Ý[™™Y›Ü™HZ[[™Â˜[žHYYXU[Y\Ý[\ÛÈšYÚ[šY[Ø™]™\ˆÙY\ÈHÜ˜\ˆH™\Ù[][ÛˆÛØÚÈ
+Z[‹Yš[\ˆ
+È
+H\ÂŠŠ››Ý
+Šˆ\ÙYÈXÙH]™HÝ]]8 %]™HXÚ[™È\ÈU”Ø[\PY™™\‘\Ü^S^Y\˜
+Â˜\Ü^R[[YYX][XÚ]›È[YX˜\ÙKˆ]\È\ÙY›ÜˆH][˜ÞH\Ý[X]K›ÜˆKÕˆÙ™œÙ]™\Ü[™Ë˜[™›Üˆ™XÛÜ™Y^X˜XÚË‚‚˜•Ô˜XÚÕ[Z[™Ëœ^T™\ÜÛœÙR[œÝ[\ÈHYYXR[œÝ[\ˆ‹LË‚‚ˆÈÈÈÈ‹LÈ8 %]™\žH\Þ[˜ÔÝ™X[X\ÈH˜XÝÜžHÝ™\ˆÛ™H›Ý[™Yœ›ØYØ\Ý\ˆ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËXÛÜ™K›Y8¡¤ˆ]™\žH\Þ[˜ÔÝ™X[XXØÙ\ÜÛÜˆ\ÈH˜XÝÜžHÝ™\ˆHÚ\™Y›Ý[™Yœ›ØYØ\Ý\‹›™]™\ˆ[˜›Ý[™YˆÜXË]šY[Ë\\[[™K›Y8¡¤ˆ\Þ[˜ÔÝ™X[KÛÛ[X][Û˜\ÈHÛ›HØ[˜Ý[Û™Y˜œšYÙHÝ]ÙˆÈØ[˜XÚÜËˆTÒUPÕT‘K›Y0©ÌMŒL8¡¤ˆ]™\žH\Þ[˜ÔÝ™X[XØÝ[Y[È]ÈY™™\š[™ÂœÛXÞH]HÜ™X][ÛˆÚ]K‚‚Š”[[™ÎŠˆ[™YKÛÛXš[™Y[™XYHYXÚ[šXØ[‚‚ŠˆH›Ü\HÙˆH›Ü›H˜\ˆ]™[Îˆ\Þ[˜ÔÝ™X[OO˜\È
+Š™›Ü˜šY[ŠŠˆ8 %HÝÜ™YÝ™X[H\È^XÝBˆÛ™HÛÛœÝ[Y\ˆ[™HÙXÛÛ™Ø[\ˆÚ[[HÙ]È›Ý[™ËˆXÛ\™Bˆ[˜È]™[Ý™X[J
+HOˆ\Þ[˜ÔÝ™X[OO˜
+ÜˆXZÙQ]™[Ý™X[J
+X
+KÚXÚ™YÚ\Ý\œÈH™]ÈÛÛœÝ[Y\ˆÛ‚ˆ[ˆ[\›˜[›Ý[™Yœ›ØYØ\Ý\ˆ[™™]\›œÈHœ™\ÚÝ™X[KˆÛ•\›Z[˜][Û˜\™YÚ\Ý\œË‚Šˆ˜Y™™\š[™ÔÛXÞX\È
+Š˜[Ø^\ÊŠˆ^XÚ]ˆ[˜›Ý[™Y\È›Ü˜šY[ˆ[ˆÛÝ\˜Ù\ËØ‚ˆÝ[™[™ÈØ\XÚ]Y\Îˆ•XÚÙ]ÈLLˆ
+]šXÝÛ\ÝX\šÈØ\
+NÈ[˜ÛÙYœ˜[YT]Y]YXœ˜[Y\È
+Š›ÜŠŠ‚ˆML\ÈÙˆÈÜ[‹›Ü]ËZÙ^Yœ˜[YNÈXÛÙYœ˜[Y\È˜Y™™\š[™Ó™]Ù\Ý
+ÊXÈTÐTH[\\Ý™X[Bˆ]™[È˜Y™™\š[™Ó™]Ù\Ý
+MŠXÈTÐTHž]HÝ™X[\È˜Y™™\š[™Ó™]Ù\Ý
+
+XÈ™XÛÜ™Y\^X˜XÚÈœ˜[Y\ÂˆÌˆÚ]
+Šœ™X[
+Šˆ˜XÚÜ™\ÜÝ\™H
+HÛ™HXÙHÙH\H]™XØ]\ÙHHš[HØ[ˆ™H™XY]BˆÛÛœÝ[Y\‰ÜÈXÙJK‚Šˆ]™\žH›Ü\ÈÛÝ[Y[ÈÝ™X[TÝ]\ÝXÜØ[™Ý\™˜XÙYˆH›Ü]›ÈÛÝ[\ˆ™XÛÜ™È\ÈHYË‚‚ˆÈÈÈÈ‹LØH8 %]šXÙT]Z\šÜØ\ÈHÛ›Hš\›]Ø\™K]ÛÜšØ\›Ý[™Ú[›™[
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXËZ\Ø\K›Y0©ÌNH8¡¤ˆ]šXÙT]Z\šÜØHÛÙX›X˜[YH\œÚ\ÝYÛˆHØ[Y\˜H™XÛÜ™˜ÛÛœÝ[Y[ˆ^XÝH›Ý\ˆXÙ\ËˆÜXËXÛÜ™K›Y8¡¤ˆ]šXÙT]Z\šØ\ÈHÚ[™ÛHØ[˜Ý[Û™Y™š\›]Ø\™K]ÛÜšØ\›Ý[™Ú[›™[‚‚Š”[[™ÎŠˆÛ™H\K\˜[˜[YNˆ
+Š˜]šXÙT]Z\šÜØ
+Šˆ
+ÜXËZ\Ø\K›Y0©ÌNIÜÈÝXÝÙˆ›ÛÛØ[Ø™›YÜËØÚ[XU™\œÚ[Û˜[˜ÛYY
+Kˆ\™H\È›È]šXÙT]Z\šØÚ[™Ý[\‹ˆ]\ÈXÛ\™Y[‚˜šYÚ[›ÝØÛÛØ8 %›ÝšYÚ[TÐTX8 %™XØ]\ÙHØ[Y\˜X
+HÛÙX›X[Ù[[ˆšYÚ[ÛÜ™X
+HÝÜ™\È]˜[™šYÚ[RX\Ü^\È]ˆ]\ÈÛÛœÝ[Y[ˆ^XÝH
+Š™›Ý\ŠŠˆXÙ\È[™›ÝÚ\™H[ÙN‚H]Z[\‹H›ÙHZ[\‹H\œÙ\ˆÛÛ™šYÝ\˜][Û‹[™H™\]Y\ÝØ]KˆHš\›]Ø\™BÛÜšØ\›Ý[™]]™\È[ž]Ú\™H[ÙH8 %[ˆYˆš\›]Ø\™Kš\Ô™Yš^
+•KŠX[ˆHXÛÙ\‹HÜXÚX[Ø\ÙBš[ˆHšY]È8 %\ÈH™]šY]ËX›ØÚÚ[™ÈY™XÝ‚‚Š[Y[™ŠˆÜXËZ\Ø\K›Y0©ÌNH
+XÛ\˜][Ûˆ[Ý™\ÈÈšYÚ[›ÝØÛÛØ
+NÈÜXËXÛÜ™K›Y
+]šXÙT]Z\šØ8¡¤‚˜]šXÙT]Z\šÜØ
+K‚‚ˆÈÈÈÈ‹LŽ8 %Û™H[\Ý™X[S[Ûš]Ü˜\ˆ]šXÙK™]™\ˆ\ˆÚ[›™[
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛHÜXËZ\Ø\K›Y0©ÌMÚ]Ý]Ú[™ÙK[™™\Ý]Y™XØ]\ÙH]\ÈX\ÞHÈÙ]Ü›Û™ÈÚ[ˆHRH\È\‹XÚ[›™[ˆ^XÝHÛ™H[\Ý™X[S[Ûš]Ü˜\ˆ]šXÙKÝÛ™Y[™Y[[Ú^™YžB˜TÐTQ]šXÙTÙ\ÜÚ[Û˜™Y™\™[˜ÙY
+›ÝÜ™X]Y
+HžHšYÚ[ÛÜ™K‘]™[Ù[\˜ˆX\™X]\È\™BœÝ\™\ÜÙY]H\œÙ\‹ˆHØÛˆÒTÐTKÑ]™[Û›ÝYšXØ][Û‹Ø[\Ý™X[XX\ÈÂ˜[œÝ\ÜYÚ]
+Š››ÈÞ[]XÈÛ[™È˜[˜XÚÊŠˆ8 %H˜ZÙH]™[Ý™X[H\ÈÛÜœÙH[ˆ›Û™KˆBœÙXÛÛ™X8¡äˆ˜]]˜Z[YÝÜ\›X[™[K›ÝYžHšYÚ[ÛÜ™XÈšYÚ[ÛÜ™XØ[ÈÝ\
+
+XYØZ[‚›Û›HÛˆ™]ÛÜšÈ™]\›ˆÜˆHÜ™Y[X[Ú[™ÙK‚‚ˆÈÈÈÈ‹LŽH8 %^X˜XÚÈ[Y[[™HÛÛY\ÈÛ›Hœ›ÛHÔÕÒTÐTKÐÛÛ[YÛ]ÜÙX\˜Ú
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛHÜXËZ\Ø\K›Y0©ÌMKˆÛ™HÙX\˜ÚQXÜ›ÜÜÈ[YÙ\ÎÈH™X[˜ÙX\˜Ú™\Ý[ÜÝ[Û˜Z\ÜÜ[[™ÈÛˆHÚ\™NÈYÚ[˜]HÚ[B˜™\ÜÛœÙTÝ]\ÔÝš\OH“SÔ‘H˜ˆ›ÈÝ\ˆ[™Ú[X^HZ[H[Y[[™K‚˜^X˜XÚÓØØ]Ü˜™]Üš]\ÈØÚ[YKÚÜÝÜÜ[™ÙY\È
+Šœ]
+È]Y\žH™\˜˜][JŠˆ8 %ZÝš\Ú[Ûˆ^X˜XÚÂ•T’\ÈÛÛZ[ˆ]Y\žH›Ü›\È]›ÈT“Xœ˜\žH›Ý[™]š\ÈØY™[KÚXÚ\È[ÛÈÚH•ÔT“\Âš[™]Üš][ˆ˜]\ˆ[ˆT“ÛÛ\Û™[ØX˜\ÙY‚‚ˆÈÈÈÈ‹LÌ8 %ÛÛ™šYÝ\˜][ÛˆUÈ\™H™XY[[ÙYžK]Üš]K[ˆ™KQÑU
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛHÜXËZ\Ø\K›Y0©Íð©ÌL‹ð©ÌMËˆ]™\žHÛÛ™šYÝ\˜][ÛˆUÙ[™ÈH
+Š™[
+Š‚™[[Y[Z[œ›ÛHHœ™\ÚÑUÙˆ][[Y[XÚÚ[™ÈH]šXÙIÜÈ™\œÚ[Û˜[™[œØ™\˜˜][NÈ[ˆ™KXÑUÈ[™X›\Ú\ÈH]šXÙIÜÈ
+Š˜Û[\Y
+Šˆ˜[Y\ËˆHRHÚÝÜÈÚ]H]šXÙB˜XØÙ\Y™]™\ˆÚ]ÙH\ÚÙY›Ü‹ˆÚ\™H[š]Ë™\Ý]Y™XØ]\ÙH]™\žHÛ™HÙˆ[H\È™Y[ˆÛÝÜ›Û™Âš[ˆHšY[ˆX^œ˜[YT˜]XHœÈ0åÈLÈÙ^Qœ˜[YR[\˜[H
+Š›Z[\ÙXÛÛ™ÊŠŽÈÛÝ“[™ÝBŠŠ™œ˜[Y\ÊŠŽÈÝÜ˜YÙHØ\XÚ]HH
+Š™XÚ[X[PŠŠ‹‚‚ˆÈÈÈÈ‹LÌH8 %\ØÛÝ™\žH™]™\ˆÙ[™ÈÜ™Y[X[È
+Š–ÔÑSPS•PËØY™]WJŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛHÜXËY\ØÛÝ™\žK›Y0©ÌH\È[ˆXœÛÛ]H[K›Ý™Z[™H›YË›Ý™Z[™Bœ™Y™\™[˜ÙKˆZÝš\Ú[ÛˆØÚÜÈXØÛÝ[ÈY\ˆH˜Z[YÙÚ[œË[™HÝX›™]ÝÙY\ÝXÚ\È]™\žHÜÝ‚‘[™›Ü˜ÙYYXÚ[šXØ[NˆH[š™XÝY˜[œÜÜ›ÝØÛÛÈ]™H›ÈÜ™Y[X[\˜[Y]\ˆ[ž]Ú\™H[‚Z\ˆÚYÛ˜]\™\Ë[™šYÚ[\ØÛÝ™\žU\ÝØÛÛZ[œÈH[ØÚÈÚÜÙHÙ[™˜Z[ÈHÝZ]HYˆBœ^[ØYÛÛZ[œÈHÜ™Y[X[\Ú\YšY[ˆšYÚ[\ØÛÝ™\žX\È
+Š››ÊŠˆYÙHÈšYÚ[•Ô[™˜Ø\œšY\È]ÈÝÛˆ[šY[Ý\[™RXY\”ØØ[›™\˜›ÜˆHX˜[›™\ˆš[™Ù\œš[‚‚ˆÈÈÈÈ‹LÌˆ8 %H\™H^Y\ˆ\È\ÛÛ][Û‹Yœ™YH[™[YKYœ™YH
+Š–Ð•RSJŠ‚‚Š”[[™ÎŠˆ™\Ý][™ÈTÒUPÕT‘K›Y0©ÍKŒH[™STÔ•STË›Y™XØ]\ÙH]\ÈH[H[ÜÝZÙ[HÂ˜™Hœ›ÚÙ[ˆ[™\ˆXY[™Kˆ[ˆšYÚ[›ÝØÛÛØšYÚ[š]Ý™X[XšYÚ[•ÔšYÚ[•˜šYÚ[TÐTXšYÚ[\ØÛÝ™\žX[™šYÚ[\ÝÚ]‚‚Šˆ
+Š››ÈXÝÜ˜
+Š‹
+Š››ÈXZ[XÝÜ˜
+Š‹
+Š››È\ÚØ
+Š‹
+Š››È\Þ[˜Ø[˜Ý[ÛŠŠˆ^Ù\Ú\™HH›ÝØÛÛˆH[Ù[H
+™XÛ\™\Êˆ\È[š\™[H\Þ[˜Ú›Û›Ý\È
+˜[œÜÜ[™Ø[Û›ÝÛšXÐÛØÚËœÛY\
+K[™ˆH[Ù[H™]™\ˆ
+˜Ø[Êˆ]8 %XÝÜœÈ[ˆšYÚ[˜[œÜÜØšYÚ[ÛÜ™XË‚Šˆ
+Š‘^Ù\[Û‹Ü˜[Y^XÚ]NŠŠˆšYÚ[TÐTXXÛ\™\ÈXÝÜˆTÐTPÛY[XÝÜˆYÙ\ÝÝÜ™XˆXÝÜˆ™\]Y\ÝØ]XXÝÜˆTÐTQ]šXÙTÙ\ÜÚ[Û˜XÝÜˆÛÛ›Û\˜XÝÜˆ[\Ý™X[S[Ûš]Ü˜ˆ[™XÝÜˆÛÕØ^P]Y[ÔÙ\ÜÚ[Û˜ˆ\È\È[X™\˜]H[™\ÈHÛ™H\™H[Ù[H]\È[ÛÈBˆ
+˜ÛY[
+ŽˆT“Ù\ÜÚ[Û˜\È]˜Z[X›H[ˆ[^›Ý[™][Û‹ÛÈTÐTH\ÈÙ[Z[™[H\Þ[˜Ú›Û›Ý\È[™ˆÙ[Z[™[H[^]\ÝX›K[™\Ú[™È]ÈÛÛ˜Ý\œ™[˜ÞH[ÈšYÚ[ÛÜ™XÛÝ[YX[ˆ™KZ[\[Y[[™ÂˆHÚÛHÛY[\™Kˆ\ÙHXÝÜœÈÛÛ›HÙ[™X›XÝ]H[™™]™\ˆÝXÚH]›Ü›Bˆœ˜[Y]ÛÜšËˆ›ÈÝ\ˆ\™H[Ù[HX^HXÛ\™H[ˆXÝÜ‹‚Šˆ
+Š››È]J
+X]K››ÝØÛÛ[[Ý\ÐÛØÚË››ÝØ\Ü]Ú[YK››ÝÊ
+X™XYœÛY\ˆ\ÚËœÛY\Þ\Ý[T˜[™ÛS[X™\‘Ù[™\˜]Ü˜ŠŠˆ[YH[™˜[™Û[™\ÜÈ\™H\˜[Y]\œËˆ]™\žH\™HÝ]BˆXXÚ[™HZÙ\È›ÝÎˆYYXR[œÝ[\È[ˆ\™Ý[Y[ÈÝ\Ø[™Ù\ÝØXÚØÛÈH˜Z[[™ÈÒH[‚ˆš[ÈHÙYY[™™K\[›š[™ÈÚ]]ÙYY™\›ÙXÙ\ÈH˜Z[\™Hž]H›Üˆž]K‚Šˆ\œÙ\œÈ[™Ý]HXXÚ[™\È\™HÝXÝÈÚ]]]][™ØY]ÙËÝÛ™YžH[ˆXÝÜˆ[Ù]Ú\™Kˆ^Bˆ\™HÙ[™X›X]]\Ý™]™\ˆ™H
+œÚ\™Y
+‹‚‚ˆÈÈÈÈ‹LÌÈ8 %^XÝHÛÈ[˜ÚXÚÙYÙ[™X›X\\È™\Ë]ÚYH
+Š–Ð•RSJŠ‚‚Š”[[™ÎŠˆXÛÙTÚ[šÐ›Þ
+šYÚ[šY[ØHšY[ÕÛÛ›ÞØ[˜XÚÈœšYÙJH[™šY[Ñœ˜[YXŠšYÚ[šY[ØÜ˜\ÈHÕ”^[Y™™\˜
+Kˆ›ÝØ\œžHH\ÝYšXØ][ÛˆÛÛ[Y[Ú\H[ˆ0©ÍËˆH\™œ™\]Z\™\È[ˆ[Y[™Y[È\ÈÙXÝ[Ûˆ[ˆHØ[YHÛÛ[Z]Ú]HÜš][ˆ\ÝYšXØ][Û‹‚˜ÜXËZ\Ø\K›Y0©Í‰ÜÈš[˜[Û\ÜÈT“Ù\ÜÚ[Û•˜[œÜÜˆ8 )ˆ[˜ÚXÚÙYÙ[™X›X\È
+Š››Ý
+ŠˆH\™‚œ™]Üš]H]\È[ˆXÝÜ˜Û[™ÈH[YØ]HÝ]KÜˆ\ÈHš[˜[Û\ÜØÚÜÙH]]X›HÝ]H]™\Â˜™Z[™HÚ[™ÛHÔÐ[ØØ]Y[™˜Z\“ØÚØYÝX\™YÝXÝ8 %[™Ûˆ[^Ú\™HÔÐ[ØØ]Y[™˜Z\“ØÚØ™Ù\È›Ý^\Ý™Z[™”ÓØÚØ[ˆHÚYˆØ[’[\Ü
+\Ú[ŠXZ\‹ˆÜXË\›Y0©Ì‹Œ‰ÜÂ˜X[X[ÛØÚØ\Èš[˜[Û\ÜÈ8 )ˆ[˜ÚXÚÙYÙ[™X›X\È[ÝÙY™XØ]\ÙH]]™\È[ˆšYÚ[\ÝÚ]ÚXÚÚ\ÈÈ›È›ÙXÝH\[šÜÎÈ0©ÍË	ÜÈØ\ÛÝ[ÈÛÝ\˜Ù\ËØÝ]ÚYHšYÚ[\ÝÚ]‚‚ˆÈÈÈ‹\ÚYÛ‹V[™]›Ü›B‚ˆÈÈÈÈ‹LÍ8 %ÝXÝ\˜[[Y[œÚ[ÛœÎˆV›Y	ÜÈ[X™\œÈÚ[ˆ
+Š–ÐÓÔÓQUP×JŠˆ
+ÔS‹PÓÓ‘“PÕË›YÌJB‚Š”[[™ÎŠˆÚYX˜\ˆ
+ŠŒ
+ŠˆY˜][ÈZ[ˆ
+ŠŒŒ
+ŠˆÈX^
+ŠŒÎ
+ŠŽÈ[œÜXÝÜˆ
+ŠŒÌŒ
+ŠˆY˜][ÈZ[ˆ
+ŠŒŽ
+Š‚‹ÈX^
+Š
+Š‹\ˆV›Y0©Ì‹Œ‹™XØ]\ÙH^HÙ\™H\š]™Yœ›ÛHHÛÛ[]\ÈÈš]
+˜Ø[Y\˜H›ÝÜÈÚ][X›˜Z[[™Ü\šÛ[™NÈ[œÜXÝÜˆÙ^KÝ˜[YH›ÝÜÈÚ]HLˆ™\Ù\™Y[YXÛÙB˜ÛÛ[[ŠH˜]\ˆ[ˆœ›ÛHÜšY\š]Y]XËˆTÒQÓ‹›Y0©ÍKŒH\È[Y[™YÛÈ•[YX™[XZ[œÈHÚ[™ÛBœÛÝ\˜ÙHÙˆÚÙ[œËˆ
+Š“›ÈšY]ÈX^HÛÛZ[ˆZ]\ˆ]\˜[
+Šˆ8 %›ÝÛÛYHœ›ÛH•[YK“Y]šXÜØ‚‚Š[Y[™ŠˆTÒQÓ‹›Y0©ÍKŒK‚‚ˆÈÈÈÈ‹LÍH8 %[HÝ]\ˆ
+ŠŒˆ
+Š‹ÝYÙH[œÙ]
+ŠŽ
+ŠŽˆTÒQÓ‹›YÚ[œÈ
+Š–ÐÓÔÓQUP×JŠˆ
+ÌŠB‚Š”[[™ÎŠˆTÒQÓ‹›Y0©ÍKŒKð©ÌË‹ˆHˆšYÝ\™HØ\œšY\È[ˆ\™Ý[Y[8 %]]ÚYHÌŒÌ˜˜Ø[˜\È™XYÈ\ÈHÙX[H™]ÙY[ˆœ˜[Y\ÈÚ]Ý]HÝ›ÚÙK[™HËŒÈ
+ˆÝ\\È[X™\˜][HÛÂœÛX[È™XY\ÈH›Ü™\‹ˆV›Y	ÜÈL°åÌLˆ[YÙ\ˆ[š]ÜšYÙY\È]ÈÙ[\š]Y]XÈÚ]HØ\˜[YHÝXœÝ]]Yˆ^[Ý]Ù[8¡¤ˆÑÔ™XÝZÙ\ÈHÝ]\ˆœ›ÛH•[YX™]™\ˆH]\˜[‚‚Š[Y[™ŠˆV›Y0©ÍKŒK‚‚ˆÈÈÈÈ‹LÍˆ8 %›ÈÜ˜YY[ØÜš[HÝ™\ˆšY[ÎˆTÒQÓ‹›YÚ[œÈ
+Š–ÔÑSPS•PËš\ÝX[JŠˆ
+ÌÊB‚Š”[[™ÎŠˆTÒQÓ‹›YKð©Ì‹ŒËˆÝ™\ˆÚ›ÛYH\Ù\ÈØÜš[K˜˜\ÙX
+›XÚÈ3¬HŒŠH
+Šš[œÚYHHÚ\Ü‚ÛÛ˜\ˆÚ\HÛ›JŠˆ8 %™]™\ˆH[][HÜ˜YY[˜[™ˆHÚ[™ÛH\›Z]Y[][HØÜš[H\ÈB›Ù™›[™KÙYÜ˜YYÝ]H]3¬HŽ‹ˆ\™H\È
+Š››È”Õš\ÝX[Y™™XÝšY]ØÝ™\ˆšY[ÊŠ‹]™\ŽˆHØÜš[B›Y\ˆ\ÈÛÛY3¬HHÈŒˆÈŽ‹[™X]\šX[È\™H›ÜˆHÚYX˜\‹[œÜXÝÜ‹ÛÛ˜\ˆ[™™]XÚYÝ™\›^\ÈÛ›Kˆ]™\žHšY[ÈÙ[\ÈYH›XÚÈ
+Ì
+K[™[\È\™HÙ\\˜]YžHBŒˆØ[˜\ÈÝ]\ˆ˜]\ˆ[ˆH›Ü™\‹‚‚Š•ÚNŠˆ]\ÈH\ÚYÛˆ]]Üš]KH[H\È\™ÝYYœ›ÛHH›ÙXÝ\Ú\È
+Hœ˜[YH\ÂœØXÜ™YŠK[™]\ÈH™]\ˆ™\Ý[8 %HÜ˜YY[˜[™XÜ›ÜÜÈHÜÙˆ]™\žH[H\È™XÚ\Ù[HB˜ÚX\S•”ˆÛÚÈH›ÙXÝ^\ÝÈÈ]›ÚYˆ\ÚYÛ‹Û[ØÚÝ\ËÌK[XZ[‹]Ú[™ÝËš[[™XYH›ÛÝÜÈ\Âœ[KÛÈH[[™Y™\Ý[\Èš\ÚX›K‚‚Š[Y[™ŠˆV›Y0©ÍKŒÈ
+ŽÜÈÌˆ›ÝÛHÜ˜YY[˜\œÈ8¡¤ˆÚ\[ØØ[ØÜš[\ÊK‚‚ˆÈÈÈÈ‹LÍÈ8 %ÚYX˜\ˆ›ÝÜÈ\™HYØ[ˆÛÛ›ÛZYÚÈ[™›ÝÈZYÚÈ\™HY™™\™[ÚÙ[œÈ
+Š–ÐÓÔÓQUP×JŠˆ
+Î
+B‚Š”[[™ÎŠˆTÒQÓ‹›Y0©ÍKIÜÈ™š]™HÛÛ›ÛZYÚË›ÈÝ\œÈˆ
+ŒÌÌŽÌÌ‹ÍY˜][Ž
+HÛÝ™\›œÂŠŠ˜ÛÛ›ÛÊŠˆ8 %]ÛœËšY[ËXÚÙ\œËÙYÛY[YÛÛ›ÛËˆ\Ý[™X›H
+Šœ›ÝÜÊŠˆ\™HHÙ\\˜]BÚÙ[ˆÜ›Ý\•[YK“Y]šXÜË”›ÝØÚ]Ø[Y\˜HH]™[HÍ˜Ú[›™[HÌ˜Ù][™ÜÈHŽ‚HØ[Y\˜H›ÝÈÚ]HÌ[X›˜Z[\ÈÛÜœ™XÝ[™H™]šY]Ù\ˆ]\Ý›Ý›YÈ]ˆ›ÝÜ›Ý\Âœ™[XZ[ˆ][\\ÈÙˆ‚‚Š[Y[™ŠˆTÒQÓ‹›Y0©ÍKH
+YH›ÝÈÜ›Ý\
+K‚‚ˆÈÈÈÈ‹LÎ8 %ÝÚYHØ[››ÝÛÛ\[H›Y][ÈHÚ\[™È]\È[[YHÛÛ\[][Ûˆ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆXÚØYÙKœÝÚYXÛ\™\È™\ÛÝ\˜Ù\ÎˆËœ›ØÙ\ÜÊ”ÚY\œÈŠWX›ÜˆšYÚ[™[™\˜Â˜TÒUPÕT‘K›Y0©ÌL‹ŒHÝ\Ø^\ÈH™\ÛÝ\˜ÙH[™\È˜Ø\œžH\ÜÙ]Ë˜Ø\˜Y˜][›Y][X˜[™H››Ú˜›Û\œÈŽÈÜXË\™[™\‹›Y0©ÍØ^\ÈÝÚYH\È›È›Y][Ý\ÜÛÈÚY\œÈÛÛ\[H]œ[[YHœ›ÛH[ˆ[X™YYÝÚYÝš[™ÈÚ][ˆUš[˜\žP\˜Ú]™XØXÚK‚‚Š”[[™ÎŠˆÜXË\™[™\‹›Y\ÈšYÚ[™TÒUPÕT‘K›Y0©ÌL‹ŒHÝ\\ÈÜ›Û™ÎˆÝÚYHÙ\È›Ýš[›ÚÙHY][ØY][X˜ÛÈ
+Š››ÈY˜][›Y][X˜\È]™\ˆ›ÙXÙYžHÝÚYZ[
+Š‹[™[ˆ\]^XÝÈÛ™H[ˆ]È[™H˜Z[ÈÈ™[™\‹ˆHÚ\[™È]\Î‚‚ŒKˆÛÝ\˜Ù\ËÕšYÚ[™[™\‹ÔÚY\œËÊ‹›Y][\™HH™]šY]ØX›H
+ŠœÛÝ\˜ÙHÙˆ]
+Š‹XÛ\™Y\Âˆœ›ØÙ\ÜÊ”ÚY\œÈŠX™\ÛÝ\˜Ù\ÈÛÈ^H[™[ˆH[™H›Üˆ[œÜXÝ[Ûˆ[™›ÜˆHÜ[Û˜[ˆÙ™›[™HÛÛ\[K‚Œ‹ˆÛÝ\˜Ù\ËÕšYÚ[™[™\‹ÓY][ÔÚY\”ÛÝ\˜ÙKœÝÚYÛÈHØ[YH^\ÈHÝ]XÈ]ÝÚYÝš[™ÂˆÛÛœÝ[ˆY][ÛÛ^ÛÛ\[\È]]š\œÝ\ÙHÚ]ˆ]šXÙK›XZÙSXœ˜\žJÛÝ\˜ÙN›Ü[ÛœÎŠX[™ØXÚ\ÈH™\Ý[[ˆ[ˆUš[˜\žP\˜Ú]™X[™\‚ˆ‹ÓXœ˜\žKÐØXÚ\ËØÛÛKšYÚ[˜\ÜÚY\œËÏÚLM‹[Ù‹\ÛÝ\˜ÙO‹›Y][X˜‚ŒËˆØÜš\ËÙÙ[‹\ÚY\‹\ÛÝ\˜ÙKœÝÚY™YÙ[™\˜]\ÈÚY\”ÛÝ\˜ÙKœÝÚYœ›ÛHH›Y][š[\Ë[™ˆšYÚ[™[™\•\ÝØ\ÜÙ\ÈHÛÈ\™Hž]KZY[XØ[ˆY][™ÈÛ™HÚ]Ý]HÝ\ˆ˜Z[ÈÒK‚ˆYˆHÛÝ\˜ÙH˜Z[ÈÈÛÛ\[K™[™\‘\œ›Ü‹œ\[[™PÛÛ\[Q˜Z[Y
+ÎŠX\È˜][›ÜˆHY][ˆ][™H[H˜[È˜XÚÈÈU”Ø[\PY™™\‘\Ü^S^Y\˜
+0©ÍŒL
+Kš\ÚX›H[™Ú]HÙÈ]ˆ\œ›Ü˜ˆ]™]™\ˆÚÝÜÈ›XÚË‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÌL‹ŒHÝ\
+›ÜY˜][›Y][X˜
+NÈØÜš\ËØZ[X\œÚÝ\˜ÛÜY\ÈšYÚ[ÕšYÚ[RK˜[™X[™šYÚ[ÕšYÚ[™[™\‹˜[™X›Üˆ\ÜÙ]Ë˜Ø\˜H››Ú˜›Û\œÂ˜[™H›Y][ÛÝ\˜Ù\ÈÛ›K‚‚ˆÈÈÈÈ‹LÎH8 %[™›Ëœ\Ý™YYÈHÛÈ˜YËX[™Y›ÜU\È[™”Ð›Ûš›Ý\”Ù\šXÙ\Ø
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË\™[™\‹›Y0©ÌNH8¡¤ˆH\˜Ú]XÝ\™HØÈ]\ÝYU^ÜY\QXÛ\˜][ÛœØ›Ü‚˜ÛÛKšYÚ[[KX\ÜÚYÛ›Y[[™ÛÛKšYÚ[˜Ø[Y\˜K\™Y˜Üˆ˜YËX[™Y›ÜÚ[[H˜Z[È‹‚˜ÜXËY\ØÛÝ™\žK›Y0©ÎH8¡¤ˆ”ÓØØ[™]ÛÜšÕ\ØYÙQ\ØÜš\[Û˜”Ð›Ûš›Ý\”Ù\šXÙ\Ø˜”Ð[ÝÜÓØØ[™]ÛÜšÚ[™Ø\ÈHÛÛK˜\KœÙXÝ\š]K›™]ÛÜšËœÙ\™\˜[™˜ÛÛK˜\K™]™[Ü\‹›™]ÛÜšÚ[™Ë›][XØ\Ý[][Y[Ë‚‚Š”[[™ÎŠˆ[YÜYˆU^ÜY\QXÛ\˜][ÛœØØZ[œÈÛÈ[šY\È™^[Û™ÛÛKšYÚ[˜ÛÛ™šYØ‚‚ŸY[YšY\ˆÛÛ™›Ü›\ÈÈ\ÙY›ÜˆŸKK_KK_KK_ŸÛÛKšYÚ[[KX\ÜÚYÛ›Y[X›XË™]X˜YÙÚ[™ÈHØ[Y\˜HÛÈH^[Ý]Ù[ŸÛÛKšYÚ[˜Ø[Y\˜K\™Y˜X›XË™]X˜YÙÚ[™ÈHØ[Y\˜H™]ÙY[ˆÚYX˜\‹ÝYÙH[™Ø[‚˜”Ð›Ûš›Ý\”Ù\šXÙ\ØHÈ—Ú—ÝÜ‹—ÜÜ—ÝÜ‹—ÛÛšY‹—ÝÜ—Xˆ”Ð[ÝÜÓØØ[™]ÛÜšÚ[™Ø[™˜”ÓØØ[™]ÛÜšÕ\ØYÙQ\ØÜš\[Û˜\™H[™XYHÜXÚYšYY[ˆTÒUPÕT‘K›Y0©ÌL‹ŒÈ[™Ý^K‚˜ÛÛK˜\KœÙXÝ\š]K›™]ÛÜšËœÙ\™\˜\È[™XYH[ˆšYÚ[™[][Y[Ø
+™YYYÈš[™QÍÌŒÂŒÍÌˆ[ˆHØ[™›Þ
+H[™Ý^\ËˆÛÛK˜\K™]™[Ü\‹›™]ÛÜšÚ[™Ë›][XØ\Ý\ÈH
+Š›X[˜YÙY
+Š‚™[][Y[™\]Z\š[™È[ˆ\KZ\ÜÝYY›Ýš\Ú[Ûš[™È›Ùš[NÈH\]\Ý[ˆÚ]Ý]][™YÜ˜YBÈH[šXØ\ÝÝÙY\]XÝY][[YKˆ\™H\È
+Š›Û™Hš[˜\žJŠˆ[™
+Š››ÈÛÛ\[K][YH][XØ\Ý™›YÊŠ‹‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÌL‹ŒÈ
+U^ÜY\QXÛ\˜][ÛœØ”Ð›Ûš›Ý\”Ù\šXÙ\Ø
+K‚‚ˆÈÈÈÈ‹M8 %šYÚ[RX\Ù\È^XÚ]XZ[XÝÜ˜›Ý™Y˜][\ÛÛ][Û˜
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍKŒÈ›ÜÜÙ\Â˜ÝÚYÙ][™ÜÎˆ\H
+ÈË™Y˜][\ÛÛ][ÛŠXZ[XÝÜ‹œÙ[ŠWXÛˆHšYÚ[RX\™Ù]Ú]^XÚ]˜XZ[XÝÜ˜\ÈH˜[˜XÚÈšYˆHÛÛÚZ[ˆÙ\È›ÝY]XØÙ\]‹‚‚Š”[[™ÎŠˆH˜[˜XÚÈ\ÈH[‹ˆÝÚYÙ][™Ë™Y˜][\ÛÛ][Û˜Ù\È›Ý^\Ý[ˆÝÚY‹ŒKŒ‹[™H™X[Ü™Y[ˆXÚØYÙKœÝÚYÙ\È›Ý\ÙH]ˆ
+Š‘]™\žHÜ[]™[\H[ˆšYÚ[RXØ\œšY\È[‚™^XÚ]XZ[XÝÜ˜
+Š‹[™ØÜš\ËÛ[œÚ˜Z[ÈÛˆ[žH[‹X[››Ý]YÜ[]™[\H[‚˜ÛÝ\˜Ù\ËÕšYÚ[RKØˆÈ›Ý™[HÛˆ\ÛÛ][Ûˆ[™™\™[˜ÙHœ›ÛHHšY]ØÛÛ™›Ü›X[˜ÙH8 %]Ù\È›ÝÛÝ™\‚HšY]È[Ù[HÛÛÜ™[˜]ÜˆÜˆHØœÙ\˜X›XÛ\ÜÈ™\ÚYH]‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÍKŒË‚‚ˆÈÈÈÈ‹MH8 %šYÚ[\È›ÈXZ[˜ÈXZ[‹œÝÚYØ[È›XZ[Š
+X
+Š–Ð•RSJŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛHTÒUPÕT‘K›Y0©ÍŒˆ[HË™\Ý]Y™XØ]\ÙH]\ÈHÛ™Hš[HÚÜÙHÚ\Bš\È›Ý™YÛÝXX›KˆÛÝ\˜Ù\ËÕšYÚ[ÛXZ[‹œÝÚY\ÈHÜ[]™[XÛÙHš[NÈšYÚ[\\ÈHÝXÝ\ŠŠÚ]Ý]
+ŠˆXZ[˜ˆÛˆ[^XZ[‹œÝÚYÜš]\ÈHY\ÜØYÙHÈÝ\œˆ[™^]ÈVUÑRST‘XÚXÚš\ÈÚ]ÙY\ÈH[ÝÚYZ[Ü™Y[ˆÛˆ[^‚‚ˆÈÈÈÈ‹Mˆ8 %XÚØYÙX\ÈHY˜][Ü›ÜÜË[[Ù[HXØÙ\ÜÈ]™[
+Š–ÐÓÔÓQUP×JŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛHTÒUPÕT‘K›Y0©ÌM[™STÔ•STË›YÚ\œ[™Yˆ0©Í	ÜÈXÛ\˜][ÛœÈ\™BÜš][ˆX›XØÚ\™H^H\™H\ÙˆH[Ù[IÜÈØÝ[Y[YÛÛ˜XÝ
+ÚXÚ\ÈÚ]0©Í
+š\ÊŠH[™˜XÚØYÙXÚ\™H^H^\ÝÛ›HÛÈ[›Ý\ˆšYÚ[\™Ù]Ø[ˆ™XXÚ[KˆÚ[ˆ[ˆÝX[œÚYHH[Ù[KœÝ\]š]˜]XˆÜ[˜\È›Ü˜šY[‹ˆHšYÚ[›ÝØÛÛØ\\È[ˆ0©ÌÈ\™H[X›XØ™XØ]\ÙB˜šYÚ[\ÝÚ]H\\™Ù][™H\Ý\™Ù]È[ÝXÚ[K‚‚ˆÈÈÈÈ‹MÈ8 %^\Ý[X[[žX\ÈÛŽˆÜš]H[žH]™\ž]Ú\™H
+Š–Ð•RSJŠ‚‚Š”[[™ÎŠˆXÚØYÙKœÝÚY[˜X›\ÈH^\Ý[X[[žX\ÛÛZ[™È™X]\™HXÚØYÙK]ÚYKˆ]™\žB™^\Ý[X[]\Ý™HÜ[Y[žH8 %ÙÙÙ\Žˆ[žHÙÙÙ\”›ÝØÛÛÛØÚÎˆ[žH[Û›ÝÛšXÐÛØÚØ˜Ø[žHšYÚ[˜Z[\™WX
+[žH\œ›ÜŠOØˆH˜\™H›ÝØÛÛ˜[YH[ˆ\HÜÚ][Ûˆ\ÈH
+Š˜ÛÛ\[H\œ›ÜŠŠ‹››ÝHØ\›š[™Ëˆ\È\È[X™\˜]Nˆ^\Ý[X[›Þ[™È]\Ý™Hš\ÚX›H]Ø[Ú]\ÈÛˆHœ˜[YH]‚‚ˆÈÈÈÈ‹M8 %Ú\™HR”QÈ]™\È
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆR”QÈ\X\œÈ[ˆ™YH[œ™[]Y›Ü›\È[™^H]\Ý›Ý™HÛÛ™›]Y‚ŠJH
+Š’TÐTH”QÈÛ
+Šˆ
+Û\ÜÈÚYX˜\‹Ù™œØÜ™Y[ŠNˆÑUÒTÐTKÔÝ™X[Z[™ËØÚ[›™[ËÞÚYKÜXÝ\™X™XÛÙYÚ]ÑÒ[XYÙTÛÝ\˜ÙPÜ™X]UÚ]]X[ˆšYÚ[šY[Ø›È•ÔÙ\ÜÚ[Û‹K‚ŠŠH
+Š“R”QÈÝ™\ˆ•
+Šˆ
+‹QPËLXYÙ]Ø[Y\˜\ÊNˆ^XÚ]HH
+Š››Û‹YÛØ[
+Šˆ›ÜˆšYÚ[•ŠÜXË\›Y0©ÌMÈ\ÝÈ•R”QÈ\È^ÛYY
+KˆHØ[Y\˜HY™\\Ú[™ÈÛ›H”QËÎL[ˆ]ÈÑœ™\ÛÛ™\ÈÈÝ™X[QØÝÜ˜XYÛ›ÜÚ\ÈÛÙXÈ[œÝ\ÜY‹ÚXÚ˜[Y\ÈHÛÙXÈ[™Ù™™\œÈÈÝÚ]ÚHØ[Y\˜IÜÈ[˜ÛÙ[™ÈÝ™\ˆTÐTH8 %^XÝHHŒKH™Z]š[Ý\‹ˆÈ›Ý[\[Y[‘ÈÍK‚ŠÊH
+Š“R”QÈÝ™\ˆ
+Šˆ
+][\\Þ[Z^Y\™\XÙX
+Nˆ™]\Ù\È[\Ý™X[S[Ûš]Ü˜	ÜÈ][\\\œÙ\‚š[ˆšYÚ[TÐTX[™™YYÈšYÚ[šY[Ø	ÜÈ”QÈXÛÙ\‹ˆ\È\ÈH[š]™\œØ[˜[˜XÚË‚‚Š[Y[™Šˆ‘PUT‘TË›Y‹QPËLH
+Ü]H™YH›Ü›\ÎÈ›Ü•R”QÈÈH›Û‹YÛØ[
+K‚‚ˆÈÈÈÈ‹MH8 %Û\ÜË]ËYÛ\ÜÈ[™][˜Ú[X™\œÎˆ‘PUT‘TË›Y0©ÌNH\ÈHØ]H
+Š–ÐÓÔÓQUP×JŠ‚‚Š”ØZYŠˆ”’QQ‹›YØ^\È[™\ˆL\ÈÛ\ÜË]ËYÛ\ÜÈÛˆSˆˆ[™ŒMˆ0åÈL[™\ˆX›Ý]ÍH	HÔHŽÂ˜‘PUT‘TË›Y0©ÌNHÚ]™\ÈH\‹XÛÛ™šYÝ\˜][ÛˆX›H
+QSÝÈL8¢iMHÈMH8¢iMÈHQP˜[[˜ÙYœL8¢iLŒÈMH8¢iNÈˆÔP˜[[˜ÙYL8¢iMŒÈMH8¢iLÈˆ][˜Ú8¡¤ˆš\œÝœ˜[YHL8¢iL\ÈÂœMH8¢iM\ÎÈHMˆ0åÈL8¢iÍH	HÔHÈ8¢iN	HÔHÈ8¢iLPŽÈLHRHNH8¢iÈ\È]LŒŽÈMˆ›Â›XZ[‹XXÝÜˆÜ\˜][Ûˆˆ\ÎÈŒLÈ\™ÙZ[[™ÈKHÐŠK‚‚Š”[[™ÎŠˆ‘PUT‘TË›Y0©ÌNH\ÈH™[X\ÙHØ]H[™\ÈÛÛœÚ\Ý[Ú]HœšYYˆ
+ÔP˜[[˜ÙYMHBŒL\È\ÈHœšYY‰ÜÈ[X™\ŠKˆHœšYY‰ÜÈšYÝ\™\È\™HHXY[™NÈ0©ÌNIÜÈ\™HHÛÛ˜XÝ‚˜ØÜš\ËØ™[˜ÚœÚ\ÜÙ\È[Hœ›ÛHHš^YÚYÛœÜÝ˜[Y\ËÚXÚ\™H
+Šœ\›X[™[TK›ÝXYÂœØØY™›Û[™ÊŠŽˆ][˜Ú][˜ÚÑš\œÝœ˜[YX\ØÜšX™XÙ]\š\œÝ•š\œÝÙ^Yœ˜[YX˜XÛÙX™[™\˜Û˜\ÚÝ™XÛÜ™Ý\[]SÜ[˜[Y[[™Q˜]Ø‚‚ˆÈÈÈÈ‹Mˆ8 %]™[›ÝYšXØ][Û˜œÈ]™[›ÝYšXØ][Û[\
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËZ\Ø\K›Y0©ÌMŒÈ[™TÒUPÕT‘K›Y0©Ì‹Ø^H]™[›ÝYšXØ][Û[\ÈHØ[YB™ØÝ[Y[	ÜÈ\[™^ˆØ^\È]™[›ÝYšXØ][Û˜‚‚Š”[[™ÎŠˆ
+Š˜]™[›ÝYšXØ][Û[\
+Šˆ8 %]X]Ú\ÈHÚ\™H[[Y[˜[YB˜]™[›ÝYšXØ][Û[\˜ÚXÚ\ÈHÚÛH˜[YHÙˆ˜[Z[™È]Y\ˆH›ÝØÛÛ‚‚Š[Y[™ŠˆÜXËZ\Ø\K›Y\[™^‹‚‚ˆÈÈÈÈ‹MÈ8 %ŒH\È[ˆTH™\]Z\™[Y[›ÝHRH›Ý\š\Ú
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆ‘TURT‘SQS•ËPÕTÕÓQT‹›YŒH›Ü˜Ù\È›Ý\ˆ[™ÜÈ[ÈHTHÝ\™˜XÙK[™XXÚ\È˜[YYš\™HÛÈ›Ø›ÙH™X]È]\ÈÜ[Û˜[‚‚ŒKˆ
+Š”›Ø™HY\ŠŠˆ8 %ZÝš\Ú[Û•T“˜Ø[™Y]\ÊÚ[›™[œ]X[]NŠX
+‹LŒÊH\Âˆ•ÔÛÛ[X[™™\ØÜšX™SÛ›X
+[™XYH[ˆÜXË\Ü›Y0©ÌM
+H\ÈHÝ™X[T›Ø™X[ˆšYÚ[ÛÜ™Xˆ][œÈØ[™Y]\È
+Š˜ÛÛ˜Ý\œ™[K›Ý[™YÈÈ[ˆ›YÚ
+Š‹™X]ÈŒ
+È\œÙXX›HÑÚ]BˆÝ\ÜYšY[ÈÛÙXÈ\ÈHÚ[‹ØMX\È›™^‹[™
+Š˜X\È\È]\ÈÛÜœ™XÝ\BˆÜ™Y[X[ÈŠŠˆ8 %™]™\ˆ\È˜Y˜[˜ÙHHØ[™Y]H‹ˆHÚ[›™\ˆ\È\œÚ\ÝYÛˆØ[Y\˜X‚Œ‹ˆ
+ŠÚ[›™[[[Y\˜][ÛŠŠˆ8 %TÐTQ]šXÙTÙ\ÜÚ[Û‹˜Ú[›™[Ê
+XÝ™\‚ˆÒTÐTKÐÛÛ[YÛ]Ò[œ]›ÞKØÚ[›™[Ø[™ÒTÐTKÔÞ\Ý[KÕšY[ËÚ[œ]ËØÚ[›™[Ø]™\žHÜ[]YˆÚ[›™[Ù™™\™Y™KXÚXÚÙYÈYˆTÐTH\È[˜]˜Z[X›K›Ø™HÚ[›™[Èx )ŒMˆÚ]HÚÜ][Y[Ý]ˆTÐÔ’P‘X‚ŒËˆ
+Š•˜[œÜÜÙ[‹ZX[[™ÊŠˆ8 %Y˜][Ô[\›X]™YÈYˆQ\ÈÙ[XÝY[™›È•\œš]™\ÈÚ][‚ˆ
+ŠHÊŠ‹˜[˜XÚÈÈÔ]]ÛX]XØ[H[™\œÚ\Ý]\ˆ]šXÙKˆH\Ù\ˆ\È™]™\ˆ\ÚÙYX›Ý]ˆ˜[œÜÜˆ
+ÜXË\Ü›Y0©ÌMŒ‰ÜÈYš\œÝXÚÙ][Y[Ý]\ÈÈÈ›ÜˆH
+›XXÚ[™IÜÊˆ[Y\ŽÈBˆHÈšYÝ\™H\ÈHÝ™X[PÛÛ›Û\˜Ø]ÚÙÈ]šYÙÙ\œÈH
+™˜[˜XÚÊ‹ˆ›Ý^\ÝÈ^H\™Bˆ›ÝHØ[YH[Y\‹ŠBˆ
+Š“š[™H˜[YYXYÛ›ÜÙ\ÊŠˆ8 %Ý™X[QØÝÜ˜]\Ý™\ÛÛ™H]™\žH˜Z[\™HÈÛ™HÙˆŒKIÜÈš[™BˆXYÛ›ÜÙ\ËXXÚÚ]HØ]\ÙHÙ[[˜ÙH[™HÛÛ˜Ü™]HXÝ[Û‹ˆH˜]È\œ›ÜˆÛÙHÜˆ[ˆ[\H[H\ÈBˆY™XÝˆšYÚ[\œ›Ü‹™XYÛ›ÜÝXÐÛÙX\È›ÜˆHÙÈ[™H˜ÛÜH]Z[Èˆ]Û‹™]™\ˆ›ÜˆBˆ\Ù\‹Y˜XÚ[™ÈÙ[[˜ÙK‚‚ˆÈÈÈÈ‹M8 %›È˜[œØÛÙ[™Ë›ÈÛÝYS‹[Û›HYÜ™\ÜË™\›È[[Y]žH
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆYÜYœ›ÛH‘PUT‘TË›Y0©ÌNð©ÌŒ\ÈXÚ\Ú[ÛœË›Ý\Ü\˜][ÛœË‚”™XÛÜ™[™È[™^Ü\™H
+Šœ\ÜÝ›ÝYÚ]^[™ÈÛ›JŠˆ8 %U\ÜÙ]Üš]\˜Ú]˜U\ÜÙ]Üš]\’[œ]
+YYXU\N›Ý]]Ù][™ÜÎˆš[
+X[™\[™
+ÈØ[\PY™™\ŽŠXÈ\™H\È›Â™[˜ÛÙ\ˆ[ˆH\[™›ÈÛÙH]]ÛÝ[YÛ™Kˆ[YÜ™\ÜÈ\ÜÙ\ÈÛ™H
+Šœ\™JŠ‚˜ÜÝÛXÞK˜Û\ÜÚYžJÎŠHOˆÜÝÛ\ÜØØ]H[ˆšYÚ[›ÝØÛÛØÈœX›XÒ[\›™]\È™Y\ÙY™Y›Ü™HBœÛØÚÙ]\ÈÜ[™Y[™H™Y\Ø[\È\ÝX›HÛˆ[^ˆ\™H\È›È[˜[]XÜÈÑË›ÈÜ˜\Ú™\Ü\‹››È\ØYÙH[™Ë›È™[[ÝHÛÛ™šYË›È›ÛÜˆ\ÜÙ]Ñ‹[™›È]]ÛX]XÈ\]HÚXÚÈ[ˆKŒ‚‚ˆÈÈÈ‹HÛÛ™›XÝÈ›Ý[™Ú[HÜš][™È\ÈÛÛ˜XÝ‚•\ÙHÙ\™H›Ý[ˆÔS‹PÓÓ‘“PÕË›YˆXXÚÛÝ[]™HÛÜÝ[ˆ[\[Y[][ÛˆYÙ[[ˆÝ\ˆÜ‚œ›ÙXÙYÛÙH]Ù\È›Ý[šË‚‚ˆÈÈÈÈ‹MH8 %XÛÙHYZ\ÜÚ[ÛŽˆXÛÙPYZ][™Ø
+›ÝØÛÛšYÚ[›ÝØÛÛØ
+H
+ÈXÛÙPYÙ]
+XÝÜ‹šYÚ[šY[Ø
+H
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËXÛÜ™K›Y0©ÎXÛ\™\È›ÝØÛÛXÛÙPYZ][™ÈÈÝ\œ™[YÙ]
+
+NÈX^ÛÛ˜Ý\œ™[Ù\ÜÚ[ÛœÊ
+NÂ˜XÜ]Z\™JÛÜÝˆÝX›Kš[Üš]NˆÝ™X[Tš[Üš]JH\Þ[˜È›ÝÜÈOˆXÛÙSX\ÙHXÚ]ÛÜÝ˜YYØ\^[È0åÈœÈ0åÈÛÙXÕÙZYÚ[™H˜\ÙKSLHYÙ]Ùˆ
+ŠŽL[š]ÈÈŒÙ\ÜÚ[ÛœÊŠ‹‚˜ÜXË]šY[Ë\\[[™K›Y0©ÌL‹XÛ\™\ÈÛØ˜[XÝÜˆX›XÈXÝÜˆXÛÙPYÙ]Ú]˜YZ]
+™\]Y\Ý
+HOˆYZ\ÜÚ[Û”™\Ý[\]X™[X\ÙX™\Ù\™U˜[œÚY[H[Tš[Üš]X[[B˜[™HÛÜÝÈ›Ü›X[\ÙYÈLÌ˜\ÙKSLH
+ŠŒŒHÈÙ\ÜÚ[ÛœÊŠ‹ˆÛÈ]]Üš]Y\ËÛÈÛÜÝ[š]ËÛÈš[Üš]H[[\ËÛÈYÙ][X™\œË[˜ÛÛ\]X›HY]Ù˜[Y\Ë‚‚Š”[[™ÎŠ‚‚Šˆ
+Š˜›ÝØÛÛXÛÙPYZ][™ØXÛÙSX\ÙXXÛÙPÛÜÝÝ™X[Tš[Üš]X[™[TÛXÞX\™BˆXÛ\™Y[ˆšYÚ[›ÝØÛÛØ
+Šˆ8 %\™K›Ý[™][Û‹[Û›K[^]\ÝX›Kˆ\È\ÈÚ]]ÂˆÝ™X[PÛÛÜ™[˜]Ü‹›XZÙT[˜[™HÛ\ÜÈx $ÑHX›H™H[š]]\ÝYÚ]Ý]šY[ÕÛÛ›ÞÚXÚˆ›ÝÜXÜÈ\ÚÙY›Üˆ[™™Z]\ˆÛÝ[[]™\ˆœ›ÛH]ÈÝÛˆ[Ù[K‚Šˆ
+Š˜XÛÙPYÙ]\ÈHÚ[™ÛH[\[Y[][ÛŠŠ‹HÛØ˜[XÝÜˆXÝÜ˜[ˆšYÚ[šY[ØÛÛ™›Ü›Z[™ÂˆÈXÛÙPYZ][™Øˆ]\ÈHÛ›H]]Üš]H]X^HYZ]HÙ\ÜÚ[Û‹ˆÝ™X[PÛÛÜ™[˜]Ü˜ˆÛÛ\]\Èš[Üš]KÛÈX\Ù\Ë[™ÙY\È
+Š››ÊŠˆYÙ]Ùˆ]ÈÝÛ‹‚Šˆ
+Š•H[š]\ÈHXÛÙH[š]
+JJŠ‹\ˆ‹LŒ‹ˆYYØ\^[È0åÈœÈ0åÈÛÙXÕÙZYÚ\È[]YÈ]ˆ›ÙXÙY[X™\œÈZÙHŽŽH[š]Èˆ]›È[X[ˆØ[ˆØ[š]KXÚXÚË‚Šˆ[Tš[Üš]X\È[]Y[ˆ˜]›Ý\ˆÙˆÝ™X[Tš[Üš]X
+ÜXËXÛÜ™K›Y0©ÍËŒIÜÈ[[JKˆ›ÝH]ˆ[Tš[Üš]X\ÈÜš][ˆ
+Š™Ù\È›ÝÛÛ\[JŠˆ8 %š\ÚX›S\™ÙX[™™XÛÜ™[™Ø›Ý]™H˜]Âˆ˜[YH‚ŠˆXÛÙPYÙ]˜YZ]X^H™]\›ˆ™Ü˜[YYÜ˜YY
+X\ÙKXÛÙS[ÙJXÈÝ™X[PÛÛÜ™[˜]Ü˜]\Ýˆ[™H][™Ý\™˜XÙHH[[Ý[Û‹‚‚Š[Y[™ŠˆÜXËXÛÜ™K›Y0©Î
+ÛÜÝ[š]XÛ\˜][ÛˆÚ]JNÈÜXË]šY[Ë\\[[™K›Y0©ÌL‚Š[Tš[Üš]X8¡¤ˆÝ™X[Tš[Üš]XÛÛ™›Ü›HÈXÛÙPYZ][™Øš^H˜]Ë]˜[YHÛÛ\Ú[ÛŠK‚‚ˆÈÈÈÈ‹ML8 %Û™H›Ü›X]\NˆšY[Ñ›Ü›X][™›ØˆšY[Ñ›Ü›X]\È[]Y
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËXš]Ý™X[K›Y0©ÌŒˆXÛ\™\ÈšY[Ñ›Ü›X][™›Ø
+ÈšY[Ë›]
+H[ˆšYÚ[š]Ý™X[X‚˜ÜXË]šY[Ë\\[[™K›Y0©Ì‹ŒˆXÛ\™\ÈšY[Ñ›Ü›X]
+MˆšY[Ë›][Ì˜]\Y
+H[‚˜šYÚ[šY[ØˆÜXË\™[™\‹›Y0©ÌËŒHXÛ\™\Èœ˜[YQÙ[ÛY]žX
+ÈÛÛÜ’[™›Ø
+ÈšY[Ü™\˜[‚˜šYÚ[›ÝØÛÛØˆ[™YH\ØÜšX™HHØ[YHÛÙYÙ\Ü^KÔÐT‹ØÛÛÝ\ˆ˜XÝËÚ]Y™™\™[šY[›˜[Y\È[™\\Ë‚‚Š”[[™ÎŠˆ
+Š›Û™H\KšY[Ñ›Ü›X][™›Ø[ˆšYÚ[›ÝØÛÛØ
+Š‹ÛÛ\ÜÙYÙˆœ˜[YQÙ[ÛY]žX[™˜ÛÛÜ’[™›Ø˜]\ˆ[ˆ™\Ý][™ÈZ\ˆšY[ËˆšYÚ[š]Ý™X[XÛÛ\]\È]œ›ÛHÔËÕ”È•RNÂ˜šYÚ[šY[ØÛÛœÝ[Y\È][™ÛÛ™\ÈÛ˜ÙH[ˆ›Ü›X]\ØÜš\[Û‘˜XÝÜžXÈšYÚ[™[™\˜™XYÂ˜Ù[ÛY]žX›Üˆ]ÈÛÛÜ™[˜]H\[[™KˆšYÚ[šY[Ë•šY[Ñ›Ü›X]\È[]Y‚˜šY[Ñ›Ü›X][™›ØÙY\È\Ü^UÚYØ\Ü^RZYÚØØ\•ÚYØØ\’ZYÚØÛÙYÚYÂ˜ÛÙYZYÚ\È
+Š˜ÛÛ\]Y\ÜÝ›ÝYÚÊŠˆÈÙ[ÛY]žXÛÈ]™\žH[™HÙˆÜXËXš]Ý™X[K›YÝ[œ™XYÈÛÜœ™XÝK‚‚Š[Y[™ŠˆÜXËXš]Ý™X[K›Y0©ÌŒˆ
+XÛ\˜][ÛˆÚ]H
+ÈÛÛ\ÜÚ][ÛŠNÈÜXË]šY[Ë\\[[™K›Y0©Ì‹Œ‚Š[]HšY[Ñ›Ü›X]
+K‚‚ˆÈÈÈÈ‹MLH8 %Û™HXÛÙYYœ˜[YH\NˆšY[Ñœ˜[YXÈÛ™HšY[ÔÚ[šØ
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©Ì‹8¡¤ˆXÛÙYœ˜[YX[ˆšYÚ[šY[ØˆÜXË]šY[Ë\\[[™K›Y0©Ì‹Œˆ8¡¤‚˜XÛÙYšY[Ñœ˜[YXÚ]H^[ØY[[K[™›ÝØÛÛšY[ÔÚ[šÈÈ™\Ù[
+ÎŠNÈÚ[Ú[™ÙQ›Ü›X]Â™YÚ[™ÙQ›Ü›X]ÈY›Üœ˜[Y\ÎÈYÝ[ÈY™XÛÝ™\ˆXˆÜXË\™[™\‹›Y0©ÌËŒH8¡¤ˆšY[Ñœ˜[YX[™˜›ÝØÛÛšY[ÔÚ[šÈÈ[œ]Y]YJÎŠNÈÝ™X[QY™\Ù]
+
+NÈÝ™X[QY[™
+™X\ÛÛŽŠHX\È›]\Ý[ÛÈÙ™™\ˆB˜ÓTØ[\PY™™\˜Ý™\›ØY‹ˆ™YH˜[Y\È›ÜˆHœ˜[YKÛÈ[˜ÛÛ\]X›H›ÝØÛÛÈÚ]
+Š››ÈY[X™\ˆ[‚˜ÛÛ[[ÛŠŠ‹‚‚Š”[[™ÎŠˆ
+Š˜šY[Ñœ˜[YX
+Šˆ
+HÛÛœÝ[Y\‰ÜÈ˜[YHÚ[œÎÈšYÚ[™[™\˜\ÈHÛ›H[\[Y[\ŠK‚˜XÛÙYœ˜[YX[™XÛÙYšY[Ñœ˜[YX\™H[]YˆÛ™HšY[ÔÚ[šØ[ˆšYÚ[šY[ØH[š[ÛˆÙ‚˜›ÝY[X™\ˆÙ]ËÚ][œ]Y]YX\ÈHœ˜[YKY[]™\žH™\˜ˆ
+›Ý™\Ù[
+K[™Y˜][›Ë[Ü™^[œÚ[ÛœÈÛˆHÚ^ØœÙ\˜Xš[]HY[X™\œÈÛÈHZ[š[X[Ú[šÈ\È™YH[™\Ëˆ^XÝXÛ\˜][Ûˆ[‚°©ÍŽKˆH^[ØY[[H\È›ÜYˆ^[XY™™\ˆ[]™\žH[™Ø[\KXY™™\ˆ[]™\žH\™HÛÂ˜[œ]Y]YXÝ™\›ØYËÚXÚ™[[Ý™\ÈHÝÚ]Úœ›ÛH]™\žHœ˜[YK‚‚˜ÓTØ[\PY™™\˜Ü›ÜÜÚ[™ÈšYÚ[šY[È8¡¤ˆšYÚ[™[™\˜›ÝYÚ˜›Ûš\ÛÛ]Y[˜È[œ]Y]YJÎ™›Ü›X]™Ù[™\˜][ÛŽŠX\ÈYØ[[™™YYÈ›È›Þˆ›ÝÚY\È\™B˜›Ûš\ÛÛ]YHØ[\ÈÞ[˜Ú›Û›Ý\Ë[™›È\ÛÛ][Ûˆ›Ý[™\žH\ÈÜ›ÜÜÙYÛÈÙ[™X›X\È›Ýœ™\]Z\™YˆÈ›ÝÜ˜\]ˆÈ›ÝÝÜ™H]‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©Ì‹ÈÜXË]šY[Ë\\[[™K›Y0©Ì‹Œ‹ð©Ì‹ÈÜXË\™[™\‹›Y0©ÌËŒK‚‚ˆÈÈÈÈ‹MLˆ8 %^XÝH
+Š™YJŠˆ[˜ÚXÚÙYÙ[™X›X\\Ë[[Y\˜]Y
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆTÒUPÕT‘K›Y0©ÍKŽH8¡¤ˆ^XÝHÛÈ
+XÛÙTÚ[šÐ›ÞXÛÙYœ˜[YX
+K‚˜ÜXË\™[™\‹›Y0©ÌKŒÈ8¡¤ˆ]\Ýœ˜[YP›Þ\ÈHÙ[™\šXÈÝXÝ[˜ÚXÚÙYÙ[™X›OŽˆ[˜ÚXÚÙYÙ[™X›X‚˜ÜXË]šY[Ë\\[[™K›Y0©Ì‹ŒÈ8¡¤ˆ›Ü›X]›Þ\ÈHÙ[™\šXÈÝXÝ[œØY™OŽˆ[˜ÚXÚÙYÙ[™X›X‚˜ÜXËY\ØÛÝ™\žK›Y0©ÌLH8¡¤ˆš[˜[Û\ÜÈ][XØ\Ý]YÜ˜[PÚ[›™[ˆ[˜ÚXÚÙYÙ[™X›X‚˜ÜXËZ\Ø\K›Y0©Íˆ8¡¤ˆš[˜[Û\ÜÈT“Ù\ÜÚ[Û•˜[œÜÜˆ[˜ÚXÚÙYÙ[™X›X‚‚Š”[[™ÎŠˆHÛÝ[\È
+Š™YJŠ‹[™\È\ÈHÛÛ\]H\ÝˆTÒUPÕT‘K›Y	ÜÈÛÈØ\ÈÜš][‚˜™Y›Ü™HH™[™\ˆÜXÈ^\ÝY[™Y›Ý›Ü™\ÙYHH]\ÝYœ˜[YHÛÝ‚‚ŸÈ\H[Ù[H\ÝYšXØ][Ûˆ]]\Ý\X\ˆ\ÈHÛÛ[Y[ŸKK_KK_KK_KK_ŸHXÛÙTÚ[šÐ›ÞšYÚ[šY[ØÛ›H]]X›HÝ]H\È[ˆ\Þ[˜ÔÝ™X[KÛÛ[X][Û˜
+ØÝ[Y[Y™XY\ØY™H›ÜˆZY[Øš[š\Ú
+H[™[ˆÔÐ[ØØ]Y[™˜Z\“ØÚØ\›ÝXÝYÛÝ[\ˆÝXÝˆ›Ý[™È[ÙHÝÜ™YˆŸˆšY[Ñœ˜[YXšYÚ[šY[ØÜ˜\ÈHÕ”^[Y™™\˜›ÙXÙYžHšY[ÕÛÛ›Þ™]™\ˆ]]]YY\ˆ[]™\žNÈÛÛœÝ[Y\œÈÛ›HØÚÈH˜\ÙHY™\ÜÈ›Üˆ™XY[™ÈÜˆÜ˜\]šXHÕ“Y][^\™PØXÚXˆ™]™\ˆ[™YÈÛÈÜš]\œËˆŸÈ]\Ýœ˜[YP›ÞšYÚ[™[™\˜HÚ[™ÛHšY[Ñœ˜[YXÛÝ\ÈH8¢iËYY\[™[™È\œ˜^K›ÝÝX\™YžHÛ™H”ÓØÚØ[›ÜˆŒœËˆ”ÓØÚØ›ÝÔÐ[ØØ]Y[™˜Z\“ØÚØ™XØ]\ÙH]\ÈØ[Yœ›ÛHšY[ÕÛÛ›Þ	ÜÈ™XY[™HØÚÈ]\Ý™H™KY[˜[\ØY™HXÜ›ÜÜÈHÈ›Ý[™\žNÈ]]^™YYÈXXÓÔÈMH[™H›ÛÜˆ\ÈMˆ‚ˆÈÈÈÈÈHÙ[œÝ\È\ÈXÝX[HZ[‚•HX›HX›Ý™H\ÈH\ÚYÛ‹ˆÚ]\È[ˆÛÝ\˜Ù\ËØÙ^H\È
+Š›Û™JŠˆÛÛ™›Ü›X[˜ÙK[™]\È›Ý[žHÙ‚H™YKÛÈHY™™\™[˜ÙH\È™XÛÜ™Y\™H˜]\ˆ[ˆY›ÜˆH™XY\ˆÈ\ØÛÝ™\ˆžHÜ™\[™Î‚‚ŸÛÝ\ÚYÛ™Y[ˆH™YH›ÝÈŸKK_KK_KK_ŸHXÛÙTÚ[šÐ›Þ
+šYÚ[šY[Ø
+H
+Š˜XœÙ[ŠŠˆXÛÙT\[[™XÛÈ]ÈÚ[šÈ\È[žHšY[ÔÚ[šØ™Z[™HXÝÜˆ[™ZY[È›Ý[™ÈXÜ›ÜÜÈH›Ý[™\žKÛÈ›È›ÞØ\È™YYYˆŸˆšY[Ñœ˜[YX
+šYÚ[šY[Ø
+H
+Š˜XœÙ[ŠŠˆHU”Ø[\PY™™\‘\Ü^S^Y\˜][œ]Y]Y\ÈÓTØ[\PY™™\˜\™XÝNÈ›ÈÕ”^[Y™™\˜\È]™\ˆÝ\™˜XÙYÈHÛÛœÝ[Y\‹ˆH\H\ÈÝ[ÝÙYžHHY][]ˆŸÈ]\Ýœ˜[YP›Þ
+šYÚ[™[™\˜
+H
+Šœ™\XÙY[ˆHØ[YHÛÝ
+ŠˆžHØ[\PY™™\˜XÚÙ[™
+šYÚ[™[™\˜
+Kˆ‚˜Ø[\PY™™\˜XÚÙ[™ØØÝ\Y\ÈÛÝÈžHÝ\\š\ÛÜˆ[[™Ëˆ]È\ÝYšXØ][Ûˆ\ÈHØ[YHÚ\H\Â˜]\Ýœ˜[YP›Þ	ÜÈ[™\ÈÜ[YÝ][ˆHš[Nˆ]™\žHÝÜ™Y›Ü\H\ÈÝX\™YžHÛ™H”ÓØÚØš[›ÜˆH›Ý[™YÜ[‹™XØ]\ÙHH\H\ÈÜš][ˆœ›ÛH›ÝHXZ[ˆXÝÜˆ
+^Y\ˆ]XÚY[™Ù[ÛY]žJH[™šY[ÕÛÛ›Þ	ÜÈØ[˜XÚÈ™XY
+[œ]Y]YJKˆ”ÓØÚØ›ÜˆHØ[YH™X\ÛÛˆÛÝÈ[Ø^\Â™Ø]™H8 %]]^™YYÈXXÓÔÈMH[™H›ÛÜˆ\ÈM‚‚•HÛÈ]È\™H]]X[H^Û\Ú]™KÛÈHÛÝ[Ý^\È]Û™H[[Y][[™ËˆÚ[ˆ]Ù\ËÚXÚ]™\ˆÙˆHÛÈ\È›ÝHÚ\[™È™[™\™\ˆ]\Ý™H[]Y˜]\ˆ[ˆÙ\[Û™ÜÚYNˆHØ\š\È™YH
+›]™JˆÛÛ™›Ü›X[˜Ù\Ë[™ÛÈ]\ÝYœ˜[YHÛÝÈ›ÜˆÛ™H[HÛÝ[YX[ˆHXÝ\™H\ÈÛÂ›ÝÛ™\œË‚‚ŠŠ‘›Ü˜šY[ŽŠŠˆHÙ[™\šXÈ\ØØ\H]Ú\È[œØY™O˜[™[˜ÚXÚÙYÙ[™X›O˜ˆHÙ[™\šXÂ˜[˜ÚXÚÙYÙ[™X›X›Þ\È›ÝH\ÝYšXØ][Û‹]\ÈHØ^HÈÝÜÜš][™ÈÛ™K[™]XZÙ\ÈB›[[H]ÛÝ[È\ÙH[™[™›Ü˜ÙXX›Kˆ›Ü›X]›Þ\È[›™XÙ\ÜØ\žH8 %ÓQ›Ü›X]\ØÜš\[Û˜\Â˜ÛÛ™š[™YÈHXÛÙT\[[™XXÝÜˆ[™™]™\ˆÜ›ÜÜÙ\Ëˆ][XØ\Ý]YÜ˜[PÚ[›™[™XÛÛY\È[‚˜XÝÜ˜
+]ÝÛœÈÛ™H•ÐÛÛ›™XÝ[Û‘Ü›Ý\[™HÛÛ[X][ÛŽÈ\™H\È›Ý[™È[ˆXÝÜˆØ[››ÝÛ
+K‚˜T“Ù\ÜÚ[Û•˜[œÜÜ™XÛÛY\È[ˆXÝÜ˜Û[™ÈH[YØ]HÝ]KÚ]HT“Ù\ÜÚ[Û˜[YØ]B›Y]ÙÈÜ[™È[ˆšXH\ÚØ‚‚˜šYÚ[\ÝÚ]Ù\È›ÝÛÝ[ˆHØ\\ÈÛˆÛÝ\˜Ù\ËØ^ÛY[™ÈšYÚ[\ÝÚ]ÚXÚÚ\ÈÈ›Âœ›ÙXÝH\[šÜËˆÛÈÛÛ™›Ü›X[˜Ù\È]™H\™HÙ^H8 %X[X[ÛØÚØ[™˜™XÛÜ™[™ÓÙÙÙ\‹”ÝÜ˜YÙXH]\ˆHš]˜]HØÚËYÝX\™Y›Þ]]ÈHÙ[™X›XÙÙÙ\‚˜XØÝ[][]H[™\Ëˆ›Ý\™H[œÚYHH^[\[Û‹[™›Ý\™H˜[YY\™HÛÈH^[\[ÛˆÝ^\ÈBœÚÜ\Ý˜]\ˆ[ˆ[ˆÜ[ˆÛÜ‹‚‚Š[Y[™ŠˆTÒUPÕT‘K›Y0©ÍKŽNÈÜXË\™[™\‹›Y0©ÌKŒÎÈÜXË]šY[Ë\\[[™K›Y0©Ì‹ŒÎÂ˜ÜXËY\ØÛÝ™\žK›Y0©ÌLNÈÜXËZ\Ø\K›Y0©Í‹‚‚ˆÈÈÈÈ‹MLÈ8 %\˜[Y]\”Ù]Ø\™H]XÚY
+Š›Û›HÚ[ˆ^HÚ[™ÙJŠˆ
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXË\›Y0©Ì‹8¡¤ˆ“›Û‹[š[
+Š›Û›HÛˆHš\œÝœ˜[YHY\ˆHÙ]Ú[™ÙY
+Šˆ
+[˜ÛY[™ÂH™\žHš\œÝœ˜[YJH‹ˆÜXË]šY[Ë\\[[™K›Y0©Ì‹ŒH8¡¤ˆœ™\Ù[ÛˆHš\œÝœ˜[YHÙˆ]™\žHÓÔ‹˜[™]È\˜[Y]\”Ù]ÝÜ™X\ÈZ[ÈY\H˜ž]KZY[XØ[™\Ù[™È
+]™\žHÓÔÚXÚ\È›Ü›X[
+H‹‚‚Š”[[™ÎŠˆ
+Š›Û›HÚ[ˆÚ[™ÙYŠŠˆšYÚ[•ÛÈHÝ\œ™[Ù]ËÛÛ\\™\Èž]\Ë[™]XÚ\ÈÛ›B›ÛˆH™X[Ú[™ÙKˆšYÚ[šY[Ë”\˜[Y]\”Ù]ÝÜ™XÝ[Y\\È
+™[[™œ˜XÙ\Ë[™][ÛÈÙY\ÂœÙ]È]\œš]™HšXHÑÜ›ÜJ˜
+K]HÚ\™HÛÛ˜XÝ\ÈÚ[™ÙY[Û›Nˆ]MˆØ[Y\˜\ÈÚ]HHÂ‘ÓÔ\‹QÓÔ]XÚY[\ÈMˆ™YY\ÜÈÑ]WX[ØØ][ÛœÈ\ˆÙXÛÛ™ÛˆHœ˜[YH]‚˜šYÚ[šY[Ø
+Š›]\Ý
+Šˆ™]Z[ˆH\Ý›Û‹Xš[Ù]È›ÜˆHY™][YHÙˆHÝ™X[H8 %HXÛÙ\ˆ™\Ù]™Ù\È›Ý[]H]È\ÚÈ›Üˆ[HYØZ[ŽÈ][Z]ÈšÙ^Yœ˜[YS™YYY
+™XÛÙ\”™\Ù]
+X[™™XZ[Â™œ›ÛHÚ]]ÛË‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©Ì‹ŒK‚‚ˆÈÈÈÈ‹MM8 %PPÈ]Y[ÔÜXÚYšXÐÛÛ™šYØ]™\È[ˆ]Y[Ñ›Ü›X][™›Ë›XYÚXÐÛÛÚÚYX™]™\ˆ[ˆ\˜[Y]\”Ù]ËœÜÖÌX
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXË\›Y0©Ì‹ŒÈ8¡¤ˆ‘›ÜˆPPÈ\ÈØ\œšY\ÈH]Y[ÔÜXÚYšXÐÛÛ™šYÈ[ˆÜÖÌX‹‚‚Š”[[™ÎŠˆ[]Yˆ\˜[Y]\”Ù]Ø\ÈH
+ŠšY[ÊŠˆ\H
+]Ø\œšY\ÈÛÙXÎˆšY[ÐÛÙXØ
+NÈÛ]YÙÛ[™È[‚˜]Y[ÈÛÛÚÚYH›ÝYÚHšY[˜[YYÜØ\È^XÝHHÚ[™Ùˆ[™È]›ÙXÙ\ÈHXÛÙ\ˆ]ÛÜšÜÈ[[ÛÛY[Û™HYÈH™XÛÛ™][Û˜ÛˆŒS\\Ëˆ[˜ÛÙYœ˜[YK˜]Y[Ñ›Ü›X]‚]Y[Ñ›Ü›X][™›ÏØØ\œšY\ÈXYÚXÐÛÛÚÚYNˆ]OØÚXÚ\ÈÚ]]Y[ÐÛÛ™\\”™Y˜Ø[È[™\‚˜Ð]Y[ÐÛÛ™\\‘XÛÛ\™\ÜÚ[Û“XYÚXÐÛÛÚÚYX‚‚Š[Y[™ŠˆÜXË\›Y0©Ì‹ŒË0©Î‹‚‚ˆÈÈÈÈ‹MMH8 %Ý™X[T]X[]X™\XÙ\ÈÝ™X[T›Ùš[K’Ú[™[™Ý™X[R[™^È˜]]Èˆ\Èš[
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËXÛÜ™K›YXÛ\™\È›ÝÝ™X[T]X[]HÈXZ[‹ÝX‹\™]]ÈX[™˜Ý™X[T›Ùš[K’Ú[™ÈXZ[‹ÝX‹\™X[™\Ù\È]X[]SÝ™\œšYNˆÝ™X[T]X[]OØÚ\™Hš[˜[™XYHYX[œÈ]]ËˆÜXËZ\Ø\K›YXÛ\™\ÈÝ™X[R[™^ÈXZ[ˆHKÝXˆH‹\™HÈX‚‚Š”[[™ÎŠˆÛ™H\KÝ™X[T]X[]X[ˆšYÚ[›ÝØÛÛØØ\Ù\ÈXZ[ˆHKÝXˆH‹\™HØ˜ÛÙX›X\È]ÈÝÙ\˜Ø\ÙHÝš[™Ëˆ
+Š•\™H\È›È˜]]ØØ\ÙJŠˆ8 %˜]]Èˆ\ÈHXœÙ[˜ÙHÙˆ[‚›Ý™\œšYK^™\ÜÙY\ÈÝ™X[T]X[]OØ
+ÚXÚÙ[\ÜÚYÛ›Y[œ]X[]SÝ™\œšYX[™XYHÙ\ÊK‚˜Ý™X[T›Ùš[K’Ú[™[™Ý™X[R[™^\™H[]YÈÝ™X[T›Ùš[KšY™XÛÛY\ÈÝ™X[T]X[]X‚‚Š•ÚNŠˆ[ˆ˜]]ØØ\ÙH[ˆ[ˆ[[H]\È[ÛÈ\ÙYÈ
+›˜[YHHÛÛ˜Ü™]HÝ™X[JˆYX[œÈ]™\žHÝÚ]Úš\È[ˆ[œ™XXÚX›Hœ˜[˜Ú[™]™\žHÝ™X[Z[™ÐÚ[›™[Q
+›ÜŽŠX™YYÈH™XÛÛ™][Û‹ˆÜ[Û˜[]B™^™\ÜÙ\È[œÙ]ˆÚ]Ý][™[[™ÈH˜[YK‚‚Š[Y[™ŠˆÜXËXÛÜ™K›Y0©ÌË0©ÍŒ‹0©ÍNÈÜXËZ\Ø\K›Y0©ÌLKŒË‚‚ˆÈÈÈÈ‹MMˆ8 %^[Ý]Ù[ÛY]žH\ÈHL°åÌLˆ[YÙ\ˆÜšYÈH\œÚ\ÝY[Ù[\È^[Ý][ÙX
+ÈÐÙ[\ÜÚYÛ›Y[X
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆV›Y0©ÍKŒH8¡¤ˆ[^[Ý]È\™H[YÙ\ˆ™XÝ[™Û\ÈÛˆH
+ŠŒLˆ0åÈLˆ[š]ÜšY
+Š‹Ù[È\™B˜^[Ý]Ù[ÈKËØ[Y\˜RQX[ÙH[[B˜ÈÚ[™ÛKÜšYž‹\›Ì\KÜšYÞËÜšY\›Ì\ËX[œÝ\ÝÛHX‚˜ÜXËXÛÜ™K›Y0©ÍH8¡¤ˆ^[Ý][ÙHÈÚ[™ÛKÜšY
+ÛÛ[[œÎœ›ÝÜÎŠKÛ™T\Ñš]™KÛ™T\ÔÙ]™[‹ÛÔ\ÑZYÚÝ\ÝÛJœ˜[Y\ÎˆÓ[ÜØZXÑœ˜[YWJHX\ÜÚYÛ›Y[È\™B˜Ù[\ÜÚYÛ›Y[ÈÙ[[™^Ø[Y\˜RQ]X[]SÝ™\œšYK\ÜXÝ[ÙK\Ð]Y[ÔÛÛÈXÙ[ÛY]žH\Â˜œ˜[Y\Ê
+HOˆÓ[ÜØZXÑœ˜[YWX[ˆH
+Š[š]Ü]X\™HÚ]ÝX›XÛÛÜ™[˜]\ÊŠ‹‚‚Š”[[™ÎŠˆZÙH›Ý^Y\™Y8 %^H\™HÛÛš[™ÈY™™\™[›Ø›[\È[™XXÚ\ÈšYÚX›Ý]]ÈÝÛ‹‚‚Šˆ
+Š‘Ù[ÛY]žJŠˆ\ÈV›Y	ÜÈ
+ŠŒLˆ0åÈLˆ[YÙ\ˆÜšY
+Š‹ˆ^[Ý][ÙK˜Ù[Ê
+HOˆÑÜšYÙ[X™]\›œÂˆÜšYÙ[ÈKËXÚ][šY[È[[ˆ‹‹ŒL˜ˆ[ÜØZXÑœ˜[YX[™]ÈÝX›Xˆ[š]\Ü]X\™HÛÛÜ™[˜]\È\™H[]Yˆ[YÙ\œÈ™XØ]\ÙHHÝ\ÝÛH[ÜØZXÈ]\ÝÛ˜\^XÝK™XØ]\ÙBˆŒÌÌÌÌÌØÙ[ÚYÈXØÝ[][]HHš\ÚX›HÙX[H\œ›Üˆ]Ë[™™XØ]\ÙH^[Ý]\]X[]H\ÈÂˆ™H^XÝ›ÜˆØœÙ\˜X›XY™š[™Ë‚Šˆ
+Š”\œÚ\Ý[˜ÙH[™Y[]JŠˆ\™HÜXËXÛÜ™K›Y	ÜÎˆ^[Ý][ÙX\ÈH\˜[Y]\š\ÙY[[Bˆ
+ÜšY
+ÛÛ[[œÎœ›ÝÜÎŠXÛÝ™\œÈ°åÌ‹ðåÌË0åÍpåÍKpåÓˆ[™°åÌH[ˆÛ™HØ\ÙH8 %V›Y	ÜÈš]™BˆÙ\\˜]HÜšYž˜Ø\Ù\ÈÈ›Ý
+K[™\ÜÚYÛ›Y[È\™HÐÙ[\ÜÚYÛ›Y[XÙ^YYžHÙ[[™^ˆÜ\œÙKÛÜY‚Šˆ^[Ù[ÛY]žH\ÈÛÛ\]Y
+Š›Û˜ÙJŠ‹[ˆšYÚ[RKÔÝYÙKÓ^[Ý][™Ú[™KœÝÚYœ›ÛBˆÙ[Ê
+X
+È•[YK“Y]šXÜË[QÝ]\˜
+È•[YK“Y]šXÜËœÝYÙR[œÙ]ˆ›ÈšY]ÈÛÛ\]\ÈHÙ[ˆ™XÝÈÝ™X[PÛÛÜ™[˜]Ü˜\š]™\È[H™\ÛÛ][Û˜œ›ÛHHØ[YH[˜Ý[ÛˆÛÈHYZ\ÜÚ[ÛˆX›Bˆ[™HØÜ™Y[ˆ™]™\ˆ\ØYÜ™YK‚ŠˆX]ÚYÙ[ÛY]žQY™™XÝ\ÈÙ^YY
+Š˜žHØ[Y\˜JŠˆ
+TÒQÓ‹›Y0©ÍËÊK›ÝžHÙ[
+V›Y0©ÍKŒJK‚ˆH^[Ý]Ú[™ÙH]\Ý™]™\ˆX\ˆÝÛˆHXÛÙHÙ\ÜÚ[Û‹[™H[H\ÈÈ›Hœ›ÛH]ÈÛÙ[Âˆ]È™]ÈÛ™H8 %ÚXÚ\ÈÛ›H^™\ÜÚX›HYˆHY[]H˜]™[[™È›ÝYÚH˜[œÚ][Ûˆ\ÈBˆØ[Y\˜K‚‚Š[Y[™ŠˆV›Y0©ÍKŒH
+^[Ý]Ù[8¡¤ˆÜšYÙ[
+ÈÙ[\ÜÚYÛ›Y[ÈYÜH\˜[Y]\š\ÙY˜^[Ý][ÙXÈÙ^HH˜[Y\ÜXÙHžHØ[Y\˜JNÈÜXËXÛÜ™K›Y0©ÍH
+[ÜØZXÑœ˜[YX8¡¤ˆÜšYÙ[˜œ˜[Y\Ê
+X8¡¤ˆÙ[Ê
+X[YÙ\ˆ[š]ÊK‚‚ˆÈÈÈÈ‹MMÈ8 %™\ÛÛ][Û˜\ÈHÛ™HÚ^™H\NÈ^[Ú^™X\È[]Y
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËXÛÜ™K›Y0©ÌÈXÛ\™\È™\ÛÛ][ÛˆÈÚYZYÚˆ[X[™0©ÎŒHÙ\\˜][HXÛ\™\Â˜^[Ú^™HÈÚYZYÚˆ[X›Üˆ[H˜XÚÚ[™ÈÚ^™K‚‚Š”[[™ÎŠˆÛ™H\K™\ÛÛ][Û˜[ˆšYÚ[›ÝØÛÛØ\ÙY›ÜˆÝ™X[H[Y[œÚ[ÛœË\Ü^B™[Y[œÚ[ÛœÈ[™[H˜XÚÚ[™ÈÚ^™H[ZÙKˆ^[Ú^™X\È[]YˆšY]ÜÜ•[Kœ^[Ú^™N‚”™\ÛÛ][Û˜ÙY\ÈHšY[˜[YK™XØ]\ÙHH˜[YHØ\œšY\ÈH[š]
+˜XÚÚ[™È^[ÊH[™HØÂ˜ÛÛ[Y[Ø^\ÈÛË‚‚ˆÈÈÈÈ‹MN8 %šY[ÐÛÙXË™XÛÙUÙZYÚHKŒÈKŒÍHÈK[™HHÛÜÝ›Ü›][H\Èš^Y
+Š–ÔÑSPS•P×JŠ‚‚Š”ØZYŠˆÜXËXÛÜ™K›Y8¡¤ˆŒKŒŒHKŒÍKR”QÈK[šÛ›ÝÛˆKŒÍK‚˜ÜXË]šY[Ë\\[[™K›Y0©ÌL‹Œˆ8¡¤ˆŒKŒŒHXš]KŒÍKŒHXZ[ŒLKÌR”QÈ‚‚Š”[[™ÎŠˆXÛÙUÙZYÚ\ÈKŒHKŒÍXZœYÈXˆHXZ[ŒLÝ\˜Ú\™ÙH\È™X[]˜™[Û™ÜÈÈH
+˜š]\
+‹›ÝHÛÙXÎˆXÛÙPÛÜÝ][\Y\ÈžH[ˆ^˜H
+ŠŒKŒŠŠˆÚ[‚˜Ù[ÛY]žK˜š]\ˆÚXÚZY[ÈKÌ›ÜˆŒHXZ[ŒL[™[ÛÈÛÝ™\œÈŒYÚL‚‚˜˜ÛÜÝ
+JHHÙZ[
+
+ÛÙYÚY0åÈÛÙYZYÚ0åÈœÊHÈ
+NLŒ0åÈL0åÈÌ
+Bˆ0åÈÛÙXË™XÛÙUÙZYÚ0åÈ
+š]\ˆÈKŒˆˆKŒ
+Bˆ0åÈ[ÙKÙZYÚ0åÈ
+HÈ˜‚˜[ÙKÙZYÚˆ[KŒœÐØ\Y
+MJHMXÙ^Yœ˜[Y\ÓÛ›HŒL˜œYÔÛ]\ÙYÂ˜
+ÌŒXY]]™HÚ[ˆÝÛœØØ[K[Û‹YXÛÙH\ÈXÝ]™NÈ0åÍ‹Œ›Üˆ™]™\œÙH^X˜XÚËˆ›Ý[™Y\ÂŒŒHKˆ›ÝHÛÙYÚY0åÈÛÙYZYÚ›Ý\Ü^HÚ^™NˆHXÛÙ\ˆ[ØØ]\ÈÛÙY
+L
+K[™]\ÈÚ]ÛÜÝÈY[[ÜžH˜[™ÚY‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©ÌL‹ŒŽÈÜXËXÛÜ™K›Y0©Î‚‚ˆÈÈÈÈ‹MNH8 %XXÚ[™HYÙ]X›H
+Š–ÔÑSPS•P×JŠ‚‚Š”[[™ÎŠˆ‘PUT‘TË›Y	ÜÈÛÈ˜[YYÛ\ÜÙ\È\™H^XÝÈÜXË]šY[Ë\\[[™K›Y	ÜÈš[™\ˆÛ\ÜÙ\Èš[š[ˆH™\Ýˆ]XÝYÛ˜ÙH]][˜Ú\œÚ\ÝYÂ˜‹ÓXœ˜\žKÐ\XØ][ÛˆÝ\ÜÕšYÚ[ÙXÛÙKXYÙ]šœÛÛ˜\Ù\‹[Ý™\œšYX›H[‚”Ù][™ÜÈ8¡¤ˆÝ™X[\È8¡¤ˆ“X^[][HÛÛ˜Ý\œ™[XÛÙ\È‹‚‚Ÿ]XÝ[ÛˆÛ\ÜÈYÙ]HX^Ù\ÜÚ[ÛœÈŸKK_KK_KK_KK_Ÿ\HÚ[XÛÛ‹ÛÈYYXH[™Ú[™\È
+XXÌMLØØXXÌMMÕ[˜JHX^È[˜HÌˆŸ\HÚ[XÛÛ‹Ëœ\™›]™[œ\ÚXØ[ÜHH˜›ÈÌˆŽŸ\HÚ[XÛÛ‹˜\ÙHK\Ù\šY\È
+Š˜˜\ÙJŠˆ
+ŠŒ
+ŠˆŸ[[UÈ\™Ø\™H›Ø™HÝXØÙYYÈ
+ˆÈØXžHZÙJÊH[[
+È]ZXÚÈÞ[˜È
+ŠŒL
+ŠˆMˆŸ[[Œ\™Ø\™HÛ›H[[YØXÞHˆŸ›Ý›Ø™\È˜Z[
+“KÝš\YÔJHÛÙØ\™HÛ›HÈ‚”[[YHØ[Xœ˜][ÛˆX^HÛ›H
+Š›ÝÙ\ŠŠˆHÙYY
+0åÌŽLÛˆ[žHXÛÙS]T˜][Èˆˆ	XÜ‚˜Õ•ÛÝ[›ÝÜ™X]R[œÝ[˜ÙQ\œ˜›ÛÜˆˆHÈˆÙ\ÜÚ[ÛœÊH[™X^H˜Z\ÙH˜XÚÈÈ][ÜÝHÙYY‚•\›X[[™ÝÙ\ˆ][\Y\œÈ\™H\YYÛˆÜ™]™\ˆ\œÚ\ÝYˆ™˜Z\ˆ0åÌŽXœÙ\š[Ý\È0åÌŒ˜˜Üš]XØ[0åÌŒÍXÝÈÝÙ\ˆ[ÙH0åÌŒ˜]\žHÚ]]\ÙSÛ˜]\žX0åÌÍX‚‚ˆÈÈÈÈ‹MŒ8 %ÙÈØ]YÛÜšY\ÎˆLËœ›ÛHTÒUPÕT‘K›YÈHÝ\ˆÛÈ\ÝÈX\ÛÈ[H
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆH
+Š\™
+Šˆ\Ý\X\™Y8 %ÜXËXÛÜ™K›Y0©ÌMHXÛ\™\ÈÙÐØ]YÛÜžHÈÛÛ™šYËÜ™Y[X[Ë˜ÛÛ›Û\‹ÛÛÜ™[˜]Ü‹™XÛÜ™[™ËÛ˜\ÚÝ]™[ËX[ØÝÜ‹]]ÛX][Û‹\œÚ\Ý[˜ÙHXŠLHØ\Ù\ÊK\Ú›Ú[œ›ÛH›ÝTÒUPÕT‘K›Y	ÜÈLÈ[™‘PUT‘TË›Y	ÜÈM‚‚Š”[[™ÎŠˆ‹LMHÝ[™È8 %TÒUPÕT‘K›Y	ÜÈLËˆX\[™È›ÜˆHÝ\ˆÛÈ\ÝÎ‚‚Ÿœ›ÛHÜXËXÛÜ™K›YÈ‘PUT‘TË›YØ[›ÛšXØ[ŸKK_KK_ŸÛÛ™šYØ\œÚ\Ý[˜ÙXÝÜ™XÝÜ˜YÙXŸÜ™Y[X[ØÙXÝ\š]XÛÜ™XŸÛÛ›Û\˜ÛÛÜ™[˜]Ü˜™XÛÜ™[™ØÛ˜\ÚÝ]™[ØØÝÜ˜]]ÛX][Û˜^X˜XÚØÛÜ™XŸX[\™˜ŸXÛÙXšY[Ø‚’YˆÛÜ™X›Ý™\ÈÛÈÛØ\œÙH[ˆ˜XÝXÙKHš^\ÈHÝXœÞ\Ý[XšY[ÛˆÙÑ]™[
+Š››Ý
+ŠˆB™›Ý\Ø]YÛÜžH\Ý‚‚Š[Y[™ŠˆÜXËXÛÜ™K›Y0©ÌMK‚‚ˆÈÈÈÈ‹MŒH8 %]™[Ú[™\ÈHÛ™H]™[^Û›Û^NÈšYÚ[]™[\X\È[]Y
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXËXÛÜ™K›Y0©ÍÈXÛ\™\È]™[Ú[™
+NHØ\Ù\ËÚ]˜[š]
+\Ø\Q]™[\NˆÝš[™ÊX
+NÈÜXËZ\Ø\K›Y\[™^ˆXÛ\™\ÈšYÚ[]™[\X‚‚Š”[[™ÎŠˆ]™[Ú[™[ˆšYÚ[›ÝØÛÛØÚ]H[šY[[š]
+\Ø\Q]™[\NŠX8 %šYÚ[TÐTXœ\œÙ\ÈHÚ\™HÝš[™È[™ÛÛœÝXÝÈ]šYÚ[ÛÜ™XÝÜ™\È]šYÚ[RXØØ[\Ù\È]šXB˜\Ü^S˜[YRÙ^XˆšYÚ[]™[\X\È[]YˆHÚ\™HÝš[™È\È™\Ù\™Y™\˜˜][H[‚˜]™[™XÛÜ™œ˜]Ñ]™[\XÛÈ[ˆ[œ™XÛÙÛš\ÙY]™[\ÈÝ[XYÛ›ÜØX›K‚‚Š[Y[™ŠˆÜXËZ\Ø\K›Y\[™^ˆ[™0©ÌM‚‚ˆÈÈÈÈ‹MŒˆ8 %]™[›ÝYšXØ][Û[\œÈH[\\Ý™X[HÝÛ™\ˆ
+ÙYH[ÛÈ‹MŠH
+Š–ÐÓÔÓQUP×JŠ‚‚Š”[[™ÎŠˆšYÚ[TÐTK‘]™[›ÝYšXØ][Û[\\ÈH
+ŠÚ\™JŠˆ\H
+Û™H\œÙY˜]™[›ÝYšXØ][Û[\˜\
+KˆšYÚ[ÛÜ™K‘]™[™XÛÜ™\ÈH
+Š™ÛXZ[ŠŠˆ\H
+Y\Y˜ÛØ[\ØÙY\œÚ\ÝYÚ]H[X›˜Z[[™HÛ\[šÊKˆ^H\™H›ÝHØ[YH\H[™™Z]\‚œ™\XÙ\ÈHÝ\‹ˆ[\Ý™X[S[Ûš]Ü˜[Z]ÈH›Ü›Y\ŽÈ]™[Ù[\˜›ÙXÙ\ÈH]\‹‚‚ˆÈÈÈÈ‹MŒÈ8 %Ý™X[RÙ^X™\XÙ\ÈÝ™X[RY[YšY\˜
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË]šY[Ë\\[[™K›Y\Ù\ÈÝ™X[RY[YšY\˜›ÝYÚÝ][™™]™\ˆXÛ\™\È]‚‚Š”[[™ÎŠˆÝXÝÝ™X[RÙ^Nˆ\ÚX›KÙ[™X›KÛÙX›HÈ˜\ˆØ[Y\˜NˆØ[Y\˜RQÈ˜\ˆ]X[]NˆÝ™X[T]X[]HXš[ˆšYÚ[›ÝØÛÛØˆ]\ÈÚ]HXÛÙH\[[™K[ˆ]Y[È›Ý]H[™HYÙ]Ü˜[\™HXÝX[BšÙ^YYžH8 %HØ[Y\˜H[Û™H\ÈÜ›Û™ÈH[ÛY[HXZ[ˆ[™HÝXˆÝ™X[H\™H›Ý]™H\š[™ÈBœ]X[]HÝÚ]ÚÚXÚ\ÈH^XÝML\ÈÚ[™ÝÈ‹LŒHX[™]\Ë‚‚ˆÈÈÈÈ‹M8 %Û™H[˜ÛÙYœ˜[YXØ\œšY\È]Y[ÈÛÎÈ[˜ÛÙY]Y[Ñœ˜[YXÙ\È›Ý^\Ý
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË]šY[Ë\\[[™K›Y0©ÌLËð©ÌNZÙ\È[˜ÛÙY]Y[Ñœ˜[YX[ˆÝX›Z]]Y[ÊÎŠX[™™]™\‚™XÛ\™\È]ˆÜXË\›Y\ÈHÚ[™ÛH[˜ÛÙYœ˜[YXÚ]]Y[Ñ›Ü›X][™]Y[ÈÛÙXÈØ\Ù\Ë‚‚Š”[[™ÎŠˆÛ™H[˜ÛÙYœ˜[YXˆÝX›Z]]Y[ÊÈœ˜[YNˆ[˜ÛÙYœ˜[YJXZÙ\ÈHØ[YH\NÂ˜œ˜[YK˜ÛÙXË˜]Y[ÈOHš[\ÈH\ØÜš[Z[˜]Ü‹[™XÛÙT\[[™X\ÜÙ\È][ˆXYË‚‚Š[Y[™ŠˆÜXË]šY[Ë\\[[™K›Y0©ÌLË0©ÌNŒK0©ÌNŒ‹‚‚ˆÈÈÈÈ‹MH8 %\Þ[˜ÔÝ™X[X
+Šœ›Ü\Y\ÊŠˆ[ˆHÜXÜÈ\™H[Ü›Û™ÎÈ^H]\Ý™H˜XÝÜšY\È
+Š–Ð•RSJŠ‚‚Š”ØZYŠˆÜXË]šY[Ë\\[[™K›Y
+˜\ˆ]™[Îˆ\Þ[˜ÔÝ™X[O\[[™Q]™[˜˜\ˆÚ[™Ù\Ø˜˜\ˆØ[\U\˜\ˆ]™[Ø
+KÜXËY\ØÛÝ™\žK›Y
+˜\ˆ[˜›Ý[™ˆ\Þ[˜ÔÝ™X[O[˜›Ý[™]YÜ˜[O˜˜˜\ˆ]Ø˜\ˆ]™[Ø˜\ˆ™\ÜÛœÙ\Ø
+KÜXËXÛÜ™K›Y0©Ìˆ
+˜\ˆ]Ø˜\ˆ]™[Ø˜˜\ˆ™\ÜÛœÙ\Ø
+H[XÛ\™HÝÜ™YØÛÛ\]Y\Þ[˜ÔÝ™X[X
+Šœ›Ü\Y\ÊŠ‹‚‚Š”[[™ÎŠˆ‹LÈ\Y\ÈÚ]Ý]^Ù\[Û‹ˆ]™\žHÛ™H™XÛÛY\ÈH˜XÝÜžBŠ[˜È]™[Ê
+HOˆ\Þ[˜ÔÝ™X[OO˜
+HÝ™\ˆHÚ\™Y›Ý[™Yœ›ØYØ\Ý\˜ˆHÚ[™ÛH\›Z]Y™^Ù\[Ûˆ\ÈHÝ™X[HÚ]H
+ŠœÝXÝ\˜[HÚ[™ÛHÛÛœÝ[Y\ˆÜ™X]YžHHØ[YHØ[]XYH]
+Š‚¸ %\ØÛÝ™\žPÛÛÜ™[˜]Ü‹œÝ\
+
+HOˆ\Þ[˜ÔÝ™X[O\ØÛÝ™\žQ]™[˜[™˜Ý™X[QØÝÜ‹™XYÛ›ÜÙJØ[Y\˜NŠHOˆ\Þ[˜ÔÝ™X[OØÝÜ”›ÙÜ™\ÜÏ˜]X[YžK™XØ]\ÙHXXÚØ[Ý\ÈB›™]È[‹ˆH
+œ›Ü\Jˆ™]™\ˆ]X[YšY\Ë‚‚˜ÜXËXÛÜ™K›Y0©Í‹ŽIÜÈœ›ØYØ\Ý\[[Y[˜XÝÜˆ\ÈYÜY™\˜˜][H\ÈHÚ\™Y[\[Y[][Û‚˜[™[Ý™\ÈÈšYÚ[›ÝØÛÛØÛÈšYÚ[TÐTX[™šYÚ[\ØÛÝ™\žXØ[ˆ\ÙH]ÛËˆÝ[™[™Â˜Y™™\š[™ÈÛXÚY\úã¾w¶‰žËkºwµçHÌHŸ[YKÓYYXU[Y\Ý[\œÝÚYYYXU[Y\Ý[\
+ÈLŽXš]™\ØØ[H[™ÛÛ\\™HŒÌ8 %ÌHŸ[YKÔ˜[™ÛTÛÝ\˜ÙKœÝÚY˜[™ÛTÛÝ\˜ÙX
+È^[œÚ[Û‹Þ\Ý[T˜[™ÛTÛÝ\˜ÙXÜ]Z^˜[™ÛTÛÝ\˜ÙXLÌ8 %ÌHŸYYXKÐÛÙXÜËœÝÚYšY[ÐÛÙXØ]Y[ÐÛÙXØYYXPÛÙXØM8 %ÌHŸYYXKÔ\˜[Y]\”Ù]ËœÝÚY\˜[Y]\”Ù]Ø
+Èš[™Ù\œš[LLÛÙXÜÈÌHŸYYXKÑ[˜ÛÙYœ˜[YKœÝÚY[˜ÛÙYœ˜[YXœ˜[YQ›ÜÛ\ÜØ]Y[Ñ›Ü›X][™›ØNL\˜[Y]\”Ù]ËYYXU[Y\Ý[\ÌHŸYYXKÑœ˜[YQÙ[ÛY]žKœÝÚYœ˜[YQÙ[ÛY]žXÛÛÜ’[™›ØšY[Ü™\˜™\ÛÛ][Û˜Œ8 %ÌHŸYYXKÕšY[Ñ›Ü›X][™›ËœÝÚYšY[Ñ›Ü›X][™›Ø
+È\ÜÝ›ÝYÚÈ
+È\ÑXÛÙ\ÛÛ\]X›XNLœ˜[YQÙ[ÛY]žKÛÙXÜÈÌHŸÝ™X[\ËÔÝ™X[T]X[]KœÝÚYÝ™X[T]X[]XÝ™X[RÙ^X•Ô˜[œÜÜÚ[™][˜ÞT™\Ù]MÌY[YšY\œÈÌHŸÝ™X[\ËÑXÛÙTÛXÞKœÝÚYXÛÙS[ÙXÝ™X[Tš[Üš]XXÛÙPÛÜÝXÛÙPYZ][™ØXÛÙSX\ÙXYZ\ÜÚ[Û”™\Ý[YÙ]Ú[™ÙXYÙ]Û˜\ÚÝ[šX[™X\ÛÛ˜YÙ]™\ÜÝ\™XÌÝ™X[T]X[]Kœ˜[YQÙ[ÛY]žHÌHŸÝ™X[\ËÕ[TÛXÞKœÝÚY[PÛ\ÜØ[PÛÛ^[TÛXÞXÝ™X[PÚÚXÙX8 %HÛ\ÜÈx $ÑHX›K\™HŒŒÝ™X[T]X[]K™\ÛÛ][ÛˆÌHŸÝ]ËÔÝ™X[TÝ]\ÝXÜËœÝÚYÝ™X[TÝ]\ÝXÜØ
+ÌHšY[ÊHM8 %ÌHŸÝ]ËÔš[™ÐY™™\‹œÝÚYš[™ÐY™™\[[Y[˜LŒ8 %ÌHŸ\œ›ÜœËÕšYÚ[\œ›Ü‹œÝÚYšYÚ[˜Z[\™X\œ›Ü”Ù]™\š]X™]žQ\ÜÜÚ][Û˜šYÚ[\œ›Ü˜šYÚ[™\]Z\™XŒÛXZ[‘\œ›ÜœÈÌHŸ\œ›ÜœËÑÛXZ[‘\œ›ÜœËœÝÚY
+Š[[]™[ˆÛXZ[ˆ[[\ÊŠˆ
+‹LL
+KˆH\™Ù\ÝÌHš[NÈÜ][ÈÛXZ[‘\œ›ÜœÊÔ›ÝØÛÛœÝÚYÈ
+ÓYYXKœÝÚYÈ
+Ð\œÝÚYYˆ]^ÙYYÈŒMŒ8 %ÌHŸ\œ›ÜœËÑXYÛ›ÜÝXÐÛÙ\ËœÝÚYH‘ËOÓPRS‹S“““˜X›\È[™HXYÛ›ÜÝXÐÛÙXØ\Ù\“Y\ÜØYÙXØ\Ù\”™[YYXX\[™ÜÈŒÛXZ[‘\œ›ÜœÈÌHŸÙÙÚ[™ËÓÙÙÙ\”›ÝØÛÛœÝÚYÙÓ]™[ÙÐØ]YÛÜžXÙÑ]™[ÙÙÙ\”›ÝØÛÛ
+È]™[^[œÚ[ÛœË[ÙÙÙ\˜MÌ8 %ÌHŸÙÙÚ[™ËÔ˜]S[Z]YÙÙÙ\‹œÝÚYXÛÜ˜]ÜŽˆˆ\ˆÙ^H\ˆÚ[™ÝÈ
+ÈÝ\™\ÜÚ[ÛˆÝ[[X\žHLÌÙÙÙ\”›ÝØÛÛÛØÚÜÈÌHŸÙÙÚ[™ËÔ™YXÝœÝÚY™YXÝ8 %HÛ™H™YXÝ[Ûˆ[\[Y[][ÛˆŒ8 %ÌHŸž]\ËÐž]T™XY\‹œÝÚYž]T™XY\˜ŒÌÛXZ[‘\œ›ÜœÈÌHŸž]\ËÐž]UÜš]\‹œÝÚYž]UÜš]\˜[˜Ûˆ[™Ý™Yš^YÌ˜MÌ8 %ÌHŸž]\ËÐš]™XY\‹œÝÚYš]™XY\˜8 %™\˜˜][Hœ›ÛH0©ÌËŒLHLÌÛXZ[‘\œ›ÜœÈÌHŸž]\ËÐš]Üš]\‹œÝÚYš]Üš]\˜[˜ÛˆYXØÙXØ˜œÜ˜Z[[™Ðš]ØLÌ8 %ÌHŸÜž\ËÓQKœÝÚY‘ÈLÌŒKÝ™X[Z[™Ë^[\ˆMÌ8 %ÌHŸÜž\ËÔÒLKœÝÚY’TÈNMÝ™X[Z[™ÈML8 %ÌHŸÜž\ËÔÒLM‹œÝÚY’TÈNMÝ™X[Z[™ÈN8 %ÌHŸÜž\ËÐ˜\ÙMœÝÚYY[™ËKÚ]\ÜXÙKH[™T“\ØY™K]Û\˜[XÛÙNÈXÛÙS\Ý›ÜˆÜ›ÜJ˜N8 %ÌHŸÜž\ËÐÔÌÌ‹œÝÚYQQQH‹ŒËX›KYš]™[ˆÌ8 %ÌHŸ™]ÒTY™\ÜËœÝÚYTY™\ÜØMŒ8 %ÌHŸ™]ÓPPÐY™\ÜËœÝÚYPPÐY™\ÜØÚ]›Ý\ˆÙ\\˜]Üˆ›Ü›\ÈML8 %ÌHŸ™]ÒTÝX›™]œÝÚYTÝX›™]TÜÝÙ\]Y[˜ÙXNTY™\ÜÈÌHŸ™]ÒÜÝÛXÞKœÝÚYÜÝÛXÞXÜÝÛ\ÜØ8 %HS‹[Û›HYÜ™\ÜÈØ]HMLTY™\ÜËÛXZ[‘\œ›ÜœÈÌHŸ™]Ñ[™Ú[ËœÝÚYTÐTQ[™Ú[•Ô[™Ú[MÛXZ[‘\œ›ÜœÈÌHŸ™]ÒœÝÚYXY\œØ™\]Y\Ý™\ÜÛœÙX[™X˜[œÜÜ[™Ø\ØY[™XŒŒ[™Ú[ÈÌHŸ™]ÐÜ™Y[X[œÝÚYÜ™Y[X[Ü™Y[X[™Y˜L8 %ÌHŸY[]KÒY[YšY\œËœÝÚYØ[Y\˜RQÜ›Ý\Q^[Ý]Q]™[QÛ\Q›ÛÚÛX\šÒQÚ[™ÝÒQNL8 %ÌHŸY[]KÑ]šXÙRY[YšY\œËœÝÚYÚ[›™[QÝ™X[Z[™ÐÚ[›™[Q˜XÚÒQMŒÝ™X[T]X[]HÌHŸY[]KÑ]šXÙT]Z\šÜËœÝÚY]šXÙT]Z\šÜØ8 %Ž›YÜÈ
+ÈY\™ÙXNL8 %ÌHŸY[]KÑ]™[Ú[™œÝÚY]™[Ú[™
+È[š]
+\Ø\Q]™[\NŠX]™[Ù]™\š]XŒ8 %ÌHŸÛÛ˜Ý\œ™[˜ÞKÐœ›ØYØ\Ý\‹œÝÚYœ›ØYØ\Ý\[[Y[˜LÌ8 %ÌHŸÛÛ˜Ý\œ™[˜ÞKÐÛÛ˜Ý\œ™[˜ÞS[Z]\‹œÝÚYÛÛ˜Ý\œ™[˜ÞS[Z]\˜’Q“È\›Z]Ø]HMLÝ™X[Tš[Üš]HÌH‚ˆÈÈÈKŒÈÛÝ\˜Ù\ËÕšYÚ[š]Ý™X[X8 %Ìˆ
+Œˆš[\ËLÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_ŸSÒS\KœÝÚY\HX›H8 $ÌÌH
+È\ÕÓ\ÒQ˜\Ô\˜[Y]\”Ù]LÌ8 %ÌˆŸSÒSS\KœÝÚY\HX›H8 $ÍŒÈ
+ÈTTM¸ $ÌŒËTÓQML8 %ÌˆŸSÓSXY\‹œÝÚYSXY\˜S[š]™Y˜M8 %ÌˆŸSÓ[Z]ËœÝÚYÙXÝ\š]H›Ý[™ÎˆX^SZP‹X^Ù]ÈX^ØØ[[™Ë[\Ý[šY\ÈŒ8 %ÌˆŸÛÛ™\Ð[›™^‹œÝÚYÝ\XÛÙHØØ[‹[[Y\˜]SS[š]ØÓ[™Ý™Yš^Yœ›ÛS[™Ý™Yš^YŒ[Z]ÈÌˆŸÛÛ™\Ó[™Ý™Yš^YœÝÚY[[Y\˜]X˜[Y]X\[™
+˜[ÎŠX8 %HÛ™H[˜Ý[ÛˆšYÚ[•\Ù\ÈMž]UÜš]\ˆÌˆŸÛÛ™\Ô”ÔœÝÚY[™\ØØ\X\ØØ\X\ØØ\Pž]PÛÝ[MŒ8 %ÌˆŸÛÛ™\Ô”Ôš]™XY\‹œÝÚY^QÛÛÛXˆYXØÙX[Ü™T”Ô]X˜Z[[™ËXš]ÚXÚÈŒÌš]™XY\‹”ÔÌˆŸÒÔËœÝÚYH\œÙY[Ù[MÌ8 %ÌˆŸÒÔÔ\œÙ\‹œÝÚYUKUŒ0©ÍËŒËŒ‹ŒK[[˜ÛˆØØ[[™È\ÝË•RKÜ›Ü[™ÈŒ”Ôš]™XY\‹ÔÈÌˆŸÒËœÝÚY[Ù[
+ÈZ[š[X[\œÙH
+0©ÍËŒËŒ‹ŒŠHML”Ôš]™XY\ˆÌˆŸKÔ›Ùš[UY\“]™[œÝÚY0©ÍËŒËŒË[˜ÛˆHXš]ÛÛœÝ˜Z[›YÜÈNL”Ôš]™XY\ˆÌˆŸKÒU”ËœÝÚY[Ù[
+È\œÙH
+0©ÍËŒËŒ‹ŒJHMŒ›Ùš[UY\“]™[ÌˆŸKÒTÔËœÝÚY[Ù[NL8 %ÌˆŸKÒTÔÔ\œÙ\‹œÝÚY0©ÍËŒËŒ‹Œ‹ŒK[[˜ÛˆÚÜ]\›H”Ë•RKÛÛ™›Ü›X[˜ÙHÚ[™ÝÈŒ›Ùš[UY\“]™[TÔÈÌˆŸKÒTËœÝÚY[Ù[
+ÈZ[š[X[\œÙH›Üˆ\˜[[\ÛU\XLÌ”Ôš]™XY\ˆÌˆŸ›Ü›X]ÕšY[Ñ›Ü›X][™›ÊÔ\œÙKœÝÚYšY[Ñ›Ü›X][™›Ëš[š]
+ÈÜÎŠX›Üˆ›ÝÛÙXÜË[˜ÛˆHœÈ[\È[™ÐTˆX›HÌÔËTÔÈÌˆŸ›Ü›X]ÔØ[\P\ÜXÝ˜][ËœÝÚYH\ÜXÝÜ˜][×ÚYØ8¡¤ˆ
+Ë
+XX›HÌ8 %ÌˆŸ™XÛÜ™ËÐUÑXÛÙ\ÛÛ™šYÝ\˜][Û”™XÛÜ™œÝÚYZ[
+È\œÙH
+ÈÙ\šX[^™HLÔÈÌˆŸ™XÛÜ™ËÒUÑXÛÙ\ÛÛ™šYÝ\˜][Û”™XÛÜ™œÝÚYZ[
+È\œÙH
+ÈÙ\šX[^™KS\œ˜^XÌTÔË›Ùš[UY\“]™[ÌˆŸÑRKÔÑRKœÝÚY[[Y\˜]X\œÙT™XÛÝ™\žTÚ[\œÙTXÝ\™U[Z[™ØŒŒ”Ôš]™XY\ˆÌˆŸØ]KÔÛXÙRXY\‹œÝÚY\Ñš\œÝÛXÙSÙ”XÝ\™XÛXÙU\X8 %
+ŠHUKX›Ý[™\žH™YXØ]JŠˆMÌSXY\‹”Ôš]™XY\ˆÌˆŸØ]KÐXØÙ\ÜÕ[š]Ý[[X\žKœÝÚYXØÙ\ÜÕ[š]Ý[[X\žXTTØ]XTÓXY\‹PÔH›ÜŒLÛXÙRXY\ˆÌˆŸØ]KÔ\˜[Y]\”Ù]ÝÜ™KœÝÚYY\™ÙK[›Ý\™\XÙK\˜[Y]\”Ù]Ú[™ÙX›Ü›X]XÚ[™ÙH]XÝ[ÛˆŒLšY[Ñ›Ü›X][™›ÊÔ\œÙHÌˆ‚ˆÈÈÈKÛÝ\˜Ù\ËÕšYÚ[•Ô8 %Ìˆ
+ŒHš[\ËÌÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_Ÿ[Ù[Ô•ÔY]ÙœÝÚY•ÔY]Ù•ÔÝ]\Ø
+Ì˜[YYÛÙ\ÊHNL8 %ÌˆŸ[Ù[Ô•ÔXY\œËœÝÚYÜ™\™YØ\ÙKZ[œÙ[œÚ]]™HÛÛZ[™\‹TÐÒRK[Û›H›Û[™È
+1,8¢hX
+HŒL8 %ÌˆŸ[Ù[Ô•ÔY\ÜØYÙKœÝÚY•Ô™\]Y\Ý•Ô™\ÜÛœÙX•Ô[˜ÛÛZ[™Øž]KY^XÝÙ\šX[^™\ˆŽ•ÔXY\œÈÌˆŸ[Ù[Ô•ÔT“œÝÚY[™]Üš][ˆT“˜[YH\NÈ™\]Y\Ý[™Q›Ü›XÜ™Y[X[Yœ™YH\ØÜš\[Û˜ŒÌ[™Ú[ÈÌˆŸÚ\™KÔ•ÔXY\”ØØ[›™\‹œÝÚYÚÙ[ˆÈ][ÝY\Ýš[™ÈÈ\˜[Y]\‹[\Ýš[Z]]™\ÈNL8 %ÌˆŸÚ\™KÔ•ÔÚ\™QXÛÙ\‹œÝÚY[˜Ü™[Y[[\œÙH
+È	[]^
+È™\Þ[˜ÎÈ]™\žH[Z][™›Ü˜ÙY•ÔXY\”ØØ[›™\ˆÌˆŸÚ\™KÔ•Ô™\]Y\ÝZ[\‹œÝÚYØ[›ÛšXØ[™\]Y\Ý[Z\ÜÚ[Û‹XY\ˆÜ™\‹ÛÛ[S[™Ý[\ÈŒL•ÔY\ÜØYÙHÌˆŸ]]Ô•ÔÚ[[™ÙKœÝÚYÕÕËP]][XØ]X\œÚ[™ÎÈÛÈÚ[[™Ù\È[ˆÛ™HXY\ŽÈÛÛ[XH[ˆ™X[XŒ•ÔXY\”ØØ[›™\ˆÌˆŸ]]Ô•Ô]][XØ]Ü‹œÝÚY˜\ÚXÈ
+ÈYÙ\ÝÈ˜ØØÛ›Û˜ÙXØÜ\]YXØÝ[XÈ‘ÈŒŽH›Ë\[Üš\œÝXÛ\ÜÎÈ
+ŠŒ‹X][\Ø\
+ŠˆÌQK•ÔÚ[[™ÙHÌˆŸÑÔÑØÝ[Y[œÝÚY[™H[Ù[ML8 %ÌˆŸÑÔÑ\œÙ\‹œÝÚY[šY[\œÙ\Žˆ˜\™H‹˜Z[[™È•S[šÛ›ÝÛˆ]šX]\Ë›Û‹UU‹NÏXÍÑØÝ[Y[˜\ÙMÌˆŸÑÔÑYYXQ\ØÜš\[Û‹œÝÚYX\Ø›]
+ÝÙ\‹XØ\ÙYÙ^\ÊKØÛÛ›ÛÜ›ÜJ˜XÛÙHŒ˜\ÙMÌˆŸÑÐÛÛ›ÛT“™\ÛÛ™\‹œÝÚYÛÛ[P˜\ÙX8¡¤ˆÛÛ[SØØ][Û˜8¡¤ˆ™\]Y\ÝT’K\[™]Ú]\Û\ÚY\™ÙHNL•ÔT“ÌˆŸXY\œËÕ˜[œÜÜXY\‹œÝÚY\œÙH
+ÈZ[È[\›X]™Y[šXØ\Ý][XØ\Ý[ÙXÜÜ˜ØŒÌ•ÔXY\”ØØ[›™\ˆÌˆŸXY\œËÔÙ\ÜÚ[Û’XY\‹œÝÚYÜ\]YHY
+È[Y[Ý]L8 %ÌˆŸXY\œËÔ•[™›ÒXY\‹œÝÚY\›ØÙ\XØ[YXÈXœÛÛ]K™[]]™H[™][ÝY›Ü›\ÈMÌ•ÔT“ÌˆŸXY\œËÔ˜[™ÙRXY\‹œÝÚYœØÛØÚØØÛ\XØØ[X˜]KPÛÛ›ÛŒ8 %ÌˆŸXXÚ[™KÔ•ÔÙ\ÜÚ[ÛÛÛ™šYËœÝÚYÛÛ™šYÈ
+È•Ô[Y\’Q
+È•ÔÛÜÙT™X\ÛÛ˜ML8 %ÌˆŸXXÚ[™KÔ•ÔXÝ[Û‹œÝÚY•ÔXÝ[Û˜•ÔÙÑ]™[•Ô˜XÚØ•Ô˜XÚÕ[Z[™Ø•ÔÙ\ÜÚ[Û‘\ØÜš\[Û˜Ž8 %ÌˆŸXXÚ[™KÔ•ÔÛÛ[X[™œÝÚY•ÔÛÛ[X[™•ÔÙ\ÜÚ[Û”Ý]XLÌ8 %ÌˆŸXXÚ[™KÔ•ÔÙ\ÜÚ[Û“XXÚ[™KœÝÚYHÝ]HXXÚ[™H
+È˜[œÜÜY\ˆ
+È›Ø™HÝ\ÜN]™\ž][™ÈX›Ý™HÌˆŸXXÚ[™KÔ•ÔÙ\ÜÚ[Û“XXÚ[™JÔ^X˜XÚËœÝÚYÙYZËØØ[Kœ˜[YK\Ý\S““ÕSÑXØ›ÝXÙX˜XÚÜ™\ÜÝ\™HÌŒ•ÔÙ\ÜÚ[Û“XXÚ[™HÌˆ‚ˆÈÈÈKHÛÝ\˜Ù\ËÕšYÚ[•8 %Ìˆ
+š[\ËÐÊB‚˜ÛXÙRXY\”YZËœÝÚY\È
+Š™[]Y
+ŠˆžH‹LNÈ\ÙHšYÚ[š]Ý™X[K”ÛXÙRXY\˜‚‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_ŸXÚÙ]Ô•XÚÙ]œÝÚY‘ÈÍML0©ÍKŒHXY\ˆ\œÙKY[™ËÔÔË^[œÚ[ÛˆŒÌž]T™XY\ˆÌˆŸXÚÙ]Ô•XY\‘^[œÚ[Û‹œÝÚYÛ™KXž]H[™ÛËXž]HXY\ˆ^[œÚ[ÛœÈLŒ•XÚÙ]ÌˆŸXÚÙ]ÔÙ\]Y[˜ÙS[X™\‹œÝÚYM‹Xš][Ù[\ˆÛÛ\\™K^[™Y
+[Ü˜\Y
+HÙ\]Y[˜ÙHLÌ8 %ÌˆŸXÚÙ]Õ[Y\Ý[\[Ü˜\\‹œÝÚYÌ‹Xš]•[Y\Ý[\8¡¤ˆ[Û›ÝÛšXÈ[™Y›Ü™H[žHYYXU[Y\Ý[\ML8 %ÌˆŸ˜XÚËÔ•˜XÚÑ›Ü›X]œÝÚY›Ü›X]ÝXÝ
+È^[ØY]\Hš[™[™È
+È˜XÝÜžHÛÙXÜÈÌˆŸ˜XÚËÔ•˜XÚÔ™XÙZ]™\‹œÝÚYHÝ\™˜XÙHšYÚ[˜[œÜÜš]™\ÈŒ]™\ž][™È™[ÝÈÌˆŸ˜XÚËÑ\XÚÙ]^™\‹œÝÚY›ÝØÛÛ\XÚÙ]^™\“Ý]][žQ\XÚÙ]^™\˜[[H›ÜˆHÝ]N8 %ÌˆŸ˜XÚËÐXØÙ\ÜÕ[š]Z[\‹œÝÚYUH\ÜÙ[X›KXž]H[™Ý™Yš^[™ËÛÜœ\[ÛˆX\šÚ[™ÈŒ[™Ý™Yš^YÌˆŸ˜XÚËÐ›Ý[™\žTÛXÞKœÝÚY
+Š“™]™\ˆ\ÝHX\šÙ\ˆš]
+ŠŽÈX\›™YX\šÙ\ˆ™[XXš[]HŒLÛXÙRXY\ˆÌˆŸÒ\XÚÙ]^™\‹œÝÚY‘ÈŒNˆÚ[™ÛHSÕTPK•KPKˆ›ÈUTÍXØÙ\ÜÕ[š]Z[\ˆÌˆŸKÒQ\XÚÙ]^™\‹œÝÚY‘ÈÍÎNˆÚ[™ÛHST•Kˆ›ÈPÒK›È[\›X]™Y[ÙHÍŒXØÙ\ÜÕ[š]Z[\ˆÌˆŸ]Y[ËÐPPÑ\XÚÙ]^™\‹œÝÚY‘ÈÍ[ÙOPPPËZœ˜ÈUKZXY\œË[[™ÝÚ^™S[™ÝÚ[™^[™ÝŽ]Y[ÔÜXÚYšXÐÛÛ™šYÈÌˆŸ]Y[ËÐ]Y[ÔÜXÚYšXÐÛÛ™šYËœÝÚYTÐÈ\œÙHœ›ÛHž]\È[™œ›ÛHÑÛÛ™šYÏX^Œš]™XY\ˆÌˆŸ]Y[ËÐQËœÝÚYQÈXY\ˆZ[›ÜˆXYÈ[\È[™š^\™\ÈÛ›HLL8 %ÌˆŸ]Y[ËÑÍÌLKœÝÚY0­K[]È[™K[]ÈX›\ËXÛÙH[™[˜ÛÙKXÛÙY[ˆH\™H^Y\ˆNL8 %ÌˆŸ]Y[ËÑÍÌ‹œÝÚYÌˆØš]ÜÈ
+Xš]
+HÛ›HŒL8 %ÌˆŸš]\‹Ô™[Ü™\Y™™\‹œÝÚYœ\ÜÝ›ÝYÚ›ÜˆÔÈQLŽÍŒ\ÈY\]™H8¡¤ˆLL‹ÌŒ\ÈX›Ý™HH	HÜÜÈŽÙ\]Y[˜ÙS[X™\‹š[™ÐY™™\ˆÌˆŸš]\‹ÑØ\ÛXÞKœÝÚYØ\]XÝ[Û‹Ù^Yœ˜[YK\™\]Y\Ý›Ý[™Ë›Ü]ËZÙ^Yœ˜[YHMÌ8 %ÌˆŸ•ÔÔ•ÔXÚÙ]œÝÚYÔ‹”‹ÑTË–QKT[Ù[ÈNL8 %ÌˆŸ•ÔÔ•Ô\œÙ\‹œÝÚYÛÛ\Ý[™\XÚÙ]\œÙKÝšXÝ[™Ý˜[Y][ÛˆŒŒ•ÔXÚÙ]ÌˆŸ•ÔÔ•Ô™\ÜZ[\‹œÝÚY”ˆÙ[™\˜][ÛˆÛˆH‘ÈÍML[\˜[[\ÈŒL•ÛÝ\˜ÙTÝ]HÌˆŸ•ÔÔ•ÛÝ\˜ÙTÝ]KœÝÚY\‹TÔÔÈÜÜËš]\ˆ
+KŽ
+KÙ\]Y[˜ÙKXÞXÛHÝ]HŒÌÙ\]Y[˜ÙS[X™\ˆÌˆŸÛØÚËÔ™\Ù[][ÛÛØÚËœÝÚYZ[‹Yš[\ˆ
+Èˆ
+Š“›Ý
+Šˆ\ÙY›Üˆ]™HXÚ[™È[Y\Ý[\[Ü˜\\ˆÌˆŸÝ]ËÔÝ]\ÝXÜÐXØÝ[][]Ü‹œÝÚYHš^YUÓPHÛÛœÝ[ÎÈÜš]\ÈÝ™X[TÝ]\ÝXÜØŒÌÝ™X[TÝ]\ÝXÜÈÌˆ‚ˆÈÈÈKˆÛÝ\˜Ù\ËÕšYÚ[TÐTX8 %Ìˆ
+Ìš[\ËˆŒÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_ŸSÖS›ÙKœÝÚYS›ÙX]ÛÛ\[][Ûˆ[™Y[[Ú\Ø][ÛˆÌ8 %ÌˆŸSÒTÐTQØÝ[Y[œÝÚY\œÙ\ŽˆZPˆÈ[]™[Ø\Ë
+Š–HÙ™ŠŠ‹^XÚ]ÝXÚË[˜Ø][Û‹]Û\˜[ÌŒS›ÙHÌˆŸSÖS˜[YKœÝÚY[šY[XØÙ\ÜÛÜœËH›ÛÛ›ØØX[\žKÛ[\Y[Ë™\]Z\™Y˜\šX[ÈŽ8 %ÌˆŸSÖSZ[\‹œÝÚY\ØØ\\È	ˆˆˆ	ØÛ›NÈ›È™]K\š[[™ÎÈ[[Y[Ü™\ˆ™\Ù\™YMÌ8 %ÌˆŸSÒTÐTU[YKœÝÚY[™\›ÛYTÐÒRH]HØØ[›™\ˆ
+›È]Q›Ü›X]\˜
+KÔÒVZ[™\Y›Û™\È8 %ÌˆŸÛY[ÒTÐTPÛY[œÝÚYHXÝÜŽˆ™\˜œËSÛÛ™[šY[˜ÙK[™\ËÛØ[\ØÚ[™Ë™]žHX›HÌ˜[œÜÜ[™ÈÌˆŸÛY[Ô™\]Y\ÝØ]KœÝÚY’Q“È\›Z]XÝÜŽÈˆX^HÝ™\‹\ÝXœØÜšX™HžH^XÝHÛ™HM8 %ÌˆŸÛY[ÑYÙ\ÝÝÜ™KœÝÚY›Û˜ÙHØXÚK˜Ø\ˆ
+™X[K›Û˜ÙJK™KY[\]™H]]ŒÌQHÌˆŸÛY[ÑYÙ\ÝÚ[[™ÙKœÝÚY\œÙNÈ‘ÈŒŽH›Ë\[Üš\œÝXÛ\ÜÈMŒ8 %ÌˆŸÛY[ÔÙ\™\•\ÝœÝÚYÙ\™\•\Ý]˜[X][™ØÙ\™\•\ÝXÚ\Ú[Û˜HÑ•HÔÒH[HL8 %ÌˆŸÛY[ÕT“Ù\ÜÚ[Û’˜[œÜÜœÝÚY›Ý\ˆ\[Y\˜[Ù\ÜÚ[ÛœËÛ™H\ˆ[™NÈ[YØ]HÝ]H[ˆ[ˆXÝÜˆŒÌˆŸÛY[Ô™\ÜÛœÙU˜[Y][Û‹œÝÚYH›Ý\‹\Ý\˜[Y]XÈ™\ÜÛœÙTÝ]\Ø^˜XÝ[ÛŽÈ0©ÎKŒÈX\[™ÈÌ™\ÜÛœÙTÝ]\ÈÌˆŸ[Ù[Ô™\ÜÛœÙTÝ]\ËœÝÚY™\ÜÛœÙTÝ]\ØHÈÝ]\ÈÛÙ\ËÝX‹\Ý]\È›ØØX[\žHML8 %ÌˆŸ[™Ú[ËÒZÝš\Ú[Û•T“œÝÚYH
+ŠœÚ[™ÛJŠˆ•Ô]Z[\ˆ
+È•Ô]Ø[™Y]XY\ˆŒ]šXÙRY[YšY\œÈÌˆŸ[™Ú[ËÑ]šXÙRY[]KœÝÚY]šXÙR[™›ØÝ]\Ø[YXØ\Xš[]Y\Ø\Ù\ÚXÚØ™]ÛÜšÒ[\™˜XÙ\ØŒSÌˆŸ[™Ú[ËÐÚ[›™[[™[ÜžKœÝÚY[œ]›ÞKØÚ[›™[Ø
+ÈšY[ËÚ[œ]ËØÚ[›™[ØYÚ[™È]ÌŒSÌˆŸ[™Ú[ËÔÝ™X[Z[™ÐÚ[›™[ËœÝÚYÛÛ™šYÈ™XY
+È
+Šœ™XY[[ÙYžK]Üš]JŠˆU
+È™KQÑUÈÚ\™H[š]ÈSZ[\ˆÌˆŸ[™Ú[ËÔÛ˜\ÚÝËœÝÚYÜXÝ\™XÓÒHÛšY™š[™ËÚ^™H]Y\žK\‹Y]šXÙH˜]HØ\N8 %ÌˆŸ[™Ú[ËÔÛÛ›Û\‹œÝÚYÛÛ[[Ý\È
+È\ÈÙY\X[]™H
+Èš\H™\›Ë\ÝÜÈ™\Ù]ÈÌø $ÌLH›ØÚÙYŒSZ[\ˆÌˆŸ[™Ú[ËÒ[XYÙTÙ][™ÜËœÝÚYÛÛÝ\‹Ú\œ™\ÜËÑ‹T‹XÝ]Y˜][ÈÌSZ[\ˆÌˆŸ[™Ú[ËÔ™XÛÜ™ÙX\˜ÚœÝÚYÔÕÐÛÛ[YÛ]ÜÙX\˜ÚÛ™HÙX\˜ÚQÙX\˜Ú™\Ý[ÜÝ[Û˜SÔ‘XYÚ[™ÈÎSZ[\ˆÌˆŸ[™Ú[ËÔÝÜ˜YÙR[™›ËœÝÚY›Û[Y\ËØ\XÚ]H[ˆXÚ[X[P‹X[MŒSÌˆŸ[™Ú[ËÔ^X˜XÚÓØØ]Ü‹œÝÚY™]Üš]\ÈØÚ[YKÚÜÝÜÜÙY\È]
+Ü]Y\žH
+Š™\˜˜][JŠˆLÌ8 %ÌˆŸ[™Ú[ËÕÛÕØ^P]Y[ËœÝÚYÚ[›™[\ÝÜ[‹ØÛÜÙKÚ[šÙY\ØYÙ\ÜÚ[ÛˆÌ\ØY[™HÌˆŸ]™[ËÓ][\\Ý™X[T\œÙ\‹œÝÚY›Ý[™\žHÛšY™š[™Ë˜\™KSˆÛ\˜[˜ÙKš^YY[[ÜžHYÙ]ÌÌ8 %ÌˆŸ]™[ËÐ[\Ý™X[S[Ûš]Ü‹œÝÚY
+Š“Û™H\ˆ]šXÙJŠŽÈX\™X]Ý\™\ÜÚ[ÛŽÈÈ8¡äˆ[œÝ\ÜYÈ\›Z[˜[˜]]˜Z[YÍ][\\Ý™X[T\œÙ\ˆÌˆŸ]™[ËÑ]™[›ÝYšXØ][Û[\œÝÚYHÚ\™H[Ù[
+È™YÚ[ÛˆXYÛš]YHÛšY™š[™ÈŽ]™[Ú[™ÌˆŸ]™[ËÓ[Ý[Û‘]XÝ[Û‹œÝÚYÜšY™XYÝÜš]KÜšYX\ÜšYÚ[ˆSZ[\ˆÌˆŸÙ\ÜÚ[Û‹ÒTÐTQ]šXÙTÙ\ÜÚ[Û‹œÝÚYH]šXÙHXÝÜŽˆØXÚHË™YØ]]™KXØ\Xš[]HØXÚKY[[Ú\ÙY[\Ý™X[HL[[™Ú[ÈÌˆŸÙ\ÜÚ[Û‹Ô]Z\šÔ™\ÛÛ™\‹œÝÚYHš\›]Ø\™HX]š^ÈH
+Š™›Ý\ŠŠˆÛÛœÝ[][ÛˆÚ[ÈŒ]šXÙT]Z\šÜÈÌˆ‚ˆÈÈÈKÈÛÝ\˜Ù\ËÕšYÚ[\ØÛÝ™\žX8 %Ìˆ
+Œˆš[\ËÌÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_Ÿ[Ù[Ñ\ØÛÝ™\™Y]šXÙKœÝÚY\ØÛÝ™\™Y]šXÙX]šXÙRY[]X]šXÙQšY[Ù^XšY[Ý[\\š]™Y›Ü\Y\ÈÎTY™\ÜËPPÐY™\ÜÈÌˆŸ[Ù[Ñ\ØÛÝ™\žQ[[\ËœÝÚY\ØÛÝ™\žTÛÝ\˜ÙX
+
+Ø\Ý
+K]šXÙU™[™Ü˜]šXÙPÛ\ÜØXÝ]˜][Û”Ý]X™XXÚXš[]X8 %ÌˆŸ[Ù[ÓÓ•’Q”ØÛÜ\ËœÝÚYØÛÜHT’H[Ù[
+È\˜Ù[XÛÙ[™ÈLÌ8 %ÌˆŸ[Ù[Ñ\ØÛÝ™\žPÛÛ™šYÝ\˜][Û‹œÝÚYÛÛ™šYËÜY\œË[Y[Ý]ËYÙ]ÈŒÌ8 %ÌˆŸ[Ù[Ñ\ØÛÝ™\žQ]™[ËœÝÚY\ØÛÝ™\žQ]™[\ØÛÝ™\žT\ÙX\ØÛÝ™\žT›ÙÜ™\ÜØ\ÙTÝ[[X\žX\ØÛÝ™\žTÝ[[X\žXÌ8 %ÌˆŸ[Ù[Ñ\ØÛÝ™\žQXYÛ›ÜÝXËœÝÚYMHØ\Ù\È
+È\Ù\‘˜XÚ[™ÓY\ÜØYÙX
+ÈÙ]™\š]X8 %ÌˆŸ˜[œÜÜÔ›ÝØÛÛËœÝÚYHÙ]™[ˆ[š™XÝY›ÝØÛÛÈ
+È\ØÛÝ™\žQ[š\›Û›Y[
+È][XØ\ÝÜ›Ý\ÜXØ
+È[˜›Ý[™]YÜ˜[XŽ8 %ÌˆŸ˜[œÜÜÓ™]ÛÜšÒ[\™˜XÙR[™›ËœÝÚY™]ÛÜšÒ[\™˜XÙR[™›ØT”[žXÔ›Ø™SÝ]ÛÛYXÔÒVÛÙXMŒTÝX›™]ÌˆŸÐQÔÐQÛÙXËœÝÚY›Ø™H[˜ÛÙKXÛÙKÐQXÛÙT™\Ý[Ü\]YK\^[ØY[›ÜHÎS[]HÌˆŸÐQÔÐQ›Ø™SX]ÚœÝÚYHÚ\™H[Ù[
+ÈÜ]Ù\šX[Œ8 %ÌˆŸÐQÔÐQS™XY\‹œÝÚY[žH[šY[S™XY\ˆ
+ÐQÛ›NÈ›ÝHTÐTHÛ™JHŒŒ8 %ÌˆŸÔÑ\ØÛÝ™\žKÕÔÑ\ØÛÝ™\žPÛÙXËœÝÚYÓÐT›Ø™HZ[›Ø™SX]Ú\ËÒ[ËÐžYHXÛÙKÛÜœ™[][ÛˆŒ8 %ÌˆŸÔÑ\ØÛÝ™\žKÕÔÑ›Ø™SX]ÚœÝÚY[Ù[
+ÈØÛÜH\œÚ[™È
+ÈYœÈŒÓ•’Q”ØÛÜ\ÈÌˆŸÝÙY\ÒTÜÝÜ™\‹œÝÚY˜[ˆ\ˆÛÜœ]Ü™\š[™ËØ]]Ø^KØš[Z[™ÈMLTÝX›™]ÌˆŸÝÙY\ÔÝÙY\[›™\‹œÝÚY[\™˜XÙHš[\š[™ËH
+Š‹ÌMˆ\™ÝX\™
+Š‹ÌM¸ $ËÌŒH˜\œ›ÝÚ[™ÈÌŒTÜÝÜ™\ˆÌˆŸÝÙY\ÐT”X›QXÛÙ\‹œÝÚYÛ\ÙÚ˜Ø[ÈÚ]›Ý[™ÈÚXÚÜÎÈ\œX[˜^˜[˜XÚÈŒT”[žHÌˆŸš[™Ù\œš[ÔÝ\[™RXY\”ØØ[›™\‹œÝÚYÌ[[™H[šY[ØØ[›™\ŽÈ
+Š™[X™\˜][H›ÝšYÚ[•Ô
+ŠˆN8 %ÌˆŸš[™Ù\œš[Ñš[™Ù\œš[ÛÙXËœÝÚY•ÔÔSÓ”ØTÐTH]šXÙR[™›ØØ™\]Y\ÝÈ
+ÈÛ\ÜÚYšXØ][ÛˆÍÝ\[™RXY\”ØØ[›™\ˆÌˆŸš[™Ù\œš[Õ™[™ÜÛ\ÜÚYšY\‹œÝÚYHÛÛ™šY[˜ÙKY[HX›KÕRHÙYYÛÚÝ\Œ8 %ÌˆŸY\™ÙKÒY[]S›Ü›X[^™\‹œÝÚYÙ\šX[[™Ó•’Q‹UURQ›Ü›X[\Ø][Ûˆ[\ÈMÌ8 %ÌˆŸY\™ÙKÓY\™ÙQ[™Ú[™KœÝÚY[š[Û‹Yš[™Ý™\ˆHY[]HY\ŽÈšY[™XÙY[˜ÙNÈÛÛ™šY[˜ÙHŒY[]S›Ü›X[^™\ˆÌˆŸÛÛÜ™[˜]Ü‹Ñ\ØÛÝ™\žPÛÛÜ™[˜]Ü‹œÝÚY\ÙHÜ˜Ú\Ý˜][Û‹YÙ]ËXY[™KØ[˜Ù[][Ûˆ]™\ž][™ÈX›Ý™HÌˆŸ™\ÛÝ\˜Ù\ËÛÝZK\ÙYYšœÛÛ˜È˜Í™ŽLŽˆšZÝš\Ú[Ûˆ‹8 )ŸX8 %XÛ\™Y\È˜ÛÜJ”™\ÛÝ\˜Ù\ÈŠXYˆ\ÙYÈ
+ŠšYˆYYH\™XÝÜžH]\Ý^\Ýœ›ÛHHØ[YHÛÛ[Z]
+Šˆ8 %8 %Ìˆ‚ˆÈÈÈKŽÛÝ\˜Ù\ËÕšYÚ[\ÝÚ]8 %Ìˆ
+LÈš[\ËŒˆÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_ŸÝX›\ËÕš\X[ÛØÚËœÝÚY[Û›ÝÛšXÐÛØÚØ
+È\ØÛÝ™\žPÛØÚØ^XÚ]Y˜[˜ÙJžNŠXMŒÛØÚÜÈÌˆŸÝX›\ËÓX[X[ÛØÚËœÝÚYØÚËX˜\ÙYÛ\ÜÈÛØÚÈ›ÜˆÛÛ˜Ý\œ™[\ÝÎÈ^[\œ›ÛH‹MLˆLÛØÚÜÈÌˆŸÝX›\ËÔ™XÛÜ™[™ÓÙÙÙ\‹œÝÚY™XÛÜ™È]™\žHÙÑ]™[›Üˆ\ÜÙ\[ÛœÈLLÙÙÙ\”›ÝØÛÛÌˆŸÝX›\ËÑš^\™R˜[œÜÜœÝÚY›Ý]HX›H
+È™XÛÜ™Y™\]Y\ÝÎÈ
+Š™˜Z[ÈÛˆ[žHÜ™Y[X[
+ŠˆŒ˜[œÜÜ[™ÈÌˆŸÝX›\ËÓ[ØÚÑ]YÜ˜[PÚ[›™[œÝÚYØÜš\Y
+[^K]YÜ˜[JX™\^H
+ÈÙ[™ÙÈN]YÜ˜[PÚ[›™[ÌˆŸÝX›\ËÓ[ØÚÕÔ›Ø™\‹œÝÚYÒTY™\ÜÎˆÕR[MŽˆÔ›Ø™SÝ]ÛÛYWWXÚ]\YšXÚX[][˜ÞHLLÔ›Øš[™ÈÌˆŸÝX›\ËÓ[ØÚÑ^Ú[™Ù\‹œÝÚYX›KYš]™[ŽÈ
+Š™˜Z[ÈÛˆ[žHÜ™Y[X[
+ŠˆLÌž]Q^Ú[™Ú[™ÈÌˆŸÞ[]XËÔØÜš\Y•ÔY\‹œÝÚYš^\™H˜[œØÜš\YÙ\Ý™XÛÛ\]][Û‹ÛÛ™šYÝ\˜X›HÚ[šÚ[™ÈÍšYÚ[•ÔÌˆŸÞ[]XËÔÞ[]XÐØ[Y\˜KœÝÚY[•Ô
+È•ØÜš\Ù[™\˜]Ü‹\‹Yš\›]Ø\™H]Z\šÈ›Ùš[\ÈŒØÜš\Y•ÔY\ˆÌˆŸÞ[]XËÔÞ[]XÔ•Ù[™\˜]Ü‹œÝÚY\™Ù]È•˜XÚÔ™XÙZ]™\˜^XÝNˆŒÒŒKÐPPËÑËÌLHÎšYÚ[•ÌˆŸÞ[]XËÔÞ[]XÔÔÐZ[\‹œÝÚYš]Üš]\˜XZ[ÔËÔËÕ”ÈÚ]ÚÜÙ[ˆÙ[ÛY]žH[™•RHŒš]Üš]\ˆÌˆŸ\›™\ÜËÑš^\™KœÝÚY]JÎŠX^
+ÎŠXÛÛ[Y[\Ýš\[™È^\œÙ\ˆL8 %ÌˆŸ\›™\ÜËÑÛÛ[•™XÝÜœËœÝÚY‘ÈLÌŒHÈÌMÍÈŒŒÍÈŒMÈX›\È
+ÈH^QÛÛÛXˆX›HŒŒ8 %Ìˆ‚ˆÈÈÈKŽHÛÝ\˜Ù\ËÕšYÚ[˜[œÜÜ8 %ÌÈ
+Nš[\ËŒÈÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_Ÿ•ÔÛÛ›™XÝ[Û‹œÝÚYHXÝÜŽˆÛÛ›™XÝ]ÛZXÈÜš]K]\ÙT™XYØØ™\Ý[YT™XYØ[Y\œÈŒ•ÔÙ\ÜÚ[Û“XXÚ[™HÌÈŸ•ÔÛÛ›™XÝ[ÛŠÕ[Y\œËœÝÚY•Ô[Y\’Q8¡¤ˆØ[˜Ù[X›H\ÚØÈÛ™H[Y\ˆ\ˆYMŒ•ÔÛÛ›™XÝ[ÛˆÌÈŸQYYXTÛØÚÙ]Z\‹œÝÚY]™[‹ÛÙÜÈLL8 $ÍLNNN•
+È•ÔÌ8 %ÌÈŸ][XØ\Ý™\ÜÛ™\‹œÝÚY•Ó\Ý[™\˜ÛˆÍÌŒÈÍÌˆŒŒ8 %ÌÈŸ•˜XÚÑ›Ü›X]Y\\‹œÝÚYÑYYXQ\ØÜš\[Û˜8¡¤ˆ•˜XÚÑ›Ü›X]•Ô˜XÚÕ[Z[™Ø8¡¤ˆÙYYLšYÚ[•ÌÈ‚ˆ
+Š”Ý\\œÙYYŠŠˆ\È›ÝÈ\ÈÜ›Û™È[™Ø[››Ý™HZ[\ÈÜš][Žˆ]XÙ\ÈHY\\ˆ[‚ˆšYÚ[˜[œÜÜÚ]HšYÚ[•\[™[˜ÞH]XÚØYÙKœÝÚYÙ\È›ÝÚ]™H]\™Ù][™ˆHZ\ÝZÙH\È[š\ÚX›HÛˆ[^™XØ]\ÙHHš[HÛÝ[Ú][œÚYHÚYˆÜÊXXÓÔÊXˆH\™BˆÙÚXÈ›ÝÈ]™\È[ˆÛÝ\˜Ù\ËÕšYÚ[•Õ˜XÚËÔ•˜XÚÑ›Ü›X]Y\\‹œÝÚYÚ\™H]\Èˆ\ÝËˆ[™H•Ô]\YÝ™\›ØYÈ[ˆÛÝ\˜Ù\ËÕšYÚ[ÛÜ™KÔÝ™X[Z[™ËÔ•˜XÚÑ›Ü›X]Y\\ŠÔ•ÔœÝÚY8 %ˆšYÚ[ÛÜ™X™Z[™ÈHÛ›HÚ\[™È\™Ù]][\ÜÈ›Ý‚‚ŸËÔÙ\™\•\Ý]˜[X]Ü‹œÝÚYÑ•HÔÒKLMˆXYˆ[›š[™ÈÚ\™YžH•Ô[™TÐTHŽÒLMˆÌÈŸËÐÙ\YšXØ]TÝ[[X\žKœÝÚYÚZ[ˆÝ[[X\žH›ÜˆHRNÈÙXÕ\Ý]˜[X]UÚ]\œ›Ü˜XYÛ›ÜÝXÜÈÛ›HMŒ8 %ÌÈŸš[Q\ØÜš\ÜYÙ]œÝÚYÙ]›[Z]ÈZ[ŠM‹›[WÛX^
+X]][˜ÚÌ8 %ÌÈŸYÜ™\ÜÑÝX\™œÝÚYÜ˜\È]™\žHÛØÚÙ]Ü™X][Ûˆ[ˆÜÝÛXÞKœ™\]Z\™T\›Z]YLLÜÝÛXÞHÌÈŸ\ØÛÝ™\žKÓ][XØ\Ý]YÜ˜[PÚ[›™[œÝÚY•ÐÛÛ›™XÝ[Û‘Ü›Ý\\ØX›U[šXØ\Ýˆ˜[ÙXÜ[Z]KÜ™]\ÙHÍ›ÝØÛÛÈÌÈŸ\ØÛÝ™\žKÕ[šXØ\Ý]YÜ˜[PÚ[›™[œÝÚY\[Y\˜[\Ü[šXØ\Ý˜[˜XÚÈŒ›ÝØÛÛÈÌÈŸ\ØÛÝ™\žKÕÔÛÛ›™XÝ›Ø™\‹œÝÚY•ÐÛÛ›™XÝ[Û˜›Ø™NÈØZ][™Ø\È\›Z[˜[ÈÔÒVÛ\ÜÚYšXØ][ÛˆŒÌ›ÝØÛÛÈÌÈŸ\ØÛÝ™\žKÓ•Ðž]Q^Ú[™Ù\‹œÝÚYÛ™H™\]Y\ÝÜ™\ÜÛœÙNÈÈ™\šYžKX›ØÚÈXØÙ\È[ž][™È
+š[™Ù\œš[Û›JHL›ÝØÛÛÈÌÈŸ\ØÛÝ™\žKÔÞ\Ý[R[\™˜XÙQ[[Y\˜]Ü‹œÝÚYÙ]Y˜YœØ
+ÈÐÓ™]ÛÜšÒ[\™˜XÙXÚ\™[\ÜÈ]XÝ[ÛˆŒ›ÝØÛÛÈÌÈŸ\ØÛÝ™\žKÔÞ\Ý[PT”X›T™XY\‹œÝÚYÞ\ØÝ›Ý]H[\8¡¤ˆT”X›QXÛÙ\˜MT”X›QXÛÙ\ˆÌÈŸ\ØÛÝ™\žKÐ›Ûš›Ý\œ›ÝÜÙ\‹œÝÚY•Ðœ›ÝÜÙ\˜Ý™\ˆH™YHÙ\šXÙH\\ÈNL›ÝØÛÛÈÌÈŸ\ØÛÝ™\žKÑ[][Y[[œÜXÝÜ‹œÝÚYÙXÐÛÙX[][Y[™XYÈØØ[[™]ÛÜšÈ\›Z\ÜÚ[Ûˆ]\š\ÝXÈN8 %ÌÈŸ\ØÛÝ™\žKÓ]™Q\ØÛÝ™\žQ[š\›Û›Y[œÝÚY\ÜÙ[X›\ÈH[]™[ˆ[š™XÝY˜[Y\ÈL[Ùˆ\ØÛÝ™\žKØÌÈ‚ˆÈÈÈKŒLÛÝ\˜Ù\ËÕšYÚ[šY[Ø8 %ÌÈ
+Íˆš[\ËˆÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_ŸÝ\ÜÕšY[Ñœ˜[YKœÝÚYšY[Ñœ˜[YX
+[˜ÚXÚÙYÙ[™X›XÌŠHLÌšY[Ñ›Ü›X][™›ÈÌÈŸÝ\ÜÕšY[ÔÚ[šËœÝÚYH›ÝØÛÛ
+È›Ë[ÜY˜][ËÝ™X[Q[™™X\ÛÛ˜œ˜[YQ›Ü™X\ÛÛ˜XÚ[™Ó[ÙXMÌšY[Ñœ˜[YHÌÈŸÝ\ÜÑXÛÙTÚ[šÐ›ÞœÝÚYH•XØ[˜XÚÈ8¡¤ˆ\Þ[˜ÔÝ™X[XœšYÙH
+[˜ÚXÚÙYÙ[™X›XÌJHM8 %ÌÈŸ›Ü›X]Ñ›Ü›X]\ØÜš\[Û‘˜XÝÜžKœÝÚY
+Š•HÚ[™ÛHÛÜ™SYYXHÛÛ™\œÚ[ÛˆÚ]JŠŽÈÚ]\˜[Y]\”Ù]Ú[\œØÌŒ\˜[Y]\”Ù]ÈÌÈŸ›Ü›X]Ñ›Ü›X]Ý™\œšY\ËœÝÚY]˜ÐØØ˜ÐØ]ÛH™XZ[›ÜˆÛÛÝ\ˆ[™\\\™HÝ™\œšY\È™XÛÜ™ÈÌÈŸ›Ü›X]Ñ›Ü›X]Ú[™ÙPÛÛÜ™[˜]Ü‹œÝÚYÛÛ\]X›HœÈ[˜ÛÛ\]X›NÈÙ[™\˜][Û˜ÈH
+Š››È›XÚÈ›\Ú
+Šˆ[HŽ\˜[Y]\”Ù]ÝÜ™HÌÈŸØ[\KÔØ[\PY™™\Z[\‹œÝÚYÓP›ØÚÐY™™\˜
+ÈÓTØ[\PY™™\˜
+È]XÚY[ÈÌ›Ü›X]\ØÜš\[Û‘˜XÝÜžHÌÈŸØ[\KÔØ[\P]XÚY[ËœÝÚY\Ü^R[[YYX][X›ÝÞ[˜ØÓ›Ý\Ü^XLÌ8 %ÌÈŸØ[\KÕ[Y\Ý[\ÛÛ™\œÚ[Û‹œÝÚYYYXU[Y\Ý[\8¡¥ÓU[YXÈ\˜][Ûˆ\Ý[X][ÛˆÚZ[ˆMLYYXU[Y\Ý[\ÌÈŸXÛÙKÑXÛÙT\[[™KœÝÚYHXÝÜŽˆÝX›Z][Ù\ËÝ˜]YÞKÝ]\ÝXÜÈLŒ]™\ž][™È™[ÝÈÌÈŸXÛÙKÑXÛÙT\[[™JÐ]Y[ËœÝÚY]Y[ÈÝX›Z\ÜÚ[Û‹›Ý][™ËXÛÙ\ˆY™][YHŒ]Y[Ô^X˜XÚÑ[™Ú[™HÌÈŸXÛÙKÓ^Y\‘XÛÙTÙ\ÜÚ[Û‹œÝÚYÝ˜]YÞHNˆU”Ø[\PY™™\‘\Ü^S^Y\˜
+ÈØ[\PY™™\”™[™\™\˜ÎØ[\PY™™\Z[\ˆÌÈŸXÛÙKÔØ[\PY™™\”™[™\š[™ËœÝÚYH™[™\™\ˆ›ÝØÛÛ
+È™\]Y\ÝYYXQ]UÚ[”™XYX[\NL8 %ÌÈŸXÛÙKÕ•XÛÙTÙ\ÜÚ[Û‹œÝÚYÝ˜]YÞHŽˆÙ\ÜÚ[ÛˆÜ™X]KØÛÛ™šYÝ\™KÙXÛÙKÚ[˜[Y]HŒ›Ü›X]\ØÜš\[Û‘˜XÝÜžHÌÈŸXÛÙKÕ•ÛÛ™šYËœÝÚY]™\žH›Ü\HÙ^HÙHÙ][™ÚHŒ8 %ÌÈŸXÛÙKÔÝ˜]YÞTÙ[XÝ[Û‹œÝÚY\Ü^TÝ˜]YÞXÝ˜]YÞR[œ]ØÙ[XÝÝ˜]YÞXÝÚ]ÚÚÜ™[ÙÜ˜\HŒ8 %ÌÈŸXÛÙKÔ^[Y™™\”ÛÛœÝÚYSÔÝ\™˜XÙH
+ÈY][XÛÛ\]X›K\8¢iH‹™\ÚÛ[™[™ÈŒÌ8 %ÌÈŸXÛÙKÑœ˜[YT]Y]YKœÝÚYØ\XÚ]H‹ÌL‹ÍÌ‹›ÜÜ™\ˆžH›ÜÛ\ÜØ›\ÚÒÙ^Yœ˜[YXš[™ÐY™™\ˆÌÈŸXÛÙKÓ][˜ÞPÛÛ›Û\‹œÝÚYH›Ý\‹[]™[Y\‹UÓP\ËÙ[[Y\ÈÌ8 %ÌÈŸXÛÙKÕ•\œ›Ü”™XÛÝ™\žKœÝÚYHÔÔÝ]\Ø8¡¤ˆXÝ[ÛˆX›K˜XÚÛÙ™‹\™Ø\™K\™\]Z\™[Y[›ÜŒ8 %ÌÈŸYÙ]ÑXÛÙPYÙ]œÝÚYHÛØ˜[XÝÜ˜ÈÛÛ™›Ü›\ÈÈXÛÙPYZ][™ØŒXÛÙTÛXÞHÌÈŸYÙ]ÓXXÚ[™PÛ\ÜËœÝÚYÞ\ØÝ]XÝ[Ûˆ
+ÈH‹MNHÙYYX›H
+È\œÚ\Ý[˜ÙHŒŒ8 %ÌÈŸYÙ]Õ\›X[ÛÝ™\››Ü‹œÝÚY\›X[[™ÝË\ÝÙ\ˆ][\Y\œË[››Ý[˜ÙYšXHYÙ]Ú[™Ù\Ê
+XNLXÛÙPYÙ]ÌÈŸYÙ]ÓØØÛ\Ú[Û“[Ûš]Ü‹œÝÚYHÈÈHÈÈÌÈÈHZ[ˆØØÛ\Ú[ÛˆY\ˆŒL8 %ÌÈŸYÙ]Ò”QÔÛ\‹œÝÚYÛ\ÜËQÛ[™ÈÚ]š]\ˆ[™\‹Y]šXÙH˜]H[Z][™ÈŒÌ8 %ÌÈŸYÙ]ÓR”QÑXÛÙ\‹œÝÚYÑÒ[XYÙTÛÝ\˜ÙXXÛÙNÈÙ\\˜]HÔHYÙ]ÈLœÈØ\NL8 %ÌÈŸ^X˜XÚËÔ^X˜XÚÔ\[[™KœÝÚY[YX˜\ÙK˜]KÙYZËÝ\ŒXÛÙT\[[™HÌÈŸ^X˜XÚËÔ™[Ü™\’X\œÝÚYÈZ[‹ZX\›Üˆ‹Yœ˜[YHÛÛ[M8 %ÌÈŸ^X˜XÚËÔ˜]PÛÛ›Û\‹œÝÚYÙ\™\ˆØØ[XœÈÛY[\ÚYH˜]NÈ]]Ë[]]HÝ]ÚYHx )Œ‹Œ8 %ÌÈŸ^X˜XÚËÔ™]™\œÙQÓÔXÛÙ\‹œÝÚYÚÛKQÓÔ\œÝXÛÙKÌŒPˆš[™ËÛ™H[H]H[YHÌŒ8 %ÌÈŸ]Y[ËÐ]Y[Ô^X˜XÚÑ[™Ú[™KœÝÚYU]Y[Ñ[™Ú[™XÜ˜\ÛÝ\˜ÙH›ÙKY™XÞXÛHÎ]Y[Ôš[™ÐY™™\ˆÌÈŸ]Y[ËÐPPÑXÛÙ\‹œÝÚY]Y[ÐÛÛ™\\”™Y˜XYÚXÈÛÛÚÚYKTÐ‘ÛÛœÝ[ÈŽ]Y[Ñ›Ü›X][™›ÈÌÈŸ]Y[ËÐ]Y[Ôš[™ÐY™™\‹œÝÚYØÚËYœ™YHÔÐË\Ë˜YK[Ý]Ûˆ[™\œ[ˆŒ8 %ÌÈŸ]Y[ËÔ™\Ø[\\‹œÝÚYÈ8¡¤ˆËÌK]\[™X\‹\\ÙH’TˆšXH‘ÔN8 %ÌÈŸ]Y[ËÐ]Y[Ô›Ý]\‹œÝÚYˆ›ØÝ\ÙY[Û›HžHY˜][X^[›]]Y\]X[\ÝÙ\ˆ˜Y\ÈŽ8 %ÌÈŸ]Y[ËÕ[Ø˜XÚÐÛÛ›Û\‹œÝÚYØ\\™H8¡¤ˆÈ[Û›È8¡¤ˆËÌLH8¡¤ˆÌŒXž]HÚ[šÜÈ]HŽÈQPÎÈÍÌLHÌÈŸÛ˜\ÚÝÔÛ˜\ÚÝ[˜ÛÙ\‹œÝÚY‘ËÒ”QËÒRPÈšXH[XYÙRSËVQ‹ÕQ‘‹ÒTËÛX[‹X\\\™HÜ›ÜÌŒ8 %ÌÈŸXYÛ›ÜÝXÜËÑXÛÙTÝ]\ÝXÜËœÝÚY™\Ù\›Ú\œË\˜Ù[[\ËŒ0­\ØXØÙ\ÜÛÜˆŒŒ8 %ÌÈŸXYÛ›ÜÝXÜËÕšY[ÔÚYÛœÜÝËœÝÚYH\›X[™[ÚYÛœÜÝ˜[Y\ÈLÌ8 %ÌÈŸXYÛ›ÜÝXÜËÒ\™Ø\™T›Ø™KœÝÚY
+Š“YX\Ý\™Y
+Šˆ\™Ø\™KYXÛÙH›YË™XYŒ\ÈY\ˆHš\œÝXÛÙHLL8 %ÌÈ‚ˆÈÈÈKŒLHÛÝ\˜Ù\ËÕšYÚ[™[™\˜8 %ÌÈ
+ÌÈš[\ËˆÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_Ÿ™[™\ÛÛ^œÝÚYÚ\™Y]šXÙK]Y]YKXœ˜\žKØXÚ\ËØ\Xš[]Y\ÈÌŒ8 %ÌÈŸ™[™\Ø\Xš[]Y\ËœÝÚYHØ\Xš[]HÝXÝ
+È›Ø™\ÈML8 %ÌÈŸÚY\œËÕšYÚ[[TÚY\œË›Y][H™]šY]ØX›HÚY\ˆÛÝ\˜ÙHÙˆ]
+™\ÛÝ\˜ÙK›ÝÛÛ\[YžHÝÚYJHŒ8 %ÌÈŸÚY\œËÔÚY\”ÛÝ\˜ÙKœÝÚYž]KZY[XØ[[X™YYÛÜKÙ[™\˜]YžHØÜš\ËÙÙ[‹\ÚY\‹\ÛÝ\˜ÙKœÝÚYÌH›Y][ÌÈŸÚY\œËÕ[U[šY›Ü›\ËœÝÚYÝÚYZ\œ›Üˆ
+ÈH^[Ý]Ù[‹XÚXÚÈ\ÝÛÚÈNL8 %ÌÈŸÚY\œËÔ\[[™PØXÚKœÝÚY\[[™RÙ^XUš[˜\žP\˜Ú]™X\œÚ\Ý[˜ÙHÙ^YYžHÛÝ\˜ÙHÒKLMˆLÒLMˆÌÈŸÙ[ÛY]žKÕ[QÙ[ÛY]žKœÝÚYÜ›Ü
+ÈÐTˆ
+È\Ü^HÚ^™HMœ˜[YQÙ[ÛY]žHÌÈŸÙ[ÛY]žKÕ[U˜[œÙ›Ü›KœÝÚY›ÛÛHx )Ž‘È[‹[˜ÚÜ™Y›ÛÛKÛ[\Œ8 %ÌÈŸÙ[ÛY]žKÑš]™XÝœÝÚYš]Øš[ØÝ™]ÚH›Ü›X]]™HX›HLÌ8 %ÌÈŸÙ[ÛY]žKÕ[PÛÛÜ™[˜]SX\œÝÚYÛÛ[8¡¥šY]Ëš\ÚX›PÛÛ[™XÝXÝ\™T^[L[U˜[œÙ›Ü›HÌÈŸÙ[ÛY]žKÓ›Ü›X[^™Y™YÚ[ÛœËœÝÚY8 )ŒL[™8 )ŒMHÛÛ™\œÚ[ÛœË›ÝÜšYÚ[œË™XÝ[™ÛYÛÛˆ›\ÈNL8 %ÌÈŸÛÛÜ‹ÐÛÛÜÛÛ™\œÚ[Û‹œÝÚY•ŒKÍÌKÌŒŒX]šXÙ\Ë˜[™Ù\ËÚ][™ËØ[\HØØ[HŒÛÛÜ’[™›ÈÌÈŸÛÛÜ‹ÑQ”ÛXÞKœÝÚYKÒÈÛ›K[™Û›HÚ\™HXY›ÛÛHˆKŒML8 %ÌÈŸœ˜[Y\ËÓ]\Ýœ˜[YP›ÞœÝÚYHØÚË\›ÝXÝYÛÝ
+[˜ÚXÚÙYÙ[™X›XÌÊHMÌšY[Ñœ˜[YHÌÈŸœ˜[Y\ËÑœ˜[YTXÙ\‹œÝÚY”ÕšY]Ë™\Ü^S[šØœ˜[YK\˜]H˜[™Ù\ËšY[ÝX›[™È8 %ÌÈŸœ˜[Y\ËÑœ˜[YTÝ™X[R[™KœÝÚY]XÚÙ]XÚÚ]Ý][\Ü[™ÈšYÚ[ÛÜ™XLLšY[ÔÚ[šÈÌÈŸ[KÕšY[Õ[UšY]ËœÝÚYH”ÕšY]ØÜ[ÛœËÝ]KšY[ÔÚ[šØÛÛ™›Ü›X[˜ÙH™[™\ÛÛ^ÌÈŸ[KÕšY[Õ[UšY]ÊÓ^Y\‹œÝÚY˜XÚÚ[™È^Y\‹ÛÛ[ÈØØ[K™\Ú^™K]™K\™\Ú^™HŒšY[Õ[UšY]ÈÌÈŸ[KÕšY[Õ[UšY]ÊÔ™[™\‹œÝÚY[˜ÛÙH[™™\Ù[›ÜˆHY][˜XÚÙ[™ŒÚY\œÈÌÈŸ[KÕšY[Õ[UšY]ÊÒ[œ]œÝÚY]™[ËÙ\Ý\™\ËÝ\œÛÜœËˆÙ^\ËÛXÚË]ËXÙ[™HŒ[PÛÛÜ™[˜]SX\ÌÈŸ[KÕšY[Õ[UšY]ÊÑ˜YÑ›ÜœÝÚY˜YÈÙ\ÜÚ[ÛœË›Ü›Ý][™ËHÛÈU\ÈŒ˜[œÙ™\•\\ÈÌÈŸ[KÔØ[\PY™™\˜XÚÙ[™œÝÚYHTÐ‘]›\Ú
+
+X™]™\ˆ›\Ú[™™[[Ý™R[XYÙJ
+XÌ8 %ÌÈŸ[KÐ˜XÚÙ[™ÝÚ]Ú\‹œÝÚYÝ[[^Y\ˆÜ›ÜÜÙ˜YK\ÈØZ]\È˜YKÜØÚ[][ÛˆÝX\™8 %ÌÈŸ[KÕ[T™[™\”Ý]KœÝÚYØœÙ\˜X›XX›\Ú\È^[Ú^™X[™ÛÛÜ™[˜]SX\Œ8 %ÌÈŸY™™XÝËÑÝÛœØ[\PÚZ[‹œÝÚY›Þ[š[™ÜÈ[ˆš[[™X\‹ØšXÝXšXÈžHØØ[H˜XÝÜˆŒŒ8 %ÌÈŸY™™XÝËÔš]˜XÞSX\ÚÔ\ÜËœÝÚYÛÛYÈ[ÜØZXÈÈ›\‹^[Y^XÝ[™\ˆ›ÛÛHŒ8 %ÌÈŸY™™XÝËÓÝ™\›^T™XÝ\ÜËœÝÚY[œÝ[˜ÙY›Þ\È›ÜˆHˆÌˆØ\ÙH[™›ÜˆØ[[ÙHŒ8 %ÌÈŸØ[ÕØ[ÛÛ\ÜÚ]Ü•šY]ËœÝÚYÚ[™ÛK[^Y\ˆ]\Ë]\Ý[™Ë\‹XÙ[™[™\™\œÈŒ]\Õ\™Ù]ÌÈŸØ[Ð]\Õ\™Ù]œÝÚY]\È[ØØ][Û‹X^^\™Q[Y[œÚ[Û˜Ø]H8 %ÌÈŸØ[Ñ\TÛÝ˜XÚÙ\‹œÝÚY\‹Y˜]ØX›H\H[š[ÛˆML8 %ÌÈŸ[\›ÜÕšY[Õ[KœÝÚY”ÕšY]Ô™\™\Ù[X›XŒšY[Õ[UšY]ÈÌÈŸ[\›ÜÕšY[ÕØ[œÝÚY”ÕšY]Ô™\™\Ù[X›X›ÜˆHØ[MŒØ[ÛÛ\ÜÚ]Ü•šY]ÈÌÈŸ[\›ÜÕ[R[\˜XÝ[Û‘[YØ]KœÝÚYHM[Y[X™\ˆ[YØ]H
+È‘\™XÝ[Û˜
+ÈÜÚ][ÛŒÑÙ\Ý\™XŒŒ8 %ÌÈŸ[\›ÜÕ˜[œÙ™\•\\ËœÝÚYU\X^ÜË[P\ÜÚYÛ›Y[˜[œÙ™\˜Ø[Y\˜T™Y•˜[œÙ™\˜MŒ8 %ÌÈŸÛ˜\ÚÝÕ[TÛ˜\ÚÝ\‹œÝÚYÙ™œØÜ™Y[ˆ™[™\‹Ý™\›^HÛÛ\ÜÚ]KÑÒ[XYÙX8 %ÌÈŸXYÛ›ÜÝXÜËÔ™[™\”Ý]ËœÝÚYÝ]ËÚYÛœÜÝËXYËRQ[Ù[8 %ÌÈ‚ˆÈÈÈKŒLˆÛÝ\˜Ù\ËÕšYÚ[ÛÜ™X8 %Í
+Nš[\ËŒLHLÐÊB‚•H\™Ù\Ý\™Ù]ˆÜ]XÜ›ÜÜÈˆYÙ[ÈžH\™XÝÜžK‚‚Ÿ]™\ÜÛœÚXš[]HÐÈ\ÈØ]™HŸKK_KK_KK_KK_KK_Ÿ]›Ü›KÐÛÜ™Q\[™[˜ÚY\ËœÝÚYHÝXÝ
+È›]™X
+È]™\žH[š™XÝY›ÝØÛÛÌŒ8 %ÍŸ]›Ü›KÑš[TÞ\Ý[JÔ™X[œÝÚYÜš]Q\˜X›XÚ]—Ñ•S”ÖSØÈ™\XÙR][XŒŒ8 %ÍŸ]›Ü›KÔ]ËœÝÚY
+Š•HÛ›HXÙHHš[\Þ\Ý[HT“\ÈÛÛœÝXÝY
+ŠŽÈÙXÝ\š]K\ØÛÜY›ÛÚÛX\šÜÈŒŒ8 %ÍŸ]›Ü›KÓØØÛ\Ú[ÛŠÐ\Ú]œÝÚYÛ™HÙˆÛ›H™YH\Ú]š[\È[ˆH[Ù[HN8 %ÍŸ]›Ü›KÔ\ÝX›Ø\™
+Ð\Ú]œÝÚY]ÈL8 %ÍŸ]›Ü›KÔ]ZXÚÓÛÚÊÐ\Ú]œÝÚY]ÈL8 %ÍŸ]›Ü›KÔÝÙ\“ØœÙ\™\‹œÝÚYÛY\ÝØZÙKØÜ™Y[œØ]™\‹ÝË\ÝÙ\‹\›X[ŒŒ8 %ÍŸ]›Ü›KÓ™]ÛÜšÔ]ØœÙ\™\‹œÝÚY•Ô][Ûš]Ü˜8¡¤ˆ™]ÛÜšÔ]Ý]XÚ][\™˜XÙHš[™Ù\œš[N8 %ÍŸ[Ù[ÐØ[Y\˜KœÝÚYØ[Y\˜X
+È˜[Y][Ûˆ
+ÈÛYØ
+È[™Ú[[\œÈÎ8 %ÍŸ[Ù[ÔÝ™X[T›Ùš[KœÝÚYÝ™X[T›Ùš[XÜšYÚ[˜Y\™ÙT›Ùš[\Ø™XÙY[˜ÙHÌ8 %ÍŸ[Ù[Ñ]šXÙPØ\Xš[]Y\ËœÝÚYØ\Xš[]Y\ËÚ[›™[\ØÜš\Ü˜Ø\Xš[]Y\ØÝÜ˜YÙU›Û[YR[™›Ø•Ô][\]XŒ]šXÙT]Z\šÜÈÍŸ[Ù[ÐØ[Y\˜QÜ›Ý\œÝÚYÜ›Ý\
+ÈY[X™\œÚ\[˜\šX[ÈM8 %ÍŸ[Ù[Ó^[Ý]œÝÚY^[Ý]^[Ý][ÙX
+
+ÈH›]X\XÛÙX›JKÜšYÙ[Ù[\ÜÚYÛ›Y[Œ8 %ÍŸ[Ù[Ó^[Ý]Ù[ÛY]žKœÝÚYÙ[Ê
+X›Üˆ[[Ù\ÈÛˆHLˆ0åÈLˆÜšYŒ^[Ý]ÍŸ[Ù[Ð›ÛÚÛX\šËœÝÚY8 %LL8 %ÍŸ[Ù[Ñ]™[™XÛÜ™œÝÚY]™[™XÛÜ™›Ü›X[^™Y™XÝÛØ[\ØÙRÙ^X]™[Ú[™ÍŸ[Ù[Ô™XÛÜ™[™ÐÛ\œÝÚYÛ\™XÛÜ™ÛÛZ[™\‹šYÙÙ\ˆŒŒ8 %ÍŸ[Ù[Ð\Ù][™ÜËœÝÚY]™\žH\œÚ\ÝY™Y™\™[˜ÙK[Y˜][YÍŒ8 %ÍŸ[Ù[ÓXœ˜\žKœÝÚYHØÝ[Y[
+È›Ü›X[^™J
+X
+ÈÛÚÝ\È
+ÈÜ™\’[™^Í[[Ù[ÈÍŸ\œÚ\Ý[˜ÙKÐ]ÛZXÒ”ÓÓ‘š[KœÝÚYH\˜X›K]Üš]H[™Ú[™Nˆ›Ý]K[\™\XÙR][P]X›Ý[˜ÙHÌš[TÞ\Ý[HÍŸ\œÚ\Ý[˜ÙKÓXœ˜\žPÛÙ[™ËœÝÚY[˜ÛÙ\‹ÙXÛÙ\ˆÛÛ™šYËH™YH]H›Ü›\ÈN8 %ÍŸ\œÚ\Ý[˜ÙKÐÛÛ™šYÔÝÜ™KœÝÚYHXÝÜŽˆØYY\‹]]]X›\ÚÚ[™Ù\Ê
+X]ÛZXÒ”ÓÓ‘š[HÍŸ\œÚ\Ý[˜ÙKÔ™XÛÝ™\žSY\‹œÝÚY˜˜ZØ8¡¤ˆ˜˜ZÌ˜8¡¤ˆ]X\˜[[™H8¡¤ˆ[\K]Ú]X˜[›™\ˆŒŒ8 %ÍŸ\œÚ\Ý[˜ÙKÔØÚ[XSZYÜ˜]Ü‹œÝÚYÚZ[ˆ[›™\‹™]™\ˆH[\X›HŒ8 %ÍŸ\œÚ\Ý[˜ÙKÓZYÜ˜][ÛŒ]Ì‹œÝÚYÜÜ]S’V]\È8¡¤ˆTÓËNŒHMŒ8 %ÍŸ\œÚ\Ý[˜ÙKÓZYÜ˜][ÛŒÌËœÝÚYÜ™Y[X[™Y˜™ZÙ^KÙ[Ø8¡¤ˆ\ÜÚYÛ›Y[ØŒ8 %ÍŸ\œÚ\Ý[˜ÙKÑ]™[ÙËœÝÚYHÙ\\˜]H]™[ËšœÛÛ˜š[™ËØ\XÚ]HL]Y\žHÍ]ÛZXÒ”ÓÓ‘š[HÍŸ\œÚ\Ý[˜ÙKÒ[\Ü^ÜœÝÚYÔÕˆ
+È”ÓÓˆ
+ÈH[˜Üž\YšYÚ[˜XÚÝ\
+’ÑŒˆŒQTËQÐÓKLMŠHŒÒLMˆÍŸÙXÝ\š]KÐÜ™Y[X[ÝÜ™KœÝÚY
+Š•HÛ›H\Ù\ˆÙˆÙXÝ\š]K™œ˜[Y]ÛÜšØ
+ŠˆŒÜ™Y[X[ÍŸÙXÝ\š]KÓØÚÛÝ]ÛÝ™\››Ü‹œÝÚY8¢iÈ›Ø™\È\ˆ
+ÜÝXØÛÝ[
+H\ˆLZ[ŽÈHÚ\™Y‹Y˜Z[\™HÛÝ[\ˆN8 %ÍŸÙXÝ\š]KÔÙ\™\•\ÝœšYÙKœÝÚY[\[Y[ÈÙ\™\•\Ý]˜[X][™ØÝ™\ˆØ[Y\˜KÔ[”ÔÒLM˜ŒÒLMˆÍŸÝ™X[Z[™ËÔÝ™X[PÛÛ›Û\‹œÝÚYHXÝÜˆ
+ÈX›XÈTH
+ÈHK]\ÚÈÝXÝ\™YÜ›Ý\LŒ]™\ž][™ÈÍŸÝ™X[Z[™ËÔÝ™X[PÛÛ›Û\ŠÓXXÚ[™KœÝÚY
+Š•HN\›ÝÈ˜[œÚ][ÛˆX›JŠ‹Û™H[˜Ý[Ûˆ\ˆÜ›Ý\Ùˆ›ÝÜÈNÝ™X[PÛÛ›Û\ˆÍŸÝ™X[Z[™ËÔÝ™X[PÛÛ›Û\ŠÕ[Y\œËœÝÚYHŒ˜[YY[Y[Ý]ÈŒ8 %ÍŸÝ™X[Z[™ËÔÝ™X[PÛÛ›Û\ŠÐØ\\™KœÝÚYÛ˜\ÚÝ[™™XÛÜ™[™È[žHÚ[Ë™K\›Û˜Z[ˆÌÛ\™XÛÜ™\ˆÍŸÝ™X[Z[™ËÔÝ™X[TÝ]KœÝÚYÝ]\ËÝ]Q]Z[˜\œ˜][ÛˆÝš[™ÜÈNL8 %ÍŸÝ™X[Z[™ËÔÝ™X[Q]™[œÝÚYH]™[[[HŒ8 %ÍŸÝ™X[Z[™ËÔÝ™X[Q\œ›Ü‹œÝÚYÝ™X[Q\œ›Ü˜
+ÈÛÙX
+ÈHØÝÜØ]\ÙXœšYÙHÌŒÛXZ[‘\œ›ÜœÈÍŸÝ™X[Z[™ËÔ™XÛÛ›™XÝÛXÞKœÝÚYHY\‹š]\‹™\Ù]ÛÛ™]žHMŒ˜[™ÛTÛÝ\˜ÙHÍŸÝ™X[Z[™ËÔÝ™X[T›Ø™KœÝÚY
+Š”ŒKŒŠŠŽˆËZ[‹Y›YÚØ[™Y]HY\‹XÙ\È›ÝY˜[˜ÙHÌZÝš\Ú[Û•T“ÍŸÝ™X[Z[™ËÐÚ[›™[[[Y\˜]Ü‹œÝÚY
+Š”ŒKŒÊŠŽˆTÐTHÚ[›™[Ë[ÙHTÐÔ’P‘X›Ø™Hx )ŒMˆTÐTQ]šXÙTÙ\ÜÚ[ÛˆÍŸÝ™X[Z[™ËÔÝ™X[PÛÛÜ™[˜]Ü‹œÝÚYHXÝÜŽˆšY]ÜÜš[Üš]KYZ\ÜÚ[Û‹Ú]ÝÛˆLŒXÛÙPYZ][™ÈÍŸÝ™X[Z[™ËÓ]™T[‹œÝÚYXZÙT[˜8 %H
+Šœ\™H[˜Ý[ÛŠŠ‹[š]]\ÝY^]\Ý]™[HÍ[TÛXÞHÍŸÝ™X[Z[™ËÔ]X[]TÛXÞKœÝÚYHÛ\ÜÈx $ÑH\XØ][Ûˆ
+È\Ý\™\Ú\ÈÝ]H\ˆ[HŒ[TÛXÞHÍŸÝ™X[Z[™ËÓ]™UšY]ÔÝ]KœÝÚYXZ[XÝÜˆØœÙ\˜X›XÈHØY[˜ÙH[\ÎÈ
+Š››È^[È]™\ŠŠˆÍ8 %ÍŸ™XÛÜ™[™ËÐÛ\™XÛÜ™\‹œÝÚYU\ÜÙ]Üš]\˜\ÜÝ›ÝYÚÈœ\X[8¡¤ˆ™[˜[YNÈœ˜YÛY[Y]™\žHˆÈ8 %ÍŸ™XÛÜ™[™ËÔ™T›ÛY™™\‹œÝÚYÚÛHÓÔÈÛ›NÈMˆZPˆÈÓÔÎÈ™]™\ˆH\X[ÓÔŒŒ8 %ÍŸ™XÛÜ™[™ËÔ™XÛÜ™[™Ó˜[Z[™ËœÝÚY[\]H™[™\š[™ËŒXž]H]ÛÛ\Û™[ËÛÛ\Ú[ÛˆÝY™š^\ÈŒ8 %ÍŸ™XÛÜ™[™ËÔ™XÛÜ™[™Ô™XÛÝ™\žKœÝÚYÜ˜\ÚØØ[ˆ›Üˆœ\X[8¢iHš[\ÈÈLÈNL8 %ÍŸ™XÛÜ™[™ËÔ™][[Û”ÝÙY\\‹œÝÚY^\È
+ÈÚYØXž]\Ë][˜Ú[™‹ZÝ\›HŒ8 %ÍŸÛ˜\ÚÝËÔÛ˜\ÚÝÙ\šXÙKœÝÚYÛÝ\˜ÙHÙ[XÝ[Û‹›Ý[™YÛÛ˜Ý\œ™[˜ÞK\Ý[˜][ÛœÈÍÛ˜\ÚÝ[˜ÛÙ\ˆÍŸÛ˜\ÚÝËÐ\›’[“Ý™\›^KœÝÚYÛÜ™QÜ˜\XÜÈÛÛ\ÜÚ]H›ÜˆHÛ˜\ÚÝ]Û›HŒŒ8 %ÍŸ]™[ËÑ]™[Ù[\‹œÝÚYÝXœØÜš\[Ûˆ™XÛÛ˜Ú[X][Û‹Y\K›ÝYšXØ][Û‹]]Ë\™XÛÜ™[\Ý™X[S[Ûš]ÜˆÍŸ]™[ËÐÛØ[\ØÙ\‹œÝÚY\™HÈÈÚ[™ÝÈÙÚXÈN8 %ÍŸ]™[ËÐ]]Ô™XÛÜ™\˜š]\‹œÝÚY\™HÛXÞNˆÛÛÛÝÛ‹Ø\Ë\ÚË]ZY]Ý\œÈŒŒ8 %ÍŸ]™[ËÓ›ÝYšXØ][Û”ØÚY[\‹œÝÚYS•\Ù\“›ÝYšXØ][ÛÙ[\˜Y\\‹Ø]YÛÜšY\Ë›Ý\ÈÌ8 %ÍŸX[ÒX[[Ûš]Ü‹œÝÚYÛ™HHˆ[Y\ˆ›ÜˆHÚÛH\ŽX[š[™ÈÍŸX[ÒX[Ø[\KœÝÚY^XÝHž]\ÎÈ›YÜØÜ[ÛˆÙ]NL8 %ÍŸX[ÒX[š[™ËœÝÚYŒÛÝË™X[ØØ]YLÌš[™ÐY™™\ˆÍŸXYÛ›ÜÝXÜËÔÝ™X[QØÝÜ‹œÝÚYHLÈÝ\ËHÈYÙ]Hš[™HŒKHXYÛ›ÜÙ\ÈLŒ8 %ÍŸXYÛ›ÜÝXÜËÑØÝÜØ]\ÙKœÝÚYØ]\ÙH8¡¤ˆY\ÜØYÙH8¡¤ˆš^8¡¤ˆXÝ[ÛˆX›HÍ8 %ÍŸXYÛ›ÜÝXÜËÑXYÛ›ÜÝXÜÐ[™PZ[\‹œÝÚYH™YKHØ\ËHX[šY™\ÝÎ\•Üš]\ˆÍŸXYÛ›ÜÝXÜËÑXYÛ›ÜÝXÜÔ™YXÝÜ‹œÝÚY\™HÙXÛÛ™\\ÜÈ™YXÝ[ÛˆÝ™\ˆÛÛXÝYÙÜÈŒŒ™YXÝÍŸXYÛ›ÜÝXÜËÕ\•Üš]\‹œÝÚYÔÒV\Ý\˜[˜ÛÛ\™\ÜÙYŒ8 %ÍŸXYÛ›ÜÝXÜËÓÙÑ^Ü\‹œÝÚYÔÓÙÔÝÜ™XL[šY\ÈÈŒPˆÈØ\ÈNL8 %ÍŸ]]ÛX][Û‹ÑY\[šËœÝÚYHÜ˜[[X\‹Ý[\œÙXÜš]KXXÝ[ÛˆØ][™ËL\\‹LLÈ[Z]Œ8 %ÍŸ]]ÛX][Û‹Ñ[]Y\ËœÝÚYØ[Y\˜Q[]XØ[Y\˜QÜ›Ý\[]X^[Ý][]X”™\Ù][]X™XÛÜ™[™ÐÛ\[]X]™[[]X
+È]Y\šY\È8 %ÍŸ]]ÛX][Û‹Ò[[ËœÝÚYHMˆ[[È
+ÈšYÚ[ÚÜÝ]Ø
+Ü]]Œ[™\ÊHN[]Y\ÈÍŸÙÙÚ[™ËÓÔÓÙÓÙÙÙ\‹œÝÚYHLËXØ]YÛÜžHY\\ŽÈ\Y\È™YXÝ™Y›Ü™H[Z][™ÈNL™YXÝÍŸÙÙÚ[™ËÔÚYÛœÜÝËœÝÚYH\›X[™[ÚYÛœÜÝ˜[Y\ÈM8 %ÍŸ\œ›ÜœËÓØØ[^™Y\œ›ÜŠÕšYÚ[œÝÚYØØ[^™Y\œ›Ü˜›Üˆ]™\žH0©ÌËŽH[[HŒÛXZ[‘\œ›ÜœÈÍ‚ˆÈÈÈKŒLÈÛÝ\˜Ù\ËÕšYÚ[RX8 %ÍH
+Îš[\ËŒMÐÊB‚‘]™\žHÜ[]™[\HØ\œšY\È[ˆ^XÚ]XZ[XÝÜ˜ˆÜ]XÜ›ÜÜÈˆYÙ[ÈžH\™XÝÜžK‚‚Ÿ]™\ÜÛœÚXš[]HÐÈØ]™HŸKK_KK_KK_KK_Ÿ[YKÕ•[YKœÝÚYH˜[Y\ÜXÙH
+ÈÜXÙXØ˜Y]\ØØ›Ü™\˜ØY]šXÜØØXÛÛ˜ŒÍHŸ[YKÐÛÛÜœËœÝÚY]™\žHÚÙ[‹šXH”ÐÛÛÜŠ˜[YN™[˜[ZXÔ›ÝšY\ŽŠXÈH‹\›ÝÈX›H
+ÈY[ÈŒÍHŸ[YKÕ\ÙÜ˜\KœÝÚYš[™HÝ\È
+È[Û›È˜XÚÈ
+È™\Ù\™Y[[Y]žHÚYÈ
+È•\XŽÍHŸ[YKÓ[Ý[Û‹œÝÚYÚ^Üš[™ÜË›Ý\ˆÝ\™\Ë™YH™\X]\œË[^X™\ÛÛ™YÝYÙÙ\˜ŒŒÍHŸ[YKÑ[]˜][Û‹œÝÚYL8 )˜LØ‘Û\ÜØ’[›™\’YÚYÚ•š\ÝX[Y™™XÝÌÍHŸ[YKÑ[š\›Û›Y[œÝÚY”[ÙT\ÙX”Ú[[Y\“Ù™œÙ]“[Ý[Û‘[˜X›Y“[Ý[Û•Y\˜•^ØØ[X“˜[Y\ÜXÙ\Ø“Û•šY[ØŒÍHŸ[YKÕÚÙ[‘Ø[\žKœÝÚYHXYÈÚ[™ÝÈ]™[™\œÈ]™\žHÚÙ[ˆ[ˆ\X\˜[˜Ù\Ëˆ
+ŠZ[š\œÝ
+ŠˆÎÍHŸÛÛ\Û™[ËÕ]Û‹œÝÚY8 )ˆ”›ÙÜ™\ÜÔš[™ËœÝÚY
+ŠŒŽš[\ÊŠ‹Û™H\ˆÛÛ\Û™[
+]Û˜”ÙYÛY[YÛÛ›Û•ÙÙÛX”ÛY\˜•^šY[”ÙX\˜ÚšY[”Ù[XÝ˜YÙXÚ\Ø\™•ÛÛ˜\˜”ÚYX˜\”›ÝØ•[X•[Y[[™X””YÛÛ[X[™[]X•Ø\Ý‘[\TÝ]X”ÚÙ[]Û˜”Ý][”Ü\šÛ[™XÛÛ^Y[X”ÜÝ™\˜”ÚY]’[œÜXÝÜ”ÙXÝ[Û˜’Ù^PØ\‘]šY\˜”›ÙÜ™\ÜÔš[™Ø
+KXXÚÚ]HÔ™]šY]ØÛÝ™\š[™È
+Š™]™\žHÝ]H[ˆ]ÈX›JŠˆŽ0åÈŒŒHHŒÍHŸÛÛ\Û™[ËÕ•[U˜[œÚ][Û”›ÞKœÝÚY
+Š[
+Šˆ[HÙ[ÛY]žH˜[œÚ][ÛœÈÛÈ›ÝYÚ\ÈŒŒÍHŸÛÛ\Û™[ËÕ“]™QÝœÝÚY[ÙHš]™[ˆžH”[ÙT\ÙX™]™\ˆ]ÈÝÛˆ[Y\ˆLLÍHŸÛÛ\Û™[ËÕ“^[Ý]Û\œÝÚYH^[Ý]\XÚÙ\ˆXÛÛœË˜]Ûˆœ›ÛH^[Ý][ÙK˜Ù[Ê
+XMŒÍHŸÛÛ\Û™[ËÑ›ØÝ\Ôš[™ËœÝÚY‘›ØÝ\Ôš[™ÊÎœ˜Y]\Î›Ý]Ù]ŠXLÍHŸ[Ý[Û‹Õ“[Ý[Û‘ÛÝ™\››Ü‹œÝÚY›Ý\ˆY\œËÛ™K\\‹LË\È™XÛÝ™\žKX›\Ú\È“[Ý[Û•Y\˜ŒÍHŸÝ]KÐ\[Ù[œÝÚYH[š™XÝYØœÙ\˜X›X˜péØYHÌÍHŸÝ]KÓ^[Ý]Ý]KœÝÚY[ÙH
+È\ÜÚYÛ›Y[È
+ÈÝ™\™›ÝËœšYÙYÈÛÛ™šYÔÝÜ™XÍHŸÝ]KÔÚYX˜\”Ù[XÝ[Û‹œÝÚY[œÜXÝÜ•X‹œÝÚYÙ[XÝ[Ûˆ[[\ÈLŒÍHŸÝ]KÔ[]TÝ]KœÝÚYÜ[‹ØÛÜÙY]Y\žK[ÙH™Yš^MŒÍHŸÝ]KÕØ\Ý]Y]YKœÝÚY›Ý[™Y]Y]YKÌŒØ\™ÈMLÍHŸÝ]KÔÚÜÝ]ÝÜ™KœÝÚYY˜][È8¢¥HÝ™\œšY\ËÛÛ™›XÝ]XÝ[Û‹\Ù\‘Y˜][Ø\œÚ\Ý[˜ÙHÌÍHŸÝ]KÑ›ØÝ\ÙY˜[Y\ËœÝÚY›ØÝ\ÙYXØ[Y\˜H[Xš[™È›ÜˆY[HÛÛ[X[™ÈLŒÍHŸÚ[™ÝËÓXZ[•Ú[™ÝÕšY]ËœÝÚY˜]šYØ][Û”Ü]šY]Ø
+Èš[œÜXÝÜ˜ÈXÛ\™\ÈH™YH˜[Y\ÜXÙ\ÈÌŒÍHŸÚ[™ÝËÓXZ[•ÛÛ˜\‹œÝÚYÝ\ÝÛZ\ØX›HLˆÛÛ˜\ˆŒÍHŸÚ[™ÝËÕÚ[™ÝÐXØÙ\ÜÛÜ‹œÝÚY˜Y™šXË[YÚ[œÙ]
+ŒŠKX˜š[™ÈÙ™‹]]ÜØ]™HMŒÍHŸÚ[™ÝËÐÚ[™[XPÚ›ÛYKœÝÚY[\ØÜ™Y[ˆÚ›ÛYH]]ËZYHNÍHŸÚYX˜\‹ÔÚYX˜\•šY]ËœÝÚY
+Èˆš[\È›ÝÜËÜ›Ý\Ëš[\ˆ˜\‹›ÛÝ\‹ÛÛ^Y[K[›[™H™[˜[YHLÍHŸÝYÙKÔÝYÙUšY]ËœÝÚY
+ÈHš[\È›Ý]\‹^[Ý][™Ú[™X[HÛÛZ[™\‹Ú›ÛYKÝ]HÝ™\›^K[\HÙ[[ÜØZXÈY]Ü‹]›Û›Ü[YØ]HHLÍHŸ[œÜXÝÜ‹Ò[œÜXÝÜ•šY]ËœÝÚY
+ÈLš[\ÈÚ^XœËˆY™\Ù]ÜšYØÚY[HÜšYÞ\Ý[HÝ™\šY]ÈHÌÍHŸ^X˜XÚËÔ^X˜XÚÕÚ[™ÝÕšY]ËœÝÚY
+ÈHš[\È[Ù[[Y[[™H[\‹ÚX]X\Û[™KØÜXˆ™]šY]Ë˜[œÜÜ^Ü]HÜÝ™\ˆHÌÍHŸ\ØÛÝ™\žKÑ\ØÛÝ™\žT›ÛÝšY]ËœÝÚY
+Èš[\ÈØØ[‹™\Ý[ËÜ™Y[X[ËÚ[›™[ËX[X[YÔÕˆ[\ÜXÝ]˜][ÛˆHÍHŸ]™[ËÑ]™[Ñ™YYšY]ËœÝÚY
+Èš[\È™YY›ÝËØ\™š[\ˆ˜\‹Ø]Ú[[ÙHÝ™\›^HÌÍHŸ[]KÐÛÛ[X[™[]SÝ™\›^KœÝÚY
+Èš[\È[‹]Ú[™ÝÈÝ™\›^K[™^^žžSX]Ú\˜›ÝËXÝ[ÛœÈLÍHŸØ[ÕšY[ÕØ[šY]ËœÝÚYØÜ™Y[”XÚÙ\‹œÝÚYÙXÛÛ™Y\Ü^HØ[ÍÍHŸÙ][™ÜËÔÙ][™ÜÕšY]ËœÝÚY
+ÈÈ[™\ÈÙ[™\˜[Ý™X[\Ë™XÛÜ™[™Ë›ÝYšXØ][ÛœËÚÜÝ]ËY˜[˜ÙYX›Ý]HÍHŸÚ\™YÔÝ™X[QØÝÜ”ÚY]œÝÚYH]™HLË\Ý\ÚY]Ú]\‹\Ý\Ý]ÛÛY\È[™Û™K]\š^\ÈÍÍHŸÚ\™YÐÚX]ÚY]Ý™\›^KœÝÚY™[™\œÈ]™Hœ›ÛHÚÜÝ]ÝÜ™XÈš[X›HŒŒÍHŸÚ\™YÑ›Ü›X]\œËœÝÚYš]˜]K\˜][Û‹ž]\Ë[YXÛÙH8 %[[Û›ÜÜXÙYYÚ]ŒÍHŸÚ\™YÔÝš[™ÜËœÝÚYÙ[™\˜]YÙ^HXØÙ\ÜÛÜœÈÝ™\ˆØØ[^˜X›KžÜÝš[™ÜØŒÍHŸ™\ÛÝ\˜Ù\ËÐ\ÜÙ]ËžØ\ÜÙ]Ø\XÛÛ‹Ý\ÝÛHÑˆÞ[X›ÛËˆ
+Š‘\™XÝÜžH^\ÝÊŠˆ8 %ÍHŸ™\ÛÝ\˜Ù\ËÐ\XÛÛ‹šXÛÛœÙ]ÛÝ\˜ÙH›ÜˆXZÙKZXÛÛ‹œÚ8 %ÍHŸØØ[^˜][ÛœËÓØØ[^˜X›KžÜÝš[™ÜØSˆ
+È•KÝ\™˜XÙKœÝXš™XÝ˜\šX[œ\Ù^\Ë\˜[˜\šX][ÛœÈ›Üˆ•H8 %ÍH‚ˆÈÈÈKŒMÛÝ\˜Ù\ËÕšYÚ[8 %Íˆ
+Èš[\ËŒHLÐÊB‚Ÿ]™\ÜÛœÚXš[]HÐÈØ]™HŸKK_KK_KK_KK_ŸXZ[‹œÝÚYÜ[]™[ÛÙNÈšYÚ[\›XZ[Š
+XÛˆXXÓÔËÝ\œˆ
+ÈVUÑRST‘X[Ù]Ú\™Kˆ
+Š“›ÈXZ[˜
+ŠˆŒÍˆŸšYÚ[\œÝÚYHÙ]™[ˆØÙ[™\È
+Ú[™ÝØ0åÍÚ[™ÝÑÜ›Ý\
+›ÜŽˆ^X˜XÚÔ™\]Y\ÝœÙ[ŠXÙ][™ÜØY[P˜\‘^˜X
+HŽÍˆŸšYÚ[ÛÛ[X[™ËœÝÚYHY[H˜\ŽÈ]™\žHÛÛ[X[™›Ý]Y›ÝYÚ\[Ù[ÍÍˆŸ\[š\›Û›Y[œÝÚY›ÛÝÝ˜\ÈÛÜ™Q\[™[˜ÚY\Ë›]™X[™HXÝÜœÈŒÍˆŸY[P˜\‘^˜PÛÛ[œÝÚYÝ]\ÈÛ[˜ÙH
+ÈÚ^]ZXÚÈXÝ[ÛœÎÈ”QÈ[X›˜Z[È]MHÈŒŒÍˆŸT“ØÚ[YR[™\‹œÝÚYšYÚ[‹ËØ8¡¤ˆY\[šËœ\œÙX8¡¤ˆÛÛœÙ[Ø]H8¡¤ˆXÝ[ÛˆNÍˆŸ\[YØ]KœÝÚYÛY\ÝØZÙK™[Ü[‹ØÚÈ˜YÙK\XØ][Û•Ú[\›Z[˜]XˆÈYÙ]ŒÍˆ‚ˆÈÈÈKŒMH\ÝÈ
+Hš[\ËŒLHÐÊB‚[\Ý\™Ù]È^\ÝÚ]HXÙZÛ\‹œÝÚYˆHš[™HÚ]˜ÛÜJ‘š^\™\ÈŠX
+Š˜[™XYH]™BH\™XÝÜžH[™]ÈœXÙZÛ\˜
+Šˆ8 %™]™\ˆ[]H[H
+‹MÌ
+K‚‚Ÿ]™\ÜÛœÚXš[]HÐÈØ]™HŸKK_KK_KK_KK_Ÿ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÐÜž\Õ\ÝËœÝÚY‘ÈLÌŒH
+È™XÝÜœÊH
+È‘ÈÌMÍ
+È‘ÈŒŒÍ
+È‘ÈŒMÈYÙ\ÝÈÝ™X[Z[™ÈÚ[šÈÚ^™\ÈKÌËÍËÌLËÌKÌŽÈHZPˆ[œ]ÍÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÐ˜\ÙM\ÝËœÝÚYYY[œYYÚ]\ÜXÙK[Y[‹T“\ØY™K[YØ[Ú\‹[ˆ	HOHXNÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÓYYXU[Y\Ý[\\ÝËœÝÚY™\ØØ[H^XÝ™\ÜÈ]LÒˆ[™HR‹Ø]\˜][Û‹Ü›ÜÜË][Y\ØØ[HÛÛ\\™KÛ[\Y[š]ŒÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÐš]™XY\•\ÝËœÝÚY]™\žH›Ý[™\žKJ
+XJÌŠXM
+
+X[˜Ø][Û‹YZØ›Û‹[]]][ÛˆŒŒÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÐž]T™XY\•Üš]\•\ÝËœÝÚY›Ý[™]š\[™Ý™Yš^YÌ˜[™J[Z]ŠXÝ™\™›ÝÈŒÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÓ™]\\Õ\ÝËœÝÚYTY™\ÜØÝšXÝ™\ÜË›Ý\ˆPPÈ›Ü›\ËÝX›™]X]ËÌÌX[™ÌÌ˜ÌÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÒÜÝÛXÞU\ÝËœÝÚY]™\žHÛ\ÜÎÈHœX›XÒ[\›™]™Y\Ø[MŒÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÔ™YXÝ\ÝËœÝÚY^žŽˆÙYYYÙXÜ™]È[ˆÙ]™\˜[[˜ÛÙ[™ÜÎÈY[\Ý[˜ÙNÈ8¢i°åÈÜ›ÝÝŽÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÕ[TÛXÞU\ÝËœÝÚY]™\žHÛ\ÜÈ›Ý[™\žK›ÝØØ[H˜XÝÜœËXY˜[™Ù[Û\ÜËPˆ›Û[Ý[ÛˆÌÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÑXÛÙPÛÜÝ\ÝËœÝÚYHÛÜšÙY^[\\ÎÈŒH›Ý[™[™ÎÈš]Y\Ý\˜Ú\™ÙHNÌHŸ\ÝËÕšYÚ[›ÝØÛÛÕ\ÝËÑ\œ›Ü•^Û›Û^U\ÝËœÝÚY]™\žHÛÙH[š\]YKÝX›K[™X\YÈHY\ÜØYÙH[™H™[YYHŒÌHŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÑ^ÛÛÛX•\ÝËœÝÚYX›HQQËLH™\˜˜][H
+ÈHÌ‹^™\›ÈÝ™\™›ÝÈMŒÌˆŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÒÔÕ\ÝËœÝÚY™X[ÔÈ™XÝÜœÎÈL]œËLLÜ›Ü[™ÎÈ•RHœÈ0íÈˆ0åÈ[WÝ[š]×Ú[—ÝXÚØÌŒÌˆŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÒTÔÕ\ÝËœÝÚYXZ[ˆ[™XZ[ŒLÈÛÛ™›Ü›X[˜ÙHÚ[™ÝÎÈœÈ
+Š››Ý
+Šˆ[™YÌŒÌˆŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÔ™XÛÜ™\ÝËœÝÚY]˜ÐØØ˜ÐØZ[8¡¤ˆ\œÙH8¡¤ˆÙ\šX[^™Hž]KZY[XØ[ŒÌˆŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÐ[›™^•\ÝËœÝÚYÛÛ™\œÚ[Ûˆ›ÝØ^\ÎÈËH[™Xž]HÝ\ÛÙ\ÎÈ[][][Ûˆž]\ÈÌˆŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÔÛXÙRXY\•\ÝËœÝÚY\Ñš\œÝÛXÙSÙ”XÝ\™XÛˆ›ÝÛÙXÜË[˜ÛˆÜÝ[H[œ]ŒÌˆŸ\ÝËÕšYÚ[š]Ý™X[U\ÝËÑ^ž•\ÝËœÝÚYHH˜[™ÛH[œ]È\ˆ\œÙ\ŽÈ™\›ÈÜ˜\Ú\Ë™\›È[™ÜÈŒÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÒXY\œÕ\ÝËœÝÚYØ\ÙKZ[œÙ[œÚ]]™HÛÚÝ\\XØ]\ËÜ™\‹TÐÒRK[Û›H›Û[™ÈŒÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÕÚ\™QXÛÙ\•\ÝËœÝÚYÜ][˜\šX[˜ÙHÝ™\ˆŒÚ[šÚ[™ÜÎÈ]™\žH[Z]È˜\™HŽÈZYZXY\ˆ	ŒÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÔ™\Þ[˜Õ\ÝËœÝÚYKÌËÍMHˆØ\˜˜YÙNÈ˜[ÙHÈØØ[‹[[Z]È˜]HÛXÞHŒŒÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÑYÙ\Ý\ÝËœÝÚY]™\žH0©Í‹H›ÝÎÈ˜ØXÜ›ÜÜÈˆ™\]Y\ÝÎÈ›ËX[Ü›Ü\H\Ý0åÌLÌÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÔÑ\ÝËœÝÚY[š^\™\ÎÈZ\ÜÚ[™ËÙ\XØ]HOXÛÛ›ÛÈ˜Z[[™È•SÈÝ]XÈÌŒÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÐÛÛ›ÛT“\ÝËœÝÚY[Ú^™XÙY[˜ÙH›ÝÜÈ\ÈH]Y\žKXØ\œžZ[™ÈØ\Ù\ÈŒÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÔÙ\ÜÚ[Û“XXÚ[™U\ÝËœÝÚY^XÝXÝ[Ûˆ\œ˜^\Èœ›ÛHš^\™\ÎÈ]\›Z[š\ÛH0åÌLÚ[šÚ[™ÜÎÈ™˜Z[\›Z[˜[ÌˆŸ\ÝËÕšYÚ[•Ô\ÝËÒZÝš\Ú[Û•T“\ÝËœÝÚY]™\žH]›ÝÎÈY\ˆÜ™\ŽÈÜ™Y[X[È™]™\ˆ[ˆ\ØÜš\[Û˜NÌˆŸ\ÝËÕšYÚ[•\ÝËÔXÚÙ]\ÝËœÝÚYXY\ˆ\œÙKY[™ËÔÔË^[œÚ[Û‹ÜÝ[H[™ÝÈÌˆŸ\ÝËÕšYÚ[•\ÝËÒ\XÚÙ]^™\•\ÝËœÝÚYÕTPK•KPKÜÜË
+Š›X\šÙ\‹Xš]][œ™[XX›JŠˆUHÜ][™ÈÍÌˆŸ\ÝËÕšYÚ[•\ÝËÒQ\XÚÙ]^™\•\ÝËœÝÚYT•KTTØ][™ËTÓ›ÜÌŒÌˆŸ\ÝËÕšYÚ[•\ÝËÐ]Y[Õ\ÝËœÝÚYPPËZœ‹TÐÈ\œÙKËÌLH›Ý]ÜÈÝ™\ˆ[HLÍˆ[œ]ËËÌˆÌÌˆŸ\ÝËÕšYÚ[•\ÝËÔ™[Ü™\•\ÝËœÝÚY\ÜÝ›ÝYÚœÈY\]™NÈ\ØØ[][ÛˆX›Ý™HH	HÜÜÎÈÜ˜\\›Ý[™ŽÌˆŸ\ÝËÕšYÚ[•\ÝËÔ•Ô\ÝËœÝÚYÛÛ\Ý[™\œÙK”ˆÙ[™\˜][Ûˆ[\˜[ËÔˆ•X\[™ÈÌˆŸ\ÝËÕšYÚ[•\ÝËÔÝ]\ÝXÜÕ\ÝËœÝÚYH^XÝUÓPH[ÙXœ˜HYØZ[œÝ[™XÛÛ\]YÙ\šY\ÈŒŒÌˆŸ\ÝËÕšYÚ[TÐTU\ÝËÖS\ÝËœÝÚY™XY\ˆØ\Ù\È
+ÈˆZ[\ˆØ\Ù\ÎÈ
+Š–H™Y\Ø[
+ŠŽÈ\[™Ú^™HØ\ÈÌˆŸ\ÝËÕšYÚ[TÐTU\ÝËÑYÙ\Ý\ÝËœÝÚYMØ\Ù\È[˜Ûˆ‘ÈŒŽH[™™^›Û˜ÙXŒŒÌˆŸ\ÝËÕšYÚ[TÐTU\ÝËÐÛY[\ÝËœÝÚY[™\ËØ]KÛØ[\ØÚ[™Ë™]žHX›K
+ŠŒ‹Y˜Z[\™H\™›ØÚÊŠˆÌÌˆŸ\ÝËÕšYÚ[TÐTU\ÝËÑ[™Ú[\ÝËœÝÚYÌXÛÙHØ\Ù\ÈXÜ›ÜÜÈ]šXÙH˜[Z[Y\ÈÌˆŸ\ÝËÕšYÚ[TÐTU\ÝËÐ[\Ý™X[U\ÝËœÝÚYN][\\Ø\Ù\È
+ÈLˆ[Ûš]ÜˆØ\Ù\ÎÈX\™X]Ý\™\ÜÚ[ÛˆÎÌˆŸ\ÝËÕšYÚ[TÐTU\ÝËÔÙX\˜Ú\ÝËœÝÚYYÚ[™ÈÚ]H™X[Z\ÜÜ[[™ÎÈSÔ‘XÈ[Y[[™H\ÜÙ[X›HÌˆŸ\ÝËÕšYÚ[\ØÛÝ™\žU\ÝËÔÐQ\ÝËœÝÚYŒØ\Ù\È[˜ÛˆHÔ‹[Ø™\ØØ]Y[™˜[™ÛH^[ØYÈÍÌˆŸ\ÝËÕšYÚ[\ØÛÝ™\žU\ÝËÕÔÑ\ØÛÝ™\žU\ÝËœÝÚYMHØ\Ù\È[˜Ûˆ[ËžYK›Ë\™Yš^ÌÌˆŸ\ÝËÕšYÚ[\ØÛÝ™\žU\ÝËÔÝÙY\[›™\•\ÝËœÝÚYMHØ\Ù\ÎÈH
+Š‹ÌMˆ™Y\Ø[
+ŠŽÈÌM¸ $ËÌŒH˜\œ›ÝÚ[™ÎÈÜÝÜ™\ˆÌÌˆŸ\ÝËÕšYÚ[\ØÛÝ™\žU\ÝËÑš[™Ù\œš[\ÝËœÝÚYMØ\Ù\ÈXÜ›ÜÜÈ›Ý\ˆ™[™ÜœÈŽÌˆŸ\ÝËÕšYÚ[\ØÛÝ™\žU\ÝËÓY\™ÙQ[™Ú[™U\ÝËœÝÚYLÈØ\Ù\ÎÈ˜Y™\ÜÔ™]\ÙY™]™\ˆ™K\Ú[ÈHØ]™YØ[Y\˜HÌŒÌˆŸ\ÝËÕšYÚ[\ØÛÝ™\žU\ÝËÐÛÛÜ™[˜]Ü•\ÝËœÝÚYLÈÜ˜Ú\Ý˜][Ûˆ
+ÈLYÜ˜YY[[ÙHØ\Ù\ÎÈ
+ŠHÜ™Y[X[\™Y\Ø[[ØÚÊŠˆÎÌˆŸ\ÝËÕšYÚ[\[[™U\ÝËÑ[™Ñ[™\ÝËœÝÚY
+Š•HYÚ\Ý]˜[YH\Ý[ˆH™\ÊŠŽˆÞ[]XÈØ[Y\˜H8¡¤ˆ•Ô8¡¤ˆ•8¡¤ˆ[˜ÛÙYœ˜[YX›ÈÛØÚÙ]Ë›ÈXXÈÌˆŸ\ÝËÕšYÚ[\[[™U\ÝËÑ]\›Z[š\ÛU\ÝËœÝÚYØ[YHÙYY8¡äˆž]KZY[XØ[XÝ[Ûˆ\œ˜^\È[™œ˜[YHÙ\]Y[˜Ù\ÈÌˆŸ\ÝËÕšYÚ[˜[œÜÜ\ÝËØY\\ˆ\ÝÈ
+È•Ó\Ý[™\˜ÝXˆÙ\™\ˆ
+XXÓÔÈÛ›JHÌÈŸ\ÝËÕšYÚ[šY[Õ\ÝËØ›Ü›X]\ØÜš\[Û‹Ø[\HY™™\‹YÙ][HÛXÞH\XØ][Û‹]Y[ÈLÌÈŸ\ÝËÕšYÚ[™[™\•\ÝËØÙ[ÛY]žH
+š]™XÝX›H™\˜˜][JKÛÛÝ\‹Y™™XÝË]\Ë˜XÚÙ[™Û˜\ÚÝLÌÈŸ\ÝËÕšYÚ[ÛÜ™U\ÝËØMÌÈ[X™\™YØ\Ù\Îˆ[Ù[ÛÛ™šYÔÝÜ™XÜ™Y[X[ËH
+ŠN˜[œÚ][Ûˆ›ÝÜÊŠ‹ÛÛÜ™[˜]Ü‹™XÛÜ™\‹Û˜\ÚÝË]™[ËX[XYÛ›ÜÝXÜË]]ÛX][ÛˆˆÍŸ\ÝËÕšYÚ[RU\ÝËØ[]H˜[šÚ[™È
+È›ÝYÚ]^[Ý]Ù[ÛY]žKÚÜÝ]ÛÛ™›XÝËØØ[\Ø][Ûˆ\š]HŒÍH‚ˆÈÈ‹ˆXÚØYÙKœÝÚY8 %š[˜[‚•\È\ÈHš[H]\È
+Š›Ûˆ\ÚÈ]H™\ÜÚ]ÜžH›ÛÝšYÚ›ÝÊŠ‹[™]\ÈÜ™Y[ˆ[™\‚˜ÝÚYZ[K\›ÙXÝšYÚ[\™X[™ÝÚYZ[ÛˆÝÚY‹ŒKŒˆÈ[^ˆ][™XYHÛÛZ[œÈ›Ý™\šYšYYZ[š^\Ëˆ™\›ÙXÙY\™HÛÈHÛÛ˜XÝ\ÈÙ[‹XÛÛZ[™YÈH™\ÜÚ]ÜžHÛÜH\Â˜]]Üš]]]™HYˆ^H]™\ˆY™™\‹[™TÒUPÕT‘K›Y0©ÌÈ\ÈÝ[HÚ\™H]Y™™\œÈœ›ÛHZ]\‹‚‚ŠŠ‘È›Ý[ÙYžH]
+ŠˆÚ]Ý][Y[™[™È\ÈÙXÝ[Ûˆ[ˆHØ[YHÛÛ[Z]ˆ[ˆ\XÝ[\ŽˆÈ›ÝYB™\[™[˜ÞH
+HXÚØYÙH\È™\›ÈžH\ÚYÛ‹[™XÚØYÙKœ™\ÛÛ™Y	ÜÈ[\H[ˆ\Ý\ÈB›XXÚ[™KXÚXÚØX›H›ÛÙŠKÈ›Ý™[[Ý™H\NˆœÝ]XØ[™È›ÝY˜™Y˜][\ÛÛ][ÛŠXZ[XÝÜ‹œÙ[ŠX8 %]Ù\È›Ý^\Ý[ˆÝÚY‹ŒKŒˆ
+‹M
+K‚‚˜ÝÚY‹ËÈÝÚY]ÛÛË]™\œÚ[ÛŽ‹Œ‹ËÂ‹ËÈšYÚ[8 %˜]]™HXXÓÔÈšY]Ù\ˆ›ÜˆZÝš\Ú[ÛˆTØ[Y\˜\È[™•”œË‚‹ËÂ‹ËÈ‘T“ÈVT“STS‘SÒQTÈ–HTÒQÓ‹ˆ\[™[˜ÚY\Î˜\È[\H[™]\ÝÝ^H[\K‚‹ËÈY[™È[ˆÔHXÚØYÙHœ™XZÜÈÛÛœÝ˜Z[ÌH[ˆØÜËÐTÒUPÕT‘K›Y0©ÌKŒH[™ÒHÚ[˜Z[‚‹ËÂ‹ËÈÛÈZ[ÛÜ›Î‚‹ËÈXXÓÔÈ8 %]™\ž][™ÈZ[ËˆÝÚYZ[ÈÛÙHÈØÜš\ËØZ[X\œÚ‚‹ËÈ[^8 %Û›HH›Ý[™][Û‹[Û›H\™Ù]È\™HYX[š[™Ù[ˆÝÚYZ[K\›ÙXÝšYÚ[\™X‹ËÈZ[È[NÈH[ÝÚYZ[[ÛÈÝXØÙYYÈ™XØ]\ÙH]™\žHš[H[ˆHXXÓÔË[Û›B‹ËÈ\™Ù]\ÈÜ˜\Y[ˆÚYˆÜÊXXÓÔÊX
+ÙYHØÜËÐTÒUPÕT‘K›Y0©Í
+K‚‚š[\ÜXÚØYÙQ\ØÜš\[Û‚‚‹ËÈPT’ÎˆHZ[Ù][™ÜÂ‚‹ËËÈ\YYÈ]™\žH\™Ù][ˆHXÚØYÙK‚‹ËËÂ‹ËËÈ
+ˆ^\Ý[X[[žX›Ü˜Ù\ÈH[žHÜ[[™ÈÛÈ^\Ý[X[›Þ[™ÈÝ^\Èš\ÚX›H]Ø[Ú]\Ë‹ËËÈÚXÚX]\œÈÛˆHœ˜[YH]‚‹ËËÈ
+ˆÝÚY[™ÝXYÙS[Ù\ÎˆË—X\ÈÙ]XÚØYÙK]ÚYH™[ÝÈ[™\›œÈÛˆ
+˜ÛÛ\]JˆÛÛ˜Ý\œ™[˜ÞB‹ËËÈÚXÚÚ[™ÎÈÙH™]™\ˆÝÛ™Ü˜YHH\™Ù]ÈXÈÚ[[˜ÙHH]K\˜XÙHXYÛ›ÜÝXË‚›]ÛÛ[[ÛŽˆÔÝÚYÙ][™×HHÂˆ™[˜X›U\ÛÛZ[™Ñ™X]\™J‘^\Ý[X[[žHŠK—B‚‹ËËÈ\™H\™Ù]ÈY][Û˜[HÙ]HÛÛ\[K][YHX\šÙ\ˆÛÈÚ\™Y[\œÈØ[ˆ\ÜÙ\\š]K‚›]\™NˆÔÝÚYÙ][™×HHÛÛ[[Ûˆ
+ÈÂˆ™Yš[™J•’QÒSÔT‘HŠK—B‚‹ËËÈXXÓÔË[Û›H\™Ù]Ëˆ’QÒSÐTX\ÈYš[™YÛ›HÚ[ˆXÝX[HÛÛ\[[™È›Üˆ[ˆ\H]›Ü›K‹ËËÈÛÈHÚYˆÜÊXXÓÔÊXÝX\™È[™HYš[™H[Ø^\ÈYÜ™YK‚›]\NˆÔÝÚYÙ][™×HHÛÛ[[Ûˆ
+ÈÂˆ™Yš[™J•’QÒSÐTH‹Ú[Š]›Ü›\ÎˆË›XXÓÔ×JJK—B‚‹ËÈPT’ÎˆHXÚØYÙB‚›]XÚØYÙHHXÚØYÙJˆ˜[YNˆ•šYÚ[‹ˆ]›Ü›\ÎˆÂˆËÈYÛ›Ü™YÛˆ[^ÈÛÛœÝ˜Z[œÈH\H\Þ[Y[\™Ù]Û›K‚ˆ›XXÓÔÊŒM
+KˆKˆ›ÙXÝÎˆÂˆËÈHÚ\[™È\š[˜\žKˆ\ÜÙ[X›Y[ÈšYÚ[˜\žHØÜš\ËØZ[X\œÚ‚ˆ™^XÝ]X›J˜[YNˆ•šYÚ[‹\™Ù]ÎˆÈ•šYÚ[—JK‚ˆËÈH[^ÐÒHÝ\™˜XÙNˆ^XÝHH›Ý[™][Û‹[Û›H\™Ù]ËˆÝÚYZ[K\›ÙXÝšYÚ[\™XˆËÈ\ÈHÚ[™ÛHÛÛ[X[™[^ÒH[œË[™]\ÈHYXÚ[š\ÛH]ÙY\ÈH\™H^Y\ˆ\™H8 %ˆËÈYˆÛÛY[Û™HYÈ[\ÜÛÜ™SYYXXÈšYÚ[•\È›ÙXÝÝÜÈZ[[™Ë‚ˆ›Xœ˜\žJˆ˜[YNˆ•šYÚ[\™H‹ˆËÈ\N˜\È‘TURT‘Q\™K›ÝÛÜÛY]XËˆHXœ˜\žH›ÙXÝÚ]›È^XÚ]\H\È[‚ˆËÈ˜]]ÛX]XÈˆ›ÙXÝ[™ÝÚYH™Y\Ù\ÈÝÚYZ[K\›ÙXÝ]]ÛX]XÈXœ˜\žO˜‚ˆËÈØ\›š[™Îˆ	ËK\›ÙXÝ	ÈØ[››Ý™H\ÙYÚ]H]]ÛX]XÈ›ÙXÝ	ÕšYÚ[\™IÎÂˆËÈZ[[™ÈHY˜][\™Ù][œÝXYˆËÈ]Ú[[H\›œÈH[^\š]HØ]H[ÈH[\XÚØYÙHZ[ÚXÚY™X]È]‚ˆËÈ™\šYšYYÛˆÝÚY‹ŒKŒˆÈ[^8 %ÙYHØÜËÐ•RSU‘T’Q’PÐUSÓ‹›Y‚ˆ\NˆœÝ]XËˆ\™Ù]ÎˆÂˆ•šYÚ[›ÝØÛÛÈ‹ˆ•šYÚ[š]Ý™X[H‹ˆ•šYÚ[•Ô‹ˆ•šYÚ[•‹ˆ•šYÚ[TÐTH‹ˆ•šYÚ[\ØÛÝ™\žH‹ˆBˆ
+K‚ˆËÈ\Ý[Û›Hš^\™\Ëˆ^ÜÙY\ÈH›ÙXÝÛÈÝÚYZ[K\›ÙXÝšYÚ[\ÝÚ]Ø[ˆ™BˆËÈØ[š]KXÚXÚÙYÛˆ[^[™\[™[HÙˆH\Ý[›™\‹‚ˆ›Xœ˜\žJ˜[YNˆ•šYÚ[\ÝÚ]‹\™Ù]ÎˆÈ•šYÚ[\ÝÚ]—JK‚ˆËÈÛÛ™[šY[˜ÙH›Üˆ[X™Y[™ÈH\^Y\ˆ[ˆ[ˆÛÙHÜÝ›Ú™XÝ
+ÙYH›Ú™XÝž[[
+K‚ˆ›Xœ˜\žJ˜[YNˆ•šYÚ[\‹\™Ù]ÎˆÈ•šYÚ[RH‹•šYÚ[ÛÜ™H‹•šYÚ[™[™\ˆ—JKˆKˆ\[™[˜ÚY\ÎˆÂˆËÈS•S•SÓSHSTKˆÙYHHXY\ˆÛÛ[Y[‚ˆKˆ\™Ù]ÎˆÂ‚ˆËÈPT’Îˆ\™H8 %›Ý[™][ÛˆÛ›K[^]\ÝX›B‚ˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[›ÝØÛÛÈ‹ˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[›ÝØÛÛÈ‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[š]Ý™X[H‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[š]Ý™X[H‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[•Ô‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[•Ô‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[•‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[š]Ý™X[H—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[•‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[TÐTH‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[TÐTH‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[\ØÛÝ™\žH‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[\ØÛÝ™\žH‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+K‚ˆËÈPT’Îˆ\Ýš^\™\È8 %\™KÚ\YÈ›È›ÙXÝH\[šÜÂ‚ˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[\ÝÚ]‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[•Ô‹•šYÚ[•‹•šYÚ[š]Ý™X[H—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[\ÝÚ]‹ˆÝÚYÙ][™ÜÎˆ\™Bˆ
+K‚ˆËÈPT’ÎˆXXÓÔË[Û›B‚ˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[˜[œÜÜ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[•Ô‹•šYÚ[\ØÛÝ™\žH—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[˜[œÜÜ‹ˆÝÚYÙ][™ÜÎˆ\Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[šY[È‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[š]Ý™X[H—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[šY[È‹ˆÝÚYÙ][™ÜÎˆ\Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[™[™\ˆ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[šY[È—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[™[™\ˆ‹ˆ™\ÛÝ\˜Ù\ÎˆÂˆËÈY][ÚY\œÈ\™HÛÛ\[YžHÝÚYH[ÈY˜][›Y][Xˆ[œÚYHH[™K‚ˆœ›ØÙ\ÜÊ”ÚY\œÈŠKˆKˆÝÚYÙ][™ÜÎˆ\Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[ÛÜ™H‹ˆ\[™[˜ÚY\ÎˆÂˆ•šYÚ[›ÝØÛÛÈ‹ˆ•šYÚ[•Ô‹ˆ•šYÚ[•‹ˆ•šYÚ[š]Ý™X[H‹ˆ•šYÚ[TÐTH‹ˆ•šYÚ[\ØÛÝ™\žH‹ˆ•šYÚ[˜[œÜÜ‹ˆ•šYÚ[šY[È‹ˆKˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[ÛÜ™H‹ˆÝÚYÙ][™ÜÎˆ\Bˆ
+Kˆ\™Ù]
+ˆ˜[YNˆ•šYÚ[RH‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[ÛÜ™H‹•šYÚ[™[™\ˆ—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[RH‹ˆ™\ÛÝ\˜Ù\ÎˆÂˆœ›ØÙ\ÜÊ”™\ÛÝ\˜Ù\ÈŠKËÈ\ÜÙ]ËžØ\ÜÙ]ËÝ\ÝÛHÑˆÞ[X›ÛÂˆœ›ØÙ\ÜÊ“ØØ[^˜][ÛœÈŠKËÈ[‹››ÚˆÈK››ÚˆœÝš[™ÜÈ
+ÈœÝš[™ÜÙXÝˆKˆÝÚYÙ][™ÜÎˆ\Bˆ
+Kˆ™^XÝ]X›U\™Ù]
+ˆ˜[YNˆ•šYÚ[‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[RH‹•šYÚ[ÛÜ™H—Kˆ]ˆ”ÛÝ\˜Ù\ËÕšYÚ[‹ˆÝÚYÙ][™ÜÎˆ\Bˆ
+K‚ˆËÈPT’Îˆ\ÝÈ8 %\™H
+[ˆÛˆ[^S‘XXÓÔÊB‚ˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[›ÝØÛÛÕ\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[›ÝØÛÛÈ‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[›ÝØÛÛÕ\ÝÈ‚ˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[š]Ý™X[U\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[š]Ý™X[H‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[š]Ý™X[U\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[•Ô\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[•Ô‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[•Ô\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[•\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[•‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[•\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[TÐTU\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[TÐTH‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[TÐTU\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[\ØÛÝ™\žU\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[\ØÛÝ™\žH‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[\ØÛÝ™\žU\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+KˆËÈ[™]ËY[™\™H\[[™NˆÞ[]XÈØ[Y\˜HOˆ•ÔOˆ•Oˆ[˜ÛÙYœ˜[YKˆ›ÈÛØÚÙ]ËˆËÈ›ÈšY[ÕÛÛ›Þ›ÈXXÈ™\]Z\™Yˆ\È\ÈHYÚ\Ý]˜[YH\Ý\™Ù][ˆH™\Ë‚ˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[\[[™U\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[\ÝÚ]‹•šYÚ[•Ô‹•šYÚ[•‹•šYÚ[š]Ý™X[H‹•šYÚ[›ÝØÛÛÈ—Kˆ]ˆ•\ÝËÕšYÚ[\[[™U\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+K‚ˆËÈPT’Îˆ\ÝÈ8 %XXÓÔÈÛ›H
+›ÙY\ÈÜ˜\Y[ˆÚYˆÜÊXXÓÔÊNÈ[\H[Ù[\ÈÛˆ[^
+B‚ˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[˜[œÜÜ\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[˜[œÜÜ‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[˜[œÜÜ\ÝÈ‚ˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[šY[Õ\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[šY[È‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[šY[Õ\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[™[™\•\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[™[™\ˆ‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[™[™\•\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[ÛÜ™U\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[ÛÜ™H‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[ÛÜ™U\ÝÈ‹ˆ™\ÛÝ\˜Ù\ÎˆË˜ÛÜJ‘š^\™\ÈŠWBˆ
+Kˆ\Ý\™Ù]
+ˆ˜[YNˆ•šYÚ[RU\ÝÈ‹ˆ\[™[˜ÚY\ÎˆÈ•šYÚ[RH‹•šYÚ[\ÝÚ]—Kˆ]ˆ•\ÝËÕšYÚ[RU\ÝÈ‚ˆ
+KˆKˆÝÚY[™ÝXYÙS[Ù\ÎˆË—BŠB˜‚ŠŠ“Û™HÛÛ[Y[[ˆHX[šY™\Ý\ÈÜ›Û™È[™Ý^\ÈÜ›Û™È›Üˆ›ÝËŠŠˆHœ›ØÙ\ÜÊ”ÚY\œÈŠXÛÛ[Y[œØ^\È“Y][ÚY\œÈ\™HÛÛ\[YžHÝÚYH[ÈY˜][›Y][Xˆ[œÚYHH[™KˆˆÝÚYHÙ\ÂŠŠ››Ý
+Šˆ[›ÚÙHY][ØY][X˜8 %ÙYH‹LÎˆH›Y][š[\È\™HÛÜYY\È™\ÛÝ\˜Ù\È›Üˆ™]šY]Â˜[™›Üˆ[ˆÜ[Û˜[Ù™›[™HÛÛ\[NÈHÚ\[™È]\È[[YHXZÙSXœ˜\žJÛÝ\˜ÙNŠXœ›ÛB˜ÚY\”ÛÝ\˜ÙKœÝÚYˆš^[™ÈHÛÛ[Y[\ÈHÌÈ\ÚÈ[™]\Ý›ÝÚ[™ÙHH™\ÛÝ\˜Ù\Î˜Û]\ÙK˜™XØ]\ÙHH\™XÝÜžHXÛ\˜][Ûˆ\ÈÚ]ÙY\ÈÛÝ\˜Ù\ËÕšYÚ[™[™\‹ÔÚY\œËØœ›ÛH™Z[™È[]Y˜[™™K]šYÙÙ\š[™ÈZ[Y™XÝÌ‹‚‚‹KKB‚ˆÈÈËˆÜ›ÜÜËXÝ][™È[\[Y[][Ûˆ[\Â‚˜šYÚ[ÒSTÔ•STË›Y\Èš[™[™È[™\ÈÙXÝ[Ûˆ
+Š™^[™ÊŠˆ]ˆÚ\™H[ÝH[šÈ^HÛÛ™›XÝ˜STÔ•STË›YÚ[œÈ[™\ÈÙXÝ[Ûˆ\ÈHY™XÝ8 %Ø^HÛÈ[ˆ[Ý\ˆ™\Ý[‚‚ˆÈÈÈËŒHš[HXY\ˆ8 %^XÝH\ÈÚ\K›È[Ü™K›È\ÜÂ‚˜ÝÚY‹ËÂ‹ËÈ•ÔÙ\ÜÚ[Û“XXÚ[™KœÝÚY‹ËÈšYÚ[•Ô‹ËÂ‹ËÈ˜[œÜÜXYÛ›ÜÝXÈ•ÔKŒÛY[Ý]HXXÚ[™Kˆ\™Nˆ›ÈÛØÚÙ]Ë›ÈÛØÚÈ™XYË›È\ÚË‚‹ËÈÙYHØÜËÜÜXË\Ü›Y0©ÌM[™ØÜËÐTWÐÓÓ•PÕ›Y0©ÍŒË‚‹ËÂ˜‚“[™HÛØ\™\ÈHÛ™K]Ë]™YK[[™H\œÜÙHÝ][Y[\ÈHÚ[\ˆÈHÜXÈÙXÝ[Ûˆ
+Š˜[™
+ŠˆB˜TWÐÓÓ•PÕ›YÙXÝ[Ûˆ][\[Y[Ëˆ›È]]Üˆ˜[Y\Ë›È]\Ë›ÈÛÜ\šYÚ›ØÚÈ
+HXÙ[˜ÙB›]™\È[ˆPÑS”ÑX
+K›ÈÛÙH[\]H[šË‚‚›XXÓÔË[Û›Hš[\ÈYHÝX\™›ÝH[™Ü˜\H
+ŠÚÛHš[JŠŽ‚‚˜ÝÚY‹ËÂ‹ËÈXÛÙT\[[™KœÝÚY‹ËÈšYÚ[šY[Â‹ËÂ‹ËÈ•XÛÛ\™\ÜÚ[Û”Ù\ÜÚ[ÛˆÝÛ™\œÚ\[™Hœ˜[YH]Y]YK‚‹ËÈXXÓÔË[Û›KˆÙYHØÜËÐTÒUPÕT‘K›Y0©ÍŒˆ[Hˆ[™ØÜËÐTWÐÓÓ•PÕ›Y0©ÍŽK‚‹ËÂ‚ˆÚYˆÜÊXXÓÔÊB‚š[\ÜÛÜ™SYYXBš[\Ü›Ý[™][Û‚š[\ÜšY[ÕÛÛ›Þ‚‹ËÈ8 )ˆ[\[Y[][Ûˆ8 )‚‚ˆÙ[™YˆËÈÜÊXXÓÔÊB˜‚•HÝX\™\ÈH
+Š›Ý]\›[ÜÝ
+ŠˆÛÛœÝXÝÈ[\ÜÈ]™H[œÚYH]ˆ[\›X]™YÚY˜[œÚYHH\B˜›ÙH\È›Ü˜šY[ˆ8 %Ü][È›ÛËœÝÚY
+\™JH[™›ÛÊÐ\KœÝÚY
+XXÓÔÊH[œÝXYˆHÛ™BœØ[˜Ý[Û™Y^Ù\[Ûˆ\ÈšYÚ[TÐTX	ÜÈÜ]›Ý[™][ÛŽ‚‚˜ÝÚYš[\Ü›Ý[™][Û‚ˆÚYˆØ[’[\Ü
+›Ý[™][Û“™]ÛÜšÚ[™ÊBš[\Ü›Ý[™][Û“™]ÛÜšÚ[™ÂˆÙ[™Y‚ˆÚYˆØ[’[\Ü
+›Ý[™][Û–S
+Bš[\Ü›Ý[™][Û–SˆÙ[™Y‚˜‚ˆÈÈÈËŒˆ›Ü›X][™Â‚Ÿ[H˜[YHŸKK_KK_Ÿ[™[][ÛˆÜXÙ\Ë™]™\ˆXœÈŸ[™H[™Ý
+ŠŒLLÛÛ[[œÊŠ‹\™ˆÛ™ÈÝš[™È]\˜[ÈÜ]Ú]
+ØÜˆ[Ý™YÈHÛÛœÝ[Ÿ˜Z[[™ÈÚ]\ÜXÙH›Ü˜šY[ˆŸš[H[™Ý
+Š¸¢iŒ[™\ÊŠ‹ˆÜ]]HËÈPT’Î˜›Ý[™\žH[È\JÑ™X]\™KœÝÚYŸ[˜Ý[Ûˆ[™Ý8¢iŒ[™\ÎÈš]Ý™X[H\œÙ\œÈX^H™XXÚLŒÚ]HËÈUSÓSN˜›ÝK™XØ]\ÙHÜ][™È[H\È™]šY]ØXš[]HYØZ[œÝHUHØÝ[Y[Ÿœ˜XÙ\ÈÉ”‹Ü[š[™Èœ˜XÙHÛˆHØ[YH[™HŸÝ][Y[ÈÛ™H\ˆ[™NÈ›ÈØŸ[\ÜÜ™\ˆ›Ý[™][Û˜š\œÝ[ˆÞ\Ý[Hœ˜[Y]ÛÜšÜÈ[X™]XØ[K[ˆšYÚ[[Ù[\È[X™]XØ[KÛ™H›[šÈ[™H™]ÙY[ˆÜ›Ý\ÈŸ›[šÈ[™\ÈÛ™H™]ÙY[ˆY[X™\œËÛÈ™Y›Ü™HHËÈPT’ÎˆXŸ˜Z[[™ÈÛÛ[X\È™\]Z\™Y[ˆ][K[[™H]\˜[ÈŸ˜Z[[™ÈÛÜÝ\™HÛ›H›ÜˆH\ÝÛÜÝ\™H\™Ý[Y[[™Û›HÚ[ˆHX™[YÈ›Ý[™È‚ˆÈÈÈËŒÈËÈPT’Î˜ÝXÝ\™B‚•\\ÈÝ™\ˆ[™\È\ÙH\ÈÜ™\ˆ[™
+Š›Û›JŠˆ\ÙHXY[™ÜÎ‚‚˜ÝÚY‹ËÈPT’ÎˆH™\ÝY\\Â‹ËÈPT’ÎˆHÝÜ™Y›Ü\Y\Â‹ËÈPT’ÎˆHÛÛ\]Y›Ü\Y\Â‹ËÈPT’ÎˆH[š]X[\Ø][Û‚‹ËÈPT’ÎˆHX›XÈTH
+ÜˆXÚØYÙHTXÈ[\›˜[TX
+B‹ËÈPT’ÎˆHš]˜]H[\œÂ‹ËÈPT’ÎˆH›ÝØÛÛ˜[YOˆ
+Û™H\ˆÛÛ™›Ü›X[˜ÙH^[œÚ[ÛŠB˜‚”›ÝØÛÛÛÛ™›Ü›X[˜Ù\ÈÛÈ[ˆ^[œÚ[ÛœËÛ™H\ˆ›ÝØÛÛXXÚÚ]]ÈÝÛˆPT’ØˆÛÙX›XÚ]˜Ý\ÝÛHÙ^\È[Ø^\ÈÜ[ÈÛÙ[™ÒÙ^\Ø^XÚ]H8 %™]™\ˆ™[HÛˆÞ[\Ú\ÙY˜[Y\È›Üˆ[ž][™Âœ\œÚ\ÝY™XØ]\ÙH0©ÍIÜÈZYÜ˜][Ûˆš^\™\È\[™ÛˆÝX›HÙ^\Ë‚‚ˆÈÈÈËXØÙ\ÜÈÛÛ›Û[™Ù[™X›X‚Ÿ]™[Ú[ˆŸKK_KK_Ÿš]˜]XHY˜][ÈÝ\\™HŸš[\š]˜]XÛ›HÚ[ˆÛÈ\\È[ˆÛ™Hš[HÙ[Z[™[HÚ\™HÝ]HŸ[\›˜[
+[\XÚ]
+H[Ù[KZ[\›˜[È™]™\ˆÜš]HHÙ^]ÛÜ™ŸXÚØYÙX
+Š\ÙH\ÊŠˆ›ÜˆTH[›Ý\ˆšYÚ[\™Ù]™YYÈ]\È›Ý[ˆ0©ÌÈÜˆ0©ÍŸX›XØÛ›H›ÜˆÚ]0©ÌÈ[™0©Í\ÝŸÜ[˜›Ü˜šY[ˆ‚˜š[˜[Ûˆ]™\žHÛ\ÜËˆÝXÝÝ™\ˆÛ\ÜØ[›\ÜÈY[]HÜˆ™Y™\™[˜ÙHÙ[X[XÜÈ\™H™\]Z\™Y‚˜[[XÚ]›ÈØ\Ù\È›Üˆ\™H˜[Y\ÜXÙ\È
+[[H•[YHÈ[[HÛÛÜˆÈ8 )ˆHX
+K™]™\ˆHÝXÝÚ]˜Hš]˜]H[š]‚‚ŠŠ”ÝÚYˆÝšXÝÛÛ˜Ý\œ™[˜ÞKÛÛ\]HÚXÚÚ[™Ë™\›È™XÛÛ˜Ý\œ™[˜ÞX[\ÜË™\›Â˜›Ûš\ÛÛ]Y
+[œØY™JXÛØ˜[ËŠŠˆ]™\ž][™ÈÜ›ÜÜÚ[™È[ˆ\ÛÛ][Ûˆ›Ý[™\žH\ÈHÙ[™X›X˜[YB\Kˆ[˜ÚXÚÙYÙ[™X›X\ÈØ\Y]
+Š™YJŠˆ\\È™\Ë]ÚYH
+‹MLŠKXXÚØ\œžZ[™ÈHÛÛ[Y[›Ùˆ^XÝH\ÈÚ\N‚‚˜ÝÚY‹ËËÈ™XY\ØY™H[™[Ù™ˆœ›ÛHšY[ÕÛÛ›Þ	ÜÈš]˜]H]Y]YH[ÈH\Þ[˜ÈÛÜ›‚‹ËËÂ‹ËËÈ[˜ÚXÚÙYÙ[™X›X\ÝYšXØ][ÛŽˆHÛ›H]]X›HÝ]H\È[‚‹ËËÈ\Þ[˜ÔÝ™X[KÛÛ[X][Û˜ÚXÚ\ÈØÝ[Y[Y™XY\ØY™H›ÜˆZY[Øš[š\Ú[™[‚‹ËËÈÔÐ[ØØ]Y[™˜Z\“ØÚØ\›ÝXÝYÛÝ[\ˆÝXÝˆ›Ý[™È[ÙH\ÈÝÜ™Y‚‹ËËÈ™]šY]ÙYŒ‹LËˆTWÐÓÓ•PÕ›Y0©Ìˆ‹ML‹[žHHÙˆË‚™š[˜[Û\ÜÈXÛÙTÚ[šÐ›Þˆ[˜ÚXÚÙYÙ[™X›HÈ8 )ˆB˜‚Y[™ÈH›Ý\™\]Z\™\È[Y[™[™È‹MLˆ[ˆHØ[YHÛÛ[Z]ˆØÜš\ËÛ[œÚÛÝ[È[K‚‚ŠŠ˜^\Ý[X[[žX\ÈÛŽŠŠˆ]™\žH^\Ý[X[\ÈÜ[Y[žHˆH˜\™H›ÝØÛÛ˜[YH[ˆ\BœÜÚ][Ûˆ\ÈHÛÛ\[H\œ›Ü‹›ÝHØ\›š[™È
+‹MÊK‚‚ˆÈÈÈËH˜[Z[™Â‚Šˆ\\È\\Ø[Y[Ø\ÙXÈY[X™\œÈÝÙ\Ø[Y[Ø\ÙXÈ›ÈØ™Yš^\ÎÈ›È[™Ø\šX[ˆ›Ý][Û‹‚ŠˆX˜œ™]šX][ÛœÈÛ›Hœ›ÛH\ÈÛÜÙY\Ý[ˆØ[›ÛšXØ[Ø\Ú[™Îˆ•Ô••ÔÑSÔÈÈ”ÂˆÑRHQˆTTUHÈÈ”ÈÐTˆÓÔUHˆTÐTHÐQÓ•’QˆT“T’HQURQ”ÓÓˆSÂˆÔQÈ”ÈTPPÈÒQˆQHÒHÔÈPPÈÓHUUˆ‘ÐˆˆQˆRHÔÑ•”ˆ”ˆX‚ˆXY[™ÈXÜ›Ûž[\ÈÝÙ\˜Ø\ÙHÚÛH
+ÜÜ\›ÛÛ\Û™[ØÙ\ØÜš\[Û˜
+NÈ[Ù]Ú\™H^BˆÝ^H\\˜Ø\ÙH
+\œÙT•Ô™\ÜÛœÙXXZÙTÑ\œÙ\˜
+K‚Šˆ›ÛÛX[œÈ™XY\È\ÜÙ\[ÛœÎˆ\ÒÙ^Yœ˜[YX\Ô\˜[Y]\”Ù]ØÚÝ[™XÛÛ›™XÝØ[”[˜‚ˆ™]™\ˆ›YØ™]™\ˆ[˜X›Y
+\ÙH\Ñ[˜X›Y
+K™]™\ˆH™YØ]]™H
+\Ó›Ý™XYX\È›Ü˜šY[ŠK‚Šˆ[˜Ý[ÛœÈ]Ø[ˆ˜Z[›ÝÜØÈ^HÈ›Ý™]\›ˆ›ÛÛˆ˜[YK\™]\›š[™ÈY[X™\œÈ˜[YHBˆ˜[YNˆ˜\ˆ\Ü^TÚ^™X›ÝÙ]\Ü^TÚ^™J
+X‚Šˆ˜XÝÜžHÝ]XÜÈ\™HXZÙx )˜ˆ•Ô™\]Y\Ý›XZÙQ\ØÜšX™J\›˜ÜÙ\NŠX‚Šˆ[š]È[ˆH˜[YHÚ[ˆ›ÝØš[Ý\Îˆ[Y[Ý]ÙXÛÛ™Øš]˜]RØœØš]\“Z[\ÙXÛÛ™ØˆXY[™S˜[›ÜØˆH˜\™H[Y[Ý]ˆ\˜][Û˜™YYÈ›È[š]8 %H\HØ\œšY\È]‚Šˆ\Ý˜[Y\È\ØÜšX™H™Z]š[Ý\ŽˆX\šÙ\š][œ™[XX›WÜÝ[Ü]ÐXØÙ\ÜÕ[š]ÐÛÜœ™XÝJ
+X‚‚ˆÈÈÈËˆ›Ü˜šY[ˆÛÛœÝXÝÈ[ˆÛÝ\˜Ù\ËØ‚˜XÜÝš^[Ü˜\0­ÈžHX0­È\ÈX0­È[œØY™Pš]Ø\Ý0­È[œØY™QÝÛ˜Ø\Ý0­È˜][\œ›Ü˜0­Â˜™XÛÛ™][Û‘˜Z[\™X0­È\œ˜^VÚWXÚ\™HX\È›Ý›Ý˜X›H[ˆ˜[™ÙH0­Èš[ÈXYÔš[Â˜[\È”ÓÙØ0­ÈÑÎ˜0­È]J
+X[ˆH\™H^Y\ˆ0­È™XYœÛY\È\ÛY\Â˜[“ÛÜ˜Ý\œ™[œ[Š[[ŠX0­È\Ü]ÚÙ[X\Ü™XÈ”ÓØÚØÈ™XYÛ]]^ÈØš˜×ÜÞ[˜×Ù[\˜Š\ÙHXÝÜœÈÜˆÔÐ[ØØ]Y[™˜Z\“ØÚØÈ”ÓØÚØ\È\›Z]Y
+Š›Û›JŠˆ[œÚYH]\Ýœ˜[YP›Þ[™˜šYÚ[\ÝÚ]
+H0­È›Ûš\ÛÛ]Y
+[œØY™JX0­È™XÛÛ˜Ý\œ™[˜ÞH[\Ü0­È[\ÜÜž\ÒÚ]
+[žH\™Ù]
+B°­ÈÛØ˜[]]X›HÝ]H[™[žHÝ]XÈ˜\˜]\È›Ý]0­ÈH˜\™H[™Û\ÚÝš[™È]\˜[[ˆBšY]È0­È[›X[˜YÙYÝ]ÚYHHÛÈØÝ[Y[YÑˆœšYÙ\È0­È[˜›Ý[™Y\Þ[˜ÔÝ™X[XY™™\š[™Ë‚‚˜™XÛÛ™][Û˜\È\›Z]YÛ›H›Üˆ›ÙÜ˜[[Y\ˆ\œ›Üˆ]
+Š˜Ø[››Ý
+ŠˆÛÛYHœ›ÛH™]ÛÜšÈ]H8 %[‚›Ý][Ù‹\˜[™ÙH[™^[ÈHÛÛœÝ[X›Kš]™XY\‹JŠXÚ]ˆˆÌ˜8 %[™]\ÝØ\œžHHY\ÜØYÙK‚[ž][™È™XXÚX›Hœ›ÛHHXÚÙ]›ÝÜÈ[œÝXYˆHX[›Ü›YYXÚÙ]œ›ÛHÛ™HØ[Y\˜H]\Ý™]™\ˆ™B˜X›HÈÜ˜\ÚH\ˆ]\ÈHÙXÝ\š]H›Ü\K›ÝY\™[H›Ø\Ý™\ÜË‚‚•HÛ™HX^Ù\[ÛŽˆHÝ]XØ[H^]\Ý]™HXÝ[Û˜\žHZ[[ˆHØ[YHš[Hœ›ÛHB˜Ø\ÙR]\˜X›X[[H
+ÔÓÙÓÙÙÙ\‹›ÙÙÙ\œØ
+KÚXÚØ\œšY\ÈËÈÝÚYY›Ü›X]ZYÛ›Ü™X[™HÛÛ[Y[›˜[Z[™ÈH[˜\šX[‚‚[ÝÙY[ˆ\ÝËØ[™ÛÝ\˜Ù\ËÕšYÚ[\ÝÚ]Øˆ\ÝÈ\™HYX[ÈÜ˜\ÚÝYK‚‚ˆÈÈÈËÈ\œ›ÜœÂ‚Šˆ
+Š•\Y›ÝÜÈ[ˆH\™H^Y\‹ŠŠˆX›XÈ]]][™È[˜È\œÙJÈ]Nˆ]JH›ÝÜÊš]Ý™X[Q\œ›ÜŠHOˆÔØ‚ˆ][Ù[H›Ý[™\šY\È[™[ˆšYÚ[ÛÜ™XÚY[ˆÈ›ÝÜÊšYÚ[\œ›ÜŠXˆÛ›HšYÚ[RX[™šYÚ[ˆ\ÙH[\Y›ÝÜØ‚ŠˆžOØÛ›HÚ\™HH˜Z[\™H\ÈÙ[Z[™[H[š[\™\Ý[™È
+Š˜[™
+ŠˆHÛÛ[Y[Ø^\ÈÛÎ‚ˆžOÈš[SX[˜YÙ\‹™Y˜][œ™[[Ý™R][J]ˆÝ[U[\
+HËÈ™\ÝY™›ÜÛX[\‚Šˆ™]™\ˆØ]ÚßXˆ™]™\ˆØ]ÚÈš[
+\œ›ÜŠHXˆ]™\žHØ]Ú[™\ËÙÜÈ]8¢iHØ\›š[™ØÚ]ˆHXYÛ›ÜÝXÐÛÙXÜˆ™]›ÝÜË‚Šˆ™\Ý[\È›ÝH™]\›ˆ\Kˆ\ÙH›ÝÜØˆ]\X\œÈÛ›H[œÚYH\Þ[˜Õ›ÝÚ[™ÔÝ™X[X[[Y[ˆ\\È[™[ˆY\[šËœ\œÙXÚ\™HHÝ[[˜Ý[Ûˆ\ÈHÚ[‚Šˆ›È”Ñ\œ›Ü˜ÛÛœÝXÝ[Û‹›È”Ñ^Ù\[Û˜›È\ÜÙ\[Û‘˜Z[\™X\È\œ›Üˆ[™[™Ë‚Šˆ[YÙ\ˆ\š]Y]XÈ
+Š™^XÝY
+ŠˆÈÜ˜\
+•Ù\]Y[˜ÙH[X™\œËÌ‹Xš][Y\Ý[\ÊH\Ù\È	ŠØØ	‹Xˆ
+ŠÚ]HÛÛ[Y[˜[Z[™ÈHÜ˜\ÚY
+Š‹ˆ]™\ž]Ú\™H[ÙHZ[ˆ
+ØÛÈH˜\Ý\™˜XÙ\ÈHYË‚ˆ™]™\ˆ[
+^XÝNŠHXÈ\ÙHÝX\™]‚‚ˆÈÈÈËŽØÝ[Y[][ÛˆÛÛ[Y[Â‚Šˆ]™\žHX›XØ[™XÚØYÙXXÛ\˜][Ûˆ\ÈHËËØÛÛ[Y[ˆ[˜Z[ÈÝ\Ú\ÙK‚ŠˆÚ\NˆÛ™HÝ[[X\žHÙ[[˜ÙH[™[™È[ˆH\š[ÙH›[šÈËËØ[™K[ˆ]Z[È[‚ˆH\˜[Y]\œÎ˜
+Û›H›ÜˆŠÈ\˜[Y]\œÊKH™]\›œÎ˜H›ÝÜÎ˜˜[Z[™ÈHÛÛ˜Ü™]H\œ›Ü‚ˆ\K[™HÛÛ\^]N˜›Üˆ[ž][™ÈÛÜœÙH[ˆÊŠK‚Šˆ
+ŠÚ]HHÜXÚYšXØ][Û‹ŠŠˆËËÈH›ÝNˆUKUŒ
+ÌŒŒJH0©ÍËŒËŒ‹ŒKŒK˜]™\žHš]Ý™X[H[™ˆ›ÝØÛÛ\œÙ\ˆ[˜Ý[Ûˆ˜[Y\È]ÈÛ]\ÙNÈ]\ÈÝÈH™]šY]Ù\ˆÚXÚÜÈÛÜœ™XÝ™\ÜÈÚ]Ý]ˆÝY\ÜÚ[™Ë‚ŠˆHØ\›š[™Î˜Ûˆ[žHÛÛ˜Ý\œ™[˜ÞHÜˆY™][YH™XÛÛ™][Ûˆ
+“]\Ý™HØ[Yœ›ÛHHÝÛš[™ÈXÝÜˆ‹ˆ•H™]\›™YY™™\ˆ\È˜[Y[[H™^\ÚŠK‚Šˆ
+Š‘ØÝ[Y[Ú]\[œÈÛˆX[›Ü›YY[œ]ŠŠˆ›ÝÜ[Û˜[›Üˆ[ž][™È]ÝXÚ\ÈH™]ÛÜšË‚Šˆ›ÈÛÛ[Y[Y[Ý]ÛÙK]™\‹ˆÚ]\È\ÝÜžK‚‚ˆÈÈÈËŽHÛÛ˜Ý\œ™[˜ÞB‚Šˆ
+Š”\™H^Y\ŽŠŠˆ›ÈXÝÜ˜›ÈXZ[XÝÜ˜›È\ÚØ›È\Þ[˜ØØ[È
+‹LÌŠKˆHÛÛBˆ^Ù\[Ûˆ\ÈšYÚ[TÐTXÚÜÙHÙ]™[ˆXÝÜœÈ\™H[[Y\˜]Y[ˆ‹LÌ‹‚Šˆ
+Š“Û™HXÝÜˆ\ˆÛÛ˜Ý\œ™[™\ÛÝ\˜ÙJŠ‹[™›Ý[™È[ÙH\È[ˆXÝÜ‹ˆYˆ[ÝHØ[ÈYÛ™K[ÝBˆ›Ø˜X›HØ[HÝXÝÝÛ™YžH[ˆ^\Ý[™ÈXÝÜ‹‚Šˆ
+Š[RH\ÈXZ[XÝÜ˜
+Š‹Üš][ˆ^XÚ]H
+‹M
+K‚Šˆ
+Š“š[™H\ÚÜÈ\ˆ]™HØ[Y\˜JŠŽˆÛ™H›ÛÝ\ÈZYÚÚ[™[ˆ[ˆHÚ[™ÛBˆÚ]›ÝÚ[™Õ\ÚÑÜ›Ý\8 %[™Ù\ÝXÝ[Ûˆ[\ÙY\[]™KYYXKXÛÙK•ÔÝ]ËØ]ÚÙÜË‚ˆ›Ý[™È]XÚ\ËˆÝÜ
+
+XØ[˜Ù[ÈH›ÛÝ[™
+Š˜]ØZ]ÊŠˆ]È]Ù\È›Ý™]\›ˆ[[H™YBˆ\È›Ú[™YÛÈ\™H\™H›ÈÜœ[ˆÛØÚÙ]È[™›ÈXZÙYXÛÙHÙ\ÜÚ[ÛœË‚Šˆ]™\žH]ØZ][ˆHÛÜ\ÈØ[˜Ù[][Û‹X]Ø\™NˆžH\ÚË˜ÚXÚÐØ[˜Ù[][ÛŠ
+X]HÜÙˆXXÚˆ]\˜][Û‹ÛØÚËœÛY\
+›ÜŽŠX™]™\ˆ™XYœÛY\[™Ú]\ÚÐØ[˜Ù[][Û’[™\˜\›Ý[™ˆ]™\žH•ÐÛÛ›™XÝ[Û˜™XÙZ]™HÛÈØ[˜Ù[[™ÈØ[ÈÛÛ›™XÝ[Û‹˜Ø[˜Ù[
+
+X‚Šˆ
+Š”Ø[˜Ý[Û™YÐÑ^]\Ý]™[NŠŠˆHšY[ÕÛÛ›ÞÝ]][™\˜›ØÚÎÈ•ÐÛÛ›™XÝ[ÛŠ]Y]YNŠXˆ
+Û™HÙ\šX[\Ù\’[š]X]Y]Y]YH\ˆ•ÔÛÛ›™XÝ[Û˜˜[YYÛÛKšYÚ[›™]Ø[Y\˜TÚÜQ˜
+NÂˆU\ÜÙ]Üš]\’[œ]œ™\]Y\ÝYYXQ]UÚ[”™XYJÛŽ\Ú[™ÎŠXÈ”ÕšY]Ë™\Ü^S[šØˆ\Ü]ÚÛÝ\˜ÙXˆ\È\ÙY›ÝÚ\™H8 %[Y\œÈ\™H\ÚÈÈžH]ØZ]ÛØÚËœÛY\
+‹‹ŠHX‚Šˆ]™\žHØ[˜XÚÈœšYÙHÝX\˜[Y\È
+Š™^XÝK[Û˜ÙJŠˆÛÛ[X][Ûˆ™\Ý[\[Û‹‚‚ˆÈÈÈËŒL]\›Z[š\ÛH[™[YB‚•H\™H^Y\ˆ™]™\ˆ™XYÈHÛØÚÈÜˆH˜[™ÛHÙ[™\˜]Ü‹ˆ]™\žH\™HÝ]HXXÚ[™HZÙ\Â˜›ÝÎˆYYXR[œÝ[\ÈH
+Šœ\˜[Y]\ŠŠˆÈÝ\Ø[™Ù\ÝØXÚØØ[™Xˆ]™\žH™]žH[^HÛÛ\]\Âš]Èš]\ˆœ›ÛH[ˆ[š™XÝY˜[™ÛTÛÝ\˜ÙXˆHÛÛœÙ\]Y[˜ÙH\È›Û‹[™YÛÝXX›H›ÜˆH™]ÛÜšÚ[™È\‚˜H˜Z[[™ÈÒH[ˆš[È]ÈÙYY[™™K\[›š[™ÈÚ]]ÙYY™\›ÙXÙ\ÈH˜Z[\™Hž]H›Üˆž]K‚‚ˆÈÈÈËŒLH\™›Ü›X[˜ÙHÛˆHœ˜[YH]‚Šˆ›È[ØØ][Ûˆ[œÚYHH\‹\XÚÙ]Üˆ\‹Yœ˜[YHÛÜˆ\XÚÙ]^™\“Ý]]››Û™X\ÈHÝ]XÈ]ˆ›Üˆ^XÝH\È™X\ÛÛ‹‚Šˆ™Y™\ˆÚ][œØY™Pž]\Ø[™ÛXÙ\ÈÈ]XÛÜY\ÎÈ]™\žHÚ][œØY™Pž]\Ø›ØÚÈØ\œšY\ÈBˆËÈÐQ‘UN˜ÛÛ[Y[˜[Z[™ÈHY™][YK[™HÚ[\ˆ™]™\ˆ\ØØ\\ÈH›ØÚË‚Šˆ™]™\ˆÝÜ™HH]XÛXÙHÛ™Ë]\›HÚ]Ý]]JÛXÙJX8 %HÛXÙH™]Z[œÈHÚÛH\™[[™ˆHL‹Xž]HXY\ˆÛXÙHÛ[™ÈHHPˆ™XY[]™H\ÈH™X[XZË‚ŠˆÛÛ[Y[[žH›Û‹[Øš[Ý\ÈÜ[Z\Ø][Û‹ˆ[ˆ[˜ÛÛ[Y[YÛ]™\ˆÛÜ\ÈH]\™HYË‚Šˆ
+Š“›ÈXZ[‹XXÝÜˆÜ\˜][ÛˆX^H^ÙYY\ÊŠˆ
+‘PUT‘TÈ0©ÌNKŒÈMŠKˆHXYÈZ[\ÈHØ]ÚÙÂˆ]\ÜÙ\ÈÛˆ[žHXZ[‹XXÝÜˆÜÝ™\ˆ\Ë[™ÒH˜Z[ÈÛˆ[žHØØÝ\œ™[˜ÙH[ˆHRHÝZ]K‚‚ˆÈÈÈËŒLˆÙÙÚ[™Â‚Šˆ\™H\™Ù]ÈÙÈ›ÝYÚ[ˆ[š™XÝY[žHÙÙÙ\”›ÝØÛÛY˜][YÈ[ÙÙÙ\Š
+Xˆ
+Š“™]™\ˆBˆÛØ˜[ŠŠˆXXÓÔÈ\™Ù]È\ÙHšYÚ[ÛÜ™K“ÔÓÙÓÙÙÙ\˜ÝXœÞ\Ý[HÛÛKšYÚ[˜\LÈØ]YÛÜšY\Ë‚Šˆ™YXÝ
+Š˜]HÛÝ\˜ÙJŠ‹›ÝYÚ™YXÝˆÔÓÙÓÙÙÙ\˜[\œÛ]\È\Èš]˜XÞNˆœX›XØ[™ˆ]\ÈÛ›HÛÜœ™XÝ™XØ]\ÙHÙˆHÛÝ\˜ÙK\ÚYHÝX\˜[YKˆ\È\ÈH[X™\˜]H˜YNˆ™YXÝˆX\›HÛÈXYÛ›ÜÝXÜÈ[™\È\™H\ÙY[[œÝXYÙˆ™[Z[™ÈÛˆœš]˜]X[™Ù][™Âˆš]˜]O˜[ˆ]™\žHÝ\ÜÙË‚Šˆ\‹\XÚÙ]ÙÙÚ[™È\ÈÛÛ\[YÝ]Ùˆ™[X\ÙNˆÚYˆP•QØ\›Ý[™™XYØ[]™[Ø[ÈÛˆBˆ[™ÜØ]YÛÜšY\Ë‚Šˆ]™\žH™\X]YY\œ›Üˆ]\ÈÜ˜\Y[ˆ˜]S[Z]YÙÙÙ\˜‚Šˆ]™\žH\Þ[˜ÔÝ™X[XØÝ[Y[È]ÈY™™\š[™ÈÛXÞH]HÜ™X][ÛˆÚ]K‚‚ˆÈÈÈËŒLÈØØ[\Ø][Ûˆ[™XØÙ\ÜÚXš[]B‚Šˆ]™\žH\Ù\‹]š\ÚX›HÝš[™ÈÛÛY\Èœ›ÛHØØ[^˜X›KžÜÝš[™ÜØÚ]BˆÝ\™˜XÙKœÝXš™XÝ˜\šX[œ\Ù^K›ÝYÚÝš[™ÊØØ[^™YŠXÈØØ[^™YÝš[™Ô™\ÛÝ\˜ÙX‚ˆH˜\™H[™Û\Ú]\˜[[ˆHšY]È\ÈH™]šY]È™Z™XÝ[Ûˆ8 %\ÜÚX[ˆ\ÈH™\]Z\™[Y[‚ŠˆYÙ]
+ŠŠÌÍH	JŠˆ[™Ý›Üˆ\ÜÚX[ŽÈ\˜[˜\šX][ÛœÈ\™H™\]Z\™Y‚Šˆ]™\žH[\˜XÝ]™H[[Y[\ÈÙ^X›Ø\™\™XXÚX›HÚ]Hš\ÚX›H›ØÝ\Èš[™Ë[™Ø\œšY\ÈH›ÚXÙSÝ™\‚ˆX™[˜[YH[™[È]™\žHÝ™\‹[Û›HY™›Ü™[˜ÙH\ÈHÝ\ÝÛHXÝ[Û‹‚ŠˆZ[š[][H]\™Ù]0åÈ^[™YÚ]ÛÛ[Ú\XÚ\™HHš\ÝX[\ÈÛX[\‹‚Šˆ]™\žHÚ[™Ú[™È[X™\ˆ\È[Û›ÜÜXÙYYÚ]
+
+XÚ]H™\Ù\™YÚYœ›ÛBˆ•[YK•\ÙÜ˜\K”™\Ù\™Y‚‚ˆÈÈÈËŒM\ÝÂ‚Šˆ
+ŠœÝÚY]\Ý[™ÊŠˆ
+[\Ü\Ý[™Ø\ÝÙ^XÝÜ™\]Z\™X
+K™]™\ˆÕ\Ý8 %^Ù\›Ü‚ˆÕY]šXØX˜\ÙY\™›Ü›X[˜ÙH\ÜÙ\[ÛœÈÛˆXXÓÔË‚Šˆ™Y™\ˆ
+ŠœX›\ÚY\Ý™XÝÜœÊŠˆ[™Ú]H[H[ˆHÛÛ[Y[ˆÚ\™H[ÝH]\ÝÞ[\Ú\ÙHHš^\™KˆØ^HÛÈ8 %™]™\ˆ[\HH˜XœšXØ]Y˜[YHØ[YHœ›ÛH™X[\™Ø\™K‚ŠˆÛÝ™\ˆX[›Ü›YY[™ÜÝ[H[œ]^XÚ]Nˆ[˜Ø]YY™™\œË™\›È[™ÝÝ™\œÚ^™Y[™ÝˆšY[Ë[YÙ\ˆÝ™\™›ÝÈ]›Ý[™\šY\Ë[™˜[Y\È]H^XÝYÙHÙˆH˜[™ÙK‚Šˆ›È\ÝX^H\[™ÛˆØ[XÛØÚÈ[YK™]ÛÜšÈXØÙ\ÜËÜˆ^XÝ][ÛˆÜ™\‹‚Šˆ]™\žH[Ù[H]\œÙ\Èž]\Èœ›ÛHH™]ÛÜšÈ\ÈH^žˆ\Ýˆ8¢iHHH[œ]Ë™\›ÈÜ˜\Ú\Ë™\›Âˆ[™ÜË›Ý[™YžH[ˆ]\˜][Û‹XÛÝ[\ÜÙ\[Ûˆ[ˆXYË‚‚ˆÈÈÈËŒMHÚ][ÝH]\Ý›ÝÝXÚ‚ŠˆXÚØYÙKœÝÚYØÜËÊŠ˜[™[ž][™ÈÝ]ÚYHH›ÝÜÈ[ÝHÙ\™H\ÜÚYÛ™Y‚ŠˆHXÙZÛ\‹œÝÚYš[\È8 %HÝ\\š\ÛÜˆ™[[Ý™\È[H
+‹MÌ
+K‚ŠˆHLˆœXÙZÛ\˜š[\È[ˆ™\ÛÝ\˜ÙH\™XÝÜšY\È8 %
+Š›™]™\ŠŠˆ[]H[K‚ŠˆHÚX›[™ÈYÙ[	ÜÈš[KˆÈ›Ý™Y›Ü›X]]È›Ýš[\›Ý™Hˆ]È›Ý™[˜[YH]È\\Ë‚‚ˆÈÈÈËŒMˆ›ÙÜ™\ÜÈÙÙÚ[™È
+X[™]ÜžJB‚˜™XÚÈ–É
+]H]H
+ÉR‰SN‰TÊWH[Ý\›˜[YOˆÝYÙOˆÚÜY\ÜØYÙOˆˆˆÚÛYKÝ\Ù\‹ØØ[Y\˜KË˜Z[\›ÙÜ™\ÜË›ÙÂ˜‚˜ÕT•[ˆÔ’US˜Ú[ˆ[Ý\ˆÛÝ\˜Ù\È\™HÛˆ\ÚË[ˆ•RSÚ]H
+Šœ™X[
+ŠˆZ[™\Ý[[ˆTÕÚ]H
+Šœ™X[
+Šˆ\ÜËÙ˜Z[ÛÝ[Ë[ˆÓ‘Xˆ“ÐÒÑQÚ]H™X\ÛÛˆYˆ[ÝH\™BœÝXÚËˆ[™\ˆMŒÚ\˜XÝ\œË›È[X™YY™]Û[™\Ëˆ™\Ü™X[[X™\œÈ8 %HÝ\\š\ÛÜˆ™K\[œÈB˜Z[[™Ú[ÙYHH\ØÜ™\[˜ÞK‚‚‹KKB‚ˆÈÈˆZ[[™™\šYšXØ][ÛˆÚXÚÛ\Ý‚ˆÈÈÈŒHHÛÛ[X[™Â‚[Ø^\È\ÜÈ[Ý\ˆÝÛˆØÜ˜]Ú]ˆÙ]™\˜[YÙ[ÈZ[ÛÛ˜Ý\œ™[H[™ÝÚYHZÙ\È[ˆ^Û\Ú]™B›ØÚÈÛˆHÚ\™Y˜Z[ÈÚ]Ý]Hš]˜]HØÜ˜]Ú][ÝHÚ[›ØÚÈÜˆ˜Z[›Üˆ™X\ÛÛœÈ]š]™H›Ý[™ÈÈÈÚ][Ý\ˆÛÙK‚‚˜˜\ÚˆÈ[Ý\ˆ[›™\ˆÛÜ
+[^ÛÛZ[™\ŠB‹šYÚ[ÜÝÚYZ[K\›ÙXÝšYÚ[\™HK\ØÜ˜]Ú\]˜Z[O[Ý\›˜[YO‚‹šYÚ[ÜÝÚY\ÝKYš[\ˆ[Ý\•\Ý\™Ù]ˆK\ØÜ˜]Ú\]˜Z[O[Ý\›˜[YO‚‚ˆÈHÛÈØ]\Ë^XÝH\ÈÒH[œÈ[BœÝÚYZ[K\›ÙXÝšYÚ[\™HVÝÚYÈ]Ø\›š[™ÜËX\ËY\œ›ÜœÈÈH\š]HØ]BœÝÚYZ[K\›ÙXÝšYÚ[\ÝÚ]VÝÚYÈ]Ø\›š[™ÜËX\ËY\œ›ÜœÂœÝÚYZ[VÝÚYÈ]Ø\›š[™ÜËX\ËY\œ›ÜœÈÈ›Ý™\ÈHÚYˆÝX\™ÈÛÛ\[BœÝÚY\ÝK\\˜[[”ØÜš\ËÝ\Ý[[^œÚÈ˜Z[ÈÛˆH™\›Ë]\Ý\™H\™Ù]”ØÜš\ËÛ[œÚ‚ˆÈXXÓÔÈÛ›BœÝÚYZ[XÈXYÈVÝÚYÈ]Ø\›š[™ÜËX\ËY\œ›ÜœÂœÝÚY\ÝK\\˜[[KY[˜X›KXÛÙKXÛÝ™\˜YÙB”ØÜš\ËØÛÝ™\˜YÙKœÚÈL	H\™H›ÛÜ‹Ì	HXXÓÔÈ›ÛÜ‚”ØÜš\ËØZ[X\œÚKXÛÛ™šYÝ\˜][Ûˆ™[X\ÙHKX\˜Ú[š]™\œØ[”ØÜš\ËØ™[˜ÚœÚK\Û[ÚÙB˜‚ŠŠ˜ÝÚYZ[K\›ÙXÝšYÚ[\™X\ÈHYXÚ[š\ÛK›ÝH›Ü›X[]KŠŠˆYˆÛÛY[Û™HYÂ˜[\ÜÛÜ™SYYXXÈšYÚ[•]ÛÛ[X[™]\ÝÝÜZ[[™ËˆYˆ]]™\ˆÝÜÈ™Z[™ÈX›HÂ™˜Z[8 %\È]Ú[[HY™Y›Ü™H\NˆœÝ]XØØ\ÈYY8 %HØ]H\ÈÛÜœÙH[ˆ\Ù[\ÜË™XØ]\ÙBš]\È\ÝY‚‚ˆÈÈÈŒˆYš[š][ÛˆÙˆÛ™K\ˆØ]™B‚ŠŠ•ÌH8 %šYÚ[›ÝØÛÛØ
+ÈÜž\ÊŠ‚‹HÈHÝÚYZ[K\›ÙXÝšYÚ[\™HVÝÚYÈ]Ø\›š[™ÜËX\ËY\œ›ÜœØÜ™Y[‹‚‹HÈHÝÚY\ÝKYš[\ˆšYÚ[›ÝØÛÛÕ\ÝØÜ™Y[‹
+Š¸¢iHLŒ\ÝÊŠ‹Ûˆ[^‚‹HÈHQHX]Ú\È[È‘ÈLÌŒH™XÝÜœÈ
+Š˜[™
+ŠˆH‘ÈŒMÈYÙ\Ý^[\K]Ú[šÈÚ^™\ÂˆKÌËÍËÌLËÌKÌˆ[™ÛˆHHZPˆ[œ]ˆÒKLH[™ÒKLMˆX]ÚZ\ˆX›\ÚY™XÝÜœË‚‹HÈH˜\ÙM™XÛÙXXØÙ\È[œYYÚ]\ÜXÙK[Y[ˆ[™T“\ØY™H[œ][™™Z™XÝÂˆ[™Ý	HOHX‚‹HÈHYYXU[Y\Ý[\˜ÛÛ™\Y
+ÎŠX\È^XÝ]L8¡¤ˆH8¡¤ˆŒ›Ý[™š\È[™Ø]\˜]\Âˆ[œÝXYÙˆÝ™\™›ÝÚ[™ÎÈH™\›È[Y\ØØ[HÛ[\È[™Ù\È›Ý˜\‚‹HÈH[TÛXÞX™\›ÙXÙ\ÈHÛ\ÜÈx $ÑHX›H]›Ý˜XÚÚ[™ÔØØ[Q˜XÝÜ˜H[™‹[˜ÛY[™ÂˆHMH	HXY˜[™[™HÛ\ÜËPˆ›Û[Ý[Ûˆ[K‚‹HÈH™YXÝ^žˆ\ÝÜ™Y[Žˆ›ÈÙYYYÙXÜ™]Ý\š]™\È[žH›Ü›X][™È]ÈY[\Ý[È8¢i°åÂˆÜ›ÝÝ‚‹HÈHÜÝÛXÞX™Y\Ù\ÈœX›XÒ[\›™]›Üˆ]™\žH›Û‹SSˆ›Ü›H\ÝY‚‹HÈH]™\žH‘ËOÓPRS‹S“““˜ÛÙH\È[š\]YH[™X\ÈÈH\Ù\“Y\ÜØYÙX[™H\Ù\”™[YYX‚‹HÈHØÜš\ËÛ[œÚÜ™Y[Žˆ›ÈXžHX\ÈXš[ÑØÜž\ÒÚ]Ý™\‹[[™Ý[™K‚‚ŠŠ•Ìˆ8 %H\™H›ÝØÛÛ^Y\ŠŠ‚‹HÈHÝÚY\ÝK\\˜[[Ü™Y[ˆÛˆ[^
+Š˜[Ú^\™HÝZ]\È›Û‹^™\›ÊŠ‚ˆ
+ØÜš\ËÝ\Ý[[^œÚ[™›Ü˜Ù\È]
+K‚‹HÈHšYÚ[\[[™U\ÝØÜ™Y[ŽˆÞ[]XÈØ[Y\˜H8¡¤ˆ•Ô8¡¤ˆ•8¡¤ˆ[˜ÛÙYœ˜[YX›ÈÛØÚÙ]Ë›ÈXXË‚‹HÈH]\›Z[š\ÛNˆHØ[YHš^\™H[™ÙYY›ÙXÙHH
+Š˜ž]KZY[XØ[
+ŠˆÛÛ˜Ø][˜][ÛˆÙˆœÙ[™ˆ^[ØYÈ[™[ˆY[XØ[XÝ[Ûˆ\œ˜^HXÜ›ÜÜÈLY™™\™[Ú[šÚ[™ÜË‚‹HÈHÜ][˜\šX[˜ÙNˆ]™\žHœÜš^\™HXÛÙ\ÈY[XØ[HXÜ›ÜÜÈŒÙ]YÜ˜[™ÛHÚ[šÚ[™ÜË‚‹HÈH^žŽˆ8¢iHHH˜[™ÛH[œ]È\ˆ\œÙ\ˆ
+•ÔÚ\™KÑ•ŒÔËŒHÔËTÐTHSˆÐQÔËQ\ØÛÝ™\žKT”[\
+Kˆ™\›ÈÜ˜\Ú\Ë™\›È[™ÜË‚‹HÈH[ØÚÑ^Ú[™Ù\˜[™š^\™R˜[œÜÜ
+Š™˜Z[HÝZ]JŠˆYˆ[žH\ØÛÝ™\žH™\]Y\ÝØ\œšY\ÂˆHÜ™Y[X[ˆ
+[X™\˜][H™\šYžH\ÈžH[\Ü˜\š[HY[™ÈÛ™KŠB‹HÈHÝÙY\[›™\ˆ™Y\Ù\È[žH™Yš^ÚY\ˆ[ˆÌMˆ[™˜\œ›ÝÜÈÌM¸ $ËÌŒHÈT”X˜XÚÙYÌË‚‹HÈHÛÝ™\˜YÙH8¢iHL	HÛˆH\™H\™Ù]ÎÈL	HÛˆ•ÔÚ\™QXÛÙ\˜[™•Ô]][XØ]Ü˜‚‹HÈHXÚØYÙKœ™\ÛÛ™YÝ[\È[ˆ[\H[ˆ\Ý‚‚ŠŠ•ÌÈ8 %˜[œÜÜšY[Ë™[™\ˆ
+XXÓÔÊJŠ‚‹HÈHÝÚYZ[XÈXYÈVÝÚYÈ]Ø\›š[™ÜËX\ËY\œ›ÜœØÜ™Y[ˆ
+Š›ÛˆXXÓÔÊŠ‹‚‹HÈHÝÚYZ[Ý[Ü™Y[ˆ
+Š›Ûˆ[^
+Šˆ8 %HÚYˆÜÊXXÓÔÊXÝX\™ÈÛÛ\[HÈ[\H[Ù[\Ë‚‹HÈHØÜš\ËÙÙ[‹\ÚY\‹\ÛÝ\˜ÙKœÝÚY™YÙ[™\˜]\ÈÚY\”ÛÝ\˜ÙKœÝÚYž]KZY[XØ[NÈH\Ýˆ]\ÜÙ\È]\ÈÜ™Y[‹‚‹HÈH[˜ÚXÚÙYÙ[™X›XÛÝ[[ˆÛÝ\˜Ù\ËØ^ÛY[™ÈšYÚ[\ÝÚ]\È
+Š™^XÝHÊŠ‹XXÚÚ]ˆH‹MLˆ\ÝYšXØ][ÛˆÛÛ[Y[‚‹HÈH›Ü›X]\ØÜš\[Û‘˜XÝÜžXZ[ÈH\ØÜš\[Ûˆœ›ÛH™X[LŒ[™ŒH\˜[Y]\ˆÙ]Âˆ[™™\ÜÈ\Ü^TÚ^™HOHNLŒ0åÌLœ›ÛHHNLŒ0åÌLÛÙYœ˜[YK‚‹HÈH\Ò\™Ø\™PXØÙ[\˜]Y\È™XYœ›ÛBˆÕ•XÛÛ\™\ÜÚ[Û”›Ü\RÙ^WÕ\Ú[™Ò\™Ø\™PXØÙ[\˜]YšY[ÑXÛÙ\˜›Ý\ÜÝ[YY‚‹HÈH™[™\ˆÙ[ÛY]žH\ÝÈ™\›ÙXÙHHš]™XÝX›H™\˜˜][K[˜ÛY[™ÂˆNLŒ0åÌL[ˆ0åÍŒ™š]8¡äˆ
+ÍKL
+X‚‹HÈH]\È\Ý\™\Ú\Îˆ¸¡¤ø¡¤¸¡¤È›ÙXÙ\È^XÝH
+ŠŒŠŠˆ˜XÚÙ[™Ú[™Ù\Ë›Ý‚‹HÈH›È›\Ú
+™[[Ýš[™Ñ\Ü^YY[XYÙNŠX[ž]Ú\™H^Ù\H[X™\˜]H›XÚË[Ý]]‚‚ŠŠ•Í8 %šYÚ[ÛÜ™X
+Š‚‹HÈHšYÚ[ÛÜ™U\ÝØÜ™Y[ˆÛˆXXÓÔÎˆ
+ŠŒMÌÈ[X™\™YØ\Ù\ÊŠ‹[˜ÛY[™ÈÛ™H\ˆ›ÝÈÙˆHN\›ÝÂˆ˜[œÚ][ÛˆX›H\ÈHÛÝ™\˜YÙH\Ý\ÜÙ\[™ÈH^\˜Ú\ÙY
+Ý]K]™[
+XÙ]
+Š™\]X[ÊŠ‚ˆHX›K‚‹HÈHX[Ø[\X\È
+Š™^XÝHž]\ÊŠˆ
+Y[[ÜžS^[Ý]X[Ø[\O‹œÚ^™HOH
+K‚‹HÈHZYÜ˜][Ûˆš^\™\ÈXœ˜\žK]ŒKšœÛÛ˜8¡¤ˆ]Œ˜8¡¤ˆ]ŒØ[ZYÜ˜]H[™XÛÙNÈ]ŽNKY]\™XˆÜ[œÈ
+Šœ™XY[Û›H[™Üš]\È›Ý[™ÊŠŽÈ][˜Ø]Y[™YØ\˜˜YÙX™XÛÝ™\ˆœ›ÛH˜˜ZØ[™ˆ[H\Ù\‹‚‹HÈHH\Ý™Y›XÝÈÝ™\ˆØ[Y\˜KÛÙ[™ÒÙ^\Ø[™\ÜÙ\È
+Š››È\ÜÝÛÜ™\Ú\YÙ^H^\ÝÊŠ‹‚‹HÈH]]ØÚÛÝ]ˆÛÈÜ™Y[X[Y\È8¡äˆ\›Z[˜[Ûˆ
+Š›Û™HÚ\™YÛÝ[\ŠŠŽÈHœ™\Ú[›Û˜ÙHBˆÙ\È›ÝÛÝ[È\Ù\ÚXÚØ›Ø™\È\™HØ\Y]È\ˆ
+ÜÝXØÛÝ[
+H\ˆLZ[]\Ë‚‹HÈHXZÙT[˜\ÈH\™H[˜Ý[ÛŽˆY[XØ[[œ]È8¡äˆY[XØ[[‹\ÜÙ\YÝ™\ˆHX]š^Ù‚ˆ[HÚ^™\Ëš\ÚXš[]Y\È[™š[Üš]Y\Ë‚‹HÈH\Ý\™\Ú\Îˆ0¬LL	HÜØÚ[][ÛˆÝ™\ˆŒÈ8¡äˆ
+ŠŒ
+Šˆ]X[]HÚ[™Ù\ÎÈHŒ	HÚ[™ÙH[\È8¡ä‚ˆ^XÝH
+ŠŒJŠ‹‚‹HÈHH™XÛÜ™[™ÈÛÛ[Y\È›ÜˆŒÈÚ[H]È[H\ÈÛÜÙY
+š[Üš]Hœ™XÛÜ™[™Ø\È™]™\‚ˆ[[ÝY[™™]™\ˆØØÛ\Ú[Û‹\]\ÙY
+K‚‹HÈHY\[šËœ\œÙX\ÈÝ[Ý™\ˆL^ž™YT“Îˆ™]™\ˆ˜\Ë™]™\ˆ[™ÜË‚‚ŠŠ•ÍH8 %šYÚ[RX
+Š‚‹HÈHšYÚ[RU\ÝØÜ™Y[‹ˆ[]Nˆˆ][\ÈØÛÜ™Y[ˆ
+Šˆ\ÊŠŽÈ˜[šÚ[™ÈX]Ú\ÈH›Ü›X]]™Bˆ›Ü›][NÈÜ™\š[™È[™H8¢iHÌÝ]Ù™ˆ\ÜÙ\Y‚‹HÈHHÚÙ[ˆØ[\žH™[™\œÈ]™\žHÚÙ[ˆ[ˆ\šËYÚ[˜Ü™X\ÙPÛÛ˜\Ý[™ˆ™YXÙU˜[œÜ\™[˜ÞX‚‹HÈH]™\žHŠ˜ÛÛ\Û™[\ÈHÔ™]šY]ØÛÝ™\š[™È
+Š™]™\žHÝ]H[ˆ]ÈX›JŠ‹[ˆ\šÈ[™YÚˆ\È™YXÙS[Ý[Û˜™YXÙU˜[œÜ\™[˜ÞX[˜Ü™X\ÙPÛÛ˜\ÝY™™\™[X]UÚ]Ý]ÛÛÜ˜ˆ^ØØ[HKŒMX[™H\ÜÚX[ˆÝš[™È]ŒK0åÈ[™Ý‚‹HÈHØÜš\ËÛ[œÚš[™È
+Š››ÊŠˆ]\˜[ÛÛÝ\‹›Û˜Y]\ËÜXÚ[™ËÚYÝÈÜˆ[š[X][Û‚ˆÝ]ÚYH•[YX[™
+Š››ÊŠˆ[‹X[››Ý]YÜ[]™[\H[ˆÛÝ\˜Ù\ËÕšYÚ[RKØ‚‹HÈH›È™˜]Ú[™ÑÜ›Ý\
+
+X›ÜXÚ]JJXœÚYÝØ˜›\˜›X\ÚØ˜Û\Ú\XÜ‚ˆœ›Ý][Û‘Y™™XÝÛˆHšY[È[Kˆ›ÈU”Ø[\PY™™\‘\Ü^S^Y\˜›Ý[™È]]][ÛˆÝ]ÚYHBˆ•[U˜[œÚ][Û”›ÞX˜[œÚ][Û‹‚‹HÈHØØ[\Ø][Ûˆ\š]Nˆ]™\žHÙ^H™\Ù[[ˆSˆ[™•NÈ›ÈZ\ÜÚ[™È\˜[˜\šX][Û‹‚‚ŠŠ•Íˆ8 %\ØÜš\ËXØÙ\[˜ÙJŠ‚‹HÈHØÜš\ËØZ[X\œÚKXÛÛ™šYÝ\˜][Ûˆ™[X\ÙHKX\˜Ú[š]™\œØ[›ÙXÙ\ÈHšYÚ[˜\]ˆ
+Š›][˜Ú\ÈÛˆHZ[XXÚ[™JŠˆÚ]YZØÈÚYÛš[™Ë[™[›š[™È]ÚXÙH›ÙXÙ\ÈBˆž]KZY[XØ[[™H\\œ›ÛHÚYÛ˜]\™H[™[Y\Ý[\‚‹HÈHÛÙ\ÚYÛˆK]™\šYžHKYY\K\ÝšXÝÛX[ŽÈ[][Y[È[\X]Ú\ÈšYÚ[™[][Y[Ø‚‹HÈH[™›Ëœ\ÝÛÛZ[œÈ”ÓØØ[™]ÛÜšÕ\ØYÙQ\ØÜš\[Û˜”Ð›Ûš›Ý\”Ù\šXÙ\Øˆ”Ð[ÝÜÓØØ[™]ÛÜšÚ[™ØHšYÚ[T“\H[™
+Š™YJŠˆU^ÜY\QXÛ\˜][ÛœØ‚‹HÈH™\›ËYYÜ™\ÜÈ\ÝÜ™Y[Žˆ›ÈXÚÙ]X]™\ÈHØØ[™]ÛÜšËÚ]ÜˆÚ]Ý]Ø[Y\˜\ÂˆÛÛ™šYÝ\™YÛÛ™š\›YYžHÜÝÛXÞX[š]\ÝÈ
+Š˜[™
+ŠˆHXÚÙ]Ø\\™Kˆ›Ý››ÂˆÛÛ›™XÝ[Ûˆˆ8 %HŒHØØ[ˆÜ[œÈSˆÛØÚÙ]È]][˜ÚžH\ÚYÛŽÈÙYH‘PUT‘TÈ0©ÌŒŒÂˆ[™HØ\\™Hš[\ˆ[ˆØÜËÐPÐÑTSÑK›Y0©ÌËK‚‹HÈHÙXÜ™]XXœÙ[˜ÙH\ÝÜ™Y[ˆÝ™\ˆXœ˜\žKšœÛÛ˜]™[ËšœÛÛ˜HXYÛ›ÜÝXÜÈ[™KHÔÕ‚ˆ^Ü[™HÙÈ^Ü‚‹HÈHXZÈ\ÝÎˆL™XÛÛ›™XÝÞXÛ\ËŒXÛÙ\ˆÝ\ÜÝÜËL\ØÛÝ™\žHÞXÛ\È[™]\›ˆÂˆ˜\Ù[[™Hš[KY\ØÜš\Ü‹\ÚË•\Ù\ÜÚ[Ûˆ[™”ÔÈÛÝ[Ë‚‹HÈH\™›Ü›X[˜ÙHØ]\ÈÚ][ˆL	Nˆˆ][˜Ú8¡¤ˆš\œÝœ˜[YHL8¢iL\ÎÈˆÔÛ\ÜË]ËYÛ\ÜÈMBˆ8¢iL\ÎÈHMˆ0åÈL8¢iÍH	HÔHÈ8¢iN	HÔHÈ8¢iLPŽÈLHNH8¢iÈ\È]LŒŽÈMˆ›ÂˆXZ[‹XXÝÜˆÜ\˜][Ûˆˆ\ÎÈŒLÈÙZ[[™ÈKHÐ‹‚‹HÈH
+Š”ŒHXØÙ\[˜ÙKÛˆ™X[\™Ø\™NŠŠˆÛ™H˜XÝÜžKYY˜][RTZÝš\Ú[ÛˆØ[Y\˜HÛˆHSŽÂˆ][˜ÚH\È\HÛ›HH\ÜÝÛÜ™È™XXÚH
+Šš\ÚX›H[Ýš[™ÈXÝ\™HÚ][ˆLÙXÛÛ™ÊŠ‹‚ˆÜš][ˆ\[ˆØÜËÐPÐÑTSÑK›Y[™Ù\Ü™Y[‹‚‹HÈHÝ™X[HØÝÜˆ›ÙXÙ\È[š[™HŒKHXYÛ›ÜÙ\ÈYØZ[œÝHÚ^ÙYYY˜][[Ù\Ë‚‚ˆÈÈÈŒÈÚ]Ø[››Ý™H™\šYšYY[ˆH]™[ÜY[ÛÛZ[™\‹[™]\Ý™HÛ™HÛˆHXXÂ‚™HÛ™\ÝX›Ý]\È\ÝÈ]\ÈHXØÙ\[˜ÙHÛÜšÈ]\È›Ý\[™YY]‚‚Ÿ\™XHÚH]™YYÈHXXÈŸKK_KK_Ÿ[ž][™È[\Ü[™È\Ú]ÝÚYRKU‘›Ý[™][Û‹šY[ÕÛÛ›ÞÛÜ™SYYXKY][ÙXÝ\š]K™]ÛÜšÈHœ˜[Y]ÛÜšÜÈ\™HXœÙ[Ûˆ[^ÈHÚYˆÜÊXXÓÔÊX›ÙY\È\™H
+Š›™]™\ˆ\KXÚXÚÙY
+Šˆ[ˆHÛÛZ[™\ˆŸHY][ÚY\œÈ™YYY][ØY][X˜œ›ÛHÛÙKÜˆH[[YHXZÙSXœ˜\žJÛÝ\˜ÙNŠXÛˆH™X[ÔHŸšYÚ[˜\\ÜÙ[X›KÛÙHÚYÛš[™Ë[][Y[Ë\™[™Y[[YH™YYÛÙ\ÚYÛ˜Ÿ™X[\™Ø\™HXÛÙK][˜ÞKÔH[™\›X[[X™\œÈ™YY\HÚ[XÛÛˆ[™™X[Ø[Y\˜\ÈŸHŒH™\›ËXÛÛ™šYÝ\˜][ÛˆØ]H™YYÈH™X[ZÝš\Ú[ÛˆØ[Y\˜HÛˆH™X[Sˆ‚‘]™\ž][™È[ˆH\™H^Y\ˆ8 %•Ô\œÚ[™ËYÙ\ÝÑ•\XÚÙ]^˜][Û‹š]\ˆY™™\š[™Ë’ŒÒŒHš]Ý™X[H\œÚ[™Ë]˜ÐØØ˜ÐØTÐTHSÐQ[™ÔËQ\ØÛÝ™\žHÛÙXÜËÒQˆX]Ë˜[TÛXÞXÜÝÛXÞX™YXÝ[™HÞ[]XËXØ[Y\˜H\›™\ÜÈ8 %
+Šš\ÊŠˆ™\šYšXX›H\™H[™›]\Ý™HÜ™Y[ˆ™Y›Ü™HHXXÓÔÈ^Y\ˆ\ÈÜš][‹‚‚ˆÈÈÈHÝ[™[™È[B‚“›ÈÜXÚYšXØ][ÛˆÛZ[HX›Ý]HZ[Þ\Ý[H\È\ÝY[[]\È™Y[ˆ^XÝ]YˆÚ[ˆHØÝ[Y[œ™\ØÜšX™\ÈHÛÛ[X[™[ˆ]YØZ[œÝHØØY™›ÛˆØÜËÐ•RSU‘T’Q’PÐUSÓ‹›Y\È\[™YË›™]™\ˆ™]Üš][ˆ8 %[™]\ÈÚH™YHY™XÝÈ[ˆ\È›Ú™XÝÙ\™H›Ý[™žHHÛÛ\[\ˆ[œÝXYÙˆžBÙ[H›ØÚÙYYÙ[Ë‚

@@ -34,6 +34,25 @@ private final class RecordingLogger: LoggerProtocol, @unchecked Sendable {
     }
 }
 
+private final class SteppableLoggingClock: MonotonicClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant = MediaInstant.zero
+
+    func now() -> MediaInstant {
+        lock.lock()
+        defer { lock.unlock() }
+        return instant
+    }
+
+    func advance(by duration: Duration) {
+        lock.lock()
+        defer { lock.unlock() }
+        instant = instant + duration
+    }
+
+    func sleep(for _: Duration) async throws {}
+}
+
 @Suite struct LoggingTests {
 
     @Test func thereAreExactlyThirteenLogCategories() {
@@ -126,5 +145,50 @@ private final class RecordingLogger: LoggerProtocol, @unchecked Sendable {
         let event = logger.events.first
         #expect(event?.file.description.hasSuffix("LoggingTests.swift") == true)
         #expect((event?.line ?? 0) > 0)
+    }
+
+    @Test func rateLimitedLoggerEmitsBudgetThenSuppressionSummary() {
+        let base = RecordingLogger()
+        let clock = SteppableLoggingClock()
+        let logger = RateLimitedLogger(wrapping: base, limit: 2, window: .seconds(10), clock: clock)
+        let event = LogEvent(level: .warning, category: .rtp, message: "packet gap",
+                             file: "Receiver.swift", line: 42)
+
+        for _ in 0..<4 { logger.log(event) }
+        #expect(base.events.map(\.message) == ["packet gap", "packet gap"])
+
+        clock.advance(by: .seconds(10))
+        logger.log(event)
+        #expect(base.events.map(\.message) == [
+            "packet gap", "packet gap", "packet gap — suppressed 2 similar", "packet gap",
+        ])
+        #expect(base.events[2].metadata["suppressed"] == "2")
+    }
+
+    @Test func rateLimitKeysAreCallSitesNotNetworkControlledMessages() {
+        let base = RecordingLogger()
+        let clock = SteppableLoggingClock()
+        let logger = RateLimitedLogger(wrapping: base, limit: 1, clock: clock)
+        logger.log(LogEvent(level: .error, category: .isapi, message: "device said A",
+                            file: "Parser.swift", line: 7))
+        logger.log(LogEvent(level: .error, category: .isapi, message: "device said B",
+                            file: "Parser.swift", line: 7))
+        logger.log(LogEvent(level: .error, category: .isapi, message: "another site",
+                            file: "Parser.swift", line: 8))
+        #expect(base.events.map(\.message) == ["device said A", "another site"])
+    }
+
+    @Test func zeroLimitSuppressesEverythingAndReportsAtTheNextWindow() {
+        let base = RecordingLogger()
+        let clock = SteppableLoggingClock()
+        let logger = RateLimitedLogger(wrapping: base, limit: 0, window: .seconds(1), clock: clock)
+        let event = LogEvent(level: .notice, category: .perf, message: "overload",
+                             file: "Budget.swift", line: 3)
+        logger.log(event)
+        logger.log(event)
+        #expect(base.events.isEmpty)
+        clock.advance(by: .seconds(1))
+        logger.log(event)
+        #expect(base.events.map(\.message) == ["overload — suppressed 2 similar"])
     }
 }

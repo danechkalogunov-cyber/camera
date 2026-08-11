@@ -153,25 +153,19 @@ sketch references them, and **no manifest row and no agent brief covers them**. 
 belong in `VTheme`. Assign them before the UI wave, or the health colouring will be reinvented inline
 in a view, which is exactly what the "literals only in VTheme" rule exists to prevent.
 
-## I6 — three types are unassigned and unwritten (M — open)
+## I6 — three types were unassigned and unwritten (M — closed)
 
-Reported by `impl:types-b` after finishing its own rows:
+All three now exist: `Identity/DeviceQuirks.swift`, `Identity/EventKind.swift` and
+`Logging/RateLimitedLogger.swift`.
 
-- **`Identity/DeviceQuirks.swift`** — `DeviceQuirk` is the single sanctioned channel for firmware
-  workarounds: a protocol module detects a quirk, `VigilCore` persists it on the camera record, and
-  it is injected back on the next connect. `spec-isapi.md` §2 and `spec-core.md` both depend on it,
-  and no manifest row creates it.
-- **`Identity/EventKind.swift`** — the event taxonomy the ISAPI alert stream decodes into and the
-  UI filters on. Same situation.
-- **`RateLimitedLogger`** — deliberately **not** written, and the reason is a real design problem
-  rather than an omission: it cannot be a `Sendable` struct with a non-`mutating` `log()`, because
-  rate limiting requires mutable state behind the call. It needs to be an actor, or hold an
-  `OSAllocatedUnfairLock` — which is macOS-only and therefore cannot live in the pure layer. Decide
-  before any module starts logging in a loop, because the first thing that needs it is the RTP
-  receiver, which can otherwise emit a log line per packet.
+The logger preserves the synchronous `LoggerProtocol` and remains checked `Sendable`. Its storage
+uses `OSAllocatedUnfairLock` in the macOS-14 product and `Synchronization.Mutex` only in Linux CI;
+both locks own the dictionary they guard. The base logger is called after releasing the lock, so a
+decorator chain cannot deadlock through re-entrancy. Keys use the static call site rather than the
+message, preventing network-controlled strings from growing the state table.
 
 `Identity/Identifiers.swift` was written by `impl:types-b` out of necessity — `StreamKey` needs
-`CameraID` — and is not a gap.
+`CameraID` — and was never a gap.
 
 ## I7 — `F-DEC-06`'s worked examples contradict the quantum the tree implements (L — open)
 
@@ -227,4 +221,3 @@ one still open.
 §11.3 has been rewritten to describe the implemented toolbar, with a note recording all five
 differences and this ruling, so the amendment cannot later be mistaken for the original text. No code
 changed — that is the whole point of the ruling going this way.
-

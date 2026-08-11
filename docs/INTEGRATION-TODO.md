@@ -96,9 +96,9 @@ customer and may need it changed.
 The reported missing types now exist: `RTSPEndpoint`, `DeviceQuirk`, `ServerTrustEvaluating`,
 `HostPolicy` and `EventKind`. Their local workarounds have been removed.
 
-`RateLimitedLogger` in particular needs a design ruling, not just an author: it cannot be a
-`Sendable` struct with a non-`mutating` `log()`, and the two escapes are an actor (which makes
-logging async and reorders lines) or a lock (macOS-only, so not available in the pure layer).
+`RateLimitedLogger` is also implemented. Its synchronous checked-`Sendable` storage selects
+`OSAllocatedUnfairLock` for the macOS-14 product and `Synchronization.Mutex` for Linux CI, so it
+needs neither an actor nor a new `@unchecked Sendable` exception.
 
 ---
 
