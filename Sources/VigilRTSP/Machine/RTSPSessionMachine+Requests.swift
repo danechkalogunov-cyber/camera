@@ -52,7 +52,8 @@ extension RTSPSessionMachine {
                                  trackIndex: trackIndex)
         counters.requestsSent += 1
         let timeout = method == .teardown ? config.teardownTimeout : config.requestTimeout
-        return [.log(.requestSent(method: method, cseq: cseq, uri: uri)),
+        return [.log(.transcript(">>> REQUEST\n" + message.redactedTranscript)),
+                .log(.requestSent(method: method, cseq: cseq, uri: uri)),
                 .send(message.serialized()),
                 .setTimer(.requestTimeout(cseq: cseq), deadline: now + timeout)]
     }

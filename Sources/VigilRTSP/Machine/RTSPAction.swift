@@ -349,6 +349,8 @@ public struct RTSPSessionStatistics: Sendable, Equatable {
 /// Structured log records. The pure layer never imports a logging framework; the driver maps these
 /// onto `LoggerProtocol` categories.
 public enum RTSPLogEvent: Sendable, Hashable {
+    /// A complete redacted request or response for the bounded diagnostics transcript.
+    case transcript(String)
     /// A request went out. `uri` is already in credential-free form.
     case requestSent(method: RTSPMethod, cseq: UInt32, uri: String)
     /// A response came back, with its round-trip time when the request was ours.

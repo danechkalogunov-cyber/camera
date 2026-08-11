@@ -252,8 +252,14 @@ extension RTSPConnection {
     /// to drop the field a bug report needs. It still goes through `Redact.secrets` — a request URI
     /// is credential-free by construction, but this path must not be the one place that assumes so.
     private func record(_ event: RTSPLogEvent) {
+        if case let .transcript(text) = event {
+            diagnostics.append(text, streamID: shortID)
+            return
+        }
         let level: LogLevel
         switch event {
+        case .transcript:
+            return
         case .requestSent, .sdpParsed, .trackControlResolved,
              .keepaliveSent, .sessionEstablished, .serverRequest:
             level = .debug

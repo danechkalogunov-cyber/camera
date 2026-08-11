@@ -904,6 +904,7 @@
 "Export Diagnostics…" = "Export Diagnostics…";
 "The archive is redacted and stays on this Mac until you choose to share it." = "The archive is redacted and stays on this Mac until you choose to share it.";
 "Building diagnostics archive…" = "Building diagnostics archive…";
+"Collecting diagnostics…" = "Collecting diagnostics…";
 "Review diagnostics archive" = "Review diagnostics archive";
 "These redacted files will be included. No data leaves this Mac automatically." = "These redacted files will be included. No data leaves this Mac automatically.";
 "generated" = "generated";

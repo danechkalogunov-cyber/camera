@@ -236,6 +236,8 @@ public actor RTSPConnection {
     // module can, because the type's own members are not `public`.
     let clock: any MonotonicClock
     let logger: any LoggerProtocol
+    let diagnostics: RTSPDiagnosticRecorder
+    let shortID: String
 
     /// The one queue Network.framework calls back on. Serial and `.userInitiated`, per
     /// API_CONTRACT §4.7.
@@ -325,10 +327,13 @@ public actor RTSPConnection {
                 random: any RandomSource = SystemRandomSource(),
                 logger: any LoggerProtocol = NullLogger(),
                 shortID: String = "0",
+                diagnostics: RTSPDiagnosticRecorder = RTSPDiagnosticRecorder(),
                 connectTimeout: Duration = .seconds(5)) {
         self.config = config
         self.clock = clock
         self.logger = logger
+        self.diagnostics = diagnostics
+        self.shortID = shortID
         self.connectTimeout = connectTimeout
         self.queue = DispatchQueue(label: "com.vigil.net.\(shortID)", qos: .userInitiated)
         self.machine = RTSPSessionMachine(config: config, credential: credential,

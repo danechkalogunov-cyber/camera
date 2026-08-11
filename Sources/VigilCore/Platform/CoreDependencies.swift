@@ -43,6 +43,9 @@ public struct CoreDependencies: Sendable {
     /// failing run reproduces exactly.
     public var random: any RandomSource
 
+    /// Bounded redacted RTSP/SDP transcripts shared by all sessions and diagnostics export.
+    public var rtspDiagnostics: RTSPDiagnosticRecorder
+
     /// Builds one RTSP session for a configured target.
     ///
     /// The arguments are the session's configuration, the credential to authenticate with, and a
@@ -70,12 +73,14 @@ public struct CoreDependencies: Sendable {
                 keychain: any KeychainProtocol,
                 random: any RandomSource,
                 governor: LockoutGovernor,
+                rtspDiagnostics: RTSPDiagnosticRecorder = RTSPDiagnosticRecorder(),
                 makeRTSPSession: @escaping RTSPSessionFactory) {
         self.clock = clock
         self.logger = logger
         self.keychain = keychain
         self.random = random
         self.governor = governor
+        self.rtspDiagnostics = rtspDiagnostics
         self.makeRTSPSession = makeRTSPSession
     }
 
@@ -91,12 +96,14 @@ public struct CoreDependencies: Sendable {
     /// substitute it with `withLogger(_:)` at the call site in the meantime rather than editing this
     /// function, so there is one place that knows what "live" means.
     public static func live(governor: LockoutGovernor) -> CoreDependencies {
-        CoreDependencies(
+        let diagnostics = RTSPDiagnosticRecorder()
+        return CoreDependencies(
             clock: SystemMonotonicClock(),
             logger: NullLogger(),
             keychain: SystemKeychain(),
             random: SystemRandomSource(),
             governor: governor,
+            rtspDiagnostics: diagnostics,
             makeRTSPSession: { config, credential, shortID in
                 RTSPConnection(config: config,
                                credential: credential,
@@ -104,6 +111,7 @@ public struct CoreDependencies: Sendable {
                                random: SystemRandomSource(),
                                logger: NullLogger(),
                                shortID: shortID,
+                               diagnostics: diagnostics,
                                connectTimeout: StreamController.connectTimeout)
             })
     }
@@ -122,6 +130,7 @@ public struct CoreDependencies: Sendable {
                                 keychain: keychain,
                                 random: random,
                                 governor: governor,
+                                rtspDiagnostics: rtspDiagnostics,
                                 makeRTSPSession: { config, credential, shortID in
                                     RTSPConnection(config: config,
                                                    credential: credential,
@@ -129,6 +138,7 @@ public struct CoreDependencies: Sendable {
                                                    random: random,
                                                    logger: logger,
                                                    shortID: shortID,
+                                                   diagnostics: rtspDiagnostics,
                                                    connectTimeout: StreamController.connectTimeout)
                                 })
     }

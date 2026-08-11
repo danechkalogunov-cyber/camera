@@ -23,6 +23,19 @@ import VigilVideo
 
 // MARK: - AppSessionModel
 
+struct CachedCapabilitiesDiagnostics {
+    let host: String
+    let port: Int
+    let useTLS: Bool
+    let capturedAt: Date
+    let data: Data
+
+    func matches(_ camera: Camera, now: Date) -> Bool {
+        host == camera.host && port == camera.httpPort && useTLS == camera.useTLS
+            && now.timeIntervalSince(capturedAt) < 24 * 60 * 60
+    }
+}
+
 /// Everything the two screens of the slice need, and nothing else.
 ///
 /// One camera, one controller, one window. This is the only type in the app that touches
@@ -98,6 +111,8 @@ final class AppSessionModel {
     let credentials: CredentialStore
     let defaults: UserDefaults
     let audioPlayback = AudioPlaybackEngine()
+    /// Original capabilities response bytes retained for 24 hours for diagnostics export.
+    @ObservationIgnored var capabilitiesDiagnostics: [CameraID: CachedCapabilitiesDiagnostics] = [:]
 
     /// Device-service XAddr selected in discovery; consumed by the next matching form submit.
     var pendingONVIFServiceURL: URL?

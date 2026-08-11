@@ -15,7 +15,9 @@ import UniformTypeIdentifiers
 
 import VigilCore
 import VigilDiscovery
+import VigilISAPI
 import VigilProtocols
+import VigilTransport
 
 private extension UTType {
     static let vigilDiagnostics = UTType(exportedAs: "com.vigil.diagnostics", conformingTo: .zip)
@@ -25,28 +27,34 @@ extension MainWindowView {
     func exportDiagnostics() {
         guard window.diagnosticsExportTask == nil else { return }
         let now = Date()
-        let files: [DiagnosticsArchiveFile]
-        do { files = try diagnosticFiles(now: now) } catch {
-            reportDiagnosticsFailure(error)
-            return
-        }
-        guard confirmDiagnostics(files) else { return }
-
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.vigilDiagnostics, .zip]
-        panel.nameFieldStringValue = "Vigil-Diagnostics-\(Self.diagnosticStamp(now)).zip"
-        panel.message = Self.localized(
-            "The archive is redacted and stays on this Mac until you choose to share it.")
-        panel.prompt = Self.localized("Export")
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
-
         window.toast = MainWindowToast(kind: .info,
-                                       message: Self.localized("Building diagnostics archive…"),
+                                       message: Self.localized("Collecting diagnostics…"),
                                        actionTitle: Self.localized("Cancel export"),
                                        action: { window.diagnosticsExportTask?.cancel() })
         window.diagnosticsExportTask = Task {
             defer { window.diagnosticsExportTask = nil }
             do {
+                let files = try await diagnosticFiles(now: now)
+                try Task.checkCancellation()
+                guard confirmDiagnostics(files) else {
+                    window.toast = nil
+                    return
+                }
+
+                let panel = NSSavePanel()
+                panel.allowedContentTypes = [.vigilDiagnostics, .zip]
+                panel.nameFieldStringValue = "Vigil-Diagnostics-\(Self.diagnosticStamp(now)).zip"
+                panel.message = Self.localized(
+                    "The archive is redacted and stays on this Mac until you choose to share it.")
+                panel.prompt = Self.localized("Export")
+                guard panel.runModal() == .OK, let destination = panel.url else {
+                    window.toast = nil
+                    return
+                }
+                window.toast = MainWindowToast(
+                    kind: .info, message: Self.localized("Building diagnostics archive…"),
+                    actionTitle: Self.localized("Cancel export"),
+                    action: { window.diagnosticsExportTask?.cancel() })
                 let worker = Task.detached(priority: .userInitiated) {
                     try DiagnosticsArchiveBuilder.build(createdAt: now,
                                                         includesHostnames: false,
@@ -101,7 +109,7 @@ extension MainWindowView {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func diagnosticFiles(now: Date) throws -> [DiagnosticsArchiveFile] {
+    private func diagnosticFiles(now: Date) async throws -> [DiagnosticsArchiveFile] {
         var files = [
             DiagnosticsArchiveFile(path: "summary.txt", text: diagnosticSummary(now: now)),
             DiagnosticsArchiveFile(path: "library-redacted.json",
@@ -114,6 +122,7 @@ extension MainWindowView {
         ]
 
         for camera in library.cameras {
+            try Task.checkCancellation()
             let key = camera.id.short
             let stats = measuredTelemetry[camera.id]?.statistics ?? .init()
             files.append(DiagnosticsArchiveFile(
@@ -132,8 +141,55 @@ extension MainWindowView {
                     .map(String.init(describing:)) ?? "No Stream Doctor result recorded."
             }
             files.append(DiagnosticsArchiveFile(path: "streams/\(key)/doctor.txt", text: doctor))
+            files.append(DiagnosticsArchiveFile(
+                path: "streams/\(key)/rtsp-transcript.txt",
+                text: session.dependencies.rtspDiagnostics.transcript(streamID: key)))
+            files.append(try await capabilitiesDiagnosticFile(for: camera))
         }
         return files
+    }
+
+    /// Reads the original response bytes instead of rebuilding XML from typed capabilities. A
+    /// failed or credential-less camera contributes an explanatory file rather than aborting the
+    /// rest of the bundle. The archive builder redacts the bytes again before they cross the final
+    /// export boundary.
+    private func capabilitiesDiagnosticFile(for camera: Camera) async throws
+        -> DiagnosticsArchiveFile {
+        let path = "streams/\(camera.id.short)/capabilities.xml"
+        let now = Date()
+        if let stored = session.capabilitiesDiagnostics[camera.id], stored.matches(camera, now: now) {
+            return DiagnosticsArchiveFile(path: path, data: stored.data)
+        }
+        do {
+            guard let credential = try await session.credentials.credential(for: camera) else {
+                return DiagnosticsArchiveFile(path: path,
+                                              text: "Capabilities unavailable: no credential.\n")
+            }
+            let configuration = ISAPIClient.Configuration()
+            let client = ISAPIClient(
+                endpoint: ISAPIEndpoint(host: camera.host, port: camera.httpPort,
+                                        useTLS: camera.useTLS),
+                credential: credential,
+                configuration: configuration,
+                transport: URLSessionHTTPTransport(configuration: configuration,
+                                                   logger: session.dependencies.logger),
+                clock: session.dependencies.clock,
+                logger: session.dependencies.logger)
+            let data = try await client.getBytes(ISAPIResource.capabilities,
+                                                 query: [], lane: .control)
+            session.capabilitiesDiagnostics[camera.id] = CachedCapabilitiesDiagnostics(
+                host: camera.host, port: camera.httpPort, useTLS: camera.useTLS,
+                capturedAt: now, data: data)
+            return DiagnosticsArchiveFile(path: path, data: data)
+        } catch let error as ISAPIError {
+            try Task.checkCancellation()
+            return DiagnosticsArchiveFile(
+                path: path, text: "Capabilities unavailable: \(error.diagnosticCode).\n")
+        } catch {
+            try Task.checkCancellation()
+            return DiagnosticsArchiveFile(path: path,
+                                          text: "Capabilities unavailable: local error.\n")
+        }
     }
 
     private func diagnosticSummary(now: Date) -> String {

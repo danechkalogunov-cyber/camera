@@ -86,8 +86,8 @@ public struct RTSPRequest: Sendable, Equatable, CustomStringConvertible {
 
     /// The full message as text with every secret elided, for the diagnostics bundle.
     ///
-    /// The body is summarised by length rather than included: it is SDP or XML that may name a
-    /// device, and no diagnosis needs it verbatim.
+    /// Request bodies are summarised by length. SDP is received in responses and is retained there
+    /// because codec, control-URI and timing lines are essential when diagnosing negotiation.
     public var redactedTranscript: String {
         var text = "\(method.rawValue) \(Redact.url(uri)) RTSP/1.0\n"
         text += headers.description
@@ -156,11 +156,18 @@ public struct RTSPResponse: Sendable, Equatable, CustomStringConvertible {
     }
 
     /// The full message as text with every secret elided (`WWW-Authenticate` included).
+    /// SDP bodies are retained; other payloads are represented only by their size.
     public var redactedTranscript: String {
         var text = "RTSP/1.0 \(status.rawValue) "
         text += reasonPhrase.isEmpty ? status.canonicalReason : reasonPhrase
         text += "\n" + headers.description
-        if !body.isEmpty { text += "\n<body \(body.count) bytes>" }
+        if !body.isEmpty {
+            if headers.first("Content-Type")?.lowercased().contains("application/sdp") == true {
+                text += "\n\n" + Redact.secrets(in: String(decoding: body, as: UTF8.self))
+            } else {
+                text += "\n<body \(body.count) bytes>"
+            }
+        }
         return text
     }
 }

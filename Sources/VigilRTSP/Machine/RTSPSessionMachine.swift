@@ -206,8 +206,10 @@ public struct RTSPSessionMachine: Sendable {
         for unit in units where !isTerminated {
             switch unit {
             case let .response(response):
+                actions.append(.log(.transcript("<<< RESPONSE\n" + response.redactedTranscript)))
                 actions += handle(response: response, now: now)
             case let .request(request):
+                actions.append(.log(.transcript("<<< REQUEST\n" + request.redactedTranscript)))
                 actions += handle(serverRequest: request, now: now)
             case let .interleaved(channel, payload):
                 actions += handleMedia(channel: channel, payload: payload, now: now)
