@@ -23,6 +23,23 @@ import Testing
         #expect(byteBounded.transcript(streamID: "large").utf8.count <= 1_024)
         #expect(byteBounded.transcript(streamID: "large").contains("truncated"))
     }
+
+    @Test func lastSDPIsKeptSeparatelyFromTheBoundedTranscript() {
+        let recorder = RTSPDiagnosticRecorder(maximumEntries: 1, maximumBytes: 4_096)
+        recorder.append("""
+            <<< RESPONSE
+            RTSP/1.0 200 OK
+            Content-Type: application/sdp
+
+            v=0
+            m=video 0 RTP/AVP 96
+            """, streamID: "camera")
+        recorder.append("later non-SDP response", streamID: "camera")
+
+        #expect(!recorder.transcript(streamID: "camera").contains("m=video"))
+        #expect(recorder.lastSDP(streamID: "camera") == "v=0\nm=video 0 RTP/AVP 96\n")
+        #expect(recorder.lastSDP(streamID: "missing") == "No SDP recorded.\n")
+    }
 }
 
 #endif

@@ -19,6 +19,7 @@ public final class RTSPDiagnosticRecorder: @unchecked Sendable {
     private struct Stream {
         var entries: [String] = []
         var byteCount = 0
+        var lastSDP: String?
     }
 
     private let lock = NSLock()
@@ -46,6 +47,9 @@ public final class RTSPDiagnosticRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         var stream = streams[streamID] ?? Stream()
+        if let sdp = Self.sdpBody(in: redacted) {
+            stream.lastSDP = String(decoding: sdp.utf8.prefix(maximumBytes), as: UTF8.self)
+        }
         stream.entries.append(entry)
         stream.byteCount += bytes
         while stream.entries.count > maximumEntries || stream.byteCount > maximumBytes {
@@ -62,10 +66,27 @@ public final class RTSPDiagnosticRecorder: @unchecked Sendable {
             ?? "No RTSP session transcript recorded.\n"
     }
 
+    /// Last complete redacted SDP body observed for this camera, as a standalone diagnostic file.
+    public func lastSDP(streamID: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return streams[streamID]?.lastSDP ?? "No SDP recorded.\n"
+    }
+
     public func reset(streamID: String) {
         lock.lock()
         streams.removeValue(forKey: streamID)
         lock.unlock()
+    }
+
+    private static func sdpBody(in transcript: String) -> String? {
+        guard transcript.range(of: "content-type: application/sdp",
+                               options: .caseInsensitive) != nil,
+              let separator = transcript.range(of: "\n\n")
+        else { return nil }
+        let body = transcript[separator.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? nil : body + "\n"
     }
 }
 

@@ -126,10 +126,10 @@ extension MainWindowView {
             let key = camera.id.short
             let stats = measuredTelemetry[camera.id]?.statistics ?? .init()
             files.append(DiagnosticsArchiveFile(
-                path: "streams/\(key)/stats.csv", text: Self.statisticsCSV(stats)))
+                path: "streams/\(key)/stats-latest.csv", text: Self.statisticsCSV(stats)))
             let minutes = measuredTelemetry[camera.id]?.minuteStatistics ?? []
             files.append(DiagnosticsArchiveFile(
-                path: "streams/\(key)/stats-24h.csv",
+                path: "streams/\(key)/stats.csv",
                 text: Self.minuteStatisticsCSV(minutes, now: session.dependencies.clock.now())))
             let doctor: String
             if window.streamDoctorCameraID == camera.id, !window.streamDoctorOutcomes.isEmpty {
@@ -144,6 +144,9 @@ extension MainWindowView {
             files.append(DiagnosticsArchiveFile(
                 path: "streams/\(key)/rtsp-transcript.txt",
                 text: session.dependencies.rtspDiagnostics.transcript(streamID: key)))
+            files.append(DiagnosticsArchiveFile(
+                path: "streams/\(key)/sdp.txt",
+                text: session.dependencies.rtspDiagnostics.lastSDP(streamID: key)))
             files.append(try await capabilitiesDiagnosticFile(for: camera))
         }
         return files
@@ -155,7 +158,7 @@ extension MainWindowView {
     /// export boundary.
     private func capabilitiesDiagnosticFile(for camera: Camera) async throws
         -> DiagnosticsArchiveFile {
-        let path = "streams/\(camera.id.short)/capabilities.xml"
+        let path = "capabilities/\(camera.id.short).xml"
         let now = Date()
         if let stored = session.capabilitiesDiagnostics[camera.id], stored.matches(camera, now: now) {
             return DiagnosticsArchiveFile(path: path, data: stored.data)
