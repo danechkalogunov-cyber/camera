@@ -312,6 +312,7 @@ final class CameraStream {
             return .connecting(.opening)
         case .playing:
             // `isDisplayingPicture`, not `isReceivingMedia`: `Live` is a claim about the screen.
+            if decodeMode != .full { return .degraded(.decodeBudget) }
             if isDisplayingPicture { return .live }
             return .connecting(hasFirstPacket ? .waitingForKeyframe : .waitingForVideo)
         case .degraded:

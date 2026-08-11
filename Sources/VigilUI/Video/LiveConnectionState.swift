@@ -176,6 +176,10 @@ package enum DegradedCause: Sendable, Hashable {
     /// Presented frame rate against the rate the camera negotiated.
     case lowFrameRate(fps: Double, negotiated: Double)
 
+    /// The global decode planner intentionally reduced this preview to protect higher-priority
+    /// streams or recordings. This is a visible policy decision, not a network fault.
+    case decodeBudget
+
     /// Informational: we already switched transport and expect this to recover. Shown for 4 s and
     /// then faded, because it is news rather than a problem (UX.md §12.5).
     case switchedToTCP
@@ -184,7 +188,7 @@ package enum DegradedCause: Sendable, Hashable {
     package var remedy: ConnectRemedy? {
         switch self {
         case .packetLoss, .jitter, .lowFrameRate: return .switchToTCP
-        case .decodeQueue: return nil
+        case .decodeQueue, .decodeBudget: return nil
         case .switchedToTCP: return nil
         }
     }
@@ -214,6 +218,8 @@ package enum DegradedCause: Sendable, Hashable {
             let shown = fps.formatted(.number.precision(.fractionLength(0)))
             let expected = negotiated.formatted(.number.precision(.fractionLength(0)))
             return Text("Showing \(shown) of \(expected) frames per second.", bundle: .vigilUI)
+        case .decodeBudget:
+            return Text("Preview reduced to stay within this Mac's decode budget.", bundle: .vigilUI)
         case .switchedToTCP:
             return Text("Switched to TCP for stability.", bundle: .vigilUI)
         }

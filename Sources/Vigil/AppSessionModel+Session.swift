@@ -500,10 +500,11 @@ extension AppSessionModel {
                     + "\(afterStart) of it after the socket opened")
                 stream.seekStartedAt = nil
             }
-        case .pathResolved(let candidate, _):
+        case .pathResolved(let candidate, let capabilities):
             // Remembered at the first frame, not here: a path that answers `DESCRIBE` but never
             // delivers video is not the one to start from next time.
             stream.resolvedPath = candidate.path
+            stream.camera?.capabilities = capabilities
         case .statistics(let latest):
             stream.statistics = latest
             if stream.streamState.isActive { stream.lastSeen = Date() }
@@ -536,6 +537,10 @@ extension AppSessionModel {
         case .formatResolved(let resolved):
             stream.format = resolved
             rebalanceDecodeBudget()
+        case .transportSelected(let transport):
+            guard var camera = stream.camera else { return }
+            camera.lastWorkingTransport = transport
+            stream.camera = camera
         default:
             break
         }

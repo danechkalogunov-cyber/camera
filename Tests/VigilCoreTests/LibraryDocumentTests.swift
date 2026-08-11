@@ -60,6 +60,23 @@ import VigilProtocols
     #expect(camerasIndex.lowerBound < versionIndex.lowerBound, "keys must be sorted")
 }
 
+@Test func cameraRoundTripsAutomaticTransportKnowledgeAndAcceptsOlderRecords() throws {
+    let camera = Camera(host: "camera.lan", transport: .auto,
+                        lastWorkingTransport: .udpUnicast)
+    let encoder = LibraryCoding.makeEncoder()
+    let decoder = LibraryCoding.makeDecoder()
+    let decoded = try decoder.decode(Camera.self, from: encoder.encode(camera))
+    #expect(decoded.transport == .auto)
+    #expect(decoded.lastWorkingTransport == .udpUnicast)
+
+    let old = Data("""
+        {"id":"00000000-0000-4000-8000-000000000001","host":"camera.lan"}
+        """.utf8)
+    let migrated = try decoder.decode(Camera.self, from: old)
+    #expect(migrated.transport == .tcpInterleaved)
+    #expect(migrated.lastWorkingTransport == nil)
+}
+
 @Test func libraryDocumentTwoHundredCameraRoundTripIsByteExact() throws {
     // Fixed identifiers make this a reproducible, reviewable stress fixture rather than 200 random
     // records whose failure cannot be recreated. Vary every scalar that has a useful alternate

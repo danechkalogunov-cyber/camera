@@ -215,6 +215,12 @@
    stringsdict; both Russian values are chosen to be invariable for that reason. */
 "live" = "live";
 "degraded" = "degraded";
+"Decode budget" = "Decode budget";
+"15 fps cap" = "15 fps cap";
+"JPEG polling" = "JPEG polling";
+"Keyframes only" = "Keyframes only";
+"Trim disposable frames" = "Trim disposable frames";
+"Preview reduced to stay within this Mac's decode budget." = "Preview reduced to stay within this Mac's decode budget.";
 
 /* The camera row's status line (UX.md §4.2, §12.5, §12.6). Every number arrives already
    formatted by FormatStyle, so the value carries a bare %@ and never a separator or a
@@ -681,8 +687,14 @@
 
 /* TWO BUTTONS THAT ANSWER HONESTLY. Both features are absent rather than broken, and this
    project's rule is that a control answering to silence is worse than one not offered. */
-"This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly.";
 "Automatic" = "Automatic";
+"Auto (TCP / UDP)" = "Auto (TCP / UDP)";
+"TCP (interleaved)" = "TCP (interleaved)";
+"UDP (unicast)" = "UDP (unicast)";
+"UDP (multicast)" = "UDP (multicast)";
+"RTSP over TLS" = "RTSP over TLS";
+"Switching this camera to UDP…" = "Switching this camera to UDP…";
+"Switching this camera to TCP…" = "Switching this camera to TCP…";
 "Colour tag" = "Colour tag";
 "Enable camera" = "Enable camera";
 "Red" = "Red";

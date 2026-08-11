@@ -181,6 +181,9 @@ struct CameraSettingsSheet: View {
     /// Explicit identity colour, or `.none` for deterministic automatic assignment.
     @State private var colorTag: ColorTag
 
+    /// Per-camera RTP transport preference.
+    @State private var transport: RTSPTransportKind
+
     /// Address, port and model, for the read-only rows.
     let host: String
     let httpPort: Int
@@ -190,7 +193,7 @@ struct CameraSettingsSheet: View {
     let groups: [CameraGroupRecord]
 
     /// Applies the edits. Called with the trimmed name, the chosen group and the overlay switch.
-    let onSave: (String, GroupID?, Bool, Bool, ColorTag) -> Void
+    let onSave: (String, GroupID?, Bool, Bool, ColorTag, RTSPTransportKind) -> Void
 
     /// Dismisses without applying.
     let onCancel: () -> Void
@@ -201,17 +204,19 @@ struct CameraSettingsSheet: View {
          showsOverlay: Bool,
          isEnabled: Bool,
          colorTag: ColorTag,
+         transport: RTSPTransportKind,
          host: String,
          httpPort: Int,
          model: String,
          groups: [CameraGroupRecord],
-         onSave: @escaping (String, GroupID?, Bool, Bool, ColorTag) -> Void,
+         onSave: @escaping (String, GroupID?, Bool, Bool, ColorTag, RTSPTransportKind) -> Void,
          onCancel: @escaping () -> Void) {
         _name = State(initialValue: name)
         _groupID = State(initialValue: groupID)
         _showsOverlay = State(initialValue: showsOverlay)
         _isEnabled = State(initialValue: isEnabled)
         _colorTag = State(initialValue: colorTag)
+        _transport = State(initialValue: transport)
         self.host = host
         self.httpPort = httpPort
         self.model = model
@@ -227,7 +232,9 @@ struct CameraSettingsSheet: View {
                    // which replaces one with "Camera <host>" — better to say so than to silently
                    // rename the camera to something the user did not type.
                    isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
-                   onConfirm: { onSave(name, groupID, showsOverlay, isEnabled, colorTag) },
+                   onConfirm: {
+                       onSave(name, groupID, showsOverlay, isEnabled, colorTag, transport)
+                   },
                    onCancel: onCancel) {
             VStack(alignment: .leading, spacing: VTheme.Space.md) {
                 field("Name") {
@@ -253,6 +260,15 @@ struct CameraSettingsSheet: View {
                             if tag != .none {
                                 Text(Self.colorTagTitle(tag), bundle: .vigilUI).tag(tag)
                             }
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
+                field("Transport") {
+                    Picker("", selection: $transport) {
+                        ForEach(RTSPTransportKind.allCases, id: \.self) { choice in
+                            Text(Self.transportTitle(choice), bundle: .vigilUI).tag(choice)
                         }
                     }
                     .labelsHidden()
@@ -298,6 +314,16 @@ struct CameraSettingsSheet: View {
         case .purple: "Purple"
         case .pink: "Pink"
         case .graphite: "Graphite"
+        }
+    }
+
+    private static func transportTitle(_ transport: RTSPTransportKind) -> LocalizedStringKey {
+        switch transport {
+        case .auto: "Auto (TCP / UDP)"
+        case .tcpInterleaved: "TCP (interleaved)"
+        case .udpUnicast: "UDP (unicast)"
+        case .udpMulticast: "UDP (multicast)"
+        case .tcpTLS: "RTSP over TLS"
         }
     }
 
@@ -457,15 +483,17 @@ extension MainWindowView {
             CameraSettingsSheet(name: identity.name,
                                 groupID: groups.group(for: cameraID),
                                 showsOverlay: window.showsVideoOverlay,
-                                isEnabled: session.camera?.isEnabled ?? true,
-                                colorTag: session.camera?.colorTag ?? .none,
+                                isEnabled: selectedCamera?.isEnabled ?? true,
+                                colorTag: selectedCamera?.colorTag ?? .none,
+                                transport: selectedCamera?.transport ?? .tcpInterleaved,
                                 host: identity.host,
-                                httpPort: session.camera?.httpPort ?? 80,
+                                httpPort: selectedCamera?.httpPort ?? 80,
                                 model: deviceInfo.identity.model,
                                 groups: groups.groups,
-                                onSave: { name, group, overlay, enabled, colorTag in
+                                onSave: { name, group, overlay, enabled, colorTag, transport in
                                     renameCamera(to: name)
                                     updateCameraMetadata(isEnabled: enabled, colorTag: colorTag)
+                                    updateCameraTransport(transport)
                                     groups.setGroup(group, for: cameraID)
                                     window.showsVideoOverlay = overlay
                                     session.rememberVideoOverlay(overlay)

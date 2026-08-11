@@ -328,6 +328,7 @@ extension AppSessionModel {
             await library.add(camera)
             return
         }
+        await library.recordRuntimeKnowledge(from: camera, for: stored.id)
         // ⛔ THE SAME DEVICE MUST NOT HAVE TWO IDENTITIES. The library row was written by whichever
         // launch first reached a picture; every launch since built its own `Camera` from the
         // remembered host, and `Camera.id` defaults to a fresh `CameraID()`. Two ids for one

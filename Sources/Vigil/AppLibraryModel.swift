@@ -310,6 +310,28 @@ final class AppLibraryModel {
         }
     }
 
+    func setTransport(_ transport: RTSPTransportKind,
+                      lastWorking: RTSPTransportKind? = nil,
+                      for id: CameraID) async {
+        guard let library, !isReadOnly else { return }
+        do {
+            _ = try await library.setTransport(transport, lastWorking: lastWorking, for: id)
+            await refresh()
+        } catch {
+            logger.error(.storage, "set transport failed: \(error)")
+        }
+    }
+
+    func recordRuntimeKnowledge(from camera: Camera, for id: CameraID) async {
+        guard let library, !isReadOnly else { return }
+        do {
+            _ = try await library.recordRuntimeKnowledge(from: camera, for: id)
+            await refresh()
+        } catch {
+            logger.error(.storage, "record runtime knowledge failed: \(error)")
+        }
+    }
+
     /// Clears a notice the user has read.
     func dismissNotice() { notice = nil }
 

@@ -429,9 +429,8 @@ struct MainWindowView: View {
     /// would survive exactly until the window closed.
     /// Renames the camera everywhere it is stored.
     ///
-    /// ⛔ THREE WRITES, AND THE THIRD WAS MISSING. `session.camera` is what every panel reads right
-    /// now; `LastConnection` is what the next launch rebuilds the camera from; and `library.json` is
-    /// what every *other* surface reads — `sidebarCameras` takes the name from the library for any
+    /// The active stream, `LastConnection` and `library.json` must change together. Every other
+    /// surface reads the library — `sidebarCameras` takes the name from there for any
     /// row that is not the live one, and so does the stage's idle cell.
     ///
     /// Without the third the rename was visibly half-applied: the live tile and its sidebar row
@@ -439,23 +438,25 @@ struct MainWindowView: View {
     /// and back brought the old name onto the live row too. That is the tail of the "renamed camera
     /// does not stick" report — `rememberThisCamera`'s merge fixed the half that `UserDefaults`
     /// owned, and this is the half the library owns.
-    /// ⚠️ `internal`, not `private`, because `sheetBody` calls it from `WindowSheets.swift`. Swift
-    /// scopes `private` to a *file*, not to a type, so a member a sibling extension needs cannot be
-    /// private however local it looks. That is the same rule every `MainWindowView+…` file's header
+    /// Internal because `sheetBody` calls it from `WindowSheets.swift`; Swift scopes `private` to a
+    /// file, not to a type. That is the same rule every `MainWindowView+…` file's header
     /// states — and moving this function's one caller out of this file is exactly what turned the
     /// rule from documentation into a build error.
     func renameCamera(to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, let id = session.camera?.id else { return }
-        session.camera?.name = trimmed
-        session.rememberCameraName(trimmed)
+        guard !trimmed.isEmpty, var camera = selectedStream.camera else { return }
+        camera.name = trimmed
+        selectedStream.camera = camera
+        if selectedStream === session.live { session.rememberCameraName(trimmed) }
+        let id = camera.id
         Task { await library.rename(id, to: trimmed) }
     }
-
     func updateCameraMetadata(isEnabled: Bool, colorTag: ColorTag) {
-        guard let id = session.camera?.id else { return }
-        session.camera?.isEnabled = isEnabled
-        session.camera?.colorTag = colorTag
+        guard var camera = selectedStream.camera else { return }
+        camera.isEnabled = isEnabled
+        camera.colorTag = colorTag
+        selectedStream.camera = camera
+        let id = camera.id
         Task {
             await library.setEnabled(isEnabled, for: id)
             await library.setColorTag(colorTag, for: id)
@@ -561,6 +562,8 @@ struct MainWindowView: View {
                 return .degraded(.decodeQueue(frames: frames))
             case .lowFrameRate(let fps, _):
                 return .degraded(.lowFrameRate(fps: fps))
+            case .decodeBudget:
+                return .degraded(.decodeBudget)
             case .switchedToTCP:
                 return .degraded(.switchedToTCP)
             }

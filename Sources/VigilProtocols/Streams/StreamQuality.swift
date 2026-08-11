@@ -83,6 +83,8 @@ public struct StreamKey: Sendable, Hashable, Codable, CustomStringConvertible {
 
 /// How the RTP data for a stream reaches us.
 public enum RTSPTransportKind: String, Sendable, Hashable, Codable, CaseIterable {
+    /// Controller policy: reuse the last proven transport, starting with TCP for a new camera.
+    case auto
     /// `Transport: RTP/AVP/TCP;unicast;interleaved=0-1`. **The default** — it traverses every LAN
     /// and needs no inbound ports.
     case tcpInterleaved

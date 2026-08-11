@@ -105,6 +105,9 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
     /// inbound ports (customer requirement R1.6).
     public var transport: RTSPTransportKind
 
+    /// Last concrete transport that reached PLAY while ``transport`` was `.auto`.
+    public var lastWorkingTransport: RTSPTransportKind?
+
     /// The Keychain handle for this device's password. Opaque; reveals not even the username.
     public var credentialRef: CredentialRef
 
@@ -141,7 +144,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, name, host, httpPort, rtspPort, useTLS, channel, preferredQuality, transport
         case credentialRef, capabilities, createdAt, lastSeenAt, isEnabled, rtspPathOverride
-        case latencyPreset, colorTag
+        case latencyPreset, colorTag, lastWorkingTransport
     }
 
     // MARK: Initialisation
@@ -157,6 +160,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
                 channel: ChannelID = .first,
                 preferredQuality: StreamQuality? = nil,
                 transport: RTSPTransportKind = .tcpInterleaved,
+                lastWorkingTransport: RTSPTransportKind? = nil,
                 credentialRef: CredentialRef = CredentialRef(),
                 capabilities: DeviceCapabilities? = nil,
                 createdAt: Date = Date(),
@@ -174,6 +178,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
         self.channel = channel
         self.preferredQuality = preferredQuality
         self.transport = transport
+        self.lastWorkingTransport = lastWorkingTransport == .auto ? nil : lastWorkingTransport
         self.credentialRef = credentialRef
         self.capabilities = capabilities
         self.createdAt = createdAt
@@ -201,6 +206,9 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
                                                          forKey: .preferredQuality)
         transport = try container.decodeIfPresent(RTSPTransportKind.self, forKey: .transport)
             ?? .tcpInterleaved
+        let learned = try container.decodeIfPresent(RTSPTransportKind.self,
+                                                    forKey: .lastWorkingTransport)
+        lastWorkingTransport = learned == .auto ? nil : learned
         credentialRef = try container.decodeIfPresent(CredentialRef.self, forKey: .credentialRef)
             ?? CredentialRef()
         capabilities = try container.decodeIfPresent(DeviceCapabilities.self, forKey: .capabilities)
@@ -226,6 +234,7 @@ public struct Camera: Identifiable, Sendable, Codable, Hashable {
         try container.encode(channel, forKey: .channel)
         try container.encodeIfPresent(preferredQuality, forKey: .preferredQuality)
         try container.encode(transport, forKey: .transport)
+        try container.encodeIfPresent(lastWorkingTransport, forKey: .lastWorkingTransport)
         try container.encode(credentialRef, forKey: .credentialRef)
         try container.encodeIfPresent(capabilities, forKey: .capabilities)
         try container.encode(createdAt, forKey: .createdAt)
@@ -292,7 +301,9 @@ public extension Camera {
     /// bug spec-isapi.md §15.6 warns about.
     func rtspURL(path: String) -> RTSPURL {
         let (bare, query) = Self.splitQuery(path)
-        return RTSPURL(scheme: transport == .tcpTLS ? "rtsps" : "rtsp",
+        let usesRTSPTLS = transport == .tcpTLS
+            || (transport == .auto && lastWorkingTransport == .tcpTLS)
+        return RTSPURL(scheme: usesRTSPTLS ? "rtsps" : "rtsp",
                        host: host,
                        port: rtspPort,
                        path: bare,

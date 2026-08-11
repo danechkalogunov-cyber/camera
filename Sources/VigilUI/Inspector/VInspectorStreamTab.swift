@@ -115,6 +115,11 @@ package struct VInspectorStreamTab: View {
         VInspectorRow("Decode") { decodeChip }
         VInspectorRow("Transport") { VInspectorMonoValue(state.stream.transport) }
         VInspectorRow("Stream in use") { streamInUseValue }
+        if let mode = state.stream.decodeBudgetMode {
+            VInspectorRow("Decode budget") {
+                VInspectorMonoValue(mode, isLive: true)
+            }
+        }
         if state.statistics.reconnectCount > 0 {
             VInspectorRow("Reconnects") {
                 VInspectorMonoValue(VInspectorFormat.count(UInt64(state.statistics.reconnectCount)),

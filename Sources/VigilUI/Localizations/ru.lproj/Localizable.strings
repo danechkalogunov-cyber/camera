@@ -201,6 +201,12 @@
    требует stringsdict; оба русских значения подобраны неизменяемыми именно для этого. */
 "live" = "в эфире";
 "degraded" = "с проблемами";
+"Decode budget" = "Бюджет декодирования";
+"15 fps cap" = "Ограничение 15 кадр/с";
+"JPEG polling" = "Опрос JPEG";
+"Keyframes only" = "Только ключевые кадры";
+"Trim disposable frames" = "Отбрасывать необязательные кадры";
+"Preview reduced to stay within this Mac's decode budget." = "Предпросмотр упрощён, чтобы уложиться в бюджет декодирования этого Mac.";
 
 /* Строка состояния камеры (UX.md §4.2, §12.5, §12.6). Числа приходят уже отформатированными
    из FormatStyle, поэтому в значении стоит голый %@ — без разделителя и без знака процента.
@@ -664,8 +670,14 @@
 
 /* TWO BUTTONS THAT ANSWER HONESTLY. Both features are absent rather than broken, and this
    project's rule is that a control answering to silence is worse than one not offered. */
-"This build streams over TCP only. UDP is refused at SETUP rather than negotiated badly." = "Эта сборка передаёт только по TCP. UDP отклоняется на SETUP, а не согласуется кое-как.";
 "Automatic" = "Автоматически";
+"Auto (TCP / UDP)" = "Авто (TCP / UDP)";
+"TCP (interleaved)" = "TCP (чередование)";
+"UDP (unicast)" = "UDP (одноадресный)";
+"UDP (multicast)" = "UDP (многоадресный)";
+"RTSP over TLS" = "RTSP через TLS";
+"Switching this camera to UDP…" = "Переключение этой камеры на UDP…";
+"Switching this camera to TCP…" = "Переключение этой камеры на TCP…";
 "Colour tag" = "Цветовая метка";
 "Enable camera" = "Включить камеру";
 "Red" = "Красный";

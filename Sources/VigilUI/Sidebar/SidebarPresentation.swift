@@ -262,6 +262,8 @@ package enum VSidebarStatusLine {
         case .lowFrameRate(let fps):
             let value = fps.formatted(.number.precision(.fractionLength(0)))
             return Text("\(value) fps", bundle: .vigilUI)
+        case .decodeBudget:
+            return Text("Decode budget", bundle: .vigilUI)
         case .switchedToTCP:
             return Text("On TCP", bundle: .vigilUI)
         }

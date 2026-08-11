@@ -98,6 +98,9 @@ package enum VSidebarImpairment: Sendable, Hashable {
     /// Presented frame rate below 60 % of what was negotiated.
     case lowFrameRate(fps: Double)
 
+    /// Preview rate reduced by the application-wide decoder budget.
+    case decodeBudget
+
     /// The transport was moved to TCP to recover. Informational rather than a fault.
     case switchedToTCP
 }

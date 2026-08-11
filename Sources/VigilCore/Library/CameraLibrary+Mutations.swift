@@ -169,6 +169,28 @@ extension CameraLibrary {
         try modify(id) { camera in camera.colorTag = colorTag }
     }
 
+    /// Persists a transport preference and the concrete choice proven by Auto.
+    @discardableResult
+    public func setTransport(_ transport: RTSPTransportKind,
+                             lastWorking: RTSPTransportKind? = nil,
+                             for id: CameraID) throws(LibraryMutationError) -> Camera {
+        try modify(id) { camera in
+            camera.transport = transport
+            camera.lastWorkingTransport = lastWorking == .auto ? nil : lastWorking
+        }
+    }
+
+    /// Merges facts learned only after a stream reaches its first frame.
+    @discardableResult
+    public func recordRuntimeKnowledge(from runtime: Camera,
+                                       for id: CameraID) throws(LibraryMutationError) -> Camera {
+        try modify(id) { camera in
+            if let capabilities = runtime.capabilities { camera.capabilities = capabilities }
+            camera.lastWorkingTransport = runtime.lastWorkingTransport
+            camera.lastSeenAt = runtime.lastSeenAt ?? camera.lastSeenAt
+        }
+    }
+
     /// Applies an arbitrary edit to one camera, then validates, normalises, persists and broadcasts.
     ///
     /// The general entry point, so a caller needing a field this type has no named method for does

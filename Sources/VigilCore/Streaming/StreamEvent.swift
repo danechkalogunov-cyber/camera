@@ -90,6 +90,9 @@ public enum StreamEvent: Sendable {
     /// The stream's shape is known.
     case formatResolved(StreamFormat)
 
+    /// Auto transport proved a concrete choice; persist it without replacing the `.auto` preference.
+    case transportSelected(RTSPTransportKind)
+
     /// The first RTP packet arrived, measured from the start of the connect attempt.
     case firstPacketReceived(afterConnect: Duration)
 

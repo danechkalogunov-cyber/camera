@@ -161,6 +161,16 @@ struct CameraStreamTests {
         #expect(stream.liveState == .live)
     }
 
+    /// A planned reduction must be visible even though the transport itself is healthy.
+    @Test func decodeBudgetReductionIsReportedAsDegraded() {
+        let stream = CameraStream()
+        stream.streamState = .playing
+        stream.isReceivingMedia = true
+        stream.decodeMode = .fpsCapped
+
+        #expect(stream.liveState == .degraded(.decodeBudget))
+    }
+
     /// Media arriving is not a picture: before the first frame is drawn the tile narrates, and which
     /// sentence it uses depends on whether any RTP has arrived at all.
     @Test func theConnectingNarrationSplitsOnTheFirstPacket() {

@@ -26,6 +26,20 @@ import VigilUI
 /// `private` reaches a type's extensions only within one file.
 extension MainWindowView {
 
+    func updateCameraTransport(_ transport: RTSPTransportKind) {
+        guard var camera = selectedStream.camera else { return }
+        guard camera.transport != transport else { return }
+        camera.transport = transport
+        camera.lastWorkingTransport = nil
+        selectedStream.camera = camera
+        let id = camera.id
+        let controller = selectedStream.controller
+        Task {
+            await library.setTransport(transport, for: id)
+            await controller?.setCamera(camera)
+        }
+    }
+
     /// Begins the selected camera's capability-vetted half-duplex talk session.
     func beginPushToTalk() {
         guard let camera = selectedCamera else { return }
@@ -129,12 +143,17 @@ extension MainWindowView {
         // with the playhead five seconds early (UX.md §9.1). Routed through the one function so the
         // two surfaces cannot drift apart about what "open this event" means.
         actions.onOpenEvent = { event in openArchive(at: event.instant) }
-        // Transport switching is still unavailable; Stream Doctor is a real report surface.
         actions.onSwapTransport = {
-            window.toast = MainWindowToast(
-                kind: .warning,
-                message: Self.localized("This build streams over TCP only. UDP is refused at "
-                                        + "SETUP rather than negotiated badly."))
+            let current = selectedStream.format?.transport
+                ?? selectedCamera?.lastWorkingTransport
+                ?? selectedCamera?.transport
+                ?? .tcpInterleaved
+            let next: RTSPTransportKind = current.isUDP ? .tcpInterleaved : .udpUnicast
+            updateCameraTransport(next)
+            window.toast = MainWindowToast(kind: .info,
+                                           message: Self.localized(next.isUDP
+                                               ? "Switching this camera to UDP…"
+                                               : "Switching this camera to TCP…"))
         }
         actions.onRunStreamDoctor = { runStreamDoctor() }
         return actions

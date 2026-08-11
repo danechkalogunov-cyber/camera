@@ -125,6 +125,8 @@ private actor DoctorMediaCache {
                     case .formatResolved(let format):
                         evidence.described = true
                         evidence.codec = format.videoCodec
+                    case .transportSelected:
+                        break
                     case .firstPacketReceived:
                         evidence.receivedRTP = true
                     case .firstFrameAssembled:

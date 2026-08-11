@@ -26,6 +26,44 @@ import VigilTransport
 
 extension StreamController {
 
+    /// Changes transport inside the same logical attempt, before emitting an error or sleeping the
+    /// reconnect ladder. Authentication and path state are left intact.
+    func applyAutomaticTransportFallback(for outcome: AttemptOutcome) -> Bool {
+        guard camera.transport == .auto else { return false }
+        let error: StreamError
+        switch outcome {
+        case .failed(let value), .retry(let value): error = value
+        case .stopped, .redirect: return false
+        }
+
+        let next = Self.nextAutomaticTransport(after: error.code,
+                                               active: activeTransport,
+                                               tried: automaticTransportsTried,
+                                               didRetryTCPAfterSilentUDP: didRetryTCPAfterSilentUDP)
+        if error.code == .noMediaReceived, activeTransport == .udpUnicast, next != nil {
+            didRetryTCPAfterSilentUDP = true
+        }
+        guard let next else { return false }
+        transportFallback = next
+        logger.notice(.transport, "auto transport fallback",
+                      ["camera": id.short, "from": activeTransport.rawValue,
+                       "to": next.rawValue, "reason": error.code.rawValue])
+        return true
+    }
+
+    static func nextAutomaticTransport(after error: StreamError.Code,
+                                       active: RTSPTransportKind,
+                                       tried: Set<RTSPTransportKind>,
+                                       didRetryTCPAfterSilentUDP: Bool) -> RTSPTransportKind? {
+        if error == .transportUnsupported {
+            if active == .tcpInterleaved, !tried.contains(.udpUnicast) { return .udpUnicast }
+            if active == .udpUnicast, !tried.contains(.tcpInterleaved) { return .tcpInterleaved }
+        }
+        if error == .noMediaReceived, active == .udpUnicast,
+           !didRetryTCPAfterSilentUDP { return .tcpInterleaved }
+        return nil
+    }
+
     /// Runs one connect attempt and reports how it ended.
     ///
     /// `generation` is the run loop's stamp. It exists because the event-consumption phase below had
@@ -90,7 +128,12 @@ extension StreamController {
         // The event stream is taken **before** `connect()`, so nothing the connection emits between
         // the socket coming up and this loop starting can be missed.
         var config = RTSPSessionConfig(url: url)
-        config.transport = transportFallback ?? camera.transport
+        let automaticStart = camera.lastWorkingTransport ?? .tcpInterleaved
+        activeTransport = transportFallback ?? (camera.transport == .auto
+            ? automaticStart : camera.transport)
+        if activeTransport == .auto { activeTransport = .tcpInterleaved }
+        automaticTransportsTried.insert(activeTransport)
+        config.transport = activeTransport
         config.setupAudio = true
         config.setupMetadataTrack = false
         config.initialScale = playbackScale
@@ -287,6 +330,10 @@ extension StreamController {
             // sign-in that succeeded here was Digest. The session does not report the scheme, and
             // naming anything else would be a lie in the diagnostics bundle.
             emit(.authenticated(scheme: .digest))
+        }
+        if camera.transport == .auto, description.transport != .auto {
+            camera.lastWorkingTransport = description.transport
+            emit(.transportSelected(description.transport))
         }
         let path = resolvedCandidate?.path ?? camera.rtspPath(for: quality)
         if let format = StreamFormat(track: videoTrack,

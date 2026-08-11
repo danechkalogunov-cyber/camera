@@ -173,7 +173,7 @@ extension RTSPSessionMachine {
             negotiatedTracks[index].clientPorts = ports
             actions.append(.prepareUDP(trackID: negotiatedTracks[index].id, ports: ports))
             transport = "RTP/AVP;unicast;client_port=\(ports.rtp)-\(ports.rtcp)"
-        case .tcpInterleaved, .tcpTLS:
+        case .auto, .tcpInterleaved, .tcpTLS:
             let channels = requestedChannels(forSetupAt: setupCursor)
             // Register before sending: frames can race the SETUP response.
             decoder.registerInterleavedChannels([channels.lowerBound, channels.upperBound])

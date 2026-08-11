@@ -131,6 +131,10 @@ public actor StreamController: Identifiable {
     var pendingRedirect: RTSPURL?
     /// Session-local fallback after a multicast join or five-second media timeout fails.
     var transportFallback: RTSPTransportKind?
+    /// Concrete transport used by the current attempt (`.auto` never reaches the RTSP machine).
+    var activeTransport: RTSPTransportKind = .tcpInterleaved
+    var automaticTransportsTried: Set<RTSPTransportKind> = []
+    var didRetryTCPAfterSilentUDP = false
 
     // MARK: Per-attempt state
 
@@ -280,6 +284,8 @@ public actor StreamController: Identifiable {
         isStopping = false
         attempt = 0
         transportFallback = nil
+        automaticTransportsTried.removeAll()
+        didRetryTCPAfterSilentUDP = false
         startedAt = clock.now()
         runGeneration &+= 1
         let generation = runGeneration
@@ -423,6 +429,8 @@ public actor StreamController: Identifiable {
             guard generation == runGeneration else { return }
             await teardown()
             if isStopping || Task.isCancelled { break }
+
+            if applyAutomaticTransportFallback(for: outcome) { continue }
 
             switch outcome {
             case .stopped:

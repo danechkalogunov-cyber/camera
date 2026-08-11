@@ -455,10 +455,18 @@ final class AppSessionModel {
         case .retry:
             connect(form.request)
         case .switchToTCP:
-            // The slice is TCP-interleaved and nothing else (`.vigil/SLICE.md`), so this is a
-            // retry — the transport it asks for is already the one in use.
-            dependencies.logger.notice(.core, "already TCP-interleaved; retrying")
-            connect(form.request)
+            guard var camera else {
+                connect(form.request)
+                return
+            }
+            camera.transport = .tcpInterleaved
+            camera.lastWorkingTransport = nil
+            self.camera = camera
+            if let controller {
+                Task { await controller.setCamera(camera) }
+            } else {
+                connect(form.request)
+            }
         case .tryAlternateRTSPPort:
             rtspPort = Self.alternateRTSPPort
             connect(form.request)

@@ -258,7 +258,8 @@ extension MainWindowView {
             pixelHeight: format.resolution?.height ?? 0,
             streamInUse: Self.qualityLabel(format.quality),
             transport: format.transport.rawValue,
-            targetFramesPerSecond: format.declaredFPS ?? 0)
+            targetFramesPerSecond: format.declaredFPS ?? 0,
+            decodeBudgetMode: Self.decodeModeLabel(selectedStream.decodeMode))
     }
 
     /// The stream's name as the panel shows it.
@@ -270,6 +271,17 @@ extension MainWindowView {
         case .main:  return "Main"
         case .sub:   return "Sub"
         case .third: return "Third"
+        }
+    }
+
+    static func decodeModeLabel(_ mode: DecodeMode) -> String? {
+        switch mode {
+        case .full: return nil
+        case .trim: return Self.localized("Trim disposable frames")
+        case .fpsCapped: return Self.localized("15 fps cap")
+        case .keyframesOnly: return Self.localized("Keyframes only")
+        case .jpegPoll: return Self.localized("JPEG polling")
+        case .paused: return Self.localized("Paused")
         }
     }
 

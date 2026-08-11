@@ -205,10 +205,12 @@ import VigilProtocols
     @Test func rtspTransportKindDefaultsAndPorts() {
         #expect(RTSPTransportKind.tcpInterleaved.defaultPort == 554)
         #expect(RTSPTransportKind.tcpTLS.defaultPort == 322)
+        #expect(RTSPTransportKind.auto.defaultPort == 554)
         #expect(RTSPTransportKind.udpUnicast.isUDP)
         #expect(RTSPTransportKind.udpMulticast.isUDP)
         #expect(!RTSPTransportKind.tcpInterleaved.isUDP)
         #expect(!RTSPTransportKind.tcpTLS.isUDP)
+        #expect(!RTSPTransportKind.auto.isUDP)
     }
 
     @Test func latencyPresetDepthsMatchTheContract() {

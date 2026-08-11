@@ -169,13 +169,16 @@ package struct InspectorStreamDescription: Sendable, Hashable {
     package var transport: String
     /// The stream's configured frame rate, for the fps deviation threshold.
     package var targetFramesPerSecond: Double
+    /// Human-readable global admission mode; empty for unrestricted `.full` decode.
+    package var decodeBudgetMode: String?
     /// The RTSP session id, masked by the caller.
     package var sessionID: String?
 
     package init(codec: String = "", profile: String? = nil, level: String? = nil,
                  pixelWidth: Int = 0, pixelHeight: Int = 0, streamInUse: String = "",
                  isAutomaticStream: Bool = true, transport: String = "",
-                 targetFramesPerSecond: Double = 0, sessionID: String? = nil) {
+                 targetFramesPerSecond: Double = 0, sessionID: String? = nil,
+                 decodeBudgetMode: String? = nil) {
         self.codec = codec
         self.profile = profile
         self.level = level
@@ -186,6 +189,7 @@ package struct InspectorStreamDescription: Sendable, Hashable {
         self.transport = transport
         self.targetFramesPerSecond = targetFramesPerSecond
         self.sessionID = sessionID
+        self.decodeBudgetMode = decodeBudgetMode
     }
 
     /// `"H.265 Main · L4.1"`.
