@@ -40,10 +40,23 @@ struct AppSessionMemoryTests {
 
         let record = harness.remember(
             account: "operator", ref: ref, path: "/Streaming/Channels/101", name: "Front door",
-            id: identity, overlay: false)
+            id: identity, overlay: false, transport: .auto,
+            lastWorkingTransport: .udpUnicast)
 
         let loaded = LastConnection.load(from: harness.defaults)
         #expect(loaded == record)
+    }
+
+    @Test func aNewCameraUsesTheGlobalTransportDefault() throws {
+        let harness = AppSessionHarness()
+        defer { harness.tearDown() }
+        harness.defaults.set(RTSPTransportKind.auto.rawValue,
+                             forKey: GeneralPreferenceKey.defaultTransportKey)
+
+        let camera = try harness.model.makeCamera(host: "camera.lan", ref: CredentialRef())
+
+        #expect(camera.transport == .auto)
+        #expect(camera.lastWorkingTransport == nil)
     }
 
     /// A record written before the identity field existed loads without one, and is not discarded.

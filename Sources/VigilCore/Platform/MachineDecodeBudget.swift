@@ -85,11 +85,6 @@ public enum MachineDecodeBudget {
     }
 
     /// The `UserDefaults` key behind Settings ➝ Streams ➝ "Maximum concurrent decodes".
-    ///
-    /// ⚠️ The key is read and honoured; the Settings control that writes it is not built yet — that
-    /// pane is its own feature. Stating it rather than hiding it: an operator who needs a different
-    /// budget today can set it with `defaults write` and be obeyed, which is strictly better than a
-    /// number nobody can change.
     public static let overrideKey = "vigil.streams.maximumConcurrentDecodes"
 
     /// F-DEC-06's figure for Apple silicon, at ``referenceCores``.

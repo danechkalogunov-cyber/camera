@@ -62,6 +62,8 @@ extension AppSessionModel {
         // same address. Written on every first frame like the rest of the record, which also
         // repairs a record saved before the field existed.
         record.cameraID = camera.id
+        record.transport = camera.transport
+        record.lastWorkingTransport = camera.lastWorkingTransport
         record.save(to: defaults)
     }
 

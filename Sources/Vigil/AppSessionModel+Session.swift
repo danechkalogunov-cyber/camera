@@ -214,7 +214,9 @@ extension AppSessionModel {
                                         ref: remembered.credentialRef,
                                         rtspPath: remembered.rtspPath,
                                         name: remembered.name,
-                                        id: remembered.cameraID)
+                                        id: remembered.cameraID,
+                                        transport: remembered.transport,
+                                        lastWorkingTransport: remembered.lastWorkingTransport)
             resolvedPath = remembered.rtspPath
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {
@@ -241,7 +243,9 @@ extension AppSessionModel {
     ///   detaches all four and leaves the library's own row for this device looking like a second,
     ///   permanently offline camera.
     func makeCamera(host: String, ref: CredentialRef, rtspPath: String? = nil,
-                    name: String? = nil, id: CameraID? = nil) throws -> Camera {
+                    name: String? = nil, id: CameraID? = nil,
+                    transport: RTSPTransportKind? = nil,
+                    lastWorkingTransport: RTSPTransportKind? = nil) throws -> Camera {
         try Camera(id: id ?? CameraID(),
                    name: name ?? "",
                    host: host,
@@ -249,6 +253,8 @@ extension AppSessionModel {
                    rtspPort: rtspPort,
                    useTLS: form.usesTLS,
                    channel: ChannelID(form.channel),
+                   transport: transport ?? GeneralPreferenceKey.defaultTransport(in: defaults),
+                   lastWorkingTransport: lastWorkingTransport,
                    credentialRef: ref,
                    rtspPathOverride: rtspPath).validated()
     }

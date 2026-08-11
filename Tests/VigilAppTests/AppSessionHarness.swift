@@ -176,7 +176,9 @@ struct AppSessionHarness {
         path: String? = nil,
         name: String? = nil,
         id: CameraID? = nil,
-        overlay: Bool = true
+        overlay: Bool = true,
+        transport: RTSPTransportKind = .tcpInterleaved,
+        lastWorkingTransport: RTSPTransportKind? = nil
     ) -> LastConnection {
         LastConnection(
             host: host,
@@ -185,7 +187,9 @@ struct AppSessionHarness {
             rtspPath: path,
             name: name,
             cameraID: id,
-            showsVideoOverlay: overlay)
+            showsVideoOverlay: overlay,
+            transport: transport,
+            lastWorkingTransport: lastWorkingTransport)
     }
 
     /// The same, already stored — which is what a test that starts from "a camera is remembered"
@@ -198,11 +202,14 @@ struct AppSessionHarness {
         path: String? = nil,
         name: String? = nil,
         id: CameraID? = nil,
-        overlay: Bool = true
+        overlay: Bool = true,
+        transport: RTSPTransportKind = .tcpInterleaved,
+        lastWorkingTransport: RTSPTransportKind? = nil
     ) -> LastConnection {
         let record = remembered(
             host: host, account: account, ref: ref, path: path, name: name, id: id,
-            overlay: overlay)
+            overlay: overlay, transport: transport,
+            lastWorkingTransport: lastWorkingTransport)
         record.save(to: defaults)
         return record
     }

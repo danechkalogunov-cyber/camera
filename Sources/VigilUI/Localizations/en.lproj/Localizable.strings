@@ -934,3 +934,10 @@
 "Save Layout Preset" = "Save Layout Preset";
 "Manage Layout Presets" = "Manage Layout Presets";
 "Preset Name" = "Preset Name";
+"Streams" = "Streams";
+"Default transport" = "Default transport";
+"Maximum concurrent decodes" = "Maximum concurrent decodes";
+"Automatic (recommended)" = "Automatic (recommended)";
+"New cameras inherit the default transport. Per-camera settings take precedence." = "New cameras inherit the default transport. Per-camera settings take precedence.";
+"Transport selection" = "Transport selection";
+"Chosen automatically from the last successful session" = "Chosen automatically from the last successful session";

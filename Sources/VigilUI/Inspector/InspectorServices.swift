@@ -171,6 +171,8 @@ package struct InspectorStreamDescription: Sendable, Hashable {
     package var targetFramesPerSecond: Double
     /// Human-readable global admission mode; empty for unrestricted `.full` decode.
     package var decodeBudgetMode: String?
+    /// Why the concrete transport was selected, when policy rather than the user selected it.
+    package var transportSelectionReason: String?
     /// The RTSP session id, masked by the caller.
     package var sessionID: String?
 
@@ -178,7 +180,7 @@ package struct InspectorStreamDescription: Sendable, Hashable {
                  pixelWidth: Int = 0, pixelHeight: Int = 0, streamInUse: String = "",
                  isAutomaticStream: Bool = true, transport: String = "",
                  targetFramesPerSecond: Double = 0, sessionID: String? = nil,
-                 decodeBudgetMode: String? = nil) {
+                 decodeBudgetMode: String? = nil, transportSelectionReason: String? = nil) {
         self.codec = codec
         self.profile = profile
         self.level = level
@@ -190,6 +192,7 @@ package struct InspectorStreamDescription: Sendable, Hashable {
         self.targetFramesPerSecond = targetFramesPerSecond
         self.sessionID = sessionID
         self.decodeBudgetMode = decodeBudgetMode
+        self.transportSelectionReason = transportSelectionReason
     }
 
     /// `"H.265 Main · L4.1"`.

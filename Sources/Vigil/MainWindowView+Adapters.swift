@@ -259,7 +259,9 @@ extension MainWindowView {
             streamInUse: Self.qualityLabel(format.quality),
             transport: format.transport.rawValue,
             targetFramesPerSecond: format.declaredFPS ?? 0,
-            decodeBudgetMode: Self.decodeModeLabel(selectedStream.decodeMode))
+            decodeBudgetMode: Self.decodeModeLabel(selectedStream.decodeMode),
+            transportSelectionReason: selectedCamera?.transport == .auto
+                ? Self.localized("Chosen automatically from the last successful session") : nil)
     }
 
     /// The stream's name as the panel shows it.

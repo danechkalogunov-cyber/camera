@@ -206,6 +206,10 @@ struct LastConnection: Sendable, Hashable {
     /// value.
     var showsVideoOverlay: Bool = true
 
+    /// Per-camera transport preference and Auto's last proven concrete choice.
+    var transport: RTSPTransportKind = .tcpInterleaved
+    var lastWorkingTransport: RTSPTransportKind?
+
     // MARK: Private Helpers
 
     private static let hostKey = "vigil.lastConnection.host"
@@ -215,6 +219,8 @@ struct LastConnection: Sendable, Hashable {
     private static let nameKey = "vigil.lastConnection.name"
     private static let overlayKey = "vigil.lastConnection.showsVideoOverlay"
     private static let cameraKey = "vigil.lastConnection.cameraID"
+    private static let transportKey = "vigil.lastConnection.transport"
+    private static let lastWorkingTransportKey = "vigil.lastConnection.lastWorkingTransport"
 
     // MARK: API
 
@@ -237,6 +243,10 @@ struct LastConnection: Sendable, Hashable {
         // A camera id that no longer parses is treated as absent, like every other malformed field
         // here: the next first frame writes a good one.
         let camera = defaults.string(forKey: cameraKey).flatMap(UUID.init(uuidString:))
+        let transport = defaults.string(forKey: transportKey)
+            .flatMap(RTSPTransportKind.init(rawValue:)) ?? .tcpInterleaved
+        let lastWorking = defaults.string(forKey: lastWorkingTransportKey)
+            .flatMap(RTSPTransportKind.init(rawValue:))
         return LastConnection(host: host,
                               account: account,
                               credentialRef: CredentialRef(uuid),
@@ -249,7 +259,9 @@ struct LastConnection: Sendable, Hashable {
                               cameraID: camera.map(CameraID.init),
                               showsVideoOverlay: defaults.object(forKey: overlayKey) == nil
                                   ? true
-                                  : defaults.bool(forKey: overlayKey))
+                                  : defaults.bool(forKey: overlayKey),
+                              transport: transport,
+                              lastWorkingTransport: lastWorking == .auto ? nil : lastWorking)
     }
 
     /// Stores this connection as the one to resume on the next launch.
@@ -273,6 +285,12 @@ struct LastConnection: Sendable, Hashable {
         } else {
             defaults.removeObject(forKey: Self.cameraKey)
         }
+        defaults.set(transport.rawValue, forKey: Self.transportKey)
+        if let lastWorkingTransport, lastWorkingTransport != .auto {
+            defaults.set(lastWorkingTransport.rawValue, forKey: Self.lastWorkingTransportKey)
+        } else {
+            defaults.removeObject(forKey: Self.lastWorkingTransportKey)
+        }
     }
 
     /// Forgets the remembered connection. Called when its credential no longer opens the camera, so
@@ -283,8 +301,10 @@ struct LastConnection: Sendable, Hashable {
         defaults.removeObject(forKey: refKey)
         defaults.removeObject(forKey: pathKey)
         defaults.removeObject(forKey: nameKey)
-        defaults.removeObject(forKey: overlayKey)
         defaults.removeObject(forKey: cameraKey)
+        defaults.removeObject(forKey: overlayKey)
+        defaults.removeObject(forKey: transportKey)
+        defaults.removeObject(forKey: lastWorkingTransportKey)
     }
 }
 

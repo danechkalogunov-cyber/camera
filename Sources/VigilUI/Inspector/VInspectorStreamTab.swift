@@ -114,6 +114,9 @@ package struct VInspectorStreamTab: View {
         }
         VInspectorRow("Decode") { decodeChip }
         VInspectorRow("Transport") { VInspectorMonoValue(state.stream.transport) }
+        if let reason = state.stream.transportSelectionReason {
+            VInspectorRow("Transport selection") { VInspectorMonoValue(reason) }
+        }
         VInspectorRow("Stream in use") { streamInUseValue }
         if let mode = state.stream.decodeBudgetMode {
             VInspectorRow("Decode budget") {
