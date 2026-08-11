@@ -553,4 +553,5 @@ import VigilProtocols
         await subject.stop()
         #expect(await subject.state == .stopped)
     }
+
 }

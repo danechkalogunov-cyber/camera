@@ -51,6 +51,7 @@ actor RequestDouble: ISAPIRequesting {
     private var sequenceCursors: [String: Int] = [:]
     private var streamChunks: [Data] = []
     private var streamContentType: String?
+    private var streamFinishes = true
     private var waiters: [(threshold: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init() {}
@@ -74,9 +75,10 @@ actor RequestDouble: ISAPIRequesting {
         routes.append(Route(suffix: suffix, sequence: pages))
     }
 
-    func setStream(contentType: String?, chunks: [Data]) {
+    func setStream(contentType: String?, chunks: [Data], finishes: Bool = true) {
         streamContentType = contentType
         streamChunks = chunks
+        streamFinishes = finishes
     }
 
     // MARK: Inspection
@@ -142,9 +144,10 @@ actor RequestDouble: ISAPIRequesting {
         record("GET", resource, query, nil)
         if let route = match(resource), let error = route.error { throw error }
         let chunks = streamChunks
+        let finishes = streamFinishes
         let stream = AsyncThrowingStream<Data, any Error> { continuation in
             for chunk in chunks { continuation.yield(chunk) }
-            continuation.finish()
+            if finishes { continuation.finish() }
         }
         return ISAPIByteStream(contentType: streamContentType, bytes: stream)
     }

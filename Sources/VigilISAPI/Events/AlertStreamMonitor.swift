@@ -58,17 +58,9 @@ public actor AlertStreamMonitor {
         public var jitterFraction: Double = 0.20
         /// A connection that has lasted this long and delivered a part resets the ladder.
         public var healthyResetSeconds: Double = 120
-        /// A gap this long *between two chunks* forces a reconnect.
-        ///
-        /// Evaluated when a chunk arrives, not on a timer: a device that stops sending entirely is
-        /// caught by the transport's own idle timeout on the `.stream` lane
-        /// (`Configuration.streamIdleTimeout`), which ends the byte stream and lands the loop in
-        /// `backOff`. A second, time-driven watchdog inside this actor would need a task racing the
-        /// pump; it is not implemented and `livenessProbeAfterIdleSeconds` is therefore not yet
-        /// consulted.
+        /// A gap this long with no chunks forces a reconnect, independently of URLSession timeout.
         public var idleWatchdogSeconds: Double = 90
-        /// Reserved. docs/spec-isapi.md §14.6 specifies a `userCheck` probe after this much
-        /// silence; see the note on `idleWatchdogSeconds` for why it is not wired up yet.
+        /// Silence before an authenticated `userCheck` proves the control lane is still alive.
         public var livenessProbeAfterIdleSeconds: Double = 60
         /// How long a decoded event waits for a JPEG part that may never come.
         public var snapshotPairingWindowSeconds: Double = 1.5
@@ -96,6 +88,9 @@ public actor AlertStreamMonitor {
                                                        bufferingPolicy: .bufferingNewest(16))
 
     private var runner: Task<Void, Never>?
+    private var activeConnection: Task<Void, any Error>?
+    private var watchdog: Task<Void, Never>?
+    private var watchdogFailure: ISAPIError?
     private var currentState: AlertStreamState = .idle
     private var attempt = 0
 
@@ -109,6 +104,8 @@ public actor AlertStreamMonitor {
     public private(set) var connectionAttempts = 0
     public private(set) var suppressedHeartbeats = 0
     public private(set) var emittedEvents = 0
+    /// Authenticated liveness probes attempted after a silent stream, for diagnostics and tests.
+    public private(set) var livenessProbes = 0
     /// The backoff delays actually chosen, in order, so the ladder and its jitter are assertable.
     public private(set) var backoffHistory: [Double] = []
 
@@ -190,7 +187,11 @@ public actor AlertStreamMonitor {
     /// Stops the read loop and completes both streams' current consumers.
     public func stop() async {
         runner?.cancel()
+        activeConnection?.cancel()
+        watchdog?.cancel()
         runner = nil
+        activeConnection = nil
+        watchdog = nil
         transition(to: .stopped)
     }
 
@@ -208,7 +209,7 @@ public actor AlertStreamMonitor {
             connectionAttempts += 1
             transition(to: .connecting)
             do {
-                try await readOneConnection()
+                try await runOneMonitoredConnection()
                 // A clean end is still an end: the device closed the response, so reconnect.
                 guard !Task.isCancelled else { return }
                 await backOff(reason: "stream ended")
@@ -223,6 +224,35 @@ public actor AlertStreamMonitor {
                 await backOff(reason: "\(error)")
             }
         }
+    }
+
+    /// Runs the byte pump in its own task so the independent watchdog can cancel only this
+    /// connection and let the outer reconnect loop continue.
+    private func runOneMonitoredConnection() async throws(ISAPIError) {
+        watchdogFailure = nil
+        let connection = Task { try await self.readOneConnection() }
+        activeConnection = connection
+        do {
+            try await connection.value
+        } catch let error as ISAPIError {
+            let failure = watchdogFailure ?? error
+            finishMonitoredConnection()
+            throw failure
+        } catch {
+            let failure = watchdogFailure ?? ISAPIError.streamEnded(afterBytes: 0)
+            finishMonitoredConnection()
+            throw failure
+        }
+        let failure = watchdogFailure
+        finishMonitoredConnection()
+        if let failure { throw failure }
+    }
+
+    private func finishMonitoredConnection() {
+        watchdog?.cancel()
+        watchdog = nil
+        activeConnection = nil
+        watchdogFailure = nil
     }
 
     /// The states from which no further connection is attempted.
@@ -242,6 +272,7 @@ public actor AlertStreamMonitor {
         let connectedAt = wallClock.now
         let connectedInstant = clock.now()
         transition(to: .streaming(since: connectedAt))
+        armWatchdog()
 
         var assembler = AlertPartAssembler(policy: policy)
         var parser: MultipartStreamParser?
@@ -257,6 +288,7 @@ public actor AlertStreamMonitor {
         do {
             for try await chunk in opened.bytes {
                 if Task.isCancelled { return }
+                armWatchdog()
                 // The gap is measured against the *previous* arrival: updating first and then
                 // comparing would compare an instant with itself and never fire.
                 let arrival = clock.now()
@@ -313,6 +345,37 @@ public actor AlertStreamMonitor {
         if var live = parser { deliver(live.finish(), into: &assembler); parser = live }
         flush(&assembler)
         await drain()
+    }
+
+    /// Restarts the two-stage silence timer after every received chunk.
+    private func armWatchdog() {
+        watchdog?.cancel()
+        let probeDelay = max(0, policy.livenessProbeAfterIdleSeconds)
+        let expiryDelay = max(0, policy.idleWatchdogSeconds)
+        watchdog = Task { [weak self] in
+            guard let self else { return }
+            if probeDelay < expiryDelay {
+                do { try await clock.sleep(for: .seconds(probeDelay)) } catch { return }
+                guard !Task.isCancelled else { return }
+                livenessProbes += 1
+                do {
+                    _ = try await requests.getDocument(ISAPIResource.userCheck,
+                                                       query: [], lane: .control)
+                } catch {
+                    expireWatchdog(with: error)
+                    return
+                }
+            }
+            let remaining = max(0, expiryDelay - min(probeDelay, expiryDelay))
+            do { try await clock.sleep(for: .seconds(remaining)) } catch { return }
+            guard !Task.isCancelled else { return }
+            expireWatchdog(with: .streamEnded(afterBytes: 0))
+        }
+    }
+
+    private func expireWatchdog(with error: ISAPIError) {
+        watchdogFailure = error
+        activeConnection?.cancel()
     }
 
     /// Feeds parser outputs into the assembler and publishes whatever completed.
