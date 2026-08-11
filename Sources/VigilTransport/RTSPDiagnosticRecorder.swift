@@ -9,6 +9,7 @@
 
 import Foundation
 import os
+import VigilProtocols
 
 /// Stores recent redacted RTSP control traffic separately for every camera.
 ///
