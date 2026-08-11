@@ -62,10 +62,10 @@ extension RTSPConnection {
             guard let self, let group, let content, !content.isEmpty else { return }
             Task { await self.receivedMulticast(content, on: group, localPort: port) }
         }
-        group.stateUpdateHandler = { [weak self, weak group] state in
-            guard let self, let group else { return }
+        group.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
             if case let .failed(error) = state {
-                Task { await self.multicastFailed(error, group: group, localPort: port) }
+                Task { await self.multicastFailed(error, localPort: port) }
             }
         }
         multicastGroups[port] = group
@@ -80,9 +80,8 @@ extension RTSPConnection {
         execute(machine.ingestUDP(data, localPort: localPort, now: clock.now()))
     }
 
-    private func multicastFailed(_ error: NWError, group: NWConnectionGroup,
-                                 localPort: UInt16) {
-        guard lifecycle == .running, multicastGroups[localPort] === group else { return }
+    private func multicastFailed(_ error: NWError, localPort: UInt16) {
+        guard lifecycle == .running, let group = multicastGroups[localPort] else { return }
         multicastGroups.removeValue(forKey: localPort)
         multicastDestinations.removeValue(forKey: localPort)
         group.cancel()
@@ -161,8 +160,7 @@ extension RTSPConnection {
            let destination = multicastDestinations[localPort] {
             group.send(content: payload, to: destination) { [weak self] error in
                 guard let error else { return }
-                Task { await self?.multicastFailed(error, group: group,
-                                                   localPort: localPort) }
+                Task { await self?.multicastFailed(error, localPort: localPort) }
             }
             return
         }

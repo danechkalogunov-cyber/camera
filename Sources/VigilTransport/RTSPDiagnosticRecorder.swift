@@ -43,7 +43,8 @@ public final class RTSPDiagnosticRecorder: Sendable {
         let entry: String
         if rawEntry.utf8.count > maximumBytes {
             let budget = maximumBytes - 64
-            entry = String(decoding: rawEntry.utf8.prefix(budget), as: UTF8.self)
+            entry = String(
+                decoding: rawEntry.utf8.prefix(budget), as: UTF8.self)
                 + "\n<transcript entry truncated>\n"
         } else {
             entry = rawEntry
@@ -77,13 +78,15 @@ public final class RTSPDiagnosticRecorder: Sendable {
     }
 
     public func reset(streamID: String) {
-        state.withLock { $0.streams.removeValue(forKey: streamID) }
+        _ = state.withLock { $0.streams.removeValue(forKey: streamID) }
     }
 
     private static func sdpBody(in transcript: String) -> String? {
-        guard transcript.range(of: "content-type: application/sdp",
-                               options: .caseInsensitive) != nil,
-              let separator = transcript.range(of: "\n\n")
+        guard
+            transcript.range(
+                of: "content-type: application/sdp",
+                options: .caseInsensitive) != nil,
+            let separator = transcript.range(of: "\n\n")
         else { return nil }
         let body = transcript[separator.upperBound...]
             .trimmingCharacters(in: .whitespacesAndNewlines)

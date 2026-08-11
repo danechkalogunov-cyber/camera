@@ -366,9 +366,7 @@ public actor AlertStreamMonitor {
                 _ = try await requests.getDocument(ISAPIResource.userCheck,
                                                    query: [], lane: .control)
             } catch {
-                let failure = (error as? ISAPIError)
-                    ?? .notConnected("liveness probe failed: \(error)")
-                expireWatchdog(with: failure)
+                expireWatchdog(with: error)
                 return
             }
         }
