@@ -17,14 +17,8 @@
 //  unchanged, only its timing is. Refusing every multi-label name up front — which this file used
 //  to do — makes an internal domain unusable, and that is a real defect, not caution.
 //
-//  DEVIATION, and it wants closing. R-71 puts the classifier in `VigilProtocols`
-//  (`Net/HostPolicy.swift`: `HostPolicy.classify(_:)` and `HostPolicy.requirePermitted(_:)`) so it
-//  is pure and Linux-tested. That file still does not exist and this target may not create it — it
-//  belongs to another agent's file rows. The rules below are a stand-in with the same refusals and
-//  the same error. When `HostPolicy` lands, the literal classification here becomes a forward to
-//  it; the resolved-address stage stays, because `HostPolicy` as specified has no entry point for
-//  raw address bytes and the contract's own doc comment says "the caller re-checks the resolved
-//  address" — this is that caller.
+//  Stage one forwards to the pure, Linux-tested `VigilProtocols.HostPolicy`. The resolved-address
+//  stage remains here because it consumes Network.framework's raw address bytes after DNS.
 //
 
 #if os(macOS)
@@ -76,15 +70,15 @@ package enum EgressGuard {
     /// Everything else — every ordinary multi-label DNS name — is `.unresolvedName`.
     package static func classify(_ host: String) -> Decision {
         let bare = unbracketed(host)
-        guard !bare.isEmpty else { return .refused }
-
-        if let address = IPv4Address(bare) {
-            return isPermitted(address) ? .permitted : .refused
+        let classification = HostPolicy.classify(host)
+        if classification.isEgressPermitted { return .permitted }
+        if classification == .invalid { return .refused }
+        // Ordinary multi-label DNS is conservatively `.publicInternet` before resolution. Internal
+        // DNS still has to work, so only literals are refused here; names owe the stage-two check.
+        if IPv4Address(bare) != nil || bare.contains(":") {
+            return .refused
         }
-        if bare.contains(":") {
-            return isPermittedIPv6Literal(bare) ? .permitted : .refused
-        }
-        return isLocalName(bare) ? .permitted : .unresolvedName
+        return .unresolvedName
     }
 
     /// Throws `TransportError.egressBlocked` for a destination that is already known to be off the
@@ -144,11 +138,7 @@ package enum EgressGuard {
     /// The permitted IPv4 classes. Unchanged from the first implementation of this file: it was
     /// correct, and the two-stage change is only about names.
     private static func isPermitted(_ address: IPv4Address) -> Bool {
-        address.isLoopback
-            || address.isPrivate
-            || address.isLinkLocal
-            || address.isMulticast
-            || address.isBroadcast
+        HostPolicy.classify(address).isEgressPermitted
     }
 
     // MARK: - IPv6
@@ -168,67 +158,12 @@ package enum EgressGuard {
         return String(text)
     }
 
-    /// Classifies an IPv6 **literal** from its first hextet, which is all these prefixes need.
-    ///
-    /// Refuses anything it cannot read as hexadecimal, including the unspecified address `::`.
-    private static func isPermittedIPv6Literal(_ text: String) -> Bool {
-        let lowered = ASCII.lowercased(text)
-        if lowered == "::1" {
-            return true                                   // loopback
-        }
-        let leading = lowered.prefix { $0 != ":" }
-        guard !leading.isEmpty, let group = UInt16(leading, radix: 16) else {
-            return false
-        }
-        if group >= 0xFE80, group <= 0xFEBF {
-            return true                                   // link-local, fe80::/10
-        }
-        if group >= 0xFC00, group <= 0xFDFF {
-            return true                                   // unique local, fc00::/7
-        }
-        if group >= 0xFF00 {
-            return true                                   // multicast, ff00::/8
-        }
-        return false
-    }
-
     /// Classifies sixteen IPv6 address bytes. Same prefixes as the literal form, plus the
     /// IPv4-mapped range, which a dual-stack resolver can hand back for an IPv4-only camera.
     private static func isPermittedIPv6(_ bytes: [UInt8]) -> Bool {
-        // ::ffff:a.b.c.d — ten zero bytes, then 0xFF 0xFF, then the IPv4 address.
-        if bytes[0..<10].allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF {
-            return isPermitted(resolvedAddress: bytes[12..<16])
-        }
-        // ::1
-        if bytes[0..<15].allSatisfy({ $0 == 0 }), bytes[15] == 1 {
-            return true
-        }
-        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 {
-            return true                                   // link-local, fe80::/10
-        }
-        if bytes[0] & 0xFE == 0xFC {
-            return true                                   // unique local, fc00::/7
-        }
-        if bytes[0] == 0xFF {
-            return true                                   // multicast, ff00::/8
-        }
-        return false
+        HostPolicy.classify(resolvedAddress: bytes).isEgressPermitted
     }
 
-    // MARK: - Names
-
-    /// Whether a DNS name can only resolve on the local link, so no resolver can point it at the
-    /// public internet.
-    private static func isLocalName(_ name: String) -> Bool {
-        var lowered = ASCII.lowercased(name)
-        if lowered.hasSuffix(".") {
-            lowered = String(lowered.dropLast())          // a fully qualified name's root label
-        }
-        guard !lowered.isEmpty else { return false }
-        if lowered == "localhost" { return true }
-        if lowered.hasSuffix(".local") { return true }
-        return !lowered.contains(".")                     // single label: mDNS or a LAN resolver
-    }
 }
 
 #endif

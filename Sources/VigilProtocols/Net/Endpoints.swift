@@ -7,8 +7,7 @@
 //
 //  Written by impl:isapi-a because `ISAPIClient.init(endpoint:…)` (API_CONTRACT §4.5) cannot
 //  compile without it and the W1 file was still missing; the declarations are the contract's
-//  verbatim shape. `RTSPEndpoint` is named in the same manifest row but nothing references it yet,
-//  so it is left to its owner rather than guessed at here.
+//  verbatim shape.
 //
 
 import Foundation
@@ -124,5 +123,23 @@ public struct ISAPIEndpoint: Sendable, Hashable, Codable {
     /// literal already carrying brackets is reported as *not* needing more.
     static func isIPv6Literal(_ host: String) -> Bool {
         host.contains(":") && !host.hasPrefix("[")
+    }
+}
+
+// MARK: - RTSPEndpoint
+
+/// Where a stream lives. Credentials are never part of an RTSP endpoint.
+public struct RTSPEndpoint: Sendable, Hashable, Codable {
+    public var host: String
+    public var port: Int
+    public var path: String
+    public var transport: RTSPTransportKind
+
+    public init(host: String, port: Int = 554, path: String,
+                transport: RTSPTransportKind = .tcpInterleaved) {
+        self.host = host
+        self.port = port
+        self.path = path
+        self.transport = transport
     }
 }
