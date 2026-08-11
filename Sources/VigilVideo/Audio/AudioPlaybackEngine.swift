@@ -38,7 +38,7 @@ public actor AudioPlaybackEngine {
         var rampGeneration: UInt32 = 0
         var statistics = AudioPlaybackStatistics()
         var aacDecoder: AACDecoder?
-        var aacConfiguration: AudioFormatInfo?
+        var aacConfiguration: VigilProtocols.AudioFormatInfo?
     }
 
     private final class AACDecoder {
@@ -46,7 +46,7 @@ public actor AudioPlaybackEngine {
         let inputFormat: AVAudioFormat
         let outputFormat: AVAudioFormat
 
-        init?(format: AudioFormatInfo, outputFormat: AVAudioFormat) {
+        init?(format: VigilProtocols.AudioFormatInfo, outputFormat: AVAudioFormat) {
             guard let cookie = format.magicCookie, !cookie.isEmpty else { return nil }
             let objectType = UInt32(cookie[cookie.startIndex] >> 3)
             var description = AudioStreamBasicDescription(

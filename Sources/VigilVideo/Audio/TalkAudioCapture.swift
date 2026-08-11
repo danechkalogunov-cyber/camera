@@ -25,7 +25,7 @@ public struct TalkAudioFrame: Sendable, Hashable {
 public actor TalkAudioCapture {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
-    private var codec: AudioCodec = .g711U
+    private var codec: VigilProtocols.AudioCodec = .g711U
     private var sampleRate = 8_000
     private var pending: [Int16] = []
     private var continuation: AsyncStream<TalkAudioFrame>.Continuation?
@@ -34,7 +34,8 @@ public actor TalkAudioCapture {
     public init() {}
 
     /// Starts lazily, so merely launching Vigil never asks for microphone access.
-    public func start(codec: AudioCodec, sampleRateHz: Int) throws -> AsyncStream<TalkAudioFrame> {
+    public func start(codec: VigilProtocols.AudioCodec,
+                      sampleRateHz: Int) throws -> AsyncStream<TalkAudioFrame> {
         stop()
         self.codec = codec
         sampleRate = max(8_000, sampleRateHz)
