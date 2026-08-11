@@ -159,8 +159,8 @@ extension RTSPConnection {
         if let group = multicastGroups[localPort],
            let destination = multicastDestinations[localPort] {
             group.send(content: payload, to: destination) { [weak self] error in
-                guard let error else { return }
-                Task { await self?.multicastFailed(error, localPort: localPort) }
+                guard let self, let error else { return }
+                Task { await self.multicastFailed(error, localPort: localPort) }
             }
             return
         }

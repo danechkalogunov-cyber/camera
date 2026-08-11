@@ -43,8 +43,8 @@ public final class RTSPDiagnosticRecorder: Sendable {
         let entry: String
         if rawEntry.utf8.count > maximumBytes {
             let budget = maximumBytes - 64
-            entry = String(
-                decoding: rawEntry.utf8.prefix(budget), as: UTF8.self)
+            entry =
+                String(decoding: rawEntry.utf8.prefix(budget), as: UTF8.self)
                 + "\n<transcript entry truncated>\n"
         } else {
             entry = rawEntry
