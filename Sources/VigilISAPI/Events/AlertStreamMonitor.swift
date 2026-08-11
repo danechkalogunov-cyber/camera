@@ -353,26 +353,29 @@ public actor AlertStreamMonitor {
         let probeDelay = max(0, policy.livenessProbeAfterIdleSeconds)
         let expiryDelay = max(0, policy.idleWatchdogSeconds)
         watchdog = Task { [weak self] in
-            guard let self else { return }
-            if probeDelay < expiryDelay {
-                do { try await clock.sleep(for: .seconds(probeDelay)) } catch { return }
-                guard !Task.isCancelled else { return }
-                livenessProbes += 1
-                do {
-                    _ = try await requests.getDocument(ISAPIResource.userCheck,
-                                                       query: [], lane: .control)
-                } catch {
-                    let failure = (error as? ISAPIError)
-                        ?? .notConnected("liveness probe failed: \(error)")
-                    expireWatchdog(with: failure)
-                    return
-                }
-            }
-            let remaining = max(0, expiryDelay - min(probeDelay, expiryDelay))
-            do { try await clock.sleep(for: .seconds(remaining)) } catch { return }
-            guard !Task.isCancelled else { return }
-            expireWatchdog(with: .streamEnded(afterBytes: 0))
+            await self?.runWatchdog(probeDelay: probeDelay, expiryDelay: expiryDelay)
         }
+    }
+
+    private func runWatchdog(probeDelay: Double, expiryDelay: Double) async {
+        if probeDelay < expiryDelay {
+            do { try await clock.sleep(for: .seconds(probeDelay)) } catch { return }
+            guard !Task.isCancelled else { return }
+            livenessProbes += 1
+            do {
+                _ = try await requests.getDocument(ISAPIResource.userCheck,
+                                                   query: [], lane: .control)
+            } catch {
+                let failure = (error as? ISAPIError)
+                    ?? .notConnected("liveness probe failed: \(error)")
+                expireWatchdog(with: failure)
+                return
+            }
+        }
+        let remaining = max(0, expiryDelay - min(probeDelay, expiryDelay))
+        do { try await clock.sleep(for: .seconds(remaining)) } catch { return }
+        guard !Task.isCancelled else { return }
+        expireWatchdog(with: .streamEnded(afterBytes: 0))
     }
 
     private func expireWatchdog(with error: ISAPIError) {

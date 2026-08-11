@@ -171,16 +171,17 @@ actor URLSessionLanePool {
         guard let input, let output else {
             throw ISAPIError.notConnected("could not create the audio upload stream")
         }
+        let streams = BoundHTTPStreams(input: input, output: output)
         var urlRequest = Self.makeURLRequest(request)
-        urlRequest.httpBodyStream = input
+        urlRequest.httpBodyStream = streams.input
         urlRequest.setValue("chunked", forHTTPHeaderField: "Transfer-Encoding")
         let session = URLSession(configuration: Self.configuration(for: .audio,
                                                                    configuration: configuration),
                                  delegate: SameHostRedirectDelegate(), delegateQueue: nil)
         let task = session.uploadTask(withStreamedRequest: urlRequest)
-        let handle = DarwinHTTPUploadHandle(input: input, output: output, task: task,
+        streams.output.open()
+        let handle = DarwinHTTPUploadHandle(streams: streams, task: task,
                                             session: session, request: request)
-        output.open()
         task.resume()
         return handle
     }
@@ -335,21 +336,32 @@ enum HTTPRedirectPolicy {
 
 #if os(macOS)
 
+/// A bound stream pair is deliberately consumed by different owners: URLSession reads `input`
+/// while ``DarwinHTTPUploadHandle`` serializes every write to `output`. Foundation does not mark
+/// streams `Sendable`, so this wrapper records that ownership contract for Swift 6.
+private final class BoundHTTPStreams: @unchecked Sendable {
+    let input: InputStream
+    let output: OutputStream
+
+    init(input: InputStream, output: OutputStream) {
+        self.input = input
+        self.output = output
+    }
+}
+
 /// Actor-isolated writer for a URLSession streamed upload. The 64 KiB bound-stream buffer is far
 /// larger than the talk queue's 80 ms maximum batch; a full buffer yields briefly instead of
 /// blocking the cooperative executor, and a peer close becomes the domain's normal network error.
 private actor DarwinHTTPUploadHandle: HTTPUploadHandle {
-    private let input: InputStream
-    private let output: OutputStream
+    private let streams: BoundHTTPStreams
     private let task: URLSessionUploadTask
     private let session: URLSession
     private let request: HTTPRequest
     private var finished = false
 
-    init(input: InputStream, output: OutputStream, task: URLSessionUploadTask,
+    init(streams: BoundHTTPStreams, task: URLSessionUploadTask,
          session: URLSession, request: HTTPRequest) {
-        self.input = input
-        self.output = output
+        self.streams = streams
         self.task = task
         self.session = session
         self.request = request
@@ -364,10 +376,10 @@ private actor DarwinHTTPUploadHandle: HTTPUploadHandle {
         var offset = 0
         while offset < chunk.count {
             if let error = task.error { throw URLSessionLanePool.map(error, request: request) }
-            guard output.streamStatus != .error && output.streamStatus != .closed else {
+            guard streams.output.streamStatus != .error && streams.output.streamStatus != .closed else {
                 throw transportFailure()
             }
-            if !output.hasSpaceAvailable {
+            if !streams.output.hasSpaceAvailable {
                 try? await Task.sleep(for: .milliseconds(2))
                 continue
             }
@@ -375,7 +387,7 @@ private actor DarwinHTTPUploadHandle: HTTPUploadHandle {
                 guard let base = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                     return 0
                 }
-                return output.write(base.advanced(by: offset), maxLength: chunk.count - offset)
+                return streams.output.write(base.advanced(by: offset), maxLength: chunk.count - offset)
             }
             guard written >= 0 else { throw transportFailure() }
             if written == 0 {
@@ -389,13 +401,13 @@ private actor DarwinHTTPUploadHandle: HTTPUploadHandle {
     func finish() {
         guard !finished else { return }
         finished = true
-        output.close()
+        streams.output.close()
         session.finishTasksAndInvalidate()
     }
 
     private func transportFailure() -> ISAPIError {
         if let error = task.error { return URLSessionLanePool.map(error, request: request) }
-        if let error = output.streamError {
+        if let error = streams.output.streamError {
             return ISAPIError.notConnected(String(describing: error))
         }
         return ISAPIError.notConnected("the camera closed the audio upload")
