@@ -115,6 +115,7 @@ public extension RTSPError {
         case .commandQueueOverflow: "VG-RTSP-0007"
         case .tooManyRedirects: "VG-RTSP-0008"
         case .timeout: "VG-RTSP-0009"
+        case .multicastBlocked: "VG-RTSP-0010"
         case .credentialsMissing: "VG-RTSP-0400"
         case .unauthorized: "VG-RTSP-0401"          // fixed by ARCHITECTURE.md §7.3
         case .authRejected: "VG-RTSP-0402"
@@ -165,6 +166,7 @@ public extension RTSPError {
         case .commandQueueOverflow: "The camera stopped answering."
         case .tooManyRedirects: "The camera redirected Vigil too many times."
         case .timeout: "The camera did not answer in time."
+        case .multicastBlocked: "The network did not deliver the camera's multicast stream."
         }
     }
 
@@ -174,6 +176,7 @@ public extension RTSPError {
         case .accessForbidden: "Use an account with live-view permission for this channel."
         case .pathNotFound: "Check the channel number in the camera's settings."
         case .noSuitableTrack: "Check that the camera is set to H.264 or H.265."
+        case .multicastBlocked: "Use unicast streaming or allow multicast on this network."
         default: nil
         }
     }

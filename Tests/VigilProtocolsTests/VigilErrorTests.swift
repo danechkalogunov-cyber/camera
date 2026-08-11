@@ -34,6 +34,7 @@ import VigilProtocols
         .rtsp(.noSuitableTrack), .rtsp(.sdpParse("m=")), .rtsp(.transportRejected),
         .rtsp(.sessionNotFound), .rtsp(.pathNotFound), .rtsp(.interleaveDesync(recovered: true)),
         .rtsp(.commandQueueOverflow), .rtsp(.tooManyRedirects), .rtsp(.timeout(.keepalive)),
+        .rtsp(.multicastBlocked),
     ]
 
     static let rtp: [VigilError] = [

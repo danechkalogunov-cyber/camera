@@ -73,9 +73,13 @@ public extension VTheme {
             return .ok
         }
 
-        nonisolated public static func level(framesPerSecond measured: Double,
-                                             target: Double) -> VLevel {
-            guard measured.isFinite, target.isFinite, target > 0, measured > 0 else { return .ok }
+        nonisolated public static func level(
+            framesPerSecond measured: Double,
+            target: Double
+        ) -> VLevel {
+            guard measured.isFinite, target.isFinite, target > 0, measured > 0 else {
+                return .ok
+            }
             let deviation = abs(measured - target) / target
             if deviation >= fpsDeviationDanger { return .danger }
             if deviation >= fpsDeviationWarn { return .warn }

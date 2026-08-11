@@ -44,8 +44,10 @@ package struct InspectorStat: Sendable, Hashable {
     /// type stays free of the theme and therefore of SwiftUI.
     package let reservedWidth: Double
 
-    package init(value: String, unit: String, level: InspectorHealthLevel,
-                 reservedWidth: Double) {
+    package init(
+        value: String, unit: String, level: InspectorHealthLevel,
+        reservedWidth: Double
+    ) {
         self.value = value
         self.unit = unit
         self.level = level
@@ -80,12 +82,16 @@ extension InspectorStat {
     /// Zero decimals per DESIGN.md §4.4's table. ⚠️ UX.md §6.1's wireframe shows `25.0`; the table is
     /// followed because it is the one that also fixes the 46 pt reserved width, and `25.0 fps` does not
     /// fit it. Reported.
-    package static func framesPerSecond(_ value: Double,
-                                        target: Double = 0) -> InspectorStat {
-        InspectorStat(value: Self.fixed(value, places: 0),
-                      unit: "fps",
-                      level: InspectorHealth.level(framesPerSecond: value, target: target),
-                      reservedWidth: Reserved.fps)
+    package static func framesPerSecond(
+        _ value: Double,
+        target: Double = 0
+    ) -> InspectorStat {
+        InspectorStat(
+            value: Self.fixed(value, places: 0),
+            unit: "fps",
+            level: InspectorHealth.level(framesPerSecond: value, target: target),
+            reservedWidth: Reserved.fps
+        )
     }
 
     /// Bitrate — `"4.1"` + `"Mb/s"`, switching to `"kb/s"` below 1 Mb/s.
@@ -94,53 +100,69 @@ extension InspectorStat {
     /// away the digit the user is looking at. One decimal per DESIGN.md §4.4.
     package static func bitrate(bitsPerSecond: Double) -> InspectorStat {
         guard bitsPerSecond.isFinite, bitsPerSecond > 0 else {
-            return InspectorStat(value: "—", unit: "Mb/s", level: .ok,
-                                 reservedWidth: Reserved.bitrate)
+            return InspectorStat(
+                value: "—", unit: "Mb/s", level: .ok,
+                reservedWidth: Reserved.bitrate
+            )
         }
         let megabits = bitsPerSecond / 1_000_000
         if megabits < 1 {
-            return InspectorStat(value: Self.fixed(bitsPerSecond / 1_000, places: 0),
-                                 unit: "kb/s", level: .ok, reservedWidth: Reserved.bitrate)
+            return InspectorStat(
+                value: Self.fixed(bitsPerSecond / 1_000, places: 0),
+                unit: "kb/s", level: .ok, reservedWidth: Reserved.bitrate
+            )
         }
-        return InspectorStat(value: Self.fixed(megabits, places: 1), unit: "Mb/s", level: .ok,
-                             reservedWidth: Reserved.bitrate)
+        return InspectorStat(
+            value: Self.fixed(megabits, places: 1), unit: "Mb/s", level: .ok,
+            reservedWidth: Reserved.bitrate
+        )
     }
 
     /// Packet loss — `"0.02"` + `"%"`. Two decimals, and the fraction is scaled here, once.
     package static func loss(fraction: Double) -> InspectorStat {
-        InspectorStat(value: Self.fixed(max(0, fraction) * 100, places: 2),
-                      unit: "%",
-                      level: InspectorHealth.level(lossFraction: fraction),
-                      reservedWidth: Reserved.loss)
+        InspectorStat(
+            value: Self.fixed(max(0, fraction) * 100, places: 2),
+            unit: "%",
+            level: InspectorHealth.level(lossFraction: fraction),
+            reservedWidth: Reserved.loss
+        )
     }
 
     /// Jitter — `"2.4"` + `"ms"`. One decimal per DESIGN.md §4.4.
     package static func jitter(milliseconds: Double) -> InspectorStat {
-        InspectorStat(value: Self.fixed(milliseconds, places: 1),
-                      unit: "ms",
-                      level: InspectorHealth.level(jitterMilliseconds: milliseconds),
-                      reservedWidth: Reserved.jitter)
+        InspectorStat(
+            value: Self.fixed(milliseconds, places: 1),
+            unit: "ms",
+            level: InspectorHealth.level(jitterMilliseconds: milliseconds),
+            reservedWidth: Reserved.jitter
+        )
     }
 
     /// Latency — `"184"` + `"ms"`. Zero decimals; an unmeasured estimate shows an em dash rather than
     /// a confident `0 ms`.
     package static func latency(milliseconds: Double) -> InspectorStat {
         guard milliseconds.isFinite, milliseconds > 0 else {
-            return InspectorStat(value: "—", unit: "ms", level: .ok,
-                                 reservedWidth: Reserved.latency)
+            return InspectorStat(
+                value: "—", unit: "ms", level: .ok,
+                reservedWidth: Reserved.latency
+            )
         }
-        return InspectorStat(value: Self.fixed(milliseconds, places: 0),
-                             unit: "ms",
-                             level: InspectorHealth.level(latencyMilliseconds: milliseconds),
-                             reservedWidth: Reserved.latency)
+        return InspectorStat(
+            value: Self.fixed(milliseconds, places: 0),
+            unit: "ms",
+            level: InspectorHealth.level(latencyMilliseconds: milliseconds),
+            reservedWidth: Reserved.latency
+        )
     }
 
     /// Decode queue depth — `"2"` + `"frames"`.
     package static func decodeQueue(frames: Int) -> InspectorStat {
-        InspectorStat(value: String(frames),
-                      unit: frames == 1 ? "frame" : "frames",
-                      level: InspectorHealth.level(queueFrames: frames),
-                      reservedWidth: Reserved.fps)
+        InspectorStat(
+            value: String(frames),
+            unit: frames == 1 ? "frame" : "frames",
+            level: InspectorHealth.level(queueFrames: frames),
+            reservedWidth: Reserved.fps
+        )
     }
 
     /// Keyframe interval — `"2.0"` + `"s"`, with the measured GOP length when the fps is known.
@@ -157,20 +179,26 @@ extension InspectorStat {
         } else {
             unit = "s"
         }
-        return InspectorStat(value: Self.fixed(seconds, places: 1), unit: unit, level: .ok,
-                             reservedWidth: Reserved.fps)
+        return InspectorStat(
+            value: Self.fixed(seconds, places: 1), unit: unit, level: .ok,
+            reservedWidth: Reserved.fps
+        )
     }
 
     /// Resolution — `"1920×1080"`, with no unit.
     package static func resolution(width: Int, height: Int) -> InspectorStat {
         guard width > 0, height > 0 else {
-            return InspectorStat(value: "—", unit: "", level: .ok,
-                                 reservedWidth: Reserved.resolution)
+            return InspectorStat(
+                value: "—", unit: "", level: .ok,
+                reservedWidth: Reserved.resolution
+            )
         }
         // A true multiplication sign, not the letter x: it is what DESIGN.md §4.4's table shows and it
         // aligns with digits in the monospaced face.
-        return InspectorStat(value: "\(width)\u{00D7}\(height)", unit: "", level: .ok,
-                             reservedWidth: Reserved.resolution)
+        return InspectorStat(
+            value: "\(width)\u{00D7}\(height)", unit: "", level: .ok,
+            reservedWidth: Reserved.resolution
+        )
     }
 
     /// Fixed-point formatting without `String(format:)`, which is locale-sensitive on the decimal

@@ -268,6 +268,8 @@ public extension StreamError {
         case .transportRejected:
             code = .transportUnsupported
             status = 461
+        case .multicastBlocked:
+            code = .networkUnavailable
         case .sessionNotFound:
             code = .sessionLost
             status = 454

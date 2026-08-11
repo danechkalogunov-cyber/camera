@@ -125,6 +125,8 @@ public enum RTSPError: Error, Sendable, Hashable, VigilFailure {
     case tooManyRedirects
     /// A timer expired. Which one it was decides what the session machine does next.
     case timeout(RTSPTimerID)
+    /// Multicast SETUP succeeded but no media reached the joined group before its first-media timer.
+    case multicastBlocked
 }
 
 // MARK: - RTP
