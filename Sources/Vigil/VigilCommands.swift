@@ -24,6 +24,7 @@
 
 import SwiftUI
 
+import VigilProtocols
 import VigilUI
 
 // MARK: - VigilCommands

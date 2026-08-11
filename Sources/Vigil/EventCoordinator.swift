@@ -154,9 +154,10 @@ final class EventCoordinator {
         }
         displayedCameraID = cameraID
         notifications.visibleCameraIDs = Set(cameraID.map { [$0] } ?? [])
+        let monitored = monitoredCameras
         followed.withLock { state in
             state.removeAll(keepingCapacity: true)
-            for camera in monitoredCameras where state[EventDeviceKey(camera: camera)] == nil {
+            for camera in monitored where state[EventDeviceKey(camera: camera)] == nil {
                 state[EventDeviceKey(camera: camera)] = camera
             }
         }

@@ -314,7 +314,7 @@ extension MainWindowView {
         NSPasteboard.general.setString(report, forType: .string)
     }
 
-    private static func doctorFailure(for code: StreamError.Code?) -> StreamDoctorFailure {
+    nonisolated private static func doctorFailure(for code: StreamError.Code?) -> StreamDoctorFailure {
         switch code {
         case .accountLocked: .accountLocked
         case .rtspPathNotFound: .wrongRTSPPath

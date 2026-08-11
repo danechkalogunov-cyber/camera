@@ -12,6 +12,7 @@
 import Foundation
 
 import VigilCore
+import VigilProtocols
 
 struct IntentCameraRecord: Codable, Hashable, Sendable {
     let id: String

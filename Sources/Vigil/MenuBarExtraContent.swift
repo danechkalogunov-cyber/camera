@@ -12,6 +12,7 @@ import ImageIO
 import Observation
 import SwiftUI
 
+import VigilCore
 import VigilISAPI
 import VigilProtocols
 import VigilUI

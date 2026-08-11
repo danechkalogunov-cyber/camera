@@ -71,7 +71,7 @@ enum DiagnosticsArchiveBuilder {
         let rows = try files.map { file in
             try Task.checkCancellation()
             DiagnosticsManifest.File(path: file.path, bytes: file.data.count,
-                                     sha256: SHA256.hash(data: file.data).hexadecimal)
+                                     sha256: CryptoKit.SHA256.hash(data: file.data).hexadecimal)
         }
         let manifest = DiagnosticsManifest(formatVersion: 1, createdAt: createdAt,
                                            includesHostnames: includesHostnames,
@@ -111,7 +111,7 @@ enum DiagnosticLogCollector {
     }
 }
 
-private extension SHA256.Digest {
+private extension CryptoKit.SHA256.Digest {
     var hexadecimal: String { map { String(format: "%02x", $0) }.joined() }
 }
 
