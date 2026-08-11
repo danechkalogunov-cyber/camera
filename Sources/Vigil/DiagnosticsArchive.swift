@@ -70,8 +70,9 @@ enum DiagnosticsArchiveBuilder {
 
         let rows = try files.map { file in
             try Task.checkCancellation()
-            DiagnosticsManifest.File(path: file.path, bytes: file.data.count,
-                                     sha256: CryptoKit.SHA256.hash(data: file.data).hexadecimal)
+            return DiagnosticsManifest.File(
+                path: file.path, bytes: file.data.count,
+                sha256: CryptoKit.SHA256.hash(data: file.data).hexadecimal)
         }
         let manifest = DiagnosticsManifest(formatVersion: 1, createdAt: createdAt,
                                            includesHostnames: includesHostnames,

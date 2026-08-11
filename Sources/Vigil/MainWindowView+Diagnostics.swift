@@ -29,7 +29,7 @@ extension MainWindowView {
         let now = Date()
         window.toast = MainWindowToast(kind: .info,
                                        message: Self.localized("Collecting diagnostics…"),
-                                       actionTitle: Self.localized("Cancel export"),
+                                       actionTitle: "Cancel export",
                                        action: { window.diagnosticsExportTask?.cancel() })
         window.diagnosticsExportTask = Task {
             defer { window.diagnosticsExportTask = nil }
@@ -53,7 +53,7 @@ extension MainWindowView {
                 }
                 window.toast = MainWindowToast(
                     kind: .info, message: Self.localized("Building diagnostics archive…"),
-                    actionTitle: Self.localized("Cancel export"),
+                    actionTitle: "Cancel export",
                     action: { window.diagnosticsExportTask?.cancel() })
                 let worker = Task.detached(priority: .userInitiated) {
                     try DiagnosticsArchiveBuilder.build(createdAt: now,

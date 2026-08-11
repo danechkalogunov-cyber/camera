@@ -12,6 +12,8 @@ import AppIntents
 import AppKit
 import Foundation
 
+import VigilProtocols
+
 private enum VigilIntentLink {
     @MainActor static func open(_ text: String) throws {
         guard let url = URL(string: text), NSWorkspace.shared.open(url) else {
