@@ -172,13 +172,17 @@ extension RTSPSessionMachine {
         let notice = serverRequest.headers.first("Notice")
         var actions: [RTSPAction] = [.log(.serverRequest(method: serverRequest.method,
                                                          notice: notice))]
+        let response: Data
         switch serverRequest.method {
         case .announce, .options, .redirect:
-            actions.append(.send(acknowledgement(cseq: serverRequest.cseq,
-                                                 includePublic: serverRequest.method == .options)))
+            response = acknowledgement(cseq: serverRequest.cseq,
+                                       includePublic: serverRequest.method == .options)
         default:
-            actions.append(.send(notImplemented(cseq: serverRequest.cseq)))
+            response = notImplemented(cseq: serverRequest.cseq)
         }
+        actions.append(.log(.transcript(
+            ">>> RESPONSE\n" + Redact.secrets(in: String(decoding: response, as: UTF8.self)))))
+        actions.append(.send(response))
         if serverRequest.method == .redirect,
            let location = serverRequest.headers.first("Location"),
            let url = RTSPURL(string: location) {

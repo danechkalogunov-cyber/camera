@@ -123,8 +123,13 @@ extension RTSPSessionMachineSuite {
             Notice: 2101 End-of-Stream Reached; event-date=20240115T093000Z\r
             \r\n
             """.utf8)
-        let actions = kinds(harness.feed(announce))
+        let produced = harness.feed(announce)
+        let actions = kinds(produced)
         #expect(actions == ["send", "stateChanged(paused)"])
+        #expect(produced.contains { action in
+            guard case .log(.transcript(let text)) = action else { return false }
+            return text.contains(">>> RESPONSE") && text.contains("RTSP/1.0 200 OK")
+        })
         #expect(harness.clientStream.hasSuffix("RTSP/1.0 200 OK\r\nCSeq: 1\r\n"
             + "Session: 1885573958\r\n\r\n"))
         #expect(harness.machine.statistics.serverRequestsReceived == 1)

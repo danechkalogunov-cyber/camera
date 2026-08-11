@@ -219,4 +219,17 @@ import VigilProtocols
         #expect(response.description == "401 Unauthorized CSeq 2 body 0 B")
         #expect(!response.redactedTranscript.contains("3a2f5c8e"))
     }
+
+    @Test func responseTranscriptIncludesSDPAndStillRedactsTheWholeMessage() {
+        let body = Data("v=0\r\na=rtpmap:96 H264/90000\r\n".utf8)
+        let response = RTSPResponse(
+            status: .ok,
+            headers: RTSPHeaders([
+                ("Content-Type", "application/sdp; charset=UTF-8"),
+                ("Authorization", "Digest response=\"33439787cead5b387dab032b929cd5aa\""),
+            ]), body: body, cseq: 2)
+
+        #expect(response.redactedTranscript.contains("a=rtpmap:96 H264/90000"))
+        #expect(!response.redactedTranscript.contains("33439787cead5b387dab032b929cd5aa"))
+    }
 }

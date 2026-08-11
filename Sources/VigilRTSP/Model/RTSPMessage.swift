@@ -162,13 +162,13 @@ public struct RTSPResponse: Sendable, Equatable, CustomStringConvertible {
         text += reasonPhrase.isEmpty ? status.canonicalReason : reasonPhrase
         text += "\n" + headers.description
         if !body.isEmpty {
-            if headers.first("Content-Type")?.lowercased().contains("application/sdp") == true {
-                text += "\n\n" + Redact.secrets(in: String(decoding: body, as: UTF8.self))
+            if headers.first("Content-Type")?.lowercased().hasPrefix("application/sdp") == true {
+                text += "\n\n" + String(decoding: body, as: UTF8.self)
             } else {
                 text += "\n<body \(body.count) bytes>"
             }
         }
-        return text
+        return Redact.secrets(in: text)
     }
 }
 
