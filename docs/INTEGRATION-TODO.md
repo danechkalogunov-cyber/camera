@@ -11,17 +11,18 @@ showing moving video.
 
 ## Status, checked against the tree rather than against reports
 
-Re-verified by grep on 2026-07-26 and again on 2026-08-02, because an item marked done in a report
+Re-verified by grep on 2026-07-26, 2026-08-02 and 2026-08-11, because an item marked done in a report
 and an item actually present in `Sources/` are different things and this list is only worth keeping
 if it tracks the second.
 
-The 2026-08-02 pass closed item 10 and left item 11 open on purpose — see the note under each.
+The 2026-08-11 pass also replaced the last HostPolicy workaround and left item 11 open on purpose —
+see the note under each.
 
 | # | Item | State | Evidence |
 |---|---|---|---|
 | 1 | `RTPTrackFormatAdapter` missing | **closed** | `Sources/VigilRTP/Track/RTPTrackFormatAdapter.swift`, plus `VigilCore/Streaming/RTPTrackFormatAdapter+RTSP.swift` and a call site in `StreamController+Session.swift`. Landed in the real module, not promoted from the harness. |
 | 2 | `VideoTileView` not a `VideoSink` | **closed** | `VigilRender/Tile/VideoTileView+VideoSink.swift:58`. |
-| 3 | `EgressGuard` refuses internal DNS names | **closed, and better than asked** | Rather than relaxing the classifier, `RTSPConnection.connect()` now resolves the name itself, classifies **every** returned address, fails closed on any non-LAN answer, and connects to the address literal. `nvr.example.internal` works; a name resolving to a public address is refused. 20/20 executed checks. |
+| 3 | `EgressGuard` refuses internal DNS names | **closed, and better than asked** | `VigilProtocols.HostPolicy` is now the single classifier. RTSP and ISAPI resolve ordinary DNS themselves, classify **every** answer and fail closed on any non-LAN result before creating the connection/task. `nvr.example.internal` works; public and mixed answers are refused. |
 | 4 | Who creates the display layer | **ruled** | spec-render wins; the view creates it in `makeBackingLayer()`. §4.9 amended. |
 | 5 | Is `.waiting(error)` terminal | **ruled and implemented** | Terminal **only before `.ready`** (`hasBecomeReady`). A powered-off camera still gets the specific §R1.5 diagnosis; a Wi-Fi roam mid-stream no longer costs a reconnect. Neither source said this — both were half right. |
 | 6 | `RTSPConnectionEvent` unconsumed | **closed** | `StreamController` consumes it. Buffering policy changed to `.bufferingOldest(512)` with per-kind drop counters so a `.track` event cannot be evicted by the media it describes. |
@@ -57,12 +58,11 @@ nobody owns it, and without it the decode pipeline has nothing to hand frames to
 
 ### 3. `EgressGuard` refuses ordinary internal DNS names
 
-`VigilProtocols/Net/HostPolicy.swift` (ruling R-71) was never written, so `EgressGuard` grew its own
-classifier. That classifier refuses any multi-label DNS name other than `*.local`, so a camera at
-`nvr.example.internal` **cannot connect at all**.
-
-Either write `HostPolicy` and forward to it, or relax the classifier. Leaving it is a real defect for
-anyone whose network has an internal domain — which is most sites with an NVR.
+**Closed.** `VigilProtocols/Net/HostPolicy.swift` implements ruling R-71 and is Linux-tested.
+`EgressGuard` forwards literal and resolved-address classification to it. Both RTSP and ISAPI use a
+two-stage policy for ordinary DNS, so `nvr.example.internal` works only when every resolved address
+is local. ISAPI also rejects cross-host automatic redirects and disables system HTTP proxies, which
+prevents either URLSession feature from bypassing the checked destination.
 
 ## Decisions, not defects
 
@@ -93,10 +93,8 @@ customer and may need it changed.
 
 ## Missing types other agents assumed
 
-Reported as absent from `Sources/` despite being named in the contract: `RTSPEndpoint`,
-`DeviceQuirks`, `ServerTrustEvaluating`, `HostPolicy`, `EventKind`, `RateLimitedLogger`. None block
-the slice, but each was worked around locally, and the workarounds should be replaced rather than
-allowed to become the real thing.
+The reported missing types now exist: `RTSPEndpoint`, `DeviceQuirk`, `ServerTrustEvaluating`,
+`HostPolicy` and `EventKind`. Their local workarounds have been removed.
 
 `RateLimitedLogger` in particular needs a design ruling, not just an author: it cannot be a
 `Sendable` struct with a non-`mutating` `log()`, and the two escapes are an actor (which makes
