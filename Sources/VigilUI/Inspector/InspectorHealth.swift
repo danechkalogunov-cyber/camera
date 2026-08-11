@@ -6,12 +6,8 @@
 //  value/unit pairs with their reserved widths.
 //  macOS-only. Implements docs/DESIGN.md §9.20/§4.4 and docs/UX.md §6.2.
 //
-//  ⚠️ docs/DESIGN.md §12 specifies `VLevel` and `VTheme.Health.level(loss:)` in `Theme/`. Neither
-//  exists in the code yet, and `Theme/` is not this slice's to write. So the level type and the three
-//  thresholds are declared here, prefixed `Inspector` so they cannot collide with the `VLevel` that
-//  will arrive later, and every one of them carries the DESIGN.md number it came from. When
-//  `VTheme.Health` lands, this type should become a thin forwarder — one `switch`, deleted here — and
-//  the tests below move with it. Flagged in the report.
+//  Threshold ownership is `VTheme.Health`; the inspector names below are compatibility aliases so
+//  existing view code keeps its domain-specific spelling without restating a single number.
 //
 //  Formatting is a pure function of the statistics, in its own type rather than inline in the views,
 //  because "0.5 % is a warning and 2 % is a failure" is a product rule that deserves a test, and
@@ -24,131 +20,8 @@ import Foundation
 
 import VigilProtocols
 
-// MARK: - InspectorHealthLevel
-
-/// How worried to be about a telemetry value.
-///
-/// Three levels, not a continuous score, because the design applies them as three discrete colours
-/// plus three discrete glyphs (DESIGN.md §9.20 and the `differentiateWithoutColor` row of §11.4).
-package enum InspectorHealthLevel: Int, Sendable, Hashable, Comparable, CaseIterable {
-
-    /// Nothing to see.
-    case ok
-
-    /// Worth noticing. Amber stroke plus `exclamationmark.triangle.fill`.
-    case warn
-
-    /// Broken. Red stroke plus `xmark.octagon.fill`.
-    case danger
-
-    package static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-
-    /// The worse of two levels, for a row that summarises several values.
-    package func worse(than other: InspectorHealthLevel) -> InspectorHealthLevel {
-        self > other ? self : other
-    }
-}
-
-// MARK: - InspectorHealth
-
-/// The thresholds, straight from docs/DESIGN.md §9.20.
-///
-/// Each bound is `>=` for the level it opens, so the table's "0.5–2 %" reads as
-/// `0.5 <= loss < 2`, and a value exactly on a boundary takes the *worse* level. That direction is
-/// deliberate: a stream sitting exactly on 2 % loss is not healthy, and rounding a boundary in the
-/// user's favour is how a fault gets reported as fine.
-package enum InspectorHealth {
-
-    /// Packet loss, as a fraction 0…1. DESIGN.md §9.20: ok < 0.5 %, warn 0.5–2 %, danger > 2 %.
-    ///
-    /// Takes a *fraction* because that is what ``StreamStatistics/lossFraction`` holds; the ×100 for
-    /// display happens once, in ``InspectorStat/loss(_:)``. Two representations of the same number in
-    /// one file is how a threshold ends up compared against a percentage.
-    package static let lossWarnFraction = 0.005
-    package static let lossDangerFraction = 0.02
-
-    /// RFC 3550 interarrival jitter, in milliseconds. ok < 20, warn 20–60, danger > 60.
-    package static let jitterWarnMilliseconds = 20.0
-    package static let jitterDangerMilliseconds = 60.0
-
-    /// Glass-to-glass latency estimate, in milliseconds. ok < 250, warn 250–600, danger > 600.
-    package static let latencyWarnMilliseconds = 250.0
-    package static let latencyDangerMilliseconds = 600.0
-
-    /// Decode queue depth, in frames. ok ≤ 2, warn 3–5, danger > 5.
-    ///
-    /// ⚠️ DESIGN.md §9.20 says ≤2 / 3–5 / >5; UX.md §6.2 says "> 8 frames = warn". No `R-` ruling
-    /// exists. DESIGN.md's is used because it is the table the shared `VHealthThresholds` is defined
-    /// from, and because it is the stricter of the two — a queue of six frames at 25 fps is already a
-    /// quarter-second behind, which the user can see. Reported.
-    package static let queueWarnFrames = 3
-    package static let queueDangerFrames = 6
-
-    /// Tolerated deviation of measured fps from the stream's target. ok < 10 %, warn 10–25 %,
-    /// danger > 25 %.
-    package static let fpsDeviationWarn = 0.10
-    package static let fpsDeviationDanger = 0.25
-
-    /// The level for a packet-loss fraction.
-    package static func level(lossFraction: Double) -> InspectorHealthLevel {
-        guard lossFraction.isFinite else { return .ok }
-        if lossFraction >= lossDangerFraction { return .danger }
-        if lossFraction >= lossWarnFraction { return .warn }
-        return .ok
-    }
-
-    /// The level for a jitter reading in milliseconds.
-    package static func level(jitterMilliseconds value: Double) -> InspectorHealthLevel {
-        guard value.isFinite else { return .ok }
-        if value >= jitterDangerMilliseconds { return .danger }
-        if value >= jitterWarnMilliseconds { return .warn }
-        return .ok
-    }
-
-    /// The level for a latency estimate in milliseconds.
-    ///
-    /// A latency of exactly zero means "not yet measured", not "instantaneous", and reports `.ok`
-    /// rather than a suspiciously perfect green: the RTCP anchor takes a few seconds to arrive and a
-    /// zero here would otherwise read as a working measurement.
-    package static func level(latencyMilliseconds value: Double) -> InspectorHealthLevel {
-        guard value.isFinite, value > 0 else { return .ok }
-        if value >= latencyDangerMilliseconds { return .danger }
-        if value >= latencyWarnMilliseconds { return .warn }
-        return .ok
-    }
-
-    /// The level for a decode-queue depth.
-    package static func level(queueFrames value: Int) -> InspectorHealthLevel {
-        if value >= queueDangerFrames { return .danger }
-        if value >= queueWarnFrames { return .warn }
-        return .ok
-    }
-
-    /// The level for measured fps against a target.
-    ///
-    /// A target of zero or an unmeasured rate reports `.ok`: we do not know the target for every
-    /// stream, and inventing a fault from a missing denominator is worse than saying nothing.
-    package static func level(framesPerSecond measured: Double,
-                              target: Double) -> InspectorHealthLevel {
-        guard measured.isFinite, target.isFinite, target > 0, measured > 0 else { return .ok }
-        let deviation = abs(measured - target) / target
-        if deviation >= fpsDeviationDanger { return .danger }
-        if deviation >= fpsDeviationWarn { return .warn }
-        return .ok
-    }
-
-    /// The worst level across the whole sample — what the inspector header's status dot shows.
-    package static func overall(_ stats: StreamStatistics,
-                                targetFramesPerSecond: Double = 0) -> InspectorHealthLevel {
-        [
-            level(lossFraction: stats.lossFraction),
-            level(jitterMilliseconds: stats.jitterMilliseconds),
-            level(latencyMilliseconds: stats.estimatedLatencyMilliseconds),
-            level(queueFrames: stats.decodeQueueDepth),
-            level(framesPerSecond: stats.framesPerSecond, target: targetFramesPerSecond),
-        ].reduce(.ok) { $0.worse(than: $1) }
-    }
-}
+package typealias InspectorHealthLevel = VLevel
+package typealias InspectorHealth = VTheme.Health
 
 // MARK: - InspectorStat
 

@@ -170,6 +170,13 @@ struct InspectorHealthTests {
         #expect(InspectorHealthLevel.danger.worse(than: .ok) == .danger)
         #expect(InspectorHealthLevel.warn.worse(than: .warn) == .warn)
     }
+
+    @Test func publicThemeSurfaceOwnsTheSameThresholds() {
+        #expect(VTheme.Health.level(loss: 0.005) == .warn)
+        #expect(VTheme.Health.level(jitterMS: 60) == .danger)
+        #expect(VTheme.Health.level(latencyMS: 250) == .warn)
+        #expect(VLevel.ok.worse(than: .danger) == .danger)
+    }
 }
 
 #endif  // os(macOS)

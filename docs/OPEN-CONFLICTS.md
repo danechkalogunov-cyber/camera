@@ -146,12 +146,11 @@ It used `&+` for the final addition, so at exactly the `Int64.max`-nanosecond bo
 a large negative value while its doc comment promised saturation. Replaced with
 `addingReportingOverflow` and a saturating clamp, with a test at the boundary.
 
-## I5 — `VTheme.Health` and `VLevel` are unowned (M — open)
+## I5 — `VTheme.Health` and `VLevel` were unowned (M — closed)
 
-DESIGN.md §12.1 places them in `VTheme` and §9.20 gives their thresholds, the contract's `VTheme`
-sketch references them, and **no manifest row and no agent brief covers them**. They are literals and
-belong in `VTheme`. Assign them before the UI wave, or the health colouring will be reinvented inline
-in a view, which is exactly what the "literals only in VTheme" rule exists to prevent.
+`VTheme+Health.swift` now owns `VLevel` and all five threshold tables. `InspectorHealth` and
+`InspectorHealthLevel` are compatibility aliases, so the tested inspector API remains source-stable
+without retaining a second copy of any threshold.
 
 ## I6 — three types were unassigned and unwritten (M — closed)
 
@@ -167,7 +166,7 @@ message, preventing network-controlled strings from growing the state table.
 `Identity/Identifiers.swift` was written by `impl:types-b` out of necessity — `StreamKey` needs
 `CameraID` — and was never a gap.
 
-## I7 — `F-DEC-06`'s worked examples contradict the quantum the tree implements (L — open)
+## I7 — `F-DEC-06`'s worked examples contradicted the implementation (L — closed)
 
 `docs/FEATURES.md` F-DEC-06 acceptance 1 defines decode cost as
 `(width × height × fps) / (1920 × 1080 × 30)`, "rounded up to 0.25 DU", and then gives three worked
@@ -179,10 +178,8 @@ per `API_CONTRACT.md` §2 R-58, and adds three factors the FEATURES prose omits:
 bit-depth weight, and **coded** rather than display pixels. Under it a real 1080p25 H.264 stream —
 coded at 1088 lines — is 1.0 DU, not 0.85.
 
-No code change is proposed: the contract is the authority and the tree already follows it.
-`FEATURES.md`'s three examples should be recomputed against R-58 so that a future reader does not
-take them for the rule, which is how this was noticed — an implementer costed streams from the
-examples and produced a second, incompatible `DecodeCost`.
+`FEATURES.md` now points to the complete R-58 formula and gives quarter-unit examples computed for
+8-bit H.264 `.full` mode. The implementation was already authoritative and did not change.
 
 ## I8 — the main window's toolbar order: `DESIGN.md` §11.3 against the mockup and the code (M — **ruled 2026-08-08**)
 

@@ -823,9 +823,10 @@ long-GOP H.265+ streams and is the difference between "instant" and "broken".
 **What:** A global admission-control policy so 40 configured cameras never melt the machine or drop
 frames on the camera the user is actually looking at.
 **Acceptance:**
-1. `[A]` Cost is expressed in **decode units (DU)**, where 1 DU = 1080p30. Cost =
-   `(width × height × fps) / (1920 × 1080 × 30)`, rounded up to 0.25 DU. Examples: 4K30 = 4.0 DU,
-   1080p25 = 0.85 DU, 704×576@25 = 0.2 DU.
+1. `[A]` Cost is expressed in **decode units (DU)**, where 1 DU = 1080p30 H.264. The full formula
+   uses coded pixels, codec, bit depth and decode mode per `API_CONTRACT.md` R-58, then rounds up to
+   0.25 DU. For 8-bit H.264 in `.full` mode without downscaling: 4K30 = 4.0 DU, coded
+   1920×1088@25 = 1.0 DU, and 704×576@25 = 0.25 DU.
 2. `[A]` Total budget: **24 DU** on Apple silicon, **10 DU** on Intel, detected at launch via
    `sysctlbyname("hw.optional.arm64")` plus core count; user-overridable in Settings ➝ Streams ➝
    "Maximum concurrent decodes".
@@ -2364,4 +2365,3 @@ Additional rules:
     MP4 and MOV.
 18. Sandboxed, hardened, notarized, stapled build launches on a clean macOS 14.0 machine with no
     developer tools installed.
-

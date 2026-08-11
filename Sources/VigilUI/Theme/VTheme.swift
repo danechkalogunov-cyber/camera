@@ -27,6 +27,7 @@ import SwiftUI
 /// | `Elevation` | `VTheme+Elevation.swift` | DESIGN.md §6 |
 /// | `Motion` | `VTheme+Motion.swift` | DESIGN.md §7 |
 /// | `Icon`, `Symbol` | `VTheme+Icon.swift` | DESIGN.md §8 |
+/// | `Health`, `VLevel` | `VTheme+Health.swift` | DESIGN.md §9.20 |
 ///
 /// **The one rule this type exists to enforce:** a hex colour, a point size, a radius, a duration,
 /// a spring, a shadow or an inset that appears anywhere other than these files is a defect, not a
