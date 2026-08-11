@@ -54,8 +54,8 @@ public actor TalkAudioCapture {
         input.installTap(onBus: 0, bufferSize: 960, format: inputFormat) { [weak self] buffer, _ in
             // AVAudioEngine owns and reuses `buffer` after this callback returns. The actor hop may
             // run later, so it receives an owned copy rather than racing the input render thread.
-            guard let owned = Self.copy(buffer) else { return }
-            Task { await self?.consume(owned, outputFormat: outputFormat) }
+            guard let self, let owned = Self.copy(buffer) else { return }
+            Task { await self.consume(owned, outputFormat: outputFormat) }
         }
         tapInstalled = true
         engine.prepare()
@@ -114,8 +114,8 @@ public actor TalkAudioCapture {
 
     private func encode(_ samples: [Int16]) -> Data {
         switch codec {
-        case .g711U: G711.encode(samples, law: .muLaw)
-        case .g711A: G711.encode(samples, law: .aLaw)
+        case .g711U: return G711.encode(samples, law: .muLaw)
+        case .g711A: return G711.encode(samples, law: .aLaw)
         case .pcmS16LE:
             var data = Data(capacity: samples.count * 2)
             for sample in samples {

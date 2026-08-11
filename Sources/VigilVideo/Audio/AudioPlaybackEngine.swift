@@ -281,7 +281,8 @@ public actor AudioPlaybackEngine {
         route.scheduledFrames += count
         startEngineIfNeeded()
         route.player.scheduleBuffer(buffer) { [weak self] in
-            Task { await self?.completed(count, for: key) }
+            guard let self else { return }
+            Task { await self.completed(count, for: key) }
         }
         if !route.primed, route.scheduledFrames >= targetFrames {
             route.primed = true
@@ -292,35 +293,52 @@ public actor AudioPlaybackEngine {
     private func ramp(_ player: AVAudioPlayerNode, to target: Float) {
         // Six small steps over roughly 60 ms avoids the click from a hard mute transition.
         let start = player.volume
-        guard let route = routes.values.first(where: { $0.player === player }) else { return }
+        guard let entry = routes.first(where: { $0.value.player === player }) else { return }
+        let key = entry.key
+        let route = entry.value
         route.rampGeneration &+= 1
         let generation = route.rampGeneration
-        for step in 1...6 {
-            let value = start + (target - start) * Float(step) / 6
-            Task {
-                try? await Task.sleep(for: .milliseconds(step * 10))
-                guard route.rampGeneration == generation else { return }
-                player.volume = value
+        Task { [weak self] in
+            for step in 1...6 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard let self else { return }
+                let value = start + (target - start) * Float(step) / 6
+                guard await self.applyRamp(value, generation: generation, key: key) else { return }
             }
         }
     }
 
+    private func applyRamp(_ value: Float, generation: UInt32, key: StreamKey) -> Bool {
+        guard let route = routes[key], route.rampGeneration == generation else { return false }
+        route.player.volume = value
+        return true
+    }
+
     private func fadeOut(_ route: Route) {
         let start = route.player.volume
+        guard let key = routes.first(where: { $0.value === route })?.key else { return }
         route.rampGeneration &+= 1
         let generation = route.rampGeneration
-        for step in 1...6 {
-            Task {
-                try? await Task.sleep(for: .milliseconds(step * 10))
-                guard route.rampGeneration == generation else { return }
-                route.player.volume = start * (1 - Float(step) / 6)
-                if step == 6 {
-                    route.player.stop()
-                    route.scheduledFrames = 0
-                    route.primed = false
-                }
+        Task { [weak self] in
+            for step in 1...6 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard let self else { return }
+                guard await self.applyFadeOut(step: step, start: start,
+                                              generation: generation, key: key) else { return }
             }
         }
+    }
+
+    private func applyFadeOut(step: Int, start: Float,
+                              generation: UInt32, key: StreamKey) -> Bool {
+        guard let route = routes[key], route.rampGeneration == generation else { return false }
+        route.player.volume = start * (1 - Float(step) / 6)
+        if step == 6 {
+            route.player.stop()
+            route.scheduledFrames = 0
+            route.primed = false
+        }
+        return true
     }
 
     private func decodePCM(_ data: Data, channels: Int) -> [Float] {
