@@ -15,7 +15,8 @@ import VigilProtocols
 
     /// One sample per case of every domain enum. Kept exhaustive by hand: a new case that is not
     /// added here shows up as a gap in `everyCaseHasAWellFormedDiagnosticCode`'s count assertion.
-    static let allCases: [VigilError] = transport + rtsp + rtp + bitstream + isapi
+    static let allCases: [VigilError] =
+        transport + rtsp + rtp + bitstream + isapi
         + discovery + decode + render + storage + credential + recording
         + [.cancelled, .internalInvariant("x", file: #fileID, line: 1)]
 
@@ -124,8 +125,8 @@ import VigilProtocols
     // MARK: - Codes
 
     @Test func everyCaseHasAWellFormedDiagnosticCode() {
-        // 12 + 17 + 15 + 19 + 22 + 9 + 15 + 11 + 8 + 7 + 6 domain cases, plus the two root cases.
-        #expect(Self.allCases.count == 143)
+        // 12 + 18 + 15 + 19 + 22 + 9 + 15 + 11 + 8 + 7 + 6 domain cases, plus the two root cases.
+        #expect(Self.allCases.count == 144)
         for error in Self.allCases {
             let code = error.diagnosticCode
             let parts = code.split(separator: "-", omittingEmptySubsequences: false)
@@ -194,8 +195,9 @@ import VigilProtocols
             ISAPIError.insufficientPermission(resource: "live"),
         ]
         for error in terminal {
-            #expect(error.disposition == .retryAfterUserAction,
-                    "\(error.diagnosticCode) must not be retried automatically")
+            #expect(
+                error.disposition == .retryAfterUserAction,
+                "\(error.diagnosticCode) must not be retried automatically")
             #expect(error.isAutomaticallyRetryable == false, "\(error.diagnosticCode)")
             #expect(error.severity == .fatal, "\(error.diagnosticCode) must be fatal")
             #expect(error.userRemedy != nil, "\(error.diagnosticCode) must tell the user what to do")
@@ -211,10 +213,12 @@ import VigilProtocols
     }
 
     @Test func transientTransportFailuresRetryWithBackoff() {
-        let transient: [TransportError] = [.connectTimeout, .connectRefused, .hostUnreachable,
-                                           .peerClosed, .readIdleTimeout, .network("x"),
-                                           .multicastBlocked, .tlsFailed("x"),
-                                           .tlsUntrusted(fingerprint: "ab")]
+        let transient: [TransportError] = [
+            .connectTimeout, .connectRefused, .hostUnreachable,
+            .peerClosed, .readIdleTimeout, .network("x"),
+            .multicastBlocked, .tlsFailed("x"),
+            .tlsUntrusted(fingerprint: "ab"),
+        ]
         for error in transient {
             #expect(error.disposition == .retryWithBackoff, "\(error.diagnosticCode)")
             #expect(error.severity == .recoverable, "\(error.diagnosticCode)")
@@ -222,8 +226,10 @@ import VigilProtocols
     }
 
     @Test func policyAndTrustTransportFailuresAreTerminal() {
-        let terminal: [TransportError] = [.localNetworkDenied, .egressBlocked(host: "8.8.8.8"),
-                                          .tlsPinMismatch(host: "cam")]
+        let terminal: [TransportError] = [
+            .localNetworkDenied, .egressBlocked(host: "8.8.8.8"),
+            .tlsPinMismatch(host: "cam"),
+        ]
         for error in terminal {
             #expect(error.severity == .fatal, "\(error.diagnosticCode)")
             #expect(error.disposition == .retryAfterUserAction, "\(error.diagnosticCode)")
@@ -231,10 +237,12 @@ import VigilProtocols
     }
 
     @Test func packetLevelRTPFaultsAreCountedNotRetried() {
-        let counted: [RTPError] = [.shortPacket(length: 4), .badVersion(1), .truncatedCSRC,
-                                   .truncatedExtension, .badPaddingLength(9),
-                                   .unknownPayloadType(99), .badFragment, .aggregationOverflow,
-                                   .jitterBufferOverflow(dropped: 1), .gap(count: 1)]
+        let counted: [RTPError] = [
+            .shortPacket(length: 4), .badVersion(1), .truncatedCSRC,
+            .truncatedExtension, .badPaddingLength(9),
+            .unknownPayloadType(99), .badFragment, .aggregationOverflow,
+            .jitterBufferOverflow(dropped: 1), .gap(count: 1),
+        ]
         for error in counted {
             #expect(error.severity == .degraded, "\(error.diagnosticCode) must not fail a session")
             #expect(error.disposition == .noRetry, "\(error.diagnosticCode)")
@@ -242,9 +250,11 @@ import VigilProtocols
     }
 
     @Test func negotiationRTPFaultsNeedTheUser() {
-        let negotiation: [RTPError] = [.unsupportedEncoding("VP9"), .missingRequiredFmtp("x"),
-                                       .unsupportedAACMode("x"), .malformedAudioConfig("x"),
-                                       .invalidClockRate(0)]
+        let negotiation: [RTPError] = [
+            .unsupportedEncoding("VP9"), .missingRequiredFmtp("x"),
+            .unsupportedAACMode("x"), .malformedAudioConfig("x"),
+            .invalidClockRate(0),
+        ]
         for error in negotiation {
             #expect(error.severity == .recoverable, "\(error.diagnosticCode)")
             #expect(error.disposition == .retryAfterUserAction, "\(error.diagnosticCode)")
@@ -262,8 +272,10 @@ import VigilProtocols
     @Test func schemaTooNewIsFatalAndEveryOtherStorageFailureNeedsTheUser() {
         #expect(StorageError.schemaTooNew(found: 4, supported: 3).severity == .fatal)
         #expect(StorageError.diskFull(needBytes: 1).severity == .recoverable)
-        for error in [StorageError.notWritable(path: "/x"), .corruptDocument("x"),
-                      .diskFull(needBytes: 1), .atomicReplaceFailed] {
+        for error in [
+            StorageError.notWritable(path: "/x"), .corruptDocument("x"),
+            .diskFull(needBytes: 1), .atomicReplaceFailed,
+        ] {
             #expect(error.disposition == .retryAfterUserAction, "\(error.diagnosticCode)")
         }
     }
@@ -294,8 +306,9 @@ import VigilProtocols
         #expect(metadata["detail"]?.contains("hunter2") == false)
         #expect(VigilError.rtsp(.unexpectedStatus(code: 503)).logMetadata["status"] == "503")
         #expect(VigilError.rtp(.gap(count: 7)).logMetadata["gap"] == "7")
-        #expect(VigilError.transport(.egressBlocked(host: "8.8.8.8")).logMetadata["host"]
-            == "8.8.8.8")
+        #expect(
+            VigilError.transport(.egressBlocked(host: "8.8.8.8")).logMetadata["host"]
+                == "8.8.8.8")
     }
 
     @Test func keychainMetadataNeverCarriesAnAccountOrPassword() {
