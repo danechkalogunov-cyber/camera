@@ -926,3 +926,6 @@
 "Chosen automatically from the last successful session" = "Выбран автоматически по последней успешной сессии";
 "Choose a camera" = "Выберите камеру";
 "Choose a camera and the moment to open on its recording timeline." = "Выберите камеру и момент, который нужно открыть на шкале записей.";
+"Architecture" = "Архитектура";
+"Data location" = "Расположение данных";
+"Show Application Data" = "Показать данные приложения";

@@ -135,8 +135,9 @@ struct VigilApp: App {
                 configuration: $window.videoWall)
         }
         Window("About Vigil", id: SceneID.about) {
-            AuxiliarySceneView(title: "About Vigil", symbol: "info.circle")
+            AboutSceneView(library: library, window: window)
         }
+        .windowResizability(.contentSize)
         Window("Settings", id: SceneID.settings) {
             GeneralSettingsView()
         }
