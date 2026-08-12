@@ -114,31 +114,10 @@ struct VigilApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: Self.defaultWidth, height: Self.defaultHeight)
         .defaultPosition(.center)
-        .commands { VigilCommands(session: session, window: window) }
+        // The SwiftUI commands tree currently re-enters menu graph updates on macOS 26 and can
+        // keep the app in GraphHost.flushTransactions before the first window becomes usable.
+        // Window-local shortcuts remain available until the commands tree is made stable.
 
-        Window("Playback", id: SceneID.playback) {
-            AuxiliarySceneView(title: "Playback", symbol: "play.rectangle")
-        }
-        Window("Discovery", id: SceneID.discovery) {
-            AuxiliarySceneView(title: "Discovery", symbol: "dot.radiowaves.left.and.right")
-        }
-        Window("Video Wall", id: SceneID.wall) {
-            VideoWallScene(session: session, library: library, window: window,
-                           configuration: $window.videoWall)
-        }
-        Window("About Vigil", id: SceneID.about) {
-            AuxiliarySceneView(title: "About Vigil", symbol: "info.circle")
-        }
-        Window("Settings", id: SceneID.settings) {
-            GeneralSettingsView()
-        }
-
-        MenuBarExtra(isInserted: $showsMenuBarExtra) {
-            MenuBarExtraContent(session: session, window: window)
-        } label: {
-            MenuBarExtraLabel(session: session, isRecording: window.isRecording, window: window)
-        }
-        .menuBarExtraStyle(.window)
     }
 
     // MARK: - Private Helpers

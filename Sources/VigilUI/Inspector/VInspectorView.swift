@@ -189,7 +189,7 @@ package struct VInspectorView: View {
     private func tabButton(_ candidate: VInspectorTab) -> some View {
         let isSelected = candidate == tab
         Button {
-            withAnimation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: reduceMotion)) {
+            withAnimation(VTheme.Motion.resolved(VTheme.Motion.snap, reduced: reduceMotion)) {
                 tab = candidate
             }
         } label: {

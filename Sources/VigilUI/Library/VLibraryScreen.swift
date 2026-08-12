@@ -86,11 +86,10 @@ package struct VLibraryScreen: View {
                 VBookmarksView(state: state, actions: actions)
             }
         }
-        // UX.md §5.9: the stage cross-fades between routes. `standard` is the 340 ms spring the
-        // token table gives a route change; `resolved` returns `reducedFallback` under Reduce
-        // Motion rather than nothing, so the change is still perceptible without travel.
+        // Route changes must acknowledge a click immediately. A long spring here makes the
+        // library feel blocked even though the route state has already changed.
         .transition(.opacity)
-        .animation(VTheme.Motion.resolved(VTheme.Motion.standard, reduced: !motionEnabled),
+        .animation(VTheme.Motion.resolved(VTheme.Motion.crossfade, reduced: !motionEnabled),
                    value: section)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(VTheme.Color.Layer.canvas)

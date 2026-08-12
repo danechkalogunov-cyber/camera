@@ -150,6 +150,18 @@ struct CameraStreamTests {
 
     // MARK: - What the tile says
 
+    /// An idle stream is not an active connection attempt. Treating it as resolving leaves a
+    /// permanent connecting overlay after a tap or a stopped session.
+    @Test func idleStreamDoesNotClaimToBeConnecting() {
+        let stream = CameraStream()
+        stream.camera = Camera(name: "Front door", host: "192.168.1.10")
+
+        guard case .offline = stream.liveState else {
+            Issue.record("an idle stream must not show a connecting overlay")
+            return
+        }
+    }
+
     /// `Live` is a claim about pixels. With a tile mounted, the tile's own render state decides.
     @Test func liveIsClaimedOnlyWhenSomethingIsOnTheGlass() {
         let stream = CameraStream()

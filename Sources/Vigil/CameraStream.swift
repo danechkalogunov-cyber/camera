@@ -300,7 +300,13 @@ final class CameraStream {
         // user's own act is the first thing to check.
         if isPlaybackPaused { return .paused }
         switch streamState {
-        case .idle, .resolving:
+        case .idle:
+            return .offline(OfflineDetail(attempt: attempt,
+                                          retryInSeconds: retryInSeconds,
+                                          lastSeen: lastSeen,
+                                          isPersistent: attempt >= 5,
+                                          diagnosis: diagnosis))
+        case .resolving:
             return .connecting(.resolving)
         case .connecting:
             return .connecting(.connecting)

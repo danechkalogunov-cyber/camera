@@ -323,6 +323,7 @@ struct MainWindowView: View {
             GeometryReader { proxy in
                 SwiftUI.Color.clear
                     .onChange(of: proxy.size.width, initial: true) { _, width in
+                        guard abs(window.contentWidth - width) > 0.5 else { return }
                         window.contentWidth = width
                     }
             }
