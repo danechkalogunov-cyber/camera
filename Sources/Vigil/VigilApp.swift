@@ -122,8 +122,9 @@ struct VigilApp: App {
             AuxiliarySceneView(title: "Playback", symbol: "play.rectangle")
         }
         Window("Discovery", id: SceneID.discovery) {
-            AuxiliarySceneView(title: "Discovery", symbol: "dot.radiowaves.left.and.right")
+            DiscoverySceneView(session: session, library: library)
         }
+        .windowResizability(.contentSize)
         Window("Video Wall", id: SceneID.wall) {
             VideoWallScene(
                 session: session, library: library, window: window,
