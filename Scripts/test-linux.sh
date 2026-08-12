@@ -57,10 +57,9 @@ for target in "${portable_targets[@]}"; do
     echo
     echo "== $target =="
     # Several suites deliberately create their own task groups to verify gates, coalescing and
-    # cancellation. Running every test case concurrently on top of that can starve those controlled
-    # scenarios on the two-core Linux runner, so keep target isolation without adding a second
-    # scheduler layer here.
-    if timeout 300 swift test --no-parallel --filter "$target"; then
+    # cancellation. An unbounded test worker count starves those controlled scenarios, while the
+    # Linux Swift Testing runner can stall before the first filtered test in fully serial mode.
+    if timeout 300 swift test --parallel --num-workers 2 --filter "$target"; then
         continue
     else
         status=$?
