@@ -16,6 +16,7 @@ import Foundation
 import Testing
 @testable import Vigil
 import VigilCore
+import VigilISAPI
 import VigilProtocols
 import VigilUI
 
