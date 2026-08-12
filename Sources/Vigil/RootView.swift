@@ -34,6 +34,7 @@ import VigilUI
 /// previewable — which is why this file is where `VideoTile` is named.
 struct RootView: View {
     @State private var motionGovernor = VMotionGovernor()
+    @AppStorage(GeneralPreferenceKey.showsMenuBarExtra) private var showsMenuBarExtra = true
 
     // MARK: - Stored Properties
 
@@ -135,6 +136,12 @@ struct RootView: View {
             }
         }
         .vMotionEnabled(!reduceMotion && motionGovernor.allowsMotion)
+        .background(
+            MenuBarStatusItemInstaller(
+                session: session,
+                window: window,
+                isVisible: showsMenuBarExtra)
+        )
         .background(WindowChromeInstaller())
         .task {
             // Opens `library.json` and, on a first run, adopts the camera the prototype remembered
@@ -157,25 +164,27 @@ struct RootView: View {
     private var content: some View {
         switch session.phase {
         case .connect:
-            ConnectFormView(state: $session.form,
-                            onConnect: { session.connect($0) },
-                            onRemedy: { session.perform($0) },
-                            onScan: { beginScan() },
-                            onTest: { session.testConnection($0) },
-                            // ⚠️ Offered only when there is a picture to go back to. ⌘N leaves the
-                            // stream running behind this form, so Back is a return; on a first
-                            // launch there is nothing behind it and a Back button would be a
-                            // control that leads to an empty room.
-                            onBack: session.live.isActive ? { returnToStage() } : nil)
+            ConnectFormView(
+                state: $session.form,
+                onConnect: { session.connect($0) },
+                onRemedy: { session.perform($0) },
+                onScan: { beginScan() },
+                onTest: { session.testConnection($0) },
+                // ⚠️ Offered only when there is a picture to go back to. ⌘N leaves the
+                // stream running behind this form, so Back is a return; on a first
+                // launch there is nothing behind it and a Back button would be a
+                // control that leads to an empty room.
+                onBack: session.live.isActive ? { returnToStage() } : nil)
         case .live:
             // The full window — toolbar, camera list, stage, inspector, status bar — around the
             // same tile `liveVideo` mounts. To fall back to the bare picture, substitute
             // `liveVideo` here; that property is kept for exactly that reason, and because it is
             // still the honest minimum if the chrome turns out to cost frames.
-            MainWindowView(session: session,
-                           window: window,
-                           library: library,
-                           onFindCameras: { beginScan() })
+            MainWindowView(
+                session: session,
+                window: window,
+                library: library,
+                onFindCameras: { beginScan() })
         }
     }
 
@@ -253,24 +262,26 @@ struct RootView: View {
         var known = Set(library.cameras.map { $0.host })
         if let host = session.camera?.host { known.insert(host) }
         known = known.filter { !$0.isEmpty }
-        let model = DiscoveryScanModel(logger: session.dependencies.logger,
-                                       knownAddresses: known,
-                                       channelSummaries: library.channelSummaries)
+        let model = DiscoveryScanModel(
+            logger: session.dependencies.logger,
+            knownAddresses: known,
+            channelSummaries: library.channelSummaries)
         scan = model
         model.start()
     }
 
     /// The scan sheet, bound to one run.
     private func discoverySheet(_ model: DiscoveryScanModel) -> some View {
-        VDiscoverySheet(cameras: model.cameras,
-                        progress: model.progress,
-                        phase: model.phase,
-                        isScanning: model.isScanning,
-                        notice: model.notice,
-                        onChoose: { chose($0, from: model) },
-                        onActivate: { activate($0, in: model) },
-                        onToggleScan: { model.toggle() },
-                        onClose: { endScan(model) })
+        VDiscoverySheet(
+            cameras: model.cameras,
+            progress: model.progress,
+            phase: model.phase,
+            isScanning: model.isScanning,
+            notice: model.notice,
+            onChoose: { chose($0, from: model) },
+            onActivate: { activate($0, in: model) },
+            onToggleScan: { model.toggle() },
+            onClose: { endScan(model) })
     }
 
     /// Prompts for and sends the first administrator password, then rechecks only this address.
@@ -278,8 +289,9 @@ struct RootView: View {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = vigilUIString("Activate camera")
-        alert.informativeText = String(format: vigilUIString("Set the first admin password for %@."),
-                                       camera.address)
+        alert.informativeText = String(
+            format: vigilUIString("Set the first admin password for %@."),
+            camera.address)
         alert.addButton(withTitle: vigilUIString("Activate"))
         alert.addButton(withTitle: vigilUIString("Cancel"))
 
@@ -311,8 +323,9 @@ struct RootView: View {
                 endpoint: ISAPIEndpoint(host: camera.address),
                 credential: Credential(account: "admin", secret: proposed),
                 configuration: configuration,
-                transport: URLSessionHTTPTransport(configuration: configuration,
-                                                   logger: session.dependencies.logger),
+                transport: URLSessionHTTPTransport(
+                    configuration: configuration,
+                    logger: session.dependencies.logger),
                 clock: session.dependencies.clock,
                 logger: session.dependencies.logger)
             do {
@@ -320,11 +333,16 @@ struct RootView: View {
                 model.start(address: camera.address)
                 model.reportNotice(vigilUIString("Camera activated. You can add it now."))
             } catch let error as ISAPIError {
-                session.dependencies.logger.notice(.discovery, "device activation failed",
-                                                   ["reason": error.userMessage,
-                                                    "code": error.diagnosticCode])
-                model.reportNotice(String(format: vigilUIString("Could not activate camera: %@"),
-                                          vigilUIString(error.userMessage)))
+                session.dependencies.logger.notice(
+                    .discovery, "device activation failed",
+                    [
+                        "reason": error.userMessage,
+                        "code": error.diagnosticCode,
+                    ])
+                model.reportNotice(
+                    String(
+                        format: vigilUIString("Could not activate camera: %@"),
+                        vigilUIString(error.userMessage)))
             } catch {
                 session.dependencies.logger.notice(.discovery, "device activation failed")
                 model.reportNotice(vigilUIString("Could not activate camera."))
@@ -380,34 +398,37 @@ struct RootView: View {
     /// `frames` is the app's single `FrameStreamHandle`: `VideoTile.makeNSView` attaches the view it
     /// creates to it, so the decode pipeline never learns that SwiftUI rebuilt anything.
     private var liveVideo: some View {
-        LiveVideoView(camera: identity,
-                      state: session.liveState,
-                      attemptStartedAt: session.attemptStartedAt,
-                      onRetry: { session.perform(.retry) },
-                      onRemedy: { session.perform($0) },
-                      video: {
-                          // Every callback is passed, and the logger with them. Each one defaults to
-                          // something that compiles and says nothing: `logger` to `NullLogger`, so a
-                          // tile built without it reports its layer lifecycle into a void, and both
-                          // report closures to `nil`, so a decode failure or a drop storm would
-                          // reach neither the screen nor the log. That is the "no video, no error"
-                          // shape this project is built to refuse, and the fix is naming them here.
-                          VideoTile(cameraID: cameraID,
-                                    frames: session.frames,
-                                    logger: session.dependencies.logger,
-                                    onKeyframeNeeded: { session.recoverStalledPicture() },
-                                    onDecodeFailure: { session.handleDecodeFailure($0) },
-                                    onFramesDropped: { session.handleFramesDropped($0, reason: $1) })
-                      })
+        LiveVideoView(
+            camera: identity,
+            state: session.liveState,
+            attemptStartedAt: session.attemptStartedAt,
+            onRetry: { session.perform(.retry) },
+            onRemedy: { session.perform($0) },
+            video: {
+                // Every callback is passed, and the logger with them. Each one defaults to
+                // something that compiles and says nothing: `logger` to `NullLogger`, so a
+                // tile built without it reports its layer lifecycle into a void, and both
+                // report closures to `nil`, so a decode failure or a drop storm would
+                // reach neither the screen nor the log. That is the "no video, no error"
+                // shape this project is built to refuse, and the fix is naming them here.
+                VideoTile(
+                    cameraID: cameraID,
+                    frames: session.frames,
+                    logger: session.dependencies.logger,
+                    onKeyframeNeeded: { session.recoverStalledPicture() },
+                    onDecodeFailure: { session.handleDecodeFailure($0) },
+                    onFramesDropped: { session.handleFramesDropped($0, reason: $1) })
+            })
     }
 
     /// Name, address and identity colour for the chip over the video.
     private var identity: LiveCameraIdentity {
         let camera = session.camera
-        return LiveCameraIdentity(id: cameraID.rawValue,
-                                  name: camera?.displayName ?? session.form.request.host,
-                                  host: camera?.host ?? session.form.request.host,
-                                  identityIndex: camera?.colorTag.paletteIndex)
+        return LiveCameraIdentity(
+            id: cameraID.rawValue,
+            name: camera?.displayName ?? session.form.request.host,
+            host: camera?.host ?? session.form.request.host,
+            identityIndex: camera?.colorTag.paletteIndex)
     }
 
     /// The camera's identifier, or a stable placeholder for the moment between pressing Return and
