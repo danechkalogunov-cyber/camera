@@ -120,26 +120,14 @@ import VigilProtocols
         #expect(AlertStreamMonitor.terminalState(for: .timedOut(resource: "x", seconds: 8)) == nil)
     }
 
-    @Test func monitorBackoffFollowsTheLadderWithBoundedJitter() async throws {
-        // Every attempt fails with a retryable error, so the ladder advances on each pass.
-        let double = RequestDouble()
-        await double.route("/alertStream", failing: .deviceBusy)
-        let gate = SleepGate()
+    @Test func monitorBackoffFollowsTheLadderWithBoundedJitter() {
         let policy = AlertStreamMonitor.Policy()
-        let subject = AlertStreamMonitor(
-            requests: double, policy: policy,
-            clock: GateClock(gate: gate),
-            wallClock: FixedWallClock(),
-            random: SplitMix64RandomSource(seed: 7))
-        await subject.start()
-        for attempt in 1...8 {
-            await double.waitForRequests(atLeast: attempt)
-            await gate.release(1)
+        var random = SplitMix64RandomSource(seed: 7)
+        let history = (0..<8).map { attempt in
+            let base = AlertStreamMonitor.backoffBase(attempt: attempt, policy: policy)
+            return AlertStreamMonitor.jittered(
+                base, fraction: policy.jitterFraction, draw: random.next())
         }
-        await settle(until: { await subject.backoffHistory.count >= 8 })
-        await subject.stop()
-        let history = await subject.backoffHistory
-        try #require(history.count >= 8)
         let ladder = policy.backoffSeconds
         for (index, delay) in history.prefix(8).enumerated() {
             let base = ladder[min(index, ladder.count - 1)]

@@ -84,8 +84,9 @@ public actor AlertStreamMonitor {
     private let logger: any LoggerProtocol
 
     private let events = Broadcaster<EventNotificationAlert>(bufferingPolicy: .bufferingNewest(256))
-    private let states = Broadcaster<AlertStreamState>(replaysLatest: true,
-                                                       bufferingPolicy: .bufferingNewest(16))
+    private let states = Broadcaster<AlertStreamState>(
+        replaysLatest: true,
+        bufferingPolicy: .bufferingNewest(16))
 
     private var runner: Task<Void, Never>?
     private var activeConnection: Task<Void, any Error>?
@@ -114,10 +115,12 @@ public actor AlertStreamMonitor {
     ///   - clock: drives every delay. No wall-clock sleeps anywhere.
     ///   - wallClock: supplies the `Date` values the states carry, and nothing else.
     ///   - random: the jitter source. Seeded in tests so a failure reproduces.
-    public init(requests: any ISAPIRequesting, policy: Policy = .init(),
-                clock: any MonotonicClock, wallClock: any WallClock,
-                random: any RandomSource = SystemRandomSource(),
-                logger: any LoggerProtocol = NullLogger()) {
+    public init(
+        requests: any ISAPIRequesting, policy: Policy = .init(),
+        clock: any MonotonicClock, wallClock: any WallClock,
+        random: any RandomSource = SystemRandomSource(),
+        logger: any LoggerProtocol = NullLogger()
+    ) {
         self.requests = requests
         self.policy = policy
         self.clock = clock
@@ -175,7 +178,7 @@ public actor AlertStreamMonitor {
         guard runner == nil else { return }
         switch currentState {
         case .notSupported, .authFailed:
-            return          // terminal: only a new credential or a re-probe may revive it
+            return  // terminal: only a new credential or a re-probe may revive it
         default:
             break
         }
@@ -278,9 +281,11 @@ public actor AlertStreamMonitor {
         var parser: MultipartStreamParser?
         var sniffBuffer = Data()
         if let contentType = opened.contentType,
-           let boundary = MultipartStreamParser.boundary(fromContentType: contentType) {
-            parser = MultipartStreamParser(boundary: boundary,
-                                           limits: assembler.parserLimits)
+            let boundary = MultipartStreamParser.boundary(fromContentType: contentType)
+        {
+            parser = MultipartStreamParser(
+                boundary: boundary,
+                limits: assembler.parserLimits)
         }
         var lastByteInstant = connectedInstant
         var deliveredAPart = false
@@ -301,8 +306,10 @@ public actor AlertStreamMonitor {
                     // No boundary in the header: buffer a little and sniff the first delimiter line
                     // out of the body. Seen on one 5.1.x build.
                     sniffBuffer.append(chunk)
-                    guard let sniffed =
-                            MultipartStreamParser.sniffBoundary(inPreamble: sniffBuffer) else {
+                    guard
+                        let sniffed =
+                            MultipartStreamParser.sniffBoundary(inPreamble: sniffBuffer)
+                    else {
                         if sniffBuffer.count > 512 {
                             throw ISAPIError.multipartProtocolError(
                                 "no multipart boundary in the header or the first 512 bytes")
@@ -310,14 +317,15 @@ public actor AlertStreamMonitor {
                         continue
                     }
                     logger.notice(.isapi, "alert stream boundary sniffed from the body")
-                    var fresh = MultipartStreamParser(boundary: sniffed,
-                                                      limits: assembler.parserLimits)
+                    var fresh = MultipartStreamParser(
+                        boundary: sniffed,
+                        limits: assembler.parserLimits)
                     let outputs = try fresh.ingest(sniffBuffer)
                     parser = fresh
                     sniffBuffer = Data()
                     deliveredAPart = deliver(outputs, into: &assembler) || deliveredAPart
-                // In order, and before the next read: an alert decoded is an alert delivered.
-                await drain()
+                    // In order, and before the next read: an alert decoded is an alert delivered.
+                    await drain()
                     continue
                 }
                 guard var live = parser else { continue }
@@ -329,7 +337,8 @@ public actor AlertStreamMonitor {
                 // A connection that has carried a part and lasted long enough is healthy; forget
                 // the previous failures so the next one starts at the bottom of the ladder.
                 if deliveredAPart,
-                   clock.now().seconds(since: connectedInstant) >= policy.healthyResetSeconds {
+                    clock.now().seconds(since: connectedInstant) >= policy.healthyResetSeconds
+                {
                     attempt = 0
                 }
             }
@@ -342,7 +351,10 @@ public actor AlertStreamMonitor {
             await drain()
             throw ISAPIError.streamEnded(afterBytes: 0)
         }
-        if var live = parser { deliver(live.finish(), into: &assembler); parser = live }
+        if var live = parser {
+            deliver(live.finish(), into: &assembler)
+            parser = live
+        }
         flush(&assembler)
         await drain()
     }
@@ -363,8 +375,9 @@ public actor AlertStreamMonitor {
             guard !Task.isCancelled else { return }
             livenessProbes += 1
             do {
-                _ = try await requests.getDocument(ISAPIResource.userCheck,
-                                                   query: [], lane: .control)
+                _ = try await requests.getDocument(
+                    ISAPIResource.userCheck,
+                    query: [], lane: .control)
             } catch {
                 expireWatchdog(with: error)
                 return
@@ -386,8 +399,10 @@ public actor AlertStreamMonitor {
     /// Returns `true` when at least one part completed, which is the "the stream is alive" signal
     /// the healthy-reset rule needs.
     @discardableResult
-    private func deliver(_ outputs: [MultipartStreamParser.Output],
-                         into assembler: inout AlertPartAssembler) -> Bool {
+    private func deliver(
+        _ outputs: [MultipartStreamParser.Output],
+        into assembler: inout AlertPartAssembler
+    ) -> Bool {
         var sawPart = false
         for output in outputs {
             for ready in assembler.accept(output, now: wallClock.now) {
@@ -439,24 +454,29 @@ public actor AlertStreamMonitor {
 
     /// Advances the ladder, publishes `.failed`, and waits.
     private func backOff(reason: String) async {
-        let base = policy.backoffSeconds.isEmpty
-            ? 1.0
-            : policy.backoffSeconds[min(attempt, policy.backoffSeconds.count - 1)]
-        let delay = jittered(base)
+        let base = Self.backoffBase(attempt: attempt, policy: policy)
+        let delay = Self.jittered(base, fraction: policy.jitterFraction, draw: random.next())
         backoffHistory.append(delay)
         attempt += 1
-        transition(to: .failed(reason: reason,
-                               retryAt: wallClock.now.addingTimeInterval(delay)))
+        transition(
+            to: .failed(
+                reason: reason,
+                retryAt: wallClock.now.addingTimeInterval(delay)))
         try? await clock.sleep(for: .seconds(delay))
     }
 
-    /// Applies ±`jitterFraction` to a delay.
-    private func jittered(_ base: Double) -> Double {
-        guard policy.jitterFraction > 0 else { return base }
+    static func backoffBase(attempt: Int, policy: Policy) -> Double {
+        guard !policy.backoffSeconds.isEmpty else { return 1 }
+        return policy.backoffSeconds[min(max(0, attempt), policy.backoffSeconds.count - 1)]
+    }
+
+    /// Applies ±`fraction` to a delay.
+    static func jittered(_ base: Double, fraction: Double, draw: UInt64) -> Double {
+        guard fraction > 0 else { return base }
         // One 64-bit draw mapped to [-1, 1]; a seeded generator therefore produces the same ladder
         // on every platform.
-        let unit = Double(random.next() >> 11) / Double(UInt64(1) << 53)
-        let factor = 1 + (unit * 2 - 1) * policy.jitterFraction
+        let unit = Double(draw >> 11) / Double(UInt64(1) << 53)
+        let factor = 1 + (unit * 2 - 1) * fraction
         return max(0, base * factor)
     }
 
@@ -465,121 +485,5 @@ public actor AlertStreamMonitor {
         currentState = next
         let broadcaster = states
         Task { await broadcaster.yield(next) }
-    }
-}
-
-// MARK: - AlertPartAssembler
-
-/// Turns a sequence of multipart parts into decoded events, pairing each `image/jpeg` part with the
-/// XML part immediately before it.
-///
-/// A plain `struct` with `mutating` methods, so the pairing rules and the 1.5 s flush are testable
-/// without an actor, a clock or a network (API_CONTRACT §2 R-32).
-struct AlertPartAssembler: Sendable {
-
-    private let policy: AlertStreamMonitor.Policy
-
-    private enum PartKind: Sendable { case text, image, other }
-    private var kind: PartKind = .other
-    private var partBuffer = Data()
-    private var partOverflowed = false
-    /// The decoded event waiting to see whether a JPEG follows it.
-    private var pending: (alert: EventNotificationAlert, since: Date)?
-
-    init(policy: AlertStreamMonitor.Policy) {
-        self.policy = policy
-    }
-
-    /// The parser limits implied by this policy.
-    var parserLimits: MultipartStreamParser.Limits {
-        MultipartStreamParser.Limits(maxTextPartBytes: policy.textPartMaxBytes,
-                                     maxBinaryPartBytes: policy.snapshotMaxBytes)
-    }
-
-    /// Consumes one parser output and returns any events it completed.
-    mutating func accept(_ output: MultipartStreamParser.Output,
-                         now: Date) -> [EventNotificationAlert] {
-        switch output {
-        case .partBegan(let headers, _):
-            let contentType = (headers["content-type"] ?? "").lowercased()
-            if contentType.contains("xml") { kind = .text }
-            else if contentType.contains("image/") { kind = .image }
-            else { kind = contentType.isEmpty ? .text : .other }
-            partBuffer = Data()
-            partOverflowed = false
-            return []
-        case .partData(let data):
-            let cap = kind == .image ? policy.snapshotMaxBytes : policy.textPartMaxBytes
-            guard partBuffer.count + data.count <= cap else {
-                partOverflowed = true
-                partBuffer = Data()
-                return []
-            }
-            partBuffer.append(data)
-            return []
-        case .partTruncated:
-            partOverflowed = true
-            partBuffer = Data()
-            return []
-        case .partEnded:
-            return completePart(now: now)
-        case .streamEnded:
-            return flushAll()
-        }
-    }
-
-    /// Emits a pending event whose pairing window has closed.
-    mutating func flushExpired(now: Date) -> [EventNotificationAlert] {
-        guard let held = pending,
-              now.timeIntervalSince(held.since) >= policy.snapshotPairingWindowSeconds else {
-            return []
-        }
-        pending = nil
-        return [held.alert]
-    }
-
-    /// Emits anything still held, at the end of a connection.
-    mutating func flushAll() -> [EventNotificationAlert] {
-        defer { pending = nil }
-        return pending.map { [$0.alert] } ?? []
-    }
-
-    /// Finishes the current part.
-    private mutating func completePart(now: Date) -> [EventNotificationAlert] {
-        defer {
-            partBuffer = Data()
-            partOverflowed = false
-            kind = .other
-        }
-        switch kind {
-        case .text:
-            guard !partOverflowed, !partBuffer.isEmpty else { return flushPending() }
-            guard let document = try? ISAPIDocument(parsing: partBuffer),
-                  let alert = try? EventNotificationAlert(document: document, receivedAt: now)
-            else {
-                // A part that will not decode is not worth stalling the pending event for.
-                return flushPending()
-            }
-            // The previous event never got an image; emit it and hold this one instead.
-            let released = flushPending()
-            if policy.attachSnapshots {
-                pending = (alert, now)
-                return released
-            }
-            return released + [alert]
-        case .image:
-            guard var held = pending?.alert else { return [] }
-            if !partOverflowed, !partBuffer.isEmpty { held.snapshot = partBuffer }
-            pending = nil
-            return [held]
-        case .other:
-            return []
-        }
-    }
-
-    /// Releases the pending event without an image.
-    private mutating func flushPending() -> [EventNotificationAlert] {
-        defer { pending = nil }
-        return pending.map { [$0.alert] } ?? []
     }
 }
