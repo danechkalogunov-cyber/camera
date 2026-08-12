@@ -924,3 +924,5 @@
 "New cameras inherit the default transport. Per-camera settings take precedence." = "Новые камеры наследуют транспорт по умолчанию. Настройка камеры имеет приоритет.";
 "Transport selection" = "Выбор транспорта";
 "Chosen automatically from the last successful session" = "Выбран автоматически по последней успешной сессии";
+"Choose a camera" = "Выберите камеру";
+"Choose a camera and the moment to open on its recording timeline." = "Выберите камеру и момент, который нужно открыть на шкале записей.";

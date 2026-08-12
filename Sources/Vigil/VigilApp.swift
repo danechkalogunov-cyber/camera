@@ -118,9 +118,13 @@ struct VigilApp: App {
         // keep the app in GraphHost.flushTransactions before the first window becomes usable.
         // Window-local shortcuts remain available until the commands tree is made stable.
 
-        Window("Playback", id: SceneID.playback) {
-            AuxiliarySceneView(title: "Playback", symbol: "play.rectangle")
+        WindowGroup("Playback", id: SceneID.playback, for: PlaybackRequest.self) { request in
+            PlaybackSceneView(
+                request: request.wrappedValue ?? .empty,
+                library: library,
+                window: window)
         }
+        .windowResizability(.contentSize)
         Window("Discovery", id: SceneID.discovery) {
             DiscoverySceneView(session: session, library: library)
         }

@@ -62,12 +62,7 @@ extension MainWindowView {
             window.paletteSelection = nil
             window.isPaletteOpen = true
         case let .playback(reference, instant, speed):
-            guard resolveLinkedCamera(reference) != nil else { return }
-            if let speed {
-                session.playbackRate = TimelinePlaybackRate.nearest(
-                    toScale: speed, in: TimelinePlaybackRate.forwardStops)
-            }
-            openArchive(at: instant)
+            openLinkedPlayback(reference, at: instant, speed: speed)
         case let .preset(reference, number):
             guard resolveLinkedCamera(reference) != nil else { return }
             ptz.goToPreset(number)
@@ -92,9 +87,11 @@ extension MainWindowView {
     // MARK: - Private Helpers
 
     /// Brings a camera up and performs the link's action on it.
-    private func openCamera(_ reference: DeepLinkReference,
-                            action: DeepLinkAction?,
-                            stream: StreamQuality?) {
+    private func openCamera(
+        _ reference: DeepLinkReference,
+        action: DeepLinkAction?,
+        stream: StreamQuality?
+    ) {
         guard let camera = resolveLinkedCamera(reference) else { return }
         if camera.id != cameraID {
             window.sidebarSelection.select(.camera(camera.id))
@@ -107,15 +104,18 @@ extension MainWindowView {
         performLinkedCameraAction(action, stream: stream, camera: camera)
     }
 
-    private func performLinkedCameraAction(_ action: DeepLinkAction?, stream: StreamQuality?,
-                                           camera: Camera) {
+    private func performLinkedCameraAction(
+        _ action: DeepLinkAction?, stream: StreamQuality?,
+        camera: Camera
+    ) {
         guard let action else { return }
         // ⛔ Acceptance 4. `NSApp.isActive` is the whole test: a link the user clicked inside Vigil
         // is the user acting, and one that arrived from Mail while Vigil sat in the background is
         // not. Checked at the moment of the act rather than at parse time, because the app may have
         // come forward in between — which is exactly what happens when a link launches it.
         if action.needsConfirmationFromAnotherApp, !NSApp.isActive,
-           !Self.confirmExternalAutomation() {
+            !Self.confirmExternalAutomation()
+        {
             return
         }
         // Set, not toggled: `cycleStreamQuality()` flips between the two and a link names one. The
@@ -141,6 +141,28 @@ extension MainWindowView {
             session.setAudioMuted(true, for: camera.id)
         case .unmute:
             session.setAudioMuted(false, for: camera.id)
+        }
+    }
+
+    private func openLinkedPlayback(
+        _ reference: DeepLinkReference, at instant: Date,
+        speed: Double?
+    ) {
+        guard let camera = resolveLinkedCamera(reference) else { return }
+        if let speed {
+            session.playbackRate = TimelinePlaybackRate.nearest(
+                toScale: speed, in: TimelinePlaybackRate.forwardStops)
+        }
+        focusCamera(camera.id)
+        window.showsTimeline = true
+        window.timelineRevealRequests &+= 1
+        guard camera.id != cameraID else {
+            openArchive(at: instant)
+            return
+        }
+        Task {
+            await session.switchTo(camera)
+            openArchive(at: instant)
         }
     }
 
