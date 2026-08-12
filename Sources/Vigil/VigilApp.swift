@@ -125,8 +125,9 @@ struct VigilApp: App {
             AuxiliarySceneView(title: "Discovery", symbol: "dot.radiowaves.left.and.right")
         }
         Window("Video Wall", id: SceneID.wall) {
-            VideoWallScene(session: session, library: library, window: window,
-                           configuration: $window.videoWall)
+            VideoWallScene(
+                session: session, library: library, window: window,
+                configuration: $window.videoWall)
         }
         Window("About Vigil", id: SceneID.about) {
             AuxiliarySceneView(title: "About Vigil", symbol: "info.circle")
@@ -178,8 +179,11 @@ private struct VideoWallScene: View {
         let safePage = min(page, pageCount - 1)
         let start = safePage * configuration.layout.tileCount
         guard start < library.cameras.count else { return [] }
-        return Array(library.cameras[start..<min(library.cameras.count,
-                                                  start + configuration.layout.tileCount)])
+        return Array(
+            library.cameras[
+                start..<min(
+                    library.cameras.count,
+                    start + configuration.layout.tileCount)])
     }
 
     private var assignment: VStageAssignment {
@@ -225,19 +229,26 @@ private struct VideoWallScene: View {
                     .padding(24)
             }
         }
-        .background(VideoWallWindowInstaller(screenID: configuration.screenID,
-                                             automaticExternal: !screenMissing))
+        .background(
+            VideoWallWindowInstaller(
+                screenID: configuration.screenID,
+                automaticExternal: !screenMissing)
+        )
         .onExitCommand { dismissWindow(id: SceneID.wall) }
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didChangeScreenParametersNotification)) { _ in
-                guard let selected = configuration.screenID,
-                      !screens.contains(where: { $0.0 == selected }) else { return }
-                configuration.screenID = nil
-                screenMissing = true
-            }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didChangeScreenParametersNotification)
+        ) { _ in
+            guard let selected = configuration.screenID,
+                !screens.contains(where: { $0.0 == selected })
+            else { return }
+            configuration.screenID = nil
+            screenMissing = true
+        }
         .task {
             if let selected = configuration.screenID,
-               !screens.contains(where: { $0.0 == selected }) {
+                !screens.contains(where: { $0.0 == selected })
+            {
                 configuration.screenID = nil
                 screenMissing = true
             }
@@ -260,9 +271,14 @@ private struct VideoWallScene: View {
 
     private var wallControls: some View {
         HStack(spacing: 10) {
-            Picker(selection: Binding(
-                get: { configuration.screenID },
-                set: { configuration.screenID = $0; screenMissing = false })) {
+            Picker(
+                selection: Binding(
+                    get: { configuration.screenID },
+                    set: {
+                        configuration.screenID = $0
+                        screenMissing = false
+                    })
+            ) {
                 Text("Automatic", bundle: .vigilUI).tag(String?.none)
                 ForEach(screens, id: \.0) { screen in Text(screen.1).tag(Optional(screen.0)) }
             } label: {
@@ -280,14 +296,18 @@ private struct VideoWallScene: View {
             Toggle(isOn: $configuration.isPatrolling) {
                 Text("Patrol", bundle: .vigilUI)
             }
-                .toggleStyle(.switch)
+            .toggleStyle(.switch)
 
             if pageCount > 1 {
-                Button { page = (page - 1 + pageCount) % pageCount } label: {
+                Button {
+                    page = (page - 1 + pageCount) % pageCount
+                } label: {
                     Image(systemName: "chevron.left")
                 }
                 Text("\(page + 1)/\(pageCount)").monospacedDigit()
-                Button { page = (page + 1) % pageCount } label: {
+                Button {
+                    page = (page + 1) % pageCount
+                } label: {
                     Image(systemName: "chevron.right")
                 }
             }
@@ -298,7 +318,7 @@ private struct VideoWallScene: View {
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
                 }
-                    .foregroundStyle(.yellow)
+                .foregroundStyle(.yellow)
             }
 
             Button {
@@ -321,9 +341,10 @@ private struct VideoWallScene: View {
     private func stageCamera(_ camera: Camera) -> VStageCamera {
         let stream = session.cameras.stream(for: camera.id)
         return VStageCamera(
-            camera: LiveCameraIdentity(id: camera.id.rawValue, name: camera.displayName,
-                                       host: camera.host,
-                                       identityIndex: camera.colorTag.paletteIndex),
+            camera: LiveCameraIdentity(
+                id: camera.id.rawValue, name: camera.displayName,
+                host: camera.host,
+                identityIndex: camera.colorTag.paletteIndex),
             state: stream?.liveState ?? .offline(OfflineDetail()),
             attemptStartedAt: stream?.attemptStartedAt,
             isStreaming: stream?.isActive == true)
@@ -331,13 +352,14 @@ private struct VideoWallScene: View {
 
     private func wallVideo(_ id: CameraID) -> VideoTile {
         let stream = session.cameras.stream(for: id) ?? session.live
-        return VideoTile(cameraID: id, frames: stream.frames,
-                         logger: session.dependencies.logger,
-                         onKeyframeNeeded: { session.recoverStalledPicture(on: stream) },
-                         onDecodeFailure: { session.handleDecodeFailure($0, on: stream) },
-                         onFramesDropped: {
-                             session.handleFramesDropped($0, reason: $1, on: stream)
-                         })
+        return VideoTile(
+            cameraID: id, frames: stream.frames,
+            logger: session.dependencies.logger,
+            onKeyframeNeeded: { session.recoverStalledPicture(on: stream) },
+            onDecodeFailure: { session.handleDecodeFailure($0, on: stream) },
+            onFramesDropped: {
+                session.handleFramesDropped($0, reason: $1, on: stream)
+            })
     }
 
     private func synchronizeWallStreams() async {
@@ -392,8 +414,9 @@ private struct VideoWallWindowInstaller: NSViewRepresentable {
             guard let window = view.window else {
                 DispatchQueue.main.async { [weak self, weak view] in
                     guard let self, let view else { return }
-                    self.install(from: view, screenID: screenID,
-                                 automaticExternal: automaticExternal)
+                    self.install(
+                        from: view, screenID: screenID,
+                        automaticExternal: automaticExternal)
                 }
                 return
             }
@@ -408,9 +431,11 @@ private struct VideoWallWindowInstaller: NSViewRepresentable {
             }
             let explicit = screenID.flatMap { id in indexed.first { $0.0 == id }?.1 }
             let mainScreen = NSScreen.main
-            let automatic = automaticExternal ? indexed.map(\.1).first { screen in
-                mainScreen.map { screen !== $0 } ?? true
-            } : nil
+            let automatic =
+                automaticExternal
+                ? indexed.map(\.1).first { screen in
+                    mainScreen.map { screen !== $0 } ?? true
+                } : nil
             guard let target = explicit ?? automatic else {
                 if isWallMode { restore(normalWindow: true) }
                 return
@@ -452,14 +477,16 @@ private struct VideoWallWindowInstaller: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        context.coordinator.install(from: view, screenID: screenID,
-                                    automaticExternal: automaticExternal)
+        context.coordinator.install(
+            from: view, screenID: screenID,
+            automaticExternal: automaticExternal)
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.install(from: view, screenID: screenID,
-                                    automaticExternal: automaticExternal)
+        context.coordinator.install(
+            from: view, screenID: screenID,
+            automaticExternal: automaticExternal)
     }
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {

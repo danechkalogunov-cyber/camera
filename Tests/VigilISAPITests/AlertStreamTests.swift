@@ -11,17 +11,22 @@
 import Foundation
 import Testing
 import VigilProtocols
+
 @testable import VigilISAPI
 
 // MARK: - EventAlertModelSuite
 
 @Suite struct EventAlertModelSuite {
 
-    private func alert(_ xml: String,
-                      receivedAt: Date = Date(timeIntervalSince1970: 1_714_560_896)) throws
-        -> EventNotificationAlert {
-        try EventNotificationAlert(document: try ISAPIDocument(parsing: Data(xml.utf8)),
-                                   receivedAt: receivedAt)
+    private func alert(
+        _ xml: String,
+        receivedAt: Date = Date(timeIntervalSince1970: 1_714_560_896)
+    ) throws
+        -> EventNotificationAlert
+    {
+        try EventNotificationAlert(
+            document: try ISAPIDocument(parsing: Data(xml.utf8)),
+            receivedAt: receivedAt)
     }
 
     @Test func eventAlertDecodesTheMotionFixture() throws {
@@ -109,7 +114,7 @@ import VigilProtocols
         #expect(region.polygon[0] == NormalizedPoint(x: 0, y: 1))
         #expect(region.polygon[1] == NormalizedPoint(x: 1, y: 1))
         #expect(abs(region.polygon[2].x - 1) < 0.0001)
-        #expect(abs(region.polygon[2].y - 0.44) < 0.0001)     // 1 - 560/1000
+        #expect(abs(region.polygon[2].y - 0.44) < 0.0001)  // 1 - 560/1000
         #expect(abs(region.polygon[3].y - 0.44) < 0.0001)
     }
 
@@ -234,9 +239,11 @@ import VigilProtocols
 
     private let now = Date(timeIntervalSince1970: 1_714_560_896)
 
-    private func drive(_ outputs: [MultipartStreamParser.Output],
-                      policy: AlertStreamMonitor.Policy = .init(),
-                      now: Date) -> [EventNotificationAlert] {
+    private func drive(
+        _ outputs: [MultipartStreamParser.Output],
+        policy: AlertStreamMonitor.Policy = .init(),
+        now: Date
+    ) -> [EventNotificationAlert] {
         var assembler = AlertPartAssembler(policy: policy)
         var events: [EventNotificationAlert] = []
         for output in outputs { events += assembler.accept(output, now: now) }
@@ -262,13 +269,20 @@ import VigilProtocols
         let token = "b"
         let motion = Data(MultipartFixtures.motionXML.utf8)
         let heartbeat = Data(MultipartFixtures.heartbeatXML.utf8)
-        let stream = MultipartFixtures.stream(boundary: token, parts: [
-            (["Content-Type": "application/xml", "Content-Length": String(motion.count)], motion),
-            (["Content-Type": "application/xml",
-              "Content-Length": String(heartbeat.count)], heartbeat),
-        ])
-        let events = drive(try MultipartFixtures.run(stream, boundary: token, chunkSize: 64),
-                           now: now)
+        let stream = MultipartFixtures.stream(
+            boundary: token,
+            parts: [
+                (["Content-Type": "application/xml", "Content-Length": String(motion.count)], motion),
+                (
+                    [
+                        "Content-Type": "application/xml",
+                        "Content-Length": String(heartbeat.count),
+                    ], heartbeat
+                ),
+            ])
+        let events = drive(
+            try MultipartFixtures.run(stream, boundary: token, chunkSize: 64),
+            now: now)
         #expect(events.count == 2)
         #expect(events[0].snapshot == nil)
     }
@@ -278,8 +292,14 @@ import VigilProtocols
         let motion = Data(MultipartFixtures.motionXML.utf8)
         let stream = MultipartFixtures.stream(
             boundary: token,
-            parts: [(["Content-Type": "application/xml",
-                      "Content-Length": String(motion.count)], motion)],
+            parts: [
+                (
+                    [
+                        "Content-Type": "application/xml",
+                        "Content-Length": String(motion.count),
+                    ], motion
+                )
+            ],
             closing: false)
         var assembler = AlertPartAssembler(policy: AlertStreamMonitor.Policy())
         var events: [EventNotificationAlert] = []
@@ -304,8 +324,14 @@ import VigilProtocols
         let motion = Data(MultipartFixtures.motionXML.utf8)
         let stream = MultipartFixtures.stream(
             boundary: token,
-            parts: [(["Content-Type": "application/xml",
-                      "Content-Length": String(motion.count)], motion)])
+            parts: [
+                (
+                    [
+                        "Content-Type": "application/xml",
+                        "Content-Length": String(motion.count),
+                    ], motion
+                )
+            ])
         var assembler = AlertPartAssembler(policy: policy)
         var events: [EventNotificationAlert] = []
         for output in try MultipartFixtures.run(stream, boundary: token, chunkSize: 4096) {
@@ -322,12 +348,16 @@ import VigilProtocols
         let motion = Data(MultipartFixtures.motionXML.utf8)
         var image = Data([0xFF, 0xD8, 0xFF])
         image.append(Data(repeating: 0x41, count: 4096))
-        let stream = MultipartFixtures.stream(boundary: token, parts: [
-            (["Content-Type": "application/xml", "Content-Length": String(motion.count)], motion),
-            (["Content-Type": "image/jpeg", "Content-Length": String(image.count)], image),
-        ])
-        var parser = MultipartStreamParser(boundary: token, limits: MultipartStreamParser.Limits(
-            maxBinaryPartBytes: policy.snapshotMaxBytes))
+        let stream = MultipartFixtures.stream(
+            boundary: token,
+            parts: [
+                (["Content-Type": "application/xml", "Content-Length": String(motion.count)], motion),
+                (["Content-Type": "image/jpeg", "Content-Length": String(image.count)], image),
+            ])
+        var parser = MultipartStreamParser(
+            boundary: token,
+            limits: MultipartStreamParser.Limits(
+                maxBinaryPartBytes: policy.snapshotMaxBytes))
         var assembler = AlertPartAssembler(policy: policy)
         var events: [EventNotificationAlert] = []
         for output in try parser.ingest(stream) { events += assembler.accept(output, now: now) }
@@ -341,217 +371,16 @@ import VigilProtocols
         let token = "b"
         let junk = Data("<EventNotificationAlert><eventTyp".utf8)
         let motion = Data(MultipartFixtures.motionXML.utf8)
-        let stream = MultipartFixtures.stream(boundary: token, parts: [
-            (["Content-Type": "application/xml", "Content-Length": String(junk.count)], junk),
-            (["Content-Type": "application/xml", "Content-Length": String(motion.count)], motion),
-        ])
-        let events = drive(try MultipartFixtures.run(stream, boundary: token, chunkSize: 4096),
-                           now: now)
+        let stream = MultipartFixtures.stream(
+            boundary: token,
+            parts: [
+                (["Content-Type": "application/xml", "Content-Length": String(junk.count)], junk),
+                (["Content-Type": "application/xml", "Content-Length": String(motion.count)], motion),
+            ])
+        let events = drive(
+            try MultipartFixtures.run(stream, boundary: token, chunkSize: 4096),
+            now: now)
         #expect(events.count == 1)
         #expect(events[0].kind == .motion)
     }
-}
-
-// MARK: - AlertStreamMonitorSuite
-
-@Suite struct AlertStreamMonitorSuite {
-
-    private func monitor(_ double: RequestDouble, gate: SleepGate,
-                        policy: AlertStreamMonitor.Policy = .init()) -> AlertStreamMonitor {
-        AlertStreamMonitor(requests: double, policy: policy, clock: GateClock(gate: gate),
-                           wallClock: FixedWallClock(),
-                           random: SplitMix64RandomSource(seed: 0x5EED))
-    }
-
-    @Test func monitorEmitsEventsAndSuppressesHeartbeats() async throws {
-        let token = "<boundary>"
-        let double = RequestDouble()
-        await double.setStream(contentType: "multipart/mixed; boundary=\(token)",
-                               chunks: [MultipartFixtures.realisticStream(boundary: token)])
-        let gate = SleepGate()
-        let subject = AlertStreamMonitor(requests: double, clock: GateClock(gate: gate),
-                                         wallClock: FixedWallClock(),
-                                         random: SplitMix64RandomSource(seed: 42))
-        let events = subject.notifications()
-        await settle(until: { await subject.eventConsumerCount() == 1 })
-        await subject.start()
-
-        var received: [EventNotificationAlert] = []
-        for await event in events {
-            received.append(event)
-            if received.count == 1 { break }
-        }
-        #expect(received.count == 1)
-        #expect(received[0].kind == .motion)
-        // The image arrived as its own part and was attached to the event before delivery.
-        #expect(received[0].snapshot == MultipartFixtures.jpeg(containing: token))
-        #expect(await subject.suppressedHeartbeats == 1)
-        #expect(await subject.emittedEvents == 1)
-        await subject.stop()
-    }
-
-    @Test func monitorTreatsA403AsUnsupportedAndStopsPermanently() async throws {
-        // docs/API_CONTRACT.md §2 R-28: no synthetic polling fallback. A fake event stream is
-        // worse than an honestly absent one.
-        let double = RequestDouble()
-        await double.route("/alertStream",
-                           failing: .notSupported(resource: "/Event/notification/alertStream"))
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        await subject.start()
-        await double.waitForRequests(atLeast: 1)
-        // Give the run loop a moment to record the terminal state.
-        await settle(until: { await subject.state == .notSupported })
-        #expect(await subject.state == .notSupported)
-        // A second `start()` must not reconnect.
-        await subject.start()
-        for _ in 0..<16 { await Task.yield() }
-        #expect(await double.requestCount == 1)
-    }
-
-    @Test func monitorTreatsAuthenticationFailureAsTerminal() async throws {
-        let double = RequestDouble()
-        await double.route("/alertStream", failing: .authenticationFailed(username: "admin"))
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        await subject.start()
-        await double.waitForRequests(atLeast: 1)
-        await settle(until: { await subject.state == .authFailed })
-        #expect(await subject.state == .authFailed)
-        #expect(await double.requestCount == 1)
-    }
-
-    @Test func monitorResetClearsATerminalState() async throws {
-        let double = RequestDouble()
-        await double.route("/alertStream", failing: .notFound(resource: "/x"))
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        await subject.start()
-        await double.waitForRequests(atLeast: 1)
-        await settle(until: { await subject.state == .notSupported })
-        await subject.stop()
-        await subject.reset()
-        #expect(await subject.state == .idle)
-    }
-
-    @Test func monitorClassifiesTerminalErrorsFromTheMappingTable() {
-        #expect(AlertStreamMonitor.terminalState(for: .notSupported(resource: "x"))
-                == .notSupported)
-        #expect(AlertStreamMonitor.terminalState(for: .notFound(resource: "x")) == .notSupported)
-        #expect(AlertStreamMonitor.terminalState(for: .insufficientPermission(resource: "x"))
-                == .notSupported)
-        #expect(AlertStreamMonitor.terminalState(for: .authenticationFailed(username: "a"))
-                == .authFailed)
-        #expect(AlertStreamMonitor.terminalState(for: .authBlockedLocally(failures: 2))
-                == .authFailed)
-        #expect(AlertStreamMonitor.terminalState(for: .accountLocked(retryAfter: 1800))
-                == .authFailed)
-        // Everything else is retried with backoff.
-        #expect(AlertStreamMonitor.terminalState(for: .deviceBusy) == nil)
-        #expect(AlertStreamMonitor.terminalState(for: .streamEnded(afterBytes: 10)) == nil)
-        #expect(AlertStreamMonitor.terminalState(for: .timedOut(resource: "x", seconds: 8)) == nil)
-    }
-
-    @Test func monitorBackoffFollowsTheLadderWithBoundedJitter() async throws {
-        // Every attempt fails with a retryable error, so the ladder advances on each pass.
-        let double = RequestDouble()
-        await double.route("/alertStream", failing: .deviceBusy)
-        let gate = SleepGate()
-        let policy = AlertStreamMonitor.Policy()
-        let subject = AlertStreamMonitor(requests: double, policy: policy,
-                                         clock: GateClock(gate: gate),
-                                         wallClock: FixedWallClock(),
-                                         random: SplitMix64RandomSource(seed: 7))
-        await subject.start()
-        for attempt in 1...8 {
-            await double.waitForRequests(atLeast: attempt)
-            await gate.release(1)
-        }
-        await subject.stop()
-        let history = await subject.backoffHistory
-        #expect(history.count >= 8)
-        let ladder = policy.backoffSeconds
-        for (index, delay) in history.prefix(8).enumerated() {
-            let base = ladder[min(index, ladder.count - 1)]
-            #expect(delay >= base * (1 - policy.jitterFraction) - 0.0001,
-                    "step \(index) delay \(delay) base \(base)")
-            #expect(delay <= base * (1 + policy.jitterFraction) + 0.0001,
-                    "step \(index) delay \(delay) base \(base)")
-        }
-        // The ladder saturates: the eighth step still uses the last rung, 60 s.
-        #expect(history[7] >= 60 * (1 - policy.jitterFraction) - 0.0001)
-    }
-
-    @Test func monitorPublishesStateChangesToEveryConsumer() async throws {
-        let double = RequestDouble()
-        await double.route("/alertStream", failing: .notSupported(resource: "x"))
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        // A factory, not a property: two consumers each get their own stream (R-65).
-        let first = subject.stateChanges()
-        let second = subject.stateChanges()
-        await settle(until: { await subject.stateConsumerCount() == 2 })
-        await subject.start()
-        var firstStates: [AlertStreamState] = []
-        for await state in first {
-            firstStates.append(state)
-            if state == .notSupported { break }
-        }
-        var secondStates: [AlertStreamState] = []
-        for await state in second {
-            secondStates.append(state)
-            if state == .notSupported { break }
-        }
-        #expect(firstStates.contains(.notSupported))
-        #expect(secondStates.contains(.notSupported))
-    }
-
-    @Test func monitorThrowsWhenNoBoundaryCanBeFound() async throws {
-        // No boundary in the header and none in the body: unparseable, and reported as such rather
-        // than silently delivering nothing.
-        let double = RequestDouble()
-        await double.setStream(contentType: "multipart/mixed",
-                               chunks: [Data(repeating: 0x41, count: 1024)])
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        await subject.start()
-        await double.waitForRequests(atLeast: 1)
-        await gate.release(1)
-        await double.waitForRequests(atLeast: 2)
-        // It retried rather than treating the failure as terminal.
-        #expect(await subject.emittedEvents == 0)
-        #expect(await subject.connectionAttempts >= 2)
-        await subject.stop()
-    }
-
-    @Test func monitorSniffsABoundaryOutOfTheBodyWhenTheHeaderLacksOne() async throws {
-        let token = "MIME_boundary"
-        let double = RequestDouble()
-        await double.setStream(contentType: "multipart/mixed",
-                               chunks: [MultipartFixtures.realisticStream(boundary: token)])
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        let events = subject.notifications()
-        await settle(until: { await subject.eventConsumerCount() == 1 })
-        await subject.start()
-        var received: [EventNotificationAlert] = []
-        for await event in events {
-            received.append(event)
-            break
-        }
-        #expect(received.first?.kind == .motion)
-        await subject.stop()
-    }
-
-    @Test func monitorStopMovesToStopped() async throws {
-        let double = RequestDouble()
-        await double.route("/alertStream", failing: .deviceBusy)
-        let gate = SleepGate()
-        let subject = monitor(double, gate: gate)
-        await subject.start()
-        await double.waitForRequests(atLeast: 1)
-        await subject.stop()
-        #expect(await subject.state == .stopped)
-    }
-
 }

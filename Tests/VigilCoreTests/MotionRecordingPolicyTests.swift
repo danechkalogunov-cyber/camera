@@ -7,14 +7,15 @@ import VigilProtocols
 @testable import VigilCore
 
 @Suite struct MotionRecordingPolicyTests {
-    private let camera = CameraID(rawValue: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!)
+    private let camera = CameraID(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!)
 
     @Test func armedTriggerStartsWithPreAndPostRoll() {
         var policy = MotionRecordingPolicy()
         let now = Date(timeIntervalSince1970: 1_000)
         let trigger = makeTrigger(at: now)
-        #expect(policy.receive(trigger, isArmed: true)
-            == .start(trigger, preRollSeconds: 10, stopAt: now.addingTimeInterval(15)))
+        #expect(
+            policy.receive(trigger, isArmed: true)
+                == .start(trigger, preRollSeconds: 10, stopAt: now.addingTimeInterval(15)))
     }
 
     @Test func repeatedTriggerExtendsInsteadOfStartingSecondClip() {
@@ -22,8 +23,9 @@ import VigilProtocols
         let first = makeTrigger(at: Date(timeIntervalSince1970: 1_000))
         let second = makeTrigger(at: Date(timeIntervalSince1970: 1_010))
         _ = policy.receive(first, isArmed: true)
-        #expect(policy.receive(second, isArmed: true)
-            == .extend(second, stopAt: Date(timeIntervalSince1970: 1_025)))
+        #expect(
+            policy.receive(second, isArmed: true)
+                == .extend(second, stopAt: Date(timeIntervalSince1970: 1_025)))
         #expect(policy.advance(to: Date(timeIntervalSince1970: 1_016)).isEmpty)
     }
 
@@ -32,8 +34,9 @@ import VigilProtocols
         let first = makeTrigger(at: Date(timeIntervalSince1970: 1_000))
         _ = policy.receive(first, isArmed: true)
         #expect(policy.advance(to: Date(timeIntervalSince1970: 1_015)) == [.stop(cameraID: camera)])
-        #expect(policy.receive(makeTrigger(at: Date(timeIntervalSince1970: 1_020)), isArmed: true)
-            == .ignore)
+        #expect(
+            policy.receive(makeTrigger(at: Date(timeIntervalSince1970: 1_020)), isArmed: true)
+                == .ignore)
         let later = makeTrigger(at: Date(timeIntervalSince1970: 1_036))
         guard case .start = policy.receive(later, isArmed: true) else {
             Issue.record("expected a new recording after cooldown")
@@ -78,16 +81,20 @@ import VigilProtocols
         #expect(!schedule.allows(outside.occurredAt, calendar: calendar))
         #expect(schedule.allows(inside.occurredAt, calendar: calendar))
         #expect(policy.receive(outside, isArmed: true, configuration: configuration) == .ignore)
-        guard case .start = policy.receive(inside, isArmed: true,
-                                           configuration: configuration) else {
+        guard
+            case .start = policy.receive(
+                inside, isArmed: true,
+                configuration: configuration)
+        else {
             Issue.record("expected the scheduled trigger to start")
             return
         }
     }
 
     private func makeTrigger(at date: Date) -> MotionRecordingTrigger {
-        MotionRecordingTrigger(cameraID: camera, eventID: EventID(), kind: .motion,
-                               occurredAt: date)
+        MotionRecordingTrigger(
+            cameraID: camera, eventID: EventID(), kind: .motion,
+            occurredAt: date)
     }
 }
 
