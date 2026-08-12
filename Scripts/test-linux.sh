@@ -56,7 +56,11 @@ echo "== run tests =="
 for target in "${portable_targets[@]}"; do
     echo
     echo "== $target =="
-    if timeout 300 swift test --parallel --filter "$target"; then
+    # Several suites deliberately create their own task groups to verify gates, coalescing and
+    # cancellation. Running every test case concurrently on top of that can starve those controlled
+    # scenarios on the two-core Linux runner, so keep target isolation without adding a second
+    # scheduler layer here.
+    if timeout 300 swift test --no-parallel --filter "$target"; then
         continue
     else
         status=$?
