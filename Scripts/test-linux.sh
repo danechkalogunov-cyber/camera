@@ -53,7 +53,21 @@ fi
 
 echo
 echo "== run tests =="
-swift test --parallel
+for target in "${portable_targets[@]}"; do
+    echo
+    echo "== $target =="
+    if timeout 300 swift test --parallel --filter "$target"; then
+        continue
+    else
+        status=$?
+        if [ "$status" -eq 124 ]; then
+            echo "test-linux.sh: $target exceeded 300 seconds" >&2
+        else
+            echo "test-linux.sh: $target failed with status $status" >&2
+        fi
+        exit 1
+    fi
+done
 
 echo
 echo "test-linux: PASS ($portable_count portable tests discovered)"
