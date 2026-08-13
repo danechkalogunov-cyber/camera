@@ -126,6 +126,7 @@ package struct VTimelineView: View {
 
     @State private var hoverX: CGFloat?
     @State private var isDragging = false
+    @State private var exportHandleDrag: (isStart: Bool, x: CGFloat)?
 
     // MARK: - Initialisation
 
@@ -316,6 +317,9 @@ package struct VTimelineView: View {
 
             hoverCursor(width: width)
             playheadOverlay(geometry: geometry)
+            // Export handles intentionally come last: the selected range sits beneath the footage
+            // lanes, but its controls must always be on top of them.
+            exportHandles(geometry: geometry)
         }
         .contentShape(Rectangle())
         // Lower priority than the marker buttons inside, which is what `gesture` (rather than
@@ -352,33 +356,64 @@ package struct VTimelineView: View {
                     .frame(width: max(1, x2 - x1), height: stackHeight)
                     .position(x: (x1 + x2) / 2, y: stackHeight / 2)
                     .allowsHitTesting(false)
-                exportHandle(at: x1, isStart: true, geometry: geometry)
-                exportHandle(at: x2, isStart: false, geometry: geometry)
             }
         }
     }
 
-    private func exportHandle(at x: CGFloat, isStart: Bool,
+    @ViewBuilder
+    private func exportHandles(geometry: TimelineGeometry) -> some View {
+        if let exportRange {
+            let start = max(exportRange.lowerBound, window.start)
+            let end = min(exportRange.upperBound, window.end)
+            if start < end {
+                let x1 = CGFloat(geometry.x(at: start))
+                let x2 = CGFloat(geometry.x(at: end))
+                exportHandle(at: x1, limitingTo: x2, isStart: true, geometry: geometry)
+                exportHandle(at: x2, limitingTo: x1, isStart: false, geometry: geometry)
+            }
+        }
+    }
+
+    private func exportHandle(at x: CGFloat, limitingTo otherX: CGFloat, isStart: Bool,
                               geometry: TimelineGeometry) -> some View {
-        VStack(spacing: 2) {
+        let draggedX = exportHandleDrag?.isStart == isStart ? exportHandleDrag?.x : nil
+        let minimumGap: CGFloat = 4
+        let constrainedX: CGFloat
+        if isStart {
+            constrainedX = min(draggedX ?? x, otherX - minimumGap)
+        } else {
+            constrainedX = max(draggedX ?? x, otherX + minimumGap)
+        }
+        return VStack(spacing: 1) {
             Text(isStart ? "I" : "O")
                 .vType(VTheme.Typography.monoSmall.numeric)
-                .foregroundStyle(VTheme.Color.Semantic.danger)
+                .foregroundStyle(VTheme.Color.Semantic.accent)
             Capsule()
-                .fill(VTheme.Color.Semantic.danger)
-                .frame(width: 10, height: 28)
+                .fill(VTheme.Color.Semantic.accent.opacity(0.82))
+                .frame(width: 4, height: 22)
         }
-            .frame(width: 24, height: 36, alignment: .top)
+            .frame(width: 30, height: 32, alignment: .top)
             .contentShape(Rectangle())
-            .position(x: x, y: 18)
-            // This must outrank the timeline scrub gesture. A normal child gesture and the
-            // timeline's zero-distance drag both start on mouse-down, which made I/O jump as a
-            // scrub and a boundary edit fought over the same pointer.
-            .highPriorityGesture(DragGesture(minimumDistance: 0).onChanged { value in
-                onMoveExportBoundary(
-                    isStart,
-                    geometry.clampedInstant(atX: Double(x + value.translation.width)))
-            })
+            .position(x: constrainedX, y: 16)
+            // Keep the model unchanged while the pointer moves. Updating it on every event makes
+            // SwiftUI rebuild the handle underneath the same drag, so the next translation is
+            // measured from a new origin and the handle appears to shoot sideways.
+            .highPriorityGesture(DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    exportHandleDrag = (isStart, value.location.x)
+                }
+                .onEnded { value in
+                    let finalX: CGFloat
+                    if isStart {
+                        finalX = min(value.location.x, otherX - minimumGap)
+                    } else {
+                        finalX = max(value.location.x, otherX + minimumGap)
+                    }
+                    exportHandleDrag = nil
+                    onMoveExportBoundary(isStart,
+                                         geometry.clampedInstant(atX: Double(finalX)))
+                }
+            )
             .accessibilityLabel(isStart
                 ? Text("Clip in point", bundle: .vigilUI)
                 : Text("Clip out point", bundle: .vigilUI))
