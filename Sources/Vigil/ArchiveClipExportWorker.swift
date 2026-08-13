@@ -231,10 +231,10 @@ actor ArchiveClipExportWorker {
                 queryItems.append(item)
             }
         }
-        let timeRange = [
-            "starttime=\(ISAPITime.compactUTC(range.lowerBound))",
-            "endtime=\(ISAPITime.compactUTC(range.upperBound))",
-        ]
+        // Match the locator that already works for visible playback: this firmware rejects the
+        // same path when `endtime` is present. The worker owns the end boundary and stops after the
+        // requested amount of media, so the camera only needs to be told where to start.
+        let timeRange = ["starttime=\(ISAPITime.compactUTC(range.lowerBound))"]
         return PlaybackLocator(path: playback.path,
                                rawQuery: (queryItems.map(String.init) + timeRange).joined(separator: "&"),
                                start: range.lowerBound,
