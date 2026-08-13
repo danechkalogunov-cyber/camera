@@ -371,7 +371,10 @@ package struct VTimelineView: View {
             .frame(width: 24, height: 36, alignment: .top)
             .contentShape(Rectangle())
             .position(x: x, y: 18)
-            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+            // This must outrank the timeline scrub gesture. A normal child gesture and the
+            // timeline's zero-distance drag both start on mouse-down, which made I/O jump as a
+            // scrub and a boundary edit fought over the same pointer.
+            .highPriorityGesture(DragGesture(minimumDistance: 0).onChanged { value in
                 onMoveExportBoundary(
                     isStart,
                     geometry.clampedInstant(atX: Double(x + value.translation.width)))

@@ -104,7 +104,9 @@ actor ArchiveClipExportWorker {
             initialPriority: .background,
             dependencies: dependencies,
             frameSink: { continuation.yield($0) },
-            playbackScale: 8)
+            // Some cameras terminate archive RTSP immediately when `Scale:` is present. Export
+            // needs reliable media more than speed; it runs off the visible playback session.
+            playbackScale: nil)
         self.controller = controller
         await controller.start()
 
@@ -209,9 +211,12 @@ actor ArchiveClipExportWorker {
         let tracks = try await session.recordTracks().filter(\.enabled)
         let channel = tracks.filter { $0.channel == camera.channel }
         let candidates = channel.isEmpty ? tracks : channel
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let dayStart = calendar.startOfDay(for: range.lowerBound)
         for track in candidates {
             let index = try await session.dayIndex(track: track.id,
-                                                   dayStartUTC: range.lowerBound)
+                                                   dayStartUTC: dayStart)
             if index.segments.contains(where: {
                 $0.start <= range.lowerBound && range.lowerBound < $0.end
             }) { return track.id }

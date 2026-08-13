@@ -39,6 +39,23 @@ final class ClipExportCoordinator {
         selection.setOut(instant)
     }
 
+    /// Moves one visible handle without allowing it to cross the other. Keeping I to the left of O
+    /// makes a drag stable: otherwise `selection.range` reorders the values mid-gesture and the
+    /// handle jumps under the cursor.
+    func moveBoundary(isStart: Bool, to instant: Date, camera: CameraID) {
+        adopt(camera)
+        let minimumGap: TimeInterval = 0.1
+        if isStart, let out = selection.outPoint {
+            selection.setIn(min(instant, out.addingTimeInterval(-minimumGap)))
+        } else if !isStart, let `in` = selection.inPoint {
+            selection.setOut(max(instant, `in`.addingTimeInterval(minimumGap)))
+        } else if isStart {
+            selection.setIn(instant)
+        } else {
+            selection.setOut(instant)
+        }
+    }
+
     func clearSelection() {
         selection.clear()
         selectionCameraID = nil

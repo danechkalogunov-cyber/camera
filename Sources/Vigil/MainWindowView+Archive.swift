@@ -423,11 +423,8 @@
                     onCancelExport: { session.clipExport.cancel() },
                     onMoveExportBoundary: { isStart, instant in
                         guard let camera = selectedCamera else { return }
-                        if isStart {
-                            session.clipExport.setIn(instant, camera: camera.id)
-                        } else {
-                            session.clipExport.setOut(instant, camera: camera.id)
-                        }
+                        session.clipExport.moveBoundary(isStart: isStart, to: instant,
+                                                        camera: camera.id)
                     },
                     onRate: { stop in
                         Task {

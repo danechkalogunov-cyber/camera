@@ -165,9 +165,7 @@ package struct VShortcutsSheet: View {
     }
 
     private var scroller: some View {
-        ScrollView(.vertical) { grid }
-        .scrollIndicators(.visible)
-        .defaultScrollAnchor(.top)
+        ScrollView(.vertical, showsIndicators: true) { grid }
         .frame(maxHeight: 420)
     }
 

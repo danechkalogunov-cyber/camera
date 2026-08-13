@@ -110,6 +110,8 @@ extension AppSessionModel {
         stream.hasPlaybackCoverage = true
         // A seek is a picture starting to move again, whatever the button said a moment ago.
         stream.isPlaybackPaused = false
+        stream.playbackStartedAt = dependencies.clock.now()
+        stream.tileSink.setPresentationPaused(false)
         stream.seekStartedAt = dependencies.clock.now()
         dependencies.logger.info(.app, "seek: opening \(target.rtspPathOverride ?? "")")
         if stream === live { stopSession() } else { stop(stream) }
@@ -132,8 +134,14 @@ extension AppSessionModel {
     /// Pauses or resumes one archive stream while its session remains alive.
     func setPlaybackPaused(_ paused: Bool, on stream: CameraStream) async {
         guard stream.isPlaybackPaused != paused else { return }
+        if paused, let locator = stream.playback, let started = stream.playbackStartedAt {
+            let elapsed = max(0, dependencies.clock.now().seconds(since: started))
+            let held = locator.start.addingTimeInterval(elapsed * stream.playbackRate.scale)
+            stream.playback = PlaybackLocator(track: locator.track, start: held, end: locator.end)
+        }
         stream.isPlaybackPaused = paused
         stream.tileSink.setPresentationPaused(paused)
+        if let controller = stream.controller { await controller.setPaused(paused) }
     }
 
     /// Streams a different camera from the library.
@@ -382,9 +390,27 @@ extension AppSessionModel {
     /// then did nothing.
     func togglePlaybackPause() async {
         guard camera != nil else { return }
-        isPlaybackPaused.toggle()
-        live.tileSink.setPresentationPaused(isPlaybackPaused)
-        dependencies.logger.info(.app, isPlaybackPaused ? "playback paused" : "playback resumed")
+        if isPlaybackPaused {
+            guard let locator = playback else { return }
+            // `StreamController.setPaused(false)` only resumes the already-running RTSP clock,
+            // which means an archive picture jumps ahead by however long it was held. Reopen from
+            // the exact held locator instead.
+            await playArchive(locator)
+            dependencies.logger.info(.app, "playback resumed")
+            return
+        }
+
+        // Keep the last decoded picture on screen, stop accepting new media, and remember the
+        // archive instant reached so resume can request that instant rather than the original seek.
+        if let locator = playback, let started = live.playbackStartedAt {
+            let elapsed = max(0, dependencies.clock.now().seconds(since: started))
+            let held = locator.start.addingTimeInterval(elapsed * playbackRate.scale)
+            playback = PlaybackLocator(track: locator.track, start: held, end: locator.end)
+        }
+        isPlaybackPaused = true
+        live.tileSink.setPresentationPaused(true)
+        if let controller { await controller.setPaused(true) }
+        dependencies.logger.info(.app, "playback paused")
     }
 
     /// Returns the picture to the live stream.
@@ -402,6 +428,7 @@ extension AppSessionModel {
         var target = camera
         target.rtspPathOverride = stream.resolvedPath
         stream.playback = nil
+        stream.playbackStartedAt = nil
         stream.hasPlaybackCoverage = true
         // Live has no speed, and leaving the rate set would make the next session ask a live
         // channel for `Scale: 4` — the next four seconds, which do not exist yet.

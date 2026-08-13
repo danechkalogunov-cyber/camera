@@ -205,6 +205,10 @@ final class CameraStream {
     /// A paused archive retains its locator but owns no streaming session.
     var isPlaybackPaused = false
 
+    /// Monotonic origin of the archive currently being shown. Unlike `seekStartedAt`, this remains
+    /// after the first frame so pause can reopen at the actual held archive instant.
+    var playbackStartedAt: MediaInstant?
+
     /// False only while synchronized playback's UTC sits in a gap in this camera's index.
     var hasPlaybackCoverage = true
 
