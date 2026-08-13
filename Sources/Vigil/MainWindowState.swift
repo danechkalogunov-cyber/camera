@@ -270,14 +270,14 @@ final class MainWindowState {
     /// nothing but `session` or this state call those directly and take no counter.
     var snapshotRequests = 0
 
-    /// See ``snapshotRequests``.
     var recordToggleRequests = 0
-
-    /// See ``snapshotRequests``.
     var findCamerasRequests = 0
-
-    /// See ``snapshotRequests``.
     var openRecordingsFolderRequests = 0
+
+    var importCamerasRequests: UInt64 = 0
+    var exportConfigurationRequests: UInt64 = 0
+    var streamDoctorRequests: UInt64 = 0
+    var pictureInPictureRequests: UInt64 = 0
 
     /// A request that must survive the main window being closed.
     var deferredRequest: DeferredRequest?

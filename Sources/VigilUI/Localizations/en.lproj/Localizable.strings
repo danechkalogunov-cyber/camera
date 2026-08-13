@@ -946,3 +946,16 @@
 "Architecture" = "Architecture";
 "Data location" = "Data location";
 "Show Application Data" = "Show Application Data";
+"Import Cameras from CSV…" = "Import Cameras from CSV…";
+"Export Configuration…" = "Export Configuration…";
+"Stream Doctor…" = "Stream Doctor…";
+"Use Sidebar Rail" = "Use Sidebar Rail";
+"Solo Selected Camera" = "Solo Selected Camera";
+"Pin Tile Controls" = "Pin Tile Controls";
+"Camera Name" = "Camera Name";
+"Stream Statistics" = "Stream Statistics";
+"Timestamp" = "Timestamp";
+"Keyboard Shortcuts" = "Keyboard Shortcuts";
+"Playback" = "Playback";
+"About Vigil" = "About Vigil";
+"Open Vigil" = "Open Vigil";

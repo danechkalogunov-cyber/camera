@@ -236,6 +236,10 @@ extension MainWindowView {
         .onChange(of: window.recordToggleRequests) { _, _ in toggleRecording() }
         .onChange(of: window.findCamerasRequests) { _, _ in onFindCameras() }
         .onChange(of: window.openRecordingsFolderRequests) { _, _ in openRecordingsFolder() }
+        .onChange(of: window.importCamerasRequests) { _, _ in importCamerasFromCSV() }
+        .onChange(of: window.exportConfigurationRequests) { _, _ in exportConfiguration() }
+        .onChange(of: window.streamDoctorRequests) { _, _ in runStreamDoctor() }
+        .onChange(of: window.pictureInPictureRequests) { _, _ in togglePictureInPicture() }
         .onChange(of: window.exportDiagnosticsRequests) { _, _ in exportDiagnostics() }
         .onChange(of: window.toggleWatchRequests) { _, _ in
             guard let camera = selectedCamera else { return }

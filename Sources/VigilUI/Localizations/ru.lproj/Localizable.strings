@@ -929,3 +929,16 @@
 "Architecture" = "Архитектура";
 "Data location" = "Расположение данных";
 "Show Application Data" = "Показать данные приложения";
+"Import Cameras from CSV…" = "Импортировать камеры из CSV…";
+"Export Configuration…" = "Экспортировать конфигурацию…";
+"Stream Doctor…" = "Диагностика потока…";
+"Use Sidebar Rail" = "Использовать узкую боковую панель";
+"Solo Selected Camera" = "Показать только выбранную камеру";
+"Pin Tile Controls" = "Закрепить элементы управления плитки";
+"Camera Name" = "Название камеры";
+"Stream Statistics" = "Статистика потока";
+"Timestamp" = "Метка времени";
+"Keyboard Shortcuts" = "Сочетания клавиш";
+"Playback" = "Воспроизведение";
+"About Vigil" = "О Vigil";
+"Open Vigil" = "Открыть Vigil";

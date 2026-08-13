@@ -35,6 +35,7 @@ import VigilUI
 struct RootView: View {
     @State private var motionGovernor = VMotionGovernor()
     @AppStorage(GeneralPreferenceKey.showsMenuBarExtra) private var showsMenuBarExtra = true
+    @Environment(\.openWindow) private var openWindow
 
     // MARK: - Stored Properties
 
@@ -140,7 +141,14 @@ struct RootView: View {
             MenuBarStatusItemInstaller(
                 session: session,
                 window: window,
-                isVisible: showsMenuBarExtra)
+                isVisible: showsMenuBarExtra,
+                openWindow: openWindow)
+        )
+        .background(
+            NativeMainMenuInstaller(
+                session: session,
+                window: window,
+                openWindow: openWindow)
         )
         .background(WindowChromeInstaller())
         .task {
