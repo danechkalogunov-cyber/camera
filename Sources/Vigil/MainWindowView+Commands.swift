@@ -433,7 +433,7 @@ extension MainWindowView {
         .hidden()
     }
 
-    /// Overflow entries with nothing behind them yet, dimmed rather than hidden.
+    /// Overflow entries that cannot run for the currently selected camera.
     ///
     /// Removing them would make the menu's shape change as features land, and a user who learned
     /// where Settings sits would find it somewhere else next month.
@@ -444,10 +444,8 @@ extension MainWindowView {
     /// has no camera, and gone the moment they have one. That is the opposite of when somebody looks
     /// for a second device.
     ///
-    /// The other four stay dimmed and are not given "not in this build" toasts: an item in a menu
-    /// can be genuinely disabled, which says the same thing without spending a click to say it.
     var unavailableOverflowItems: Set<VOverflowItem> {
-        [.videoWall, .streamDoctor, .settings]
+        []
     }
 
     /// Handles an overflow choice.
@@ -456,7 +454,11 @@ extension MainWindowView {
         switch item {
         case .discovery: onFindCameras()
         case .pictureInPicture: togglePictureInPicture()
-        default: return
+        case .videoWall: openWindow(id: SceneID.wall)
+        case .streamDoctor:
+            guard let camera = selectedCamera else { return }
+            beginStreamDoctor(camera: camera)
+        case .settings: openWindow(id: SceneID.settings)
         }
     }
 

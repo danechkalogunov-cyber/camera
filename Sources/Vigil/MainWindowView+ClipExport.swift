@@ -51,6 +51,16 @@ extension MainWindowView {
         }
     }
 
+    /// Uses macOS's native sharing picker so an exported clip can go straight to Telegram, Mail,
+    /// AirDrop and any other installed sharing extension instead of only being saved in Finder.
+    func shareExportedClip(_ url: URL) {
+        let picker = NSSharingServicePicker(items: [url])
+        guard let view = NSApp.keyWindow?.contentView ?? NSApp.mainWindow?.contentView else {
+            return
+        }
+        picker.show(relativeTo: .zero, of: view, preferredEdge: .minY)
+    }
+
     func exportFileStem(_ cameraName: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         let safe = cameraName.unicodeScalars.map {

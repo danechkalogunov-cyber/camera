@@ -353,18 +353,6 @@ package struct VToolbarView: View {
                 symbol: .patrol,
                 style: isCycling ? .secondary : .ghost,
                 action: onToggleCycle)
-            .overlay {
-                if isCycling {
-                    TimelineView(.periodic(from: .now, by: 0.2)) { context in
-                        let elapsed = context.date.timeIntervalSinceReferenceDate
-                            .truncatingRemainder(dividingBy: cycleInterval)
-                        Circle().trim(from: 0, to: VCycleProgress.fraction(elapsed: elapsed,
-                                                                          interval: cycleInterval))
-                            .stroke(.tint, lineWidth: 2).rotationEffect(.degrees(-90)).padding(2)
-                    }
-                    .allowsHitTesting(false)
-                }
-            }
             .contextMenu {
                 ForEach(VCycleModel.intervals, id: \.self) { interval in
                     Button("\(Int(interval)) s") { onSelectCycleInterval(interval) }

@@ -210,20 +210,17 @@ public actor CredentialStore {
         var status = keychain.add(attributes)
 
         if status == errSecDuplicateItem {
-            // ⛔ UPDATED IN PLACE, AND A DELETE-THEN-ADD WAS TRIED AND REVERTED. Replacing the item
-            // does refresh its ACL — but it also throws away every grant the *user* has made
-            // against it, and "Always Allow" is exactly such a grant. So the one thing that
-            // rewriting was meant to fix, it broke: the user clicked Always Allow, the next connect
-            // recreated the item, and macOS asked again. An item's access control is the user's,
-            // and a password save must not be a way to reset it.
-            //
-            // The update dictionary MUST NOT carry kSecClass — the Keychain answers errSecParam if
-            // it does — and the access group belongs to the query, not to the update.
-            var update = attributes
-            update.removeValue(forKey: kSecClass as String)
-            update.removeValue(forKey: kSecAttrAccessGroup as String)
-            update.removeValue(forKey: kSecAttrAccess as String)
-            status = keychain.update(baseQuery(descriptor.ref), update)
+            // Old development builds wrote items with an ACL tied to the transient ad-hoc binary.
+            // Updating such an item preserves that ACL and macOS asks for the login password after
+            // every rebuild. Recreate it only when the user explicitly saves a password, so the
+            // replacement gets the stable shared ACL from `itemAttributes`.
+            let deleteStatus = keychain.delete(baseQuery(descriptor.ref))
+            guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+                let error = CredentialError.from(status: deleteStatus, operation: "replace")
+                logger.failure(.core, error)
+                throw error
+            }
+            status = keychain.add(attributes)
         }
         guard status == errSecSuccess else {
             let error = CredentialError.from(status: status, operation: "save")

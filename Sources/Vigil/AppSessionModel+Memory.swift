@@ -129,17 +129,11 @@ extension AppSessionModel {
         await playArchive(locator, on: stream)
     }
 
-    /// Pauses or resumes one archive stream. A pause owns no socket and holds the tile's last frame.
+    /// Pauses or resumes one archive stream while its session remains alive.
     func setPlaybackPaused(_ paused: Bool, on stream: CameraStream) async {
         guard stream.isPlaybackPaused != paused else { return }
         stream.isPlaybackPaused = paused
-        if paused {
-            if stream === live { stopSession() } else { stop(stream) }
-            // Teardown deliberately preserves the pause bit.
-            stream.isPlaybackPaused = true
-        } else if let locator = stream.playback {
-            await playArchive(locator, on: stream)
-        }
+        stream.tileSink.setPresentationPaused(paused)
     }
 
     /// Streams a different camera from the library.
@@ -387,21 +381,10 @@ extension AppSessionModel {
     /// never resume. That was the second half of the same bug — the picture stopped and the button
     /// then did nothing.
     func togglePlaybackPause() async {
-        guard let camera else { return }
-        guard isPlaybackPaused else {
-            isPlaybackPaused = true
-            dependencies.logger.info(.app, "playback paused")
-            stopSession()
-            return
-        }
-        isPlaybackPaused = false
-        if let locator = playback {
-            await playArchive(locator)
-            return
-        }
-        dependencies.logger.info(.app, "resuming the live stream")
-        beginConnecting()
-        await stream(camera: camera, ref: activeRef ?? camera.credentialRef)
+        guard camera != nil else { return }
+        isPlaybackPaused.toggle()
+        live.tileSink.setPresentationPaused(isPlaybackPaused)
+        dependencies.logger.info(.app, isPlaybackPaused ? "playback paused" : "playback resumed")
     }
 
     /// Returns the picture to the live stream.

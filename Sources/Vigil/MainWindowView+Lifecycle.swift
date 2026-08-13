@@ -241,6 +241,10 @@ extension MainWindowView {
         .onChange(of: window.streamDoctorRequests) { _, _ in runStreamDoctor() }
         .onChange(of: window.pictureInPictureRequests) { _, _ in togglePictureInPicture() }
         .onChange(of: window.exportDiagnosticsRequests) { _, _ in exportDiagnostics() }
+        .onChange(of: session.clipExport.shareRequests) { _, _ in
+            guard let url = session.clipExport.completedURL else { return }
+            shareExportedClip(url)
+        }
         .onChange(of: window.toggleWatchRequests) { _, _ in
             guard let camera = selectedCamera else { return }
             let starts = !window.watchedCameraIDs.contains(camera.id)

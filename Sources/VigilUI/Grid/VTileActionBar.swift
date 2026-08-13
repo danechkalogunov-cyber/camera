@@ -253,7 +253,7 @@ package enum VTileActionMetrics {
     package static let hit: CGFloat = 28
 
     /// Between buttons.
-    package static let spacing: CGFloat = 4
+    package static let spacing: CGFloat = 0
 
     /// How wide the whole row is, buttons plus gaps plus its own padding.
     ///

@@ -77,7 +77,7 @@ actor ArchiveClipExportWorker {
             trigger: "export",
             nameTemplate: "{camera}_{date}_{time}",
             limits: RecordingSegmentPlanner.Limits(maximumSeconds: 0, maximumBytes: 0),
-            fragmentIntervalSeconds: 2,
+            fragmentIntervalSeconds: 0,
             preservesSourceGaps: true,
             expectsMediaDataInRealTime: false)
         let recorder = ClipRecorder(camera: info, options: options, destination: destination,

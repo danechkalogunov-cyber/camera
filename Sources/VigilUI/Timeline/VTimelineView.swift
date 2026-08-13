@@ -360,12 +360,17 @@ package struct VTimelineView: View {
 
     private func exportHandle(at x: CGFloat, isStart: Bool,
                               geometry: TimelineGeometry) -> some View {
-        Capsule()
-            .fill(VTheme.Color.Semantic.accent)
-            .frame(width: 10, height: 28)
-            .frame(width: 24, height: 36)
+        VStack(spacing: 2) {
+            Text(isStart ? "I" : "O")
+                .vType(VTheme.Typography.monoSmall.numeric)
+                .foregroundStyle(VTheme.Color.Semantic.danger)
+            Capsule()
+                .fill(VTheme.Color.Semantic.danger)
+                .frame(width: 10, height: 28)
+        }
+            .frame(width: 24, height: 36, alignment: .top)
             .contentShape(Rectangle())
-            .position(x: x, y: stackHeight / 2)
+            .position(x: x, y: 18)
             .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                 onMoveExportBoundary(
                     isStart,

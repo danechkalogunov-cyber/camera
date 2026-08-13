@@ -371,6 +371,7 @@
                     onGoToDayEdge: { start in archive.moveToDayEdge(start: start) },
                     onDismiss: {
                         window.showsTimeline = false
+                        session.clipExport.clearSelection()
                         // Closing the scrubber returns to live. A window left showing
                         // yesterday with no scrubber to say so is the worst state this
                         // feature can produce: the picture looks live and is not.

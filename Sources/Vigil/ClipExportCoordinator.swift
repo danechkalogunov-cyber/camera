@@ -21,6 +21,7 @@ final class ClipExportCoordinator {
     private(set) var progress: Double = 0
     private(set) var lastFailure: String?
     private(set) var completedURL: URL?
+    private(set) var shareRequests: UInt64 = 0
     private(set) var selectionCameraID: CameraID?
 
     private var worker: ArchiveClipExportWorker?
@@ -72,6 +73,7 @@ final class ClipExportCoordinator {
                                   destination: destination, maskedSerial: maskedSerial)
                 self.progress = 1
                 self.completedURL = destination
+                self.shareRequests &+= 1
                 self.lastFailure = nil
             } catch ArchiveClipExportWorker.Failure.cancelled {
                 self.lastFailure = nil

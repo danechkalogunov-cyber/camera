@@ -59,6 +59,7 @@ extension MainWindowView {
             localClips: timelineLocalClips,
             markers: timelineMarkers)
         archive.movePlayhead(to: lead, isScrubbing: false)
+        playArchive(from: lead)
     }
 
     /// UX.md §9.1: the event feed opens five seconds early.

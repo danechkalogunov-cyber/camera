@@ -163,7 +163,7 @@
             // clip on this subtree would force the tile offscreen and break the display layer's
             // direct composition (see the header of VigilRender/Interop/VideoTile.swift).
             .overlay(alignment: .topTrailing) { statsReadout }
-            .overlay(alignment: .bottomLeading) { elapsedReadout }
+            .overlay(alignment: .topLeading) { elapsedReadout }
             .overlay(alignment: .bottomTrailing) { actionBar }
             .overlay(alignment: .bottom) { audioMeter }
             .background { sizeReader }
@@ -275,7 +275,8 @@
             }
         }
 
-        /// The bottom-leading readout. At most one at a time, recording first (UX.md §5.3).
+        /// The recording readout sits opposite the telemetry so it never covers the name chip or
+        /// the row of camera controls along the bottom edge.
         @ViewBuilder
         private var elapsedReadout: some View {
             if showsOverlay, overlays.contains(.timestamp), isRecording, let recordingElapsed {

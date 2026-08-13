@@ -52,6 +52,10 @@ final class TileVideoSink: VideoSink {
     /// view weakly, so nothing here keeps a discarded view alive.
     private let attached = OSAllocatedUnfairLock<VideoTileView?>(initialState: nil)
 
+    /// Holds the last drawn frame in place without tearing down the RTSP session. The timeline's
+    /// pause control must not turn a presentation toggle into a reconnect.
+    private let presentationPaused = OSAllocatedUnfairLock(initialState: false)
+
     // MARK: - Initialisation
 
     /// Creates an unattached sink.
@@ -101,6 +105,13 @@ final class TileVideoSink: VideoSink {
         onRenderState(current?.state)
     }
 
+    /// Stops or resumes delivery to the renderer while leaving decoding and the network session
+    /// alive. The next frame after resume replaces the held picture in the usual way.
+    @MainActor
+    func setPresentationPaused(_ paused: Bool) {
+        presentationPaused.withLock { $0 = paused }
+    }
+
     /// Stops delivering. The tile keeps its last picture, which is the correct thing to leave on
     /// screen (docs/API_CONTRACT.md §4.9 — never `flush(removingDisplayedImage:)`).
     func release() {
@@ -134,6 +145,7 @@ final class TileVideoSink: VideoSink {
 
     nonisolated func enqueue(_ sampleBuffer: CMSampleBuffer, format: VideoFormatInfo,
                              generation: UInt32) {
+        guard !presentationPaused.withLock({ $0 }) else { return }
         // The sample buffer is neither boxed nor stored: both sides are `nonisolated` and the call
         // is synchronous, so no isolation boundary is crossed (R-51).
         let view = attached.withLock { $0 }
@@ -141,11 +153,13 @@ final class TileVideoSink: VideoSink {
     }
 
     nonisolated func enqueuePixelBuffer(_ pixelBuffer: CVPixelBuffer, generation: UInt32) {
+        guard !presentationPaused.withLock({ $0 }) else { return }
         let view = attached.withLock { $0 }
         view?.enqueuePixelBuffer(pixelBuffer, generation: generation)
     }
 
     nonisolated func enqueueJPEG(_ image: CGImage) {
+        guard !presentationPaused.withLock({ $0 }) else { return }
         let view = attached.withLock { $0 }
         view?.enqueueJPEG(image)
     }
