@@ -32,15 +32,30 @@ extension MainWindowView {
     }
 
     func exportSelectedClip() {
-        guard !session.clipExport.isExporting,
-              let camera = selectedCamera,
-              currentExportRange != nil else { return }
+        guard !session.clipExport.isExporting else { return }
+        guard let camera = selectedCamera, let range = currentExportRange else {
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: Self.localized("Set both I and O before exporting video."))
+            return
+        }
+        guard let hostWindow = NSApp.keyWindow ?? NSApp.mainWindow else {
+            window.toast = MainWindowToast(
+                kind: .error,
+                message: Self.localized("Vigil could not open the export save dialog."))
+            return
+        }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.mpeg4Movie]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         panel.nameFieldStringValue = "\(exportFileStem(camera.displayName)).mp4"
-        panel.begin { response in
+        panel.message = Self.localized("Choose where to save the selected video clip.")
+        panel.prompt = Self.localized("Export Video")
+        // A window-attached sheet is reliably visible above the stage. The previous unattached
+        // asynchronous panel could be hidden behind the full-screen timeline and looked like the
+        // export button ignored the click.
+        panel.beginSheetModal(for: hostWindow) { response in
             guard response == .OK, let destination = panel.url else { return }
             session.clipExport.start(
                 camera: camera,
@@ -49,6 +64,7 @@ extension MainWindowView {
                     serial: deviceInfo.identity.serialNumber),
                 appSession: session)
         }
+        _ = range
     }
 
     /// Uses macOS's native sharing picker so an exported clip can go straight to Telegram, Mail,
