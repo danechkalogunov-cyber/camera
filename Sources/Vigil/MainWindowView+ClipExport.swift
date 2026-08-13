@@ -33,7 +33,7 @@ extension MainWindowView {
 
     func exportSelectedClip() {
         guard !session.clipExport.isExporting else { return }
-        guard let camera = selectedCamera, let range = currentExportRange else {
+        guard let camera = selectedCamera, currentExportRange != nil else {
             window.toast = MainWindowToast(
                 kind: .warning,
                 message: Self.localized("Set both I and O before exporting video."))
@@ -64,7 +64,6 @@ extension MainWindowView {
                     serial: deviceInfo.identity.serialNumber),
                 appSession: session)
         }
-        _ = range
     }
 
     /// Uses macOS's native sharing picker so an exported clip can go straight to Telegram, Mail,
