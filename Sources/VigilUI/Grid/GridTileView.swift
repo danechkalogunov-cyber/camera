@@ -375,7 +375,7 @@
 
         // MARK: - Corners
 
-        /// Paints the canvas back over the four corners the picture would otherwise square off.
+        /// Paints the canvas around the rounded inner edge of the tile border.
         ///
         /// ⛔ **Not** a `clipShape`, and not `masksToBounds` on the layer either. The file's own rule
         /// stands — a SwiftUI clip over this subtree breaks the display layer's direct composition —
@@ -384,9 +384,12 @@
         /// the layer's background and leaves the picture square. The corners stuck out of the 20 pt
         /// border exactly as before.
         ///
-        /// So the corners are covered rather than cut. This is sound because the tile sits on
-        /// `Layer.canvas` — the stage's own background — so the cover is the colour that would be
-        /// showing anyway. It costs one masked shape and no compositor blend over the picture.
+        /// So the border gutter and its corners are covered rather than cut. The punched-out shape
+        /// is inset by the widest border, matching the picture's padding above; this keeps the
+        /// square black well from showing past the rounded inner edge of the purple frame. This is
+        /// sound because the tile sits on `Layer.canvas` — the stage's own background — so the
+        /// cover is the colour that would be showing anyway. It costs one masked shape and no
+        /// compositor blend over the picture.
         ///
         /// ⚠️ It assumes the stage's default canvas. `VGridStageView` lets a caller substitute one
         /// (the video wall passes black), and a tile on a substituted canvas would show four corners of
@@ -397,10 +400,14 @@
             return Rectangle()
                 .fill(VTheme.Color.Layer.canvas)
                 .mask {
-                    // Everything outside the rounded rect: the full rectangle with the rounded shape
-                    // punched out of it.
+                    // Everything outside the border's inner edge: the full rectangle with the
+                    // inset rounded shape punched out of it.
                     Rectangle()
-                        .overlay { shape.blendMode(.destinationOut) }
+                        .overlay {
+                            shape
+                                .inset(by: VTheme.Border.recording)
+                                .blendMode(.destinationOut)
+                        }
                         .compositingGroup()
                 }
                 .allowsHitTesting(false)
