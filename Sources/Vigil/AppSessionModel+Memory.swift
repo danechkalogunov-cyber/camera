@@ -137,7 +137,7 @@ extension AppSessionModel {
         if paused, let locator = stream.playback, let started = stream.playbackStartedAt {
             let elapsed = max(0, dependencies.clock.now().seconds(since: started))
             let held = locator.start.addingTimeInterval(elapsed * stream.playbackRate.scale)
-            stream.playback = PlaybackLocator(track: locator.track, start: held, end: locator.end)
+            stream.playback = locator.rebased(to: held)
         }
         stream.isPlaybackPaused = paused
         stream.tileSink.setPresentationPaused(paused)
@@ -405,7 +405,7 @@ extension AppSessionModel {
         if let locator = playback, let started = live.playbackStartedAt {
             let elapsed = max(0, dependencies.clock.now().seconds(since: started))
             let held = locator.start.addingTimeInterval(elapsed * playbackRate.scale)
-            playback = PlaybackLocator(track: locator.track, start: held, end: locator.end)
+            playback = locator.rebased(to: held)
         }
         isPlaybackPaused = true
         live.tileSink.setPresentationPaused(true)
@@ -468,6 +468,21 @@ extension AppSessionModel {
     /// What was stored last time, or `true` before anything has been.
     var remembersVideoOverlay: Bool {
         LastConnection.load(from: defaults)?.showsVideoOverlay ?? true
+    }
+}
+
+private extension PlaybackLocator {
+    /// Keeps a device-provided playback locator intact (including its opaque `name` query item)
+    /// while rebasing only the point where RTSP playback resumes.
+    func rebased(to start: Date) -> PlaybackLocator {
+        let query = rawQuery.split(separator: "&", omittingEmptySubsequences: true).map { item in
+            let pair = item.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let name = pair.first, name.caseInsensitiveCompare("starttime") == .orderedSame
+            else { return String(item) }
+            return "starttime=\(ISAPITime.compactUTC(start))"
+        }.joined(separator: "&")
+        return PlaybackLocator(path: path, rawQuery: query, start: start, end: end,
+                               fileName: fileName, sizeBytes: sizeBytes)
     }
 }
 
