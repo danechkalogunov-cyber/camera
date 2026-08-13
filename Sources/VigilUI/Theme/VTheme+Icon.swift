@@ -255,7 +255,9 @@ extension VTheme.Symbol {
         case .synchronisedPlayback: return "link"
 
         // PTZ
-        case .ptzPad: return "vigil.ptz.joystick"
+        // The intended custom asset is not shipped yet. Returning its unresolved name leaves a
+        // full-sized button with no glyph, which reads as a random gap in the camera controls.
+        case .ptzPad: return "viewfinder.circle"
         case .zoomIn: return "plus.magnifyingglass"
         case .zoomOut: return "minus.magnifyingglass"
         case .focusControl: return "viewfinder.circle"

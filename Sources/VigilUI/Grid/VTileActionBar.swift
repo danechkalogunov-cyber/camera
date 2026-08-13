@@ -163,7 +163,7 @@ extension View {
 
 /// The bottom-trailing button row.
 ///
-/// 24 × 24 pt glyphs packed into adjacent hit targets, on the tile's own scrim so the
+/// 24 × 24 pt glyphs on a 28 pt hit target with 4 pt spacing (§5.3), on the tile's own scrim so the
 /// row reads over a bright frame and a dark one alike.
 @MainActor
 package struct VTileActionBar: View {
@@ -250,10 +250,10 @@ package struct VTileActionBar: View {
 package enum VTileActionMetrics {
 
     /// The hit target. The glyph inside it is `Icon.sm`.
-    package static let hit: CGFloat = 24
+    package static let hit: CGFloat = 28
 
     /// Between buttons.
-    package static let spacing: CGFloat = 0
+    package static let spacing: CGFloat = 4
 
     /// How wide the whole row is, buttons plus gaps plus its own padding.
     ///
