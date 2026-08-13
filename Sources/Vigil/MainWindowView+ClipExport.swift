@@ -33,10 +33,16 @@ extension MainWindowView {
 
     func exportSelectedClip() {
         guard !session.clipExport.isExporting else { return }
-        guard let camera = selectedCamera, currentExportRange != nil else {
+        guard let camera = selectedCamera, let range = currentExportRange else {
             window.toast = MainWindowToast(
                 kind: .warning,
                 message: Self.localized("Set both I and O before exporting video."))
+            return
+        }
+        guard let playback = archive.locator(at: range.lowerBound) else {
+            window.toast = MainWindowToast(
+                kind: .warning,
+                message: Self.localized("Nothing was recorded at the export in point."))
             return
         }
         guard let hostWindow = NSApp.keyWindow ?? NSApp.mainWindow else {
@@ -59,6 +65,7 @@ extension MainWindowView {
             guard response == .OK, let destination = panel.url else { return }
             session.clipExport.start(
                 camera: camera,
+                playback: playback,
                 destination: destination,
                 maskedSerial: ClipExportCoordinator.mask(
                     serial: deviceInfo.identity.serialNumber),

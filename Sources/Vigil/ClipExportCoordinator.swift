@@ -11,6 +11,7 @@ import Foundation
 import Observation
 
 import VigilCore
+import VigilISAPI
 import VigilProtocols
 
 @MainActor
@@ -61,11 +62,11 @@ final class ClipExportCoordinator {
         selectionCameraID = nil
     }
 
-    func start(camera: Camera, destination: URL, maskedSerial: String?,
+    func start(camera: Camera, playback: PlaybackLocator, destination: URL, maskedSerial: String?,
                appSession: AppSessionModel) {
         guard !isExporting, selectionCameraID == camera.id,
               let range = selection.range else { return }
-        let worker = ArchiveClipExportWorker(camera: camera, range: range,
+        let worker = ArchiveClipExportWorker(camera: camera, range: range, playback: playback,
                                              dependencies: appSession.dependencies,
                                              credentials: appSession.credentials)
         self.worker = worker

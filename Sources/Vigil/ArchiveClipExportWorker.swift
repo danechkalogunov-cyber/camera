@@ -44,6 +44,7 @@ actor ArchiveClipExportWorker {
 
     private let camera: Camera
     private let range: Range<Date>
+    private let playback: PlaybackLocator
     private let dependencies: CoreDependencies
     private let credentials: CredentialStore
     private let fileSystem: any RecordingFileSystem
@@ -57,11 +58,13 @@ actor ArchiveClipExportWorker {
     private var parameterSets: ParameterSets?
     private var wasCancelled = false
 
-    init(camera: Camera, range: Range<Date>, dependencies: CoreDependencies,
+    init(camera: Camera, range: Range<Date>, playback: PlaybackLocator,
+         dependencies: CoreDependencies,
          credentials: CredentialStore,
          fileSystem: any RecordingFileSystem = SystemRecordingFileSystem()) {
         self.camera = camera
         self.range = range
+        self.playback = playback
         self.dependencies = dependencies
         self.credentials = credentials
         self.fileSystem = fileSystem
@@ -87,8 +90,7 @@ actor ArchiveClipExportWorker {
         self.recorder = recorder
 
         var target = camera
-        let locator = PlaybackLocator(track: try await playbackTrack(), start: range.lowerBound,
-                                      end: range.upperBound)
+        let locator = exportLocator()
         let query = locator.rawQuery
         target.rtspPathOverride = query.isEmpty ? locator.path : locator.path + "?" + query
 
@@ -217,38 +219,28 @@ actor ArchiveClipExportWorker {
         parameterSets = format.parameterSets
     }
 
-    /// Finds the camera's track containing the requested in point. The UI index is deliberately
-    /// not reused here: export is background work and must remain correct if the selected camera or
-    /// day changes while it runs.
-    private func playbackTrack() async throws -> TrackID {
-        guard let credential = try await credentials.credential(for: camera) else {
-            throw Failure.noVideo
+    /// Uses the path chosen by the timeline's real segment index. A camera can split one channel
+    /// across tracks (for example 101 and 103); re-discovering a track here can select the wrong
+    /// one and make an otherwise visible range look empty to RTSP.
+    private func exportLocator() -> PlaybackLocator {
+        var queryItems: [Substring] = []
+        for item in playback.rawQuery.split(separator: "&", omittingEmptySubsequences: true) {
+            let name = String(item.prefix { $0 != "=" })
+            if name.caseInsensitiveCompare("starttime") != .orderedSame
+                && name.caseInsensitiveCompare("endtime") != .orderedSame {
+                queryItems.append(item)
+            }
         }
-        var configuration = ISAPIClient.Configuration()
-        configuration.connectTimeout = .seconds(4)
-        configuration.controlTimeout = .seconds(6)
-        let endpoint = ISAPIEndpoint(host: camera.host, port: camera.httpPort,
-                                     useTLS: camera.useTLS)
-        let session = ISAPIDeviceSession(
-            endpoint: endpoint, credential: credential, configuration: configuration,
-            transport: URLSessionHTTPTransport(configuration: configuration,
-                                               logger: dependencies.logger),
-            clock: dependencies.clock, logger: dependencies.logger)
-        defer { Task { await session.shutdown() } }
-        let tracks = try await session.recordTracks().filter(\.enabled)
-        let channel = tracks.filter { $0.channel == camera.channel }
-        let candidates = channel.isEmpty ? tracks : channel
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        let dayStart = calendar.startOfDay(for: range.lowerBound)
-        for track in candidates {
-            let index = try await session.dayIndex(track: track.id,
-                                                   dayStartUTC: dayStart)
-            if index.segments.contains(where: {
-                $0.start <= range.lowerBound && range.lowerBound < $0.end
-            }) { return track.id }
-        }
-        throw Failure.noVideo
+        let timeRange = [
+            "starttime=\(ISAPITime.compactUTC(range.lowerBound))",
+            "endtime=\(ISAPITime.compactUTC(range.upperBound))",
+        ]
+        return PlaybackLocator(path: playback.path,
+                               rawQuery: (queryItems.map(String.init) + timeRange).joined(separator: "&"),
+                               start: range.lowerBound,
+                               end: range.upperBound,
+                               fileName: playback.fileName,
+                               sizeBytes: playback.sizeBytes)
     }
 
     private static func slug(_ value: String) -> String {
