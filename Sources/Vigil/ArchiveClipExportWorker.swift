@@ -124,10 +124,36 @@ actor ArchiveClipExportWorker {
                 }
             }
         }
-        let budget = max(30, range.upperBound.timeIntervalSince(range.lowerBound) / 8 + 30)
+        // Export deliberately requests normal-speed playback: several camera firmwares end an
+        // archive RTSP session as soon as `Scale:` is present. The old /8 budget therefore cut a
+        // 71-second clip off after roughly 39 seconds, leaving the UI looking permanently busy.
+        let expectedSeconds = range.upperBound.timeIntervalSince(range.lowerBound)
+        let budget = max(45, expectedSeconds + 30)
         let watchdog = Task {
             try? await Task.sleep(for: .seconds(budget))
             continuation.finish()
+        }
+        // A camera can keep the RTSP socket open after it has stopped delivering usable video.
+        // Watch `mediaSeconds`, not frame arrival: repeated timestamps must not keep the export UI
+        // spinning forever. Three quiet five-second checks leave normal keyframe spacing ample room.
+        let stallWatchdog = Task { [weak self] in
+            var previous = -1.0
+            var unchangedChecks = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self else { return }
+                let current = await self.mediaSeconds
+                if current > previous + 0.05 {
+                    previous = current
+                    unchangedChecks = 0
+                } else {
+                    unchangedChecks += 1
+                    if unchangedChecks >= 3 {
+                        continuation.finish()
+                        return
+                    }
+                }
+            }
         }
 
         var started = false
@@ -148,6 +174,7 @@ actor ArchiveClipExportWorker {
         }
 
         watchdog.cancel()
+        stallWatchdog.cancel()
         eventTask.cancel()
         continuation.finish()
         await controller.stop(reason: .userRequested)
