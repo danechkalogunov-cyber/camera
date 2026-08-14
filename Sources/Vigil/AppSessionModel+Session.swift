@@ -24,6 +24,59 @@ import VigilVideo
 
 extension AppSessionModel {
 
+    struct ClipExportResumeState {
+        let stream: CameraStream
+        let camera: Camera
+        let credentialRef: CredentialRef
+        let resolvedPath: String?
+        let playback: PlaybackLocator?
+        let wasPaused: Bool
+        let wasRunning: Bool
+    }
+
+    func suspendForClipExport(cameraID: CameraID) async -> ClipExportResumeState? {
+        guard let stream = cameras.stream(for: cameraID),
+              let camera = stream.camera else { return nil }
+        let state = ClipExportResumeState(
+            stream: stream,
+            camera: camera,
+            credentialRef: stream.activeRef ?? camera.credentialRef,
+            resolvedPath: stream.resolvedPath,
+            playback: stream.playback,
+            wasPaused: stream.isPlaybackPaused,
+            wasRunning: stream.isRunning || stream.isActive)
+        let audioKey = StreamKey(camera: camera.id, quality: .main)
+        let outgoing = stream.teardown()
+        rebalanceDecodeBudget()
+        guard state.wasRunning || outgoing.controller != nil || outgoing.pipeline != nil else {
+            return state
+        }
+        await audioPlayback.remove(audioKey)
+        await outgoing.pipeline?.stop(reason: .stopped)
+        await outgoing.controller?.stop(reason: .userRequested)
+        return state
+    }
+
+    func resumeAfterClipExport(_ state: ClipExportResumeState) async {
+        guard state.wasRunning, state.stream.camera?.id == state.camera.id else { return }
+        if let playback = state.playback {
+            await playArchive(playback, on: state.stream)
+            if state.wasPaused {
+                await setPlaybackPaused(true, on: state.stream)
+            }
+            return
+        }
+        var target = state.camera
+        target.rtspPathOverride = state.resolvedPath ?? state.camera.rtspPathOverride
+        state.stream.playback = nil
+        state.stream.playbackStartedAt = nil
+        state.stream.playbackRate = .normal
+        state.stream.isPlaybackPaused = false
+        if state.stream === live { phase = .live }
+        state.stream.beginConnecting()
+        await start(state.stream, camera: target, ref: state.credentialRef)
+    }
+
     /// Tears the current session down: tasks, decode chain, controller.
     ///
     /// Leaves `phase` and the form alone, because both callers want something different afterwards

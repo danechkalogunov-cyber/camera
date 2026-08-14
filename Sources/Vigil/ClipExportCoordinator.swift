@@ -85,7 +85,13 @@ final class ClipExportCoordinator {
         }
         exportTask = Task { [weak self, weak worker] in
             guard let self, let worker else { return }
+            var resumeState: AppSessionModel.ClipExportResumeState?
             do {
+                resumeState = await appSession.suspendForClipExport(cameraID: camera.id)
+                guard !Task.isCancelled else {
+                    await worker.cancel()
+                    throw ArchiveClipExportWorker.Failure.cancelled
+                }
                 let output = try await worker.run()
                 try self.finalize(output: output, camera: camera, range: range,
                                   destination: destination, maskedSerial: maskedSerial)
@@ -99,6 +105,9 @@ final class ClipExportCoordinator {
                 self.lastFailure = error.localizedDescription
                 try? FileManager.default.removeItem(at: destination)
                 try? FileManager.default.removeItem(at: Self.sidecarURL(for: destination))
+            }
+            if let resumeState {
+                await appSession.resumeAfterClipExport(resumeState)
             }
             self.progressTask?.cancel()
             self.progressTask = nil

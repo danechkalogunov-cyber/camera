@@ -24,6 +24,7 @@ actor ArchiveClipExportWorker {
 
     enum Failure: Error, LocalizedError {
         case noVideo
+        case stream(StreamError)
         case multipleSegments(Int)
         case incomplete(expected: Double, actual: Double)
         case cancelled
@@ -31,13 +32,16 @@ actor ArchiveClipExportWorker {
         var errorDescription: String? {
             switch self {
             case .noVideo:
-                vigilUIString("The camera returned no video for the selected range.")
+                return vigilUIString("The camera returned no video for the selected range.")
+            case .stream(let error):
+                let status = error.rtspStatus.map { " (RTSP \($0))" } ?? ""
+                return vigilUIString("The camera could not start video: \(error.message)\(status)")
             case .multipleSegments:
-                vigilUIString("The camera changed video format during export.")
+                return vigilUIString("The camera changed video format during export.")
             case .incomplete:
-                vigilUIString("The camera ended the export before the selected range was complete.")
+                return vigilUIString("The camera ended the export before the selected range was complete.")
             case .cancelled:
-                vigilUIString("Export cancelled.")
+                return vigilUIString("Export cancelled.")
             }
         }
     }
@@ -56,6 +60,7 @@ actor ArchiveClipExportWorker {
     private(set) var codec: VideoCodec?
     private(set) var resolution: Resolution?
     private var parameterSets: ParameterSets?
+    private var terminalError: StreamError?
     private var wasCancelled = false
 
     init(camera: Camera, range: Range<Date>, playback: PlaybackLocator,
@@ -71,6 +76,7 @@ actor ArchiveClipExportWorker {
     }
 
     func run() async throws -> Output {
+        terminalError = nil
         let destination = try RecordingDestinationResolver.resolve(
             RecordingDestinationRequest(kind: .clips, folderName: "Vigil/Exports"),
             fileSystem: fileSystem)
@@ -117,8 +123,12 @@ actor ArchiveClipExportWorker {
             for await event in events {
                 switch event {
                 case .formatResolved(let format):
-                    await self.remember(format)
-                case .error(_, isFatal: true), .ended:
+                    self.remember(format)
+                case .error(let error, isFatal: true):
+                    self.remember(error)
+                    continuation.finish()
+                    return
+                case .ended:
                     continuation.finish()
                     return
                 default:
@@ -189,6 +199,9 @@ actor ArchiveClipExportWorker {
         }
         guard started, let codec else {
             await recorder.cancelAndDelete()
+            if let terminalError {
+                throw Failure.stream(terminalError)
+            }
             throw Failure.noVideo
         }
         let records = await recorder.finish(reason: .userStopped)
@@ -217,6 +230,10 @@ actor ArchiveClipExportWorker {
         codec = format.videoCodec
         resolution = format.resolution
         parameterSets = format.parameterSets
+    }
+
+    private func remember(_ error: StreamError) {
+        terminalError = error
     }
 
     /// Uses the path chosen by the timeline's real segment index. A camera can split one channel

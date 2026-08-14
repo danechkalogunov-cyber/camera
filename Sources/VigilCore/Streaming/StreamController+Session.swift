@@ -210,12 +210,12 @@ extension StreamController {
     /// Both are below the two short-circuits deliberately: a learned path and a user-typed override
     /// are not probe sequences and must not consume the budget.
     func resolvePath(credential: Credential) async -> PathResolution {
-        if let known = resolvedCandidate { return .ok(known) }
         if let override = camera.rtspPathOverride, !override.isEmpty {
             let candidate = RTSPPathCandidate.override(override)
             resolvedCandidate = candidate
             return .ok(candidate)
         }
+        if let known = resolvedCandidate { return .ok(known) }
 
         if case let .refused(retryAfter) = await governor.allowProbe(host: camera.host,
                                                                     account: credential.account) {
