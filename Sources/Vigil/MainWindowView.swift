@@ -256,7 +256,7 @@ struct MainWindowView: View {
                      onToggleSidebar: { window.isSidebarVisible.toggle() },
                      onToggleInspector: { window.isInspectorVisible.toggle() },
                      onSelectLayout: { selectLayout($0) },
-                     onToggleCycle: { window.cycle = window.cycle.toggledRunning() },
+                     onToggleCycle: { toggleCycle() },
                      onSelectCycleInterval: { window.cycle = window.cycle.withInterval($0) },
                      onOpenPalette: { openPalette() },
                      onShowMore: { window.isOverflowMenuOpen.toggle() })

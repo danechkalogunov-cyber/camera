@@ -376,6 +376,9 @@ final class MainWindowState {
     /// Exact camera ordering supplied by a named preset; nil uses the ordinary workspace order.
     var presetCameraOrder: [CameraID]?
 
+    /// Cameras currently drawn in the main stage, mirrored for the independent Video Wall scene.
+    var visibleStageCameraIDs: Set<CameraID> = []
+
     /// Bridges the app-scene diagnostics command to the evidence owned by `MainWindowView`.
     var exportDiagnosticsRequests: UInt64 = 0
     @ObservationIgnored var diagnosticsExportTask: Task<Void, Never>?

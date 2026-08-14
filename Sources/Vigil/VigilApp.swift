@@ -178,17 +178,19 @@ private struct VideoWallScene: View {
     }
 
     private var pageCount: Int {
-        max(1, Int(ceil(Double(library.cameras.count) / Double(configuration.layout.tileCount))))
+        max(1, Int(ceil(Double(enabledCameras.count) / Double(configuration.layout.tileCount))))
     }
+
+    private var enabledCameras: [Camera] { library.cameras.filter(\.isEnabled) }
 
     private var pageCameras: [Camera] {
         let safePage = min(page, pageCount - 1)
         let start = safePage * configuration.layout.tileCount
-        guard start < library.cameras.count else { return [] }
+        guard start < enabledCameras.count else { return [] }
         return Array(
-            library.cameras[
+            enabledCameras[
                 start..<min(
-                    library.cameras.count,
+                    enabledCameras.count,
                     start + configuration.layout.tileCount)])
     }
 
@@ -203,7 +205,7 @@ private struct VideoWallScene: View {
     }
 
     private var mainVisibleIDs: Set<CameraID> {
-        var ids = Set(library.cameras.prefix(window.layout.tileCount).map(\.id))
+        var ids = window.visibleStageCameraIDs
         if let bound = session.camera?.id { ids.insert(bound) }
         return ids
     }
@@ -271,6 +273,9 @@ private struct VideoWallScene: View {
         }
         .onChange(of: configuration.layout) { _, _ in page = 0 }
         .onChange(of: library.cameras.count) { _, _ in page = min(page, pageCount - 1) }
+        .onChange(of: enabledCameras.map(\.id)) { _, _ in
+            page = min(page, pageCount - 1)
+        }
         .onDisappear { releaseWallStreams() }
         .frame(minWidth: 640, minHeight: 360)
     }

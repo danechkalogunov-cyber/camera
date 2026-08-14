@@ -324,6 +324,10 @@
                 // sideways because focus hit the edge of the grid would read as a glitch.
                 .offset(window.stageBumpOffset)
                 .overlay(alignment: .bottom) { timelineOverlay }
+                .onAppear { window.visibleStageCameraIDs = Set(stagePageOrder) }
+                .onChange(of: stagePageOrder) { _, page in
+                    window.visibleStageCameraIDs = Set(page)
+                }
         }
 
         /// The scrubber over the bottom edge, once it has been asked for.

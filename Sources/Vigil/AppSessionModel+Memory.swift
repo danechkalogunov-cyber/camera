@@ -206,6 +206,7 @@ extension AppSessionModel {
     /// Starts or promotes a stream for the dedicated wall without replacing the bound camera.
     @discardableResult
     func connectForVideoWall(_ target: Camera) async -> Bool {
+        guard target.isEnabled else { return false }
         let stream = target.id == camera?.id ? live : cameras.stream(for: target)
         stream.isVideoWall = true
         if stream.isActive {

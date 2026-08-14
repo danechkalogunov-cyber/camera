@@ -144,7 +144,7 @@ extension MainWindowView {
         switch command.id {
         case "view.sidebar":   window.isSidebarVisible.toggle()
         case "view.inspector": window.isInspectorVisible.toggle()
-        case "view.cycle":     window.cycle = window.cycle.toggledRunning()
+        case "view.cycle":     toggleCycle()
         case "record.toggle":  toggleRecording()
         case "capture.snapshot": takeSnapshot()
         case "camera.find":    onFindCameras()
@@ -245,7 +245,7 @@ extension MainWindowView {
                 .keyboardShortcut("l", modifiers: .command)
             Button("", action: { window.isInspectorVisible.toggle() })
                 .keyboardShortcut("i", modifiers: [.command, .option])
-            Button("", action: { window.cycle = window.cycle.toggledRunning() })
+            Button("", action: { toggleCycle() })
                 .keyboardShortcut("y", modifiers: .command)
             Button("", action: { addCamera() })
                 .keyboardShortcut("n", modifiers: .command)
@@ -479,7 +479,7 @@ extension MainWindowView {
         // Through `chooseLayout`, so an explicit choice also ends solo — see `layoutBeforeSolo`.
         window.presetCameraOrder = nil
         window.chooseLayout(layout)
-        window.cycle = window.cycle.retargeted(cameraCount: library.cameras.count, layout: layout)
+        window.cycle = window.cycle.retargeted(cameraCount: stageOrder.count, layout: layout)
     }
 
     func applyLayoutPreset(_ preset: VLayoutPreset) {
@@ -498,6 +498,13 @@ extension MainWindowView {
                   layout: window.layout)
     }
 
+    /// Starts the patrol from the page the stage visibly selects, rather than waiting for its timer.
+    func toggleCycle() {
+        window.cycle = window.cycle.toggledRunning()
+        guard window.cycle.isRunning else { return }
+        Task { await showCyclePage() }
+    }
+
     /// The cycle's clock. The model is pure and holds no timer — this is the only thing that ticks.
     func runCycle() async {
         while !Task.isCancelled, window.cycle.isTicking {
@@ -513,7 +520,7 @@ extension MainWindowView {
             // advanced through nothing for as long as it was switched on — which is what the
             // toolbar's spinning ring was reporting. It was right when the app held one camera and
             // wrong from the moment the library landed.
-            window.cycle = window.cycle.next(cameraCount: library.cameras.count,
+            window.cycle = window.cycle.next(cameraCount: stageOrder.count,
                                              layout: window.layout)
             await showCyclePage()
         }
@@ -537,11 +544,10 @@ extension MainWindowView {
     /// is spent. That is a placeholder's behaviour, and it is `F-DEC-06` that replaces the number
     /// with a measured admission policy.
     private func showCyclePage() async {
-        let cameras = library.cameras
-        let range = window.cycle.visibleRange(cameraCount: cameras.count, layout: window.layout)
-        await session.showOnStage(range.compactMap { index in
-            cameras.indices.contains(index) ? cameras[index] : nil
-        })
+        let page = stagePageOrder.compactMap { id in
+            library.cameras.first { $0.id == id }
+        }
+        await session.showOnStage(page)
     }
 }
 

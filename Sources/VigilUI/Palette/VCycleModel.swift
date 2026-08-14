@@ -227,6 +227,14 @@ package struct VCycleModel: Sendable, Hashable {
         return with(page: clamped, isReversing: false)
     }
 
+    /// Moves to a page selected outside the automatic patrol, clamped to the current stage.
+    package func selectingPage(_ requested: Int,
+                               cameraCount: Int,
+                               layout: VGridLayout) -> VCycleModel {
+        let last = pageCount(cameraCount: cameraCount, layout: layout) - 1
+        return with(page: Swift.min(Swift.max(requested, 0), last), isReversing: false)
+    }
+
     // MARK: - Running and pausing
 
     /// Switched on, unpaused, back at the first page.

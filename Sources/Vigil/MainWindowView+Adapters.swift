@@ -155,14 +155,14 @@ extension MainWindowView {
                        serial: deviceInfo.identity.serialNumber)
     }
 
-    /// The layout, filled from ``stageOrder``.
+    /// The layout, filled from the current page of ``stageOrder``.
     ///
     /// ⚠️ The doc that used to sit here described a stage of exactly one cell holding exactly one
     /// camera, and it survived the change that made this the whole library — a stale comment on a
     /// rewritten body, which is worse than none, because it reads as a decision rather than as an
     /// oversight. ``stageOrder`` now carries the reasoning, including what a selected group does.
     var stageAssignment: VStageAssignment {
-        VStageAssignment(layout: window.layout, cameras: stageOrder)
+        VStageAssignment(layout: window.layout, cameras: stagePageOrder)
     }
 
     /// Which cameras belong on the stage, in the order the cells take them.
@@ -197,6 +197,12 @@ extension MainWindowView {
                                    })
     }
 
+    /// The one screenful selected by the cycle model, even while automatic cycling is off.
+    var stagePageOrder: [CameraID] {
+        let range = window.cycle.visibleRange(cameraCount: stageOrder.count, layout: window.layout)
+        return range.compactMap { stageOrder.indices.contains($0) ? stageOrder[$0] : nil }
+    }
+
     /// One tile payload per camera on the stage.
     ///
     /// ⚠️ A camera with no stream is not `.offline`, and the distinction is the whole of this
@@ -206,7 +212,7 @@ extension MainWindowView {
     /// what the stage keys that on, and it answers from the camera's **own** stream now rather than
     /// from "is this the one camera the app is driving".
     var stageCameras: [VStageCamera] {
-        stageOrder.map { id in stageCamera(id) }
+        stagePageOrder.map { id in stageCamera(id) }
     }
 
     /// One camera's tile payload, read from its own stream.

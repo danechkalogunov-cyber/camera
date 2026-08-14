@@ -200,10 +200,14 @@ extension MainWindowView {
         // ⚠️ The layout's worth, not the whole overflow. Putting nine cameras on a four-cell stage
         // would refuse five of them on the budget and leave the user with the same chip and no
         // explanation; one page is what the cells can actually hold.
-        let perPage = max(1, window.layout.tileCount)
-        let waiting = stageOrder.dropFirst(perPage)
-        guard !waiting.isEmpty else { return }
-        let page = waiting.prefix(perPage)
+        let count = stageOrder.count
+        guard window.cycle.pageCount(cameraCount: count, layout: window.layout) > 1 else { return }
+        let nextPage = (window.cycle.page + 1)
+            % window.cycle.pageCount(cameraCount: count, layout: window.layout)
+        window.cycle = window.cycle.selectingPage(nextPage,
+                                                   cameraCount: count,
+                                                   layout: window.layout)
+        let page = stagePageOrder
             .compactMap { id in library.cameras.first { $0.id == id } }
         guard !page.isEmpty else { return }
         Task { await session.showOnStage(page) }
