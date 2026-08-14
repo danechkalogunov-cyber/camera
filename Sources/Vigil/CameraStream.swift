@@ -285,7 +285,7 @@ final class CameraStream {
     /// stream that is resolving an address has no controller yet, and the cell for it must show
     /// "Connecting…" rather than the *Not connected* card — the card offers to start a session that
     /// is already starting.
-    var isActive: Bool { isRunning || streamState != .idle }
+    var isActive: Bool { isSuspendedForClipExport || isRunning || streamState != .idle }
 
     // MARK: - What the tile says
 
