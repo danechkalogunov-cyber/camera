@@ -239,8 +239,6 @@ extension AppSessionModel {
                                         id: remembered.cameraID,
                                         transport: remembered.transport,
                                         lastWorkingTransport: remembered.lastWorkingTransport)
-            try await credentials.migrateLegacyAccess(for: camera)
-            AppDelegate.dismissStalePasswordPanel()
             resolvedPath = remembered.rtspPath
             await stream(camera: camera, ref: remembered.credentialRef)
         } catch {

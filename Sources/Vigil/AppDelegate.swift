@@ -22,23 +22,6 @@ import VigilUI
 /// window's session lifecycle, where all active camera paths and recorders are available together.
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
-    @MainActor
-    static func dismissStalePasswordPanel() {
-        dismissPasswordInput()
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled else { return }
-            dismissPasswordInput()
-        }
-    }
-
-    @MainActor
-    private static func dismissPasswordInput() {
-        NSApp.keyWindow?.endEditing(for: nil)
-        NSTextInputContext.current?.discardMarkedText()
-        _ = NSApp.sendAction(#selector(NSResponder.cancelOperation(_:)), to: nil, from: nil)
-    }
-
     /// Keep the process available from its menu-bar extra after the last window closes.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

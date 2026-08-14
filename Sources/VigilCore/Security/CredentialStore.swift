@@ -174,16 +174,6 @@ public actor CredentialStore {
         try credential(for: camera.credentialRef)
     }
 
-    /// Rewrites an older item with Vigil's shared development ACL after its first successful read.
-    ///
-    /// Development builds are ad-hoc signed, so the default Keychain ACL changes with every
-    /// rebuild. Keeping the migration inside the store means the secret never leaves this actor.
-    public func migrateLegacyAccess(for camera: Camera) throws {
-        guard let credential = try credential(for: camera.credentialRef) else { return }
-        try save(credential, descriptor: CredentialDescriptor(camera: camera,
-                                                             account: credential.account))
-    }
-
     /// True when a password is stored for `ref`, without decrypting it.
     ///
     /// Uses `kSecReturnAttributes` alone, so it does not unlock the keychain to read the secret —
@@ -207,8 +197,7 @@ public actor CredentialStore {
     /// Creates or replaces the item for `descriptor.ref`.
     ///
     /// An existing item is updated in place rather than deleted and re-added, so its creation date
-    /// and any user-granted access control survive a password change. A **new** item is created
-    /// with the ACL ``sharedAccess(label:)`` builds; see that method for what that costs and why.
+    /// and its creation date survives a password change.
     ///
     /// - Precondition: `credential.ref == descriptor.ref`. Filing a password under another
     ///   credential's handle is a programmer error that would silently orphan the original.
@@ -220,10 +209,6 @@ public actor CredentialStore {
         var status = keychain.add(attributes)
 
         if status == errSecDuplicateItem {
-            // Old development builds wrote items with an ACL tied to the transient ad-hoc binary.
-            // Updating such an item preserves that ACL and macOS asks for the login password after
-            // every rebuild. Recreate it only when the user explicitly saves a password, so the
-            // replacement gets the stable shared ACL from `itemAttributes`.
             let deleteStatus = keychain.delete(baseQuery(descriptor.ref))
             guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
                 let error = CredentialError.from(status: deleteStatus, operation: "replace")
@@ -313,6 +298,7 @@ public actor CredentialStore {
             kSecClass as String: kSecClassInternetPassword,
             kSecReturnAttributes as String: NSNumber(value: true),
             kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecUseDataProtectionKeychain as String: NSNumber(value: true),
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
 
@@ -357,6 +343,7 @@ public actor CredentialStore {
         var query: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrPath as String: ref.keychainPath,
+            kSecUseDataProtectionKeychain as String: NSNumber(value: true),
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         return query
@@ -384,62 +371,10 @@ public actor CredentialStore {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
             kSecAttrSynchronizable as String: NSNumber(value: false),
             kSecValueData as String: Data(credential.secret.utf8),
+            kSecUseDataProtectionKeychain as String: NSNumber(value: true),
         ]
         if let accessGroup { attributes[kSecAttrAccessGroup as String] = accessGroup }
-        if let access = Self.sharedAccess(label: descriptor.label) {
-            attributes[kSecAttrAccess as String] = access
-        }
         return attributes
-    }
-
-    /// An ACL that every application on this Mac can read, so macOS never asks for the login
-    /// password to hand Vigil back its own item.
-    ///
-    /// ⛔ WHY THIS EXISTS, AND WHAT IT COSTS. A file-based Keychain item is bound by default to the
-    /// **exact binary** that created it. Rebuild Vigil — which is what happens on every `git pull`
-    /// here — and the signature no longer matches, so macOS puts up "Vigil wants to use your
-    /// confidential information" and asks for the account password, once per launch, forever.
-    /// "Always Allow" does not survive the next build either, because it trusts that binary and not
-    /// the next one. The result is a camera password typed into a system dialog every single time
-    /// the app starts, which is precisely the thing R1.4's zero-input relaunch promises not to ask
-    /// for.
-    ///
-    /// ⚠️ THE COST IS REAL AND IS NOT HIDDEN: the item becomes readable by any process running as
-    /// this user without a prompt. That is the same posture as most self-built apps and is a
-    /// deliberate trade for a camera password on a machine the owner builds the app on; it is not
-    /// the posture a signed, distributed build should ship with. When Vigil is signed with a stable
-    /// identity this should become the fallback rather than the rule, and the item's ACL can then
-    /// name that identity instead of naming everyone.
-    ///
-    /// ⛔ IT APPLIES TO **NEW ITEMS ONLY**, AND THAT LIMIT IS NOT AN OVERSIGHT. An ACL can be
-    /// attached when an item is created and changed afterwards only by `SecKeychainItemSetAccess`,
-    /// which macOS guards with its own dialog — "Vigil wants to change the owner of the … item",
-    /// asking for the login password. That was tried and reverted: it replaced one prompt with a
-    /// worse one. An item written before this existed keeps its narrow ACL until the user removes
-    /// it in Keychain Access and types the camera's password once more, and there is no way for an
-    /// application to do that on their behalf without asking for exactly the authorisation the
-    /// exercise is trying to avoid.
-    ///
-    /// `nil` on any failure, and the caller simply omits the attribute — a prompting item is a far
-    /// better outcome than no saved password at all.
-    private static func sharedAccess(label: String) -> SecAccess? {
-        var access: SecAccess?
-        guard SecAccessCreate(label as CFString, nil, &access) == errSecSuccess,
-              let access else { return nil }
-        var aclList: CFArray?
-        guard SecAccessCopyACLList(access, &aclList) == errSecSuccess,
-              let acls = aclList as? [SecACL] else { return access }
-        for acl in acls {
-            var applications: CFArray?
-            var description: CFString?
-            var prompt = SecKeychainPromptSelector()
-            guard SecACLCopyContents(acl, &applications, &description, &prompt) == errSecSuccess
-            else { continue }
-            // A `nil` application list is the documented way to say "every application is trusted";
-            // an *empty* array would say the opposite — nobody — and prompt every time.
-            _ = SecACLSetContents(acl, nil, description ?? "" as CFString, prompt)
-        }
-        return access
     }
 }
 
