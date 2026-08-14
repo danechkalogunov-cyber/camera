@@ -362,13 +362,28 @@
                         // is what the badge is anchored on.
                         guard let first = cluster.markers.first else { return }
                         archive.movePlayhead(to: first.instant, isScrubbing: false)
+                        playArchive(from: first.instant)
                     },
-                    onStep: { seconds in archive.stepPlayhead(by: seconds) },
-                    onStepToEdge: { forward in archive.stepToEdge(forward: forward) },
+                    onStep: { seconds in
+                        archive.stepPlayhead(by: seconds)
+                        guard let instant = archive.archive?.playhead else { return }
+                        playArchive(from: instant)
+                    },
+                    onStepToEdge: { forward in
+                        archive.stepToEdge(forward: forward)
+                        guard let instant = archive.archive?.playhead else { return }
+                        playArchive(from: instant)
+                    },
                     onStepToMarker: { forward in
                         archive.stepToMarker(forward: forward)
+                        guard let instant = archive.archive?.playhead else { return }
+                        playArchive(from: instant)
                     },
-                    onGoToDayEdge: { start in archive.moveToDayEdge(start: start) },
+                    onGoToDayEdge: { start in
+                        archive.moveToDayEdge(start: start)
+                        guard let instant = archive.archive?.playhead else { return }
+                        playArchive(from: instant)
+                    },
                     onDismiss: {
                         window.showsTimeline = false
                         session.clipExport.clearSelection()

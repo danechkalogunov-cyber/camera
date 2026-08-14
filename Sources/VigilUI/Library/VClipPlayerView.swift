@@ -58,7 +58,7 @@ package struct VClipPlayerView: View {
             surface
         }
         .background(VTheme.Color.Layer.videoWell)
-        .task(id: clip.url) { load() }
+        .task(id: LoadKey(url: clip.url, isRecording: clip.isRecording)) { load() }
         .onDisappear { player?.pause() }
     }
 
@@ -133,6 +133,11 @@ package struct VClipPlayerView: View {
         player.isMuted = true
         self.player = player
         player.play()
+    }
+
+    private struct LoadKey: Hashable {
+        let url: URL?
+        let isRecording: Bool
     }
 }
 

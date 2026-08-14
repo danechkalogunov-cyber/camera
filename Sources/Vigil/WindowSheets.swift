@@ -35,6 +35,9 @@ private struct SheetFrame<Content: View>: View {
     /// accepting the press and failing quietly.
     let isConfirmEnabled: Bool
 
+    /// Whether Return confirms the sheet. Multi-line editors keep Return for a newline.
+    let allowsDefaultAction: Bool
+
     /// Performed on confirm. The caller dismisses.
     let onConfirm: () -> Void
 
@@ -42,6 +45,22 @@ private struct SheetFrame<Content: View>: View {
     let onCancel: () -> Void
 
     @ViewBuilder let content: () -> Content
+
+    init(title: LocalizedStringKey,
+         confirmTitle: LocalizedStringKey,
+         isConfirmEnabled: Bool,
+         allowsDefaultAction: Bool = true,
+         onConfirm: @escaping () -> Void,
+         onCancel: @escaping () -> Void,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.confirmTitle = confirmTitle
+        self.isConfirmEnabled = isConfirmEnabled
+        self.allowsDefaultAction = allowsDefaultAction
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        self.content = content
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: VTheme.Space.md) {
@@ -61,15 +80,18 @@ private struct SheetFrame<Content: View>: View {
         .padding(VTheme.Space.lg)
         .frame(width: SheetMetrics.width)
         .background(VTheme.Color.Layer.surface)
-        // Escape cancels, Return confirms. Both are zero-sized buttons because that is how a
-        // key equivalent is declared in pure SwiftUI without an AppKit responder.
+        // Escape cancels. Single-line sheets also bind Return to confirm; multi-line editors keep
+        // it for a newline. Both are zero-sized buttons because that is how a key equivalent is
+        // declared in pure SwiftUI without an AppKit responder.
         .background {
             Button("", action: onCancel)
                 .keyboardShortcut(.cancelAction)
                 .hidden()
-            Button("", action: { if isConfirmEnabled { onConfirm() } })
-                .keyboardShortcut(.defaultAction)
-                .hidden()
+            if allowsDefaultAction {
+                Button("", action: { if isConfirmEnabled { onConfirm() } })
+                    .keyboardShortcut(.defaultAction)
+                    .hidden()
+            }
         }
     }
 }
@@ -429,6 +451,7 @@ struct BookmarkSheet: View {
         SheetFrame(title: isNew ? "Bookmark This Moment" : "Edit Bookmark",
                    confirmTitle: isNew ? "Add" : "Save",
                    isConfirmEnabled: true,
+                   allowsDefaultAction: false,
                    onConfirm: { onSave(title, note) },
                    onCancel: onCancel) {
             VStack(alignment: .leading, spacing: VTheme.Space.md) {

@@ -290,6 +290,7 @@ struct RootView: View {
             onActivate: { activate($0, in: model) },
             onToggleScan: { model.toggle() },
             onClose: { endScan(model) })
+            .onDisappear { model.stop() }
     }
 
     /// Prompts for and sends the first administrator password, then rechecks only this address.
@@ -385,11 +386,9 @@ struct RootView: View {
         // look exactly like the sheet closing and nothing happening. The password is cleared with
         // it: the one that is in the field belongs to the camera being left, and offering it to a
         // different device is how an account gets locked out.
-        if session.phase == .live {
-            session.disconnect()
-            session.form.password = ""
-            session.form.clearDiagnosis()
-        }
+        session.form.password = ""
+        session.form.clearDiagnosis()
+        if session.phase == .live { session.disconnect() }
         endScan(model)
     }
 
