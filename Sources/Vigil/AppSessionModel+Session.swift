@@ -51,6 +51,7 @@ extension AppSessionModel {
         guard state.wasRunning || outgoing.controller != nil || outgoing.pipeline != nil else {
             return state
         }
+        stream.isSuspendedForClipExport = true
         await audioPlayback.remove(audioKey)
         await outgoing.pipeline?.stop(reason: .stopped)
         await outgoing.controller?.stop(reason: .userRequested)
@@ -58,6 +59,7 @@ extension AppSessionModel {
     }
 
     func resumeAfterClipExport(_ state: ClipExportResumeState) async {
+        state.stream.isSuspendedForClipExport = false
         guard state.wasRunning, state.stream.camera?.id == state.camera.id else { return }
         if let playback = state.playback {
             await playArchive(playback, on: state.stream)

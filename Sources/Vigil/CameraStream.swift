@@ -205,6 +205,8 @@ final class CameraStream {
     /// A paused archive retains its locator but owns no streaming session.
     var isPlaybackPaused = false
 
+    var isSuspendedForClipExport = false
+
     /// Monotonic origin of the archive currently being shown. Unlike `seekStartedAt`, this remains
     /// after the first frame so pause can reopen at the actual held archive instant.
     var playbackStartedAt: MediaInstant?
@@ -298,6 +300,7 @@ final class CameraStream {
     /// session object for as long as there was only ever one camera to be wrong about.
     var liveState: LiveConnectionState {
         if playback != nil, !hasPlaybackCoverage { return .noRecording }
+        if isSuspendedForClipExport { return .paused }
         // ⛔ BEFORE EVERYTHING ELSE. A stopped session reports `StreamState.idle`, which the ladder
         // below reads as "resolving" — so pressing stop put a spinner over a picture that was
         // exactly where the user left it and never resolved, because nothing was connecting. The
