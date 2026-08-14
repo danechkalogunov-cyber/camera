@@ -336,11 +336,6 @@ package struct VCommandPaletteView: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        // Hovering moves the keyboard selection too, so the pointer and the arrow keys can never
-        // point at two different rows at once.
-        .onHover { hovering in
-            if hovering, isEnabled { selection = match.id }
-        }
         .id(match.id)
         .accessibilityLabel(Text(verbatim: match.command.title))
         .accessibilityAddTraits(isSelected ? .isSelected : [])

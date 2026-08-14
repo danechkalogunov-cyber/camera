@@ -378,12 +378,11 @@ package struct VTimelineView: View {
                               geometry: TimelineGeometry) -> some View {
         let draggedX = exportHandleDrag?.isStart == isStart ? exportHandleDrag?.x : nil
         let minimumGap: CGFloat = 4
-        let constrainedX: CGFloat
-        if isStart {
-            constrainedX = min(draggedX ?? x, otherX - minimumGap)
-        } else {
-            constrainedX = max(draggedX ?? x, otherX + minimumGap)
-        }
+        let constrainedX = constrainedExportHandleX(draggedX ?? x,
+                                                    limitingTo: otherX,
+                                                    isStart: isStart,
+                                                    minimumGap: minimumGap,
+                                                    geometry: geometry)
         return VStack(spacing: 1) {
             Text(isStart ? "I" : "O")
                 .vType(VTheme.Typography.monoSmall.numeric)
@@ -400,15 +399,21 @@ package struct VTimelineView: View {
             // measured from a new origin and the handle appears to shoot sideways.
             .highPriorityGesture(DragGesture(minimumDistance: 0)
                 .onChanged { value in
-                    exportHandleDrag = (isStart, value.location.x)
+                    exportHandleDrag = (
+                        isStart,
+                        constrainedExportHandleX(x + value.translation.width,
+                                                 limitingTo: otherX,
+                                                 isStart: isStart,
+                                                 minimumGap: minimumGap,
+                                                 geometry: geometry)
+                    )
                 }
                 .onEnded { value in
-                    let finalX: CGFloat
-                    if isStart {
-                        finalX = min(value.location.x, otherX - minimumGap)
-                    } else {
-                        finalX = max(value.location.x, otherX + minimumGap)
-                    }
+                    let finalX = constrainedExportHandleX(x + value.translation.width,
+                                                          limitingTo: otherX,
+                                                          isStart: isStart,
+                                                          minimumGap: minimumGap,
+                                                          geometry: geometry)
                     exportHandleDrag = nil
                     onMoveExportBoundary(isStart,
                                          geometry.clampedInstant(atX: Double(finalX)))
@@ -417,6 +422,19 @@ package struct VTimelineView: View {
             .accessibilityLabel(isStart
                 ? Text("Clip in point", bundle: .vigilUI)
                 : Text("Clip out point", bundle: .vigilUI))
+    }
+
+    private func constrainedExportHandleX(_ candidate: CGFloat,
+                                          limitingTo otherX: CGFloat,
+                                          isStart: Bool,
+                                          minimumGap: CGFloat,
+                                          geometry: TimelineGeometry) -> CGFloat {
+        let timelineWidth = CGFloat(geometry.width)
+        let bounded = min(max(candidate, 0), timelineWidth)
+        if isStart {
+            return min(bounded, max(0, otherX - minimumGap))
+        }
+        return max(bounded, min(timelineWidth, otherX + minimumGap))
     }
 
     /// The 1 pt cursor line that follows the pointer (DESIGN.md §9.14, hover row). Suppressed
