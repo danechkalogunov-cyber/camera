@@ -24,59 +24,25 @@ import VigilVideo
 
 extension AppSessionModel {
 
-    struct ClipExportResumeState {
-        let stream: CameraStream
-        let camera: Camera
-        let credentialRef: CredentialRef
-        let resolvedPath: String?
-        let playback: PlaybackLocator?
-        let wasPaused: Bool
-        let wasRunning: Bool
-    }
-
-    func suspendForClipExport(cameraID: CameraID) async -> ClipExportResumeState? {
-        guard let stream = cameras.stream(for: cameraID),
-              let camera = stream.camera else { return nil }
-        let state = ClipExportResumeState(
-            stream: stream,
-            camera: camera,
-            credentialRef: stream.activeRef ?? camera.credentialRef,
-            resolvedPath: stream.resolvedPath,
-            playback: stream.playback,
-            wasPaused: stream.isPlaybackPaused,
-            wasRunning: stream.isRunning || stream.isActive)
+    func beginClipExport(camera: Camera, playback: PlaybackLocator)
+        async -> AsyncStream<EncodedFrame> {
+        let stream = cameras.stream(for: camera)
         let audioKey = StreamKey(camera: camera.id, quality: .main)
         let outgoing = stream.teardown()
-        rebalanceDecodeBudget()
-        guard state.wasRunning || outgoing.controller != nil || outgoing.pipeline != nil else {
-            return state
-        }
         stream.isSuspendedForClipExport = true
+        rebalanceDecodeBudget()
         await audioPlayback.remove(audioKey)
         await outgoing.pipeline?.stop(reason: .stopped)
         await outgoing.controller?.stop(reason: .userRequested)
-        return state
+        let frames = stream.clipExportTap.attach()
+        stream.isSuspendedForClipExport = false
+        guard !Task.isCancelled else { return frames }
+        await playArchive(playback, on: stream)
+        return frames
     }
 
-    func resumeAfterClipExport(_ state: ClipExportResumeState) async {
-        state.stream.isSuspendedForClipExport = false
-        guard state.wasRunning, state.stream.camera?.id == state.camera.id else { return }
-        if let playback = state.playback {
-            await playArchive(playback, on: state.stream)
-            if state.wasPaused {
-                await setPlaybackPaused(true, on: state.stream)
-            }
-            return
-        }
-        var target = state.camera
-        target.rtspPathOverride = state.resolvedPath ?? state.camera.rtspPathOverride
-        state.stream.playback = nil
-        state.stream.playbackStartedAt = nil
-        state.stream.playbackRate = .normal
-        state.stream.isPlaybackPaused = false
-        if state.stream === live { phase = .live }
-        state.stream.beginConnecting()
-        await start(state.stream, camera: target, ref: state.credentialRef)
+    func endClipExport(cameraID: CameraID) {
+        cameras.stream(for: cameraID)?.clipExportTap.detach()
     }
 
     /// Tears the current session down: tasks, decode chain, controller.
@@ -398,6 +364,7 @@ extension AppSessionModel {
         // not capture `self`, which is `@MainActor`. Reading it costs one uncontended lock per frame,
         // and answers `nil` whenever nothing is being written.
         let recordingTap = stream.recordingTap
+        let clipExportTap = stream.clipExportTap
         let telemetry = stream.telemetry
         let backlog = stream.backlog
         let mediaClock = dependencies.clock
@@ -433,6 +400,7 @@ extension AppSessionModel {
                                           initialPriority: .focused,
                                           dependencies: dependencies,
                                           frameSink: { frame in
+                                              clipExportTap.yield(frame)
                                               backlog.arrived()
                                               continuation.yield(frame)
                                               if frame.codec.audio != nil {

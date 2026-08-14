@@ -75,7 +75,7 @@ actor ArchiveClipExportWorker {
         self.fileSystem = fileSystem
     }
 
-    func run() async throws -> Output {
+    func run(frames suppliedFrames: AsyncStream<EncodedFrame>? = nil) async throws -> Output {
         terminalError = nil
         let destination = try RecordingDestinationResolver.resolve(
             RecordingDestinationRequest(kind: .clips, folderName: "Vigil/Exports"),
@@ -95,44 +95,54 @@ actor ArchiveClipExportWorker {
                                     requestKeyframe: {})
         self.recorder = recorder
 
-        var target = camera
-        let locator = exportLocator()
-        let query = locator.rawQuery
-        target.rtspPathOverride = query.isEmpty ? locator.path : locator.path + "?" + query
-
         let (frames, continuation) = AsyncStream<EncodedFrame>.makeStream(
             of: EncodedFrame.self, bufferingPolicy: .bufferingNewest(512))
         self.continuation = continuation
-        let store = credentials
-        let ref = camera.credentialRef
-        let controller = StreamController(
-            camera: target,
-            credentialProvider: { try await store.credential(for: ref) },
-            initialQuality: .main,
-            initialPriority: .background,
-            dependencies: dependencies,
-            frameSink: { continuation.yield($0) },
-            // Some cameras terminate archive RTSP immediately when `Scale:` is present. Export
-            // needs reliable media more than speed; it runs off the visible playback session.
-            playbackScale: nil)
-        self.controller = controller
-        await controller.start()
-
-        let events = controller.events()
-        let eventTask = Task {
-            for await event in events {
-                switch event {
-                case .formatResolved(let format):
-                    self.remember(format)
-                case .error(let error, isFatal: true):
-                    self.remember(error)
-                    continuation.finish()
-                    return
-                case .ended:
-                    continuation.finish()
-                    return
-                default:
-                    break
+        var sourceTask: Task<Void, Never>?
+        var eventTask: Task<Void, Never>?
+        var activeController: StreamController?
+        if let suppliedFrames {
+            sourceTask = Task {
+                for await frame in suppliedFrames {
+                    guard !Task.isCancelled else { break }
+                    continuation.yield(frame)
+                }
+                continuation.finish()
+            }
+        } else {
+            var target = camera
+            let locator = exportLocator()
+            let query = locator.rawQuery
+            target.rtspPathOverride = query.isEmpty ? locator.path : locator.path + "?" + query
+            let store = credentials
+            let ref = camera.credentialRef
+            let controller = StreamController(
+                camera: target,
+                credentialProvider: { try await store.credential(for: ref) },
+                initialQuality: .main,
+                initialPriority: .background,
+                dependencies: dependencies,
+                frameSink: { continuation.yield($0) },
+                playbackScale: nil)
+            self.controller = controller
+            activeController = controller
+            await controller.start()
+            let events = controller.events()
+            eventTask = Task {
+                for await event in events {
+                    switch event {
+                    case .formatResolved(let format):
+                        self.remember(format)
+                    case .error(let error, isFatal: true):
+                        self.remember(error)
+                        continuation.finish()
+                        return
+                    case .ended:
+                        continuation.finish()
+                        return
+                    default:
+                        break
+                    }
                 }
             }
         }
@@ -187,9 +197,10 @@ actor ArchiveClipExportWorker {
 
         watchdog.cancel()
         stallWatchdog.cancel()
-        eventTask.cancel()
+        sourceTask?.cancel()
+        eventTask?.cancel()
         continuation.finish()
-        await controller.stop(reason: .userRequested)
+        await activeController?.stop(reason: .userRequested)
         self.controller = nil
         self.continuation = nil
 

@@ -29,6 +29,7 @@ final class ClipExportCoordinator {
     private var exportTask: Task<Void, Never>?
     private var progressTask: Task<Void, Never>?
     private var destination: URL?
+    private var detachFrames: (() -> Void)?
 
     func setIn(_ instant: Date, camera: CameraID) {
         adopt(camera)
@@ -71,6 +72,9 @@ final class ClipExportCoordinator {
                                              credentials: appSession.credentials)
         self.worker = worker
         self.destination = destination
+        self.detachFrames = { [weak appSession] in
+            appSession?.endClipExport(cameraID: camera.id)
+        }
         isExporting = true
         progress = 0
         lastFailure = nil
@@ -85,14 +89,13 @@ final class ClipExportCoordinator {
         }
         exportTask = Task { [weak self, weak worker] in
             guard let self, let worker else { return }
-            var resumeState: AppSessionModel.ClipExportResumeState?
             do {
-                resumeState = await appSession.suspendForClipExport(cameraID: camera.id)
+                let frames = await appSession.beginClipExport(camera: camera, playback: playback)
                 guard !Task.isCancelled else {
                     await worker.cancel()
                     throw ArchiveClipExportWorker.Failure.cancelled
                 }
-                let output = try await worker.run()
+                let output = try await worker.run(frames: frames)
                 try self.finalize(output: output, camera: camera, range: range,
                                   destination: destination, maskedSerial: maskedSerial)
                 self.progress = 1
@@ -106,9 +109,8 @@ final class ClipExportCoordinator {
                 try? FileManager.default.removeItem(at: destination)
                 try? FileManager.default.removeItem(at: Self.sidecarURL(for: destination))
             }
-            if let resumeState {
-                await appSession.resumeAfterClipExport(resumeState)
-            }
+            appSession.endClipExport(cameraID: camera.id)
+            self.detachFrames = nil
             self.progressTask?.cancel()
             self.progressTask = nil
             self.worker = nil
@@ -121,6 +123,8 @@ final class ClipExportCoordinator {
         guard isExporting else { return }
         let worker = worker
         let destination = destination
+        detachFrames?()
+        detachFrames = nil
         progressTask?.cancel()
         exportTask?.cancel()
         Task {

@@ -104,6 +104,7 @@ final class CameraStream {
 
     /// The recorder's inlet into this camera's encoded-frame path.
     let recordingTap = RecordingTap()
+    let clipExportTap = ClipExportTap()
 
     /// Created lazily and shared by manual and device-triggered recording for this camera.
     var recordingCoordinator: RecordingCoordinator?

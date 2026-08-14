@@ -100,6 +100,38 @@ final class RecordingTap: Sendable {
     }
 }
 
+final class ClipExportTap: Sendable {
+    private let state = OSAllocatedUnfairLock<AsyncStream<EncodedFrame>.Continuation?>(
+        initialState: nil)
+
+    func attach() -> AsyncStream<EncodedFrame> {
+        let (stream, continuation) = AsyncStream<EncodedFrame>.makeStream(
+            of: EncodedFrame.self, bufferingPolicy: .bufferingNewest(512))
+        let previous = state.withLock { current in
+            let previous = current
+            current = continuation
+            return previous
+        }
+        previous?.finish()
+        return stream
+    }
+
+    func yield(_ frame: EncodedFrame) {
+        state.withLock { continuation in
+            _ = continuation?.yield(frame)
+        }
+    }
+
+    func detach() {
+        let continuation = state.withLock { current in
+            let continuation = current
+            current = nil
+            return continuation
+        }
+        continuation?.finish()
+    }
+}
+
 // MARK: - RecordingCoordinator
 
 /// Starts and stops clip recording for the live camera.
