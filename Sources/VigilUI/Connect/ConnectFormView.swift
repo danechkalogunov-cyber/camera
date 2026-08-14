@@ -107,6 +107,10 @@ package struct ConnectFormView: View {
         .task { focus = state.host.isEmpty ? .host : .password }
         .onChange(of: state.host) { _, _ in state.absorbPastedURL() }
         .onChange(of: state.request) { _, _ in state.clearDiagnosis() }
+        .onChange(of: state.isConnecting) { _, isConnecting in
+            if isConnecting { focus = nil }
+        }
+        .onDisappear { focus = nil }
         .onChange(of: state.diagnosis) { _, diagnosis in
             guard let diagnosis else { return }
             if let field = diagnosis.fieldToFocus { focus = field }
@@ -343,6 +347,7 @@ package struct ConnectFormView: View {
             focus = firstInvalidField()
             return
         }
+        focus = nil
         state.clearDiagnosis()
         state.isConnecting = true
         onConnect(state.request)
