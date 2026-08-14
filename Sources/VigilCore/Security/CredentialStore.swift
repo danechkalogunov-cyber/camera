@@ -174,6 +174,16 @@ public actor CredentialStore {
         try credential(for: camera.credentialRef)
     }
 
+    /// Rewrites an older item with Vigil's shared development ACL after its first successful read.
+    ///
+    /// Development builds are ad-hoc signed, so the default Keychain ACL changes with every
+    /// rebuild. Keeping the migration inside the store means the secret never leaves this actor.
+    public func migrateLegacyAccess(for camera: Camera) throws {
+        guard let credential = try credential(for: camera.credentialRef) else { return }
+        try save(credential, descriptor: CredentialDescriptor(camera: camera,
+                                                             account: credential.account))
+    }
+
     /// True when a password is stored for `ref`, without decrypting it.
     ///
     /// Uses `kSecReturnAttributes` alone, so it does not unlock the keychain to read the secret —
