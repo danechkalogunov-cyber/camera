@@ -263,6 +263,7 @@ package struct VTextField<FocusValue: Hashable>: View {
         .textFieldStyle(.plain)
         .focused(focus, equals: focusValue)
         .focusEffectDisabled()
+        .textContentType(nil)
         .vType(typeStep)
         .foregroundStyle(isEnabled ? VTheme.Color.Text.primary : VTheme.Color.Text.disabled)
         // `.tint` is what colours the insertion point and the selection on macOS (§9.5).
