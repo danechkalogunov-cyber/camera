@@ -30,3 +30,8 @@ __pycache__/
 # stay in history by decision, not by oversight — rewriting would change every SHA from the 47th
 # commit on. ЗАПУСК.md, «Шаг 2», says why the clone is 110 MB and how --depth 1 avoids it.
 .b/
+
+# Claude Code's local working directory. `.claude/worktrees/` holds the isolated git worktrees
+# spawned for parallel sub-agents — each is a full checkout of this repo, locked while its agent
+# runs. Committing it would nest the repository inside itself; it is transient tooling, not source.
+.claude/
