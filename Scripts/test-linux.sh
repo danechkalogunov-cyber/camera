@@ -59,14 +59,7 @@ for target in "${portable_targets[@]}"; do
     # Several suites deliberately create their own task groups to verify gates, coalescing and
     # cancellation. An unbounded test worker count starves those controlled scenarios, while the
     # Linux Swift Testing runner can stall before the first filtered test in fully serial mode.
-    #
-    # ⚠️ DIAGNOSTIC (temporary): VigilISAPITests hangs to the 300 s timeout with two workers and no
-    # log names the culprit. Run it with a single worker so the serial pass/fail lines stop exactly
-    # at the offending test — and if a single worker makes it pass, the hang is worker starvation,
-    # not a logic deadlock. Revert to two workers once the cause is found.
-    workers=2
-    [ "$target" = "VigilISAPITests" ] && workers=1
-    if timeout 300 swift test --parallel --num-workers "$workers" --filter "$target"; then
+    if timeout 300 swift test --parallel --num-workers 2 --filter "$target"; then
         continue
     else
         status=$?

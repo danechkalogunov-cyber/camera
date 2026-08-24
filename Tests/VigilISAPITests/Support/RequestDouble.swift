@@ -52,7 +52,6 @@ actor RequestDouble: ISAPIRequesting {
     private var streamChunks: [Data] = []
     private var streamContentType: String?
     private var streamFinishes = true
-    private var waiters: [(threshold: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init() {}
 
@@ -89,14 +88,19 @@ actor RequestDouble: ISAPIRequesting {
         recorded.filter { $0.resource.hasSuffix(suffix) }
     }
 
-    /// Suspends until at least `count` requests have been recorded.
+    /// Yields until at least `count` requests have been recorded, up to a bounded number of hops.
     ///
-    /// Deterministic where polling would not be: the continuation is resumed from inside the
-    /// recording step, so a test never spins and never depends on a scheduler.
-    func waitForRequests(atLeast count: Int) async {
-        if recorded.count >= count { return }
-        await withCheckedContinuation { continuation in
-            waiters.append((count, continuation))
+    /// ⛔ BOUNDED ON PURPOSE, the same way ``settle(until:)`` is. This used to park on a
+    /// `CheckedContinuation` resumed from inside `record` — which is fine right up until the request
+    /// being waited for never arrives, and then the test blocks **forever** and the whole
+    /// `VigilISAPITests` target burns the 300 s CI budget with no line naming the culprit. A
+    /// virtual-clock suite with no real I/O never has a reason to wait on wall time, so a request
+    /// that is never going to come costs a bounded spin of microseconds and then the caller's
+    /// `#expect` fails fast and *names the test*, instead of hanging the run.
+    func waitForRequests(atLeast count: Int, hops: Int = 100_000) async {
+        for _ in 0..<hops {
+            if recorded.count >= count { return }
+            await Task.yield()
         }
     }
 
@@ -174,9 +178,6 @@ actor RequestDouble: ISAPIRequesting {
         for item in query { items[item.name] = item.value ?? "" }
         recorded.append(
             RecordedRequest(method: method, resource: resource, query: items, body: body))
-        let reached = waiters.filter { $0.threshold <= recorded.count }
-        waiters.removeAll { $0.threshold <= recorded.count }
-        for waiter in reached { waiter.continuation.resume() }
     }
 
     private func match(_ resource: String) -> Route? {
