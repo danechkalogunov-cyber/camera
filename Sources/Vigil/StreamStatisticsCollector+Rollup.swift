@@ -303,7 +303,7 @@ extension StreamStatisticsRollup {
         // 12. Bits are already carried through raw here, so fps was the one gauge reading
         // inconsistently low. The counters and the other reconciled fields still come from `resolved`.
         var forHistory = resolved
-        forHistory.framesPerSecond = positive(sample.framesPerSecond)
+        forHistory.framesPerSecond = positive(sample.framesPerSecond) ?? 0
         appendMinute(forHistory, at: now)
     }
 }
