@@ -295,7 +295,16 @@ extension StreamStatisticsRollup {
         latestRaw = sample
         let resolved = reconciled(sample, at: now)
         append(resolved, at: now)
-        appendMinute(resolved, at: now)
+        // ⛔ THE MINUTE ROLLUP AVERAGES THE RAW FRAME-RATE GAUGE, not the live-readout reconciliation.
+        // `reconciled` withholds fps for the first second so the on-screen number does not jump while
+        // a stream is opening — a display concern that has no place in a 24-hour historical average.
+        // Folding that suppressed `0` into the minute dragged a real minute of throughput down: a
+        // stream running at 25 fps that happened to start on a minute boundary averaged closer to
+        // 12. Bits are already carried through raw here, so fps was the one gauge reading
+        // inconsistently low. The counters and the other reconciled fields still come from `resolved`.
+        var forHistory = resolved
+        forHistory.framesPerSecond = positive(sample.framesPerSecond)
+        appendMinute(forHistory, at: now)
     }
 }
 

@@ -226,7 +226,12 @@ struct DataPortabilityTests {
         #expect(text.hasSuffix("\r\n"))
 
         let restored = try #require(CameraCSVImporter.decode(data).first)
-        #expect(restored.name == camera.name)
+        // ⛔ The newline round-trips through the CSV itself (asserted above) but not into the camera:
+        // the importer runs `Camera.validated()`, which deliberately folds `\n`/`\r` to a space
+        // because a camera name must not span lines. So the comma and the doubled quotes come back
+        // verbatim and only the newline is normalised — which is the whole point of validating on
+        // import rather than trusting the file.
+        #expect(restored.name == "Gate, \"north\" level 1")
         #expect(restored.preferredQuality == .main)
         #expect(restored.colorTag == .blue)
     }

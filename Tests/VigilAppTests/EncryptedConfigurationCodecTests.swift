@@ -8,7 +8,13 @@ import VigilProtocols
 
 @Suite struct EncryptedConfigurationCodecTests {
     @Test func deterministicContainerRoundTripsAndAuthenticatesHeader() throws {
-        let camera = try Camera(name: "Gate", host: "192.168.1.40").validated()
+        // ⛔ A fixed `createdAt`, because the round-trip has to be deterministic and equal. The
+        // backup's date strategy is `.iso8601`, which writes whole seconds, so a camera left with the
+        // default `createdAt: Date()` loses its sub-second fraction on decode and the restored value
+        // no longer equals the original — a false failure about the clock, not the codec.
+        let camera = try Camera(
+            name: "Gate", host: "192.168.1.40",
+            createdAt: Date(timeIntervalSince1970: 1_000)).validated()
         let payload = EncryptedConfigurationPayload(
             archive: VigilConfigurationArchive(exportedAt: Date(timeIntervalSince1970: 1_000),
                                                  cameras: [camera], groups: []),
