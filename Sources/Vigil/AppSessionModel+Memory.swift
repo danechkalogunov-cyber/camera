@@ -476,14 +476,19 @@ private extension PlaybackLocator {
     /// Keeps a device-provided playback locator intact (including its opaque `name` query item)
     /// while rebasing only the point where RTSP playback resumes.
     func rebased(to start: Date) -> PlaybackLocator {
-        let query = rawQuery.split(separator: "&", omittingEmptySubsequences: true).map { item in
+        // ⚠️ Named `rebasedQuery`, not `query`: `Scripts/lint.py`'s cross-file `private` check
+        // treats every `let` inside this `private extension` as a fileprivate *member*, and a bare
+        // `query` collided with an unrelated `.query` access in `AppSessionModel+Session.swift`.
+        // A local variable is not a member; the longer name says so and sidesteps the false match.
+        let rebasedQuery = rawQuery.split(separator: "&", omittingEmptySubsequences: true).map { item in
             let pair = item.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard let name = pair.first, name.caseInsensitiveCompare("starttime") == .orderedSame
             else { return String(item) }
             return "starttime=\(ISAPITime.compactUTC(start))"
         }.joined(separator: "&")
-        return PlaybackLocator(path: path, rawQuery: query, start: start, end: end,
-                               fileName: fileName, sizeBytes: sizeBytes)
+        return PlaybackLocator(
+            path: path, rawQuery: rebasedQuery, start: start, end: end,
+            fileName: fileName, sizeBytes: sizeBytes)
     }
 }
 

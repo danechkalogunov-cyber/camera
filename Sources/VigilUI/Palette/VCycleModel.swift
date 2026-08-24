@@ -120,12 +120,14 @@ package struct VCycleModel: Sendable, Hashable {
     ///   - isPaused: whether a running cycle is held.
     ///   - page: the page on the stage, floored at zero.
     ///   - isReversing: ping-pong direction; ignored by the other two orders.
-    package init(interval: TimeInterval = VCycleModel.defaultInterval,
-                 order: VCycleOrder = .forward,
-                 isRunning: Bool = false,
-                 isPaused: Bool = false,
-                 page: Int = 0,
-                 isReversing: Bool = false) {
+    package init(
+        interval: TimeInterval = VCycleModel.defaultInterval,
+        order: VCycleOrder = .forward,
+        isRunning: Bool = false,
+        isPaused: Bool = false,
+        page: Int = 0,
+        isReversing: Bool = false
+    ) {
         self.interval = VCycleModel.clamp(interval)
         self.order = order
         self.isRunning = isRunning
@@ -228,9 +230,11 @@ package struct VCycleModel: Sendable, Hashable {
     }
 
     /// Moves to a page selected outside the automatic patrol, clamped to the current stage.
-    package func selectingPage(_ requested: Int,
-                               cameraCount: Int,
-                               layout: VGridLayout) -> VCycleModel {
+    package func selectingPage(
+        _ requested: Int,
+        cameraCount: Int,
+        layout: VGridLayout
+    ) -> VCycleModel {
         let last = pageCount(cameraCount: cameraCount, layout: layout) - 1
         return with(page: Swift.min(Swift.max(requested, 0), last), isReversing: false)
     }
@@ -288,18 +292,21 @@ package struct VCycleModel: Sendable, Hashable {
     // MARK: - Private Helpers
 
     /// One copy-with, so no mutator has to restate all six fields and get one of them wrong.
-    private func with(interval: TimeInterval? = nil,
-                      order: VCycleOrder? = nil,
-                      isRunning: Bool? = nil,
-                      isPaused: Bool? = nil,
-                      page: Int? = nil,
-                      isReversing: Bool? = nil) -> VCycleModel {
-        VCycleModel(interval: interval ?? self.interval,
-                    order: order ?? self.order,
-                    isRunning: isRunning ?? self.isRunning,
-                    isPaused: isPaused ?? self.isPaused,
-                    page: page ?? self.page,
-                    isReversing: isReversing ?? self.isReversing)
+    private func with(
+        interval: TimeInterval? = nil,
+        order: VCycleOrder? = nil,
+        isRunning: Bool? = nil,
+        isPaused: Bool? = nil,
+        page: Int? = nil,
+        isReversing: Bool? = nil
+    ) -> VCycleModel {
+        VCycleModel(
+            interval: interval ?? self.interval,
+            order: order ?? self.order,
+            isRunning: isRunning ?? self.isRunning,
+            isPaused: isPaused ?? self.isPaused,
+            page: page ?? self.page,
+            isReversing: isReversing ?? self.isReversing)
     }
 }
 

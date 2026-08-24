@@ -942,3 +942,10 @@
 "Playback" = "Воспроизведение";
 "About Vigil" = "О Vigil";
 "Open Vigil" = "Открыть Vigil";
+
+/* Clip export (F-PLB-04) */
+"Set both I and O before exporting video." = "Задайте точки I и O перед экспортом видео.";
+"Nothing was recorded at the export in point." = "В точке начала экспорта ничего не записано.";
+"Vigil could not open the export save dialog." = "Vigil не смог открыть окно сохранения экспорта.";
+"Choose where to save the selected video clip." = "Выберите, куда сохранить выбранный видеофрагмент.";
+"Export Video" = "Экспорт видео";

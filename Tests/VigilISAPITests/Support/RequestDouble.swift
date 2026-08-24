@@ -206,6 +206,10 @@ actor SleepGate {
     private var order: [UUID] = []
     private var credits = 0
 
+    /// Ids whose continuation `cancelWaiter` resumed, so ``wait`` can tell a cancellation wake from
+    /// a `release` wake after the fact — the two are indistinguishable at the continuation itself.
+    private var cancelledWakes: Set<UUID> = []
+
     /// Suspends until a credit is available or the calling task is cancelled.
     ///
     /// Cancellation matters: a cancelled PTZ keep-alive must not leave a parked waiter behind that
@@ -228,6 +232,16 @@ actor SleepGate {
         } onCancel: {
             Task { await self.cancelWaiter(id) }
         }
+        // ⛔ A RELEASE IS CONSERVED — it must wake a live sleeper or become a credit, never vanish
+        // into a cancelled one. `cancelWaiter` runs asynchronously (its `onCancel` cannot touch the
+        // actor synchronously), so a `release` can land on a waiter whose task was already cancelled
+        // but not yet cleaned up. Before this, that release was spent on a task about to return —
+        // and the sleeper the test meant to wake (a reconnect back-off) stayed parked forever, which
+        // is exactly how VigilISAPITests hung on CI. Here, a wake delivered by `release` to a
+        // cancelled task is handed straight on to the next real sleeper.
+        if Task.isCancelled, cancelledWakes.remove(id) == nil {
+            release(1)
+        }
     }
 
     /// Lets `count` sleepers through, banking credit when none is waiting yet.
@@ -246,6 +260,7 @@ actor SleepGate {
     private func cancelWaiter(_ id: UUID) {
         guard let continuation = waiters.removeValue(forKey: id) else { return }
         order.removeAll { $0 == id }
+        cancelledWakes.insert(id)
         continuation.resume()
     }
 }

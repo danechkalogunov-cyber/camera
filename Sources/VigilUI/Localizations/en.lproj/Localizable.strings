@@ -959,3 +959,10 @@
 "Playback" = "Playback";
 "About Vigil" = "About Vigil";
 "Open Vigil" = "Open Vigil";
+
+/* Clip export (F-PLB-04) */
+"Set both I and O before exporting video." = "Set both I and O before exporting video.";
+"Nothing was recorded at the export in point." = "Nothing was recorded at the export in point.";
+"Vigil could not open the export save dialog." = "Vigil could not open the export save dialog.";
+"Choose where to save the selected video clip." = "Choose where to save the selected video clip.";
+"Export Video" = "Export Video";
