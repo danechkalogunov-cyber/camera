@@ -177,17 +177,19 @@ import VigilProtocols
         let subject = monitor(double, gate: gate)
         await subject.start()
         await double.waitForRequests(atLeast: 1)
-        // ⛔ Wait until the first connection has actually failed and entered its back-off before
-        // releasing the gate. Releasing the instant the open request lands wakes the idle
-        // watchdog's probe sleep instead — that fires a `userCheck`, not the reconnect — so the
-        // reconnect never happens and `connectionAttempts` stays at 1 (which is exactly how this
-        // test hung, then failed, on CI). `backoffHistory` becomes non-empty only once `backOff`
-        // has run, and by then the watchdog is cancelled and the back-off sleep is the gate's only
-        // live waiter, so the single release reaches it. The sibling watchdog test gates its
-        // releases the same way.
-        await settle(until: { await !subject.backoffHistory.isEmpty })
-        await gate.release(1)
-        await double.waitForRequests(atLeast: 2)
+        // ⛔ DRIVE THE GATE UNTIL THE RECONNECT ACTUALLY HAPPENS, rather than releasing it once and
+        // hoping. Releasing the instant the open request lands is a race: the idle watchdog's probe
+        // sleep may be the gate's waiter at that moment, so a single release wakes that — firing a
+        // `userCheck`, not the back-off that drives the reconnect — and `connectionAttempts` stays
+        // at 1. That is exactly how this test hung under two workers, then failed intermittently
+        // (green on Linux, red on macOS) once the wait was bounded. Feeding the gate one release per
+        // hop is timing-independent: whichever sleep it wakes, the next release reaches the next,
+        // and the loop stops the moment the reconnect lands. `settle` is bounded, so a reconnect
+        // that never comes is a fast failure, not a hang.
+        await settle(until: {
+            await gate.release(1)
+            return await subject.connectionAttempts >= 2
+        })
         // It retried rather than treating the failure as terminal.
         #expect(await subject.emittedEvents == 0)
         #expect(await subject.connectionAttempts >= 2)

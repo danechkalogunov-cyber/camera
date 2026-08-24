@@ -196,10 +196,14 @@ struct CameraStreamTests {
     }
 
     /// The five transient states collapse into the connecting ladder, in order.
+    ///
+    /// ⛔ `.idle` is deliberately NOT on this list. It used to map to `.connecting(.resolving)`, but
+    /// a stopped session also reports `StreamState.idle`, so that put a spinner over a picture the
+    /// user had just stopped; `liveState` now reads `.idle` as `.offline` and checks the user's own
+    /// stop first. `offlineCarriesTheAttemptAndTheRetry` covers the idle → offline mapping.
     @Test func everyTransientStateHasItsOwnRungOfTheLadder() {
         let stream = CameraStream()
         let expected: [(StreamState, LiveConnectionState)] = [
-            (.idle, .connecting(.resolving)),
             (.resolving, .connecting(.resolving)),
             (.connecting, .connecting(.connecting)),
             (.authenticating, .connecting(.authenticating)),
