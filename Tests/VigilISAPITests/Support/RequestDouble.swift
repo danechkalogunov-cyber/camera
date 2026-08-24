@@ -102,14 +102,18 @@ actor RequestDouble: ISAPIRequesting {
 
     // MARK: ISAPIRequesting
 
-    func getDocument(_ resource: String, query: [URLQueryItem],
-                     lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument {
+    func getDocument(
+        _ resource: String, query: [URLQueryItem],
+        lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument {
         record("GET", resource, query, nil)
         return try await document(for: resource)
     }
 
-    func getBytes(_ resource: String, query: [URLQueryItem],
-                  lane: HTTPLane) async throws(ISAPIError) -> Data {
+    func getBytes(
+        _ resource: String, query: [URLQueryItem],
+        lane: HTTPLane
+    ) async throws(ISAPIError) -> Data {
         record("GET", resource, query, nil)
         guard let route = match(resource) else { return Data() }
         if let error = route.error { throw error }
@@ -117,30 +121,38 @@ actor RequestDouble: ISAPIRequesting {
         return Data(route.xml?.utf8 ?? "".utf8)
     }
 
-    func putDocument(_ resource: String, body: Data?, query: [URLQueryItem],
-                     lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument? {
+    func putDocument(
+        _ resource: String, body: Data?, query: [URLQueryItem],
+        lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument? {
         record("PUT", resource, query, body)
         guard let route = match(resource) else { return nil }
         if let error = route.error { throw error }
         return try? await document(for: resource, consuming: false)
     }
 
-    func postDocument(_ resource: String, body: Data?, query: [URLQueryItem],
-                      lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument {
+    func postDocument(
+        _ resource: String, body: Data?, query: [URLQueryItem],
+        lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument {
         record("POST", resource, query, body)
         return try await document(for: resource)
     }
 
-    func deleteDocument(_ resource: String, query: [URLQueryItem],
-                        lane: HTTPLane) async throws(ISAPIError) -> ISAPIDocument? {
+    func deleteDocument(
+        _ resource: String, query: [URLQueryItem],
+        lane: HTTPLane
+    ) async throws(ISAPIError) -> ISAPIDocument? {
         record("DELETE", resource, query, nil)
         guard let route = match(resource) else { return nil }
         if let error = route.error { throw error }
         return try? await document(for: resource, consuming: false)
     }
 
-    func openStream(_ resource: String, query: [URLQueryItem],
-                    headers: [String: String]) async throws(ISAPIError) -> ISAPIByteStream {
+    func openStream(
+        _ resource: String, query: [URLQueryItem],
+        headers: [String: String]
+    ) async throws(ISAPIError) -> ISAPIByteStream {
         record("GET", resource, query, nil)
         if let route = match(resource), let error = route.error { throw error }
         let chunks = streamChunks
@@ -154,12 +166,14 @@ actor RequestDouble: ISAPIRequesting {
 
     // MARK: Internals
 
-    private func record(_ method: String, _ resource: String,
-                       _ query: [URLQueryItem], _ body: Data?) {
+    private func record(
+        _ method: String, _ resource: String,
+        _ query: [URLQueryItem], _ body: Data?
+    ) {
         var items: [String: String] = [:]
         for item in query { items[item.name] = item.value ?? "" }
-        recorded.append(RecordedRequest(method: method, resource: resource,
-                                        query: items, body: body))
+        recorded.append(
+            RecordedRequest(method: method, resource: resource, query: items, body: body))
         let reached = waiters.filter { $0.threshold <= recorded.count }
         waiters.removeAll { $0.threshold <= recorded.count }
         for waiter in reached { waiter.continuation.resume() }
@@ -169,8 +183,10 @@ actor RequestDouble: ISAPIRequesting {
         routes.first { resource.hasSuffix($0.suffix) }
     }
 
-    private func document(for resource: String,
-                          consuming: Bool = true) async throws(ISAPIError) -> ISAPIDocument {
+    private func document(
+        for resource: String,
+        consuming: Bool = true
+    ) async throws(ISAPIError) -> ISAPIDocument {
         guard let route = match(resource) else {
             return try ISAPIDocument(parsing: Data(Self.okStatus.utf8))
         }
