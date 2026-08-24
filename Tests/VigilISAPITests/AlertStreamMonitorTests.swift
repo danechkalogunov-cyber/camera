@@ -177,6 +177,15 @@ import VigilProtocols
         let subject = monitor(double, gate: gate)
         await subject.start()
         await double.waitForRequests(atLeast: 1)
+        // ⛔ Wait until the first connection has actually failed and entered its back-off before
+        // releasing the gate. Releasing the instant the open request lands wakes the idle
+        // watchdog's probe sleep instead — that fires a `userCheck`, not the reconnect — so the
+        // reconnect never happens and `connectionAttempts` stays at 1 (which is exactly how this
+        // test hung, then failed, on CI). `backoffHistory` becomes non-empty only once `backOff`
+        // has run, and by then the watchdog is cancelled and the back-off sleep is the gate's only
+        // live waiter, so the single release reaches it. The sibling watchdog test gates its
+        // releases the same way.
+        await settle(until: { await !subject.backoffHistory.isEmpty })
         await gate.release(1)
         await double.waitForRequests(atLeast: 2)
         // It retried rather than treating the failure as terminal.
