@@ -88,23 +88,37 @@ if [ "$run_tests" -eq 1 ]; then
     llvm_profdata=("${llvm_cov[@]/llvm-cov/llvm-profdata}")
     # The `--skip` on the VigilCoreTests pass drops one test that stalls on a burst-delivery path;
     # see the note in .github/workflows/macos.yml. Coverage of the rest of the target is unaffected.
+    #
+    # ⚠️ Each pass's profile is copied OUTSIDE $bin/codecov. `swift test --enable-code-coverage` wipes
+    # that directory at the start of every run, so a copy left inside it is gone before the merge —
+    # which is exactly how the first attempt failed with "part-…profdata: No such file or directory".
+    partdir=$(mktemp -d "${TMPDIR:-/tmp}/vigil-cov-parts.XXXXXX")
     parts=()
+    pass=0
     for selector in \
         "--skip VigilCoreTests" \
         "--filter VigilCoreTests --skip eventMonitorServiceCollapsesARepeatedWireAlarmIntoOneRow"; do
         # shellcheck disable=SC2086 -- selector is two words on purpose
         swift test --parallel --enable-code-coverage $selector || {
             echo "coverage.sh: the suite failed; coverage of a red tree is not worth reading." >&2
+            rm -rf "$partdir"
             exit 1
         }
-        part="$bin/codecov/part-${selector//[^A-Za-z]/_}.profdata"
-        cp "$prof" "$part"
-        parts+=("$part")
+        [ -f "$prof" ] || {
+            echo "coverage.sh: no profile at $prof after '$selector'." >&2
+            rm -rf "$partdir"
+            exit 2
+        }
+        cp "$prof" "$partdir/pass-$pass.profdata"
+        parts+=("$partdir/pass-$pass.profdata")
+        pass=$((pass + 1))
     done
     "${llvm_profdata[@]}" merge -sparse "${parts[@]}" -o "$prof" || {
         echo "coverage.sh: could not merge the per-target coverage profiles." >&2
+        rm -rf "$partdir"
         exit 2
     }
+    rm -rf "$partdir"
     echo
 fi
 [ -f "$prof" ] || {
