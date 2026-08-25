@@ -35,8 +35,16 @@ jobs:
         run: swift build
 
       # 2798 of these had never run before 2026-08-04. See docs/BUILD-VERIFICATION.md.
+      #
+      # ⚠️ `--num-workers 2`, matching Scripts/test-linux.sh. Unbounded `--parallel` oversubscribes
+      # the runner's cores, and the async event pipeline pays for it: `EventMonitorService` ingests
+      # each alert on a single pump that `await`s the store write per event, and under a saturated
+      # cooperative pool that pump starves. `eventMonitorServiceCollapsesARepeatedWireAlarmIntoOneRow`
+      # then times out with the collapsed row's count short of 30 — the "starved pool" case its own
+      # comment calls out, not lost events (the ingest path awaits every write). Bounding the workers
+      # gives the pump room to finish; it costs the test step a little wall time and buys determinism.
       - name: Test
-        run: swift test --parallel
+        run: swift test --parallel --num-workers 2
 
       # Enforcing again, and now against measured numbers. This step ran `--enforce` from the day it
       # was written, against floors nobody could measure because nothing on macOS compiled; it was
