@@ -335,7 +335,8 @@ struct CameraSettingsSheet: View {
     /// A caption over a control.
     private func field<Control: View>(
         _ label: LocalizedStringKey,
-        @ViewBuilder control: () -> Control) -> some View {
+        @ViewBuilder control: () -> Control
+    ) -> some View {
         VStack(alignment: .leading, spacing: VTheme.Space.xxs) {
             Text(label, bundle: .vigilUI)
                 .vType(VTheme.Typography.callout)

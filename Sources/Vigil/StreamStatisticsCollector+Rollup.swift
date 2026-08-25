@@ -543,7 +543,8 @@ extension StreamStatisticsRollup {
     /// The measured frame rate, or `nil` during the warm-up and during a stall.
     private func resolvedFramesPerSecond(
         _ sample: StreamStatistics,
-        at now: MediaInstant) -> Double? {
+        at now: MediaInstant
+    ) -> Double? {
         guard let firstFrameAt,
             now.seconds(since: firstFrameAt) >= Self.framesPerSecondWarmUpSeconds
         else { return nil }
