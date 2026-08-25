@@ -36,14 +36,19 @@ jobs:
 
       # 2798 of these had never run before 2026-08-04. See docs/BUILD-VERIFICATION.md.
       #
-      # Runs in parallel. The one suite that could not survive the resulting contention —
-      # `EventMonitorService`, whose tests each drive a real ingest pump — is marked `.serialized`
-      # at its declaration so its members do not starve one another; see the note there. Two blunter
-      # levers were tried and rejected: `--num-workers` is an XCTest-era knob swift-testing ignores,
-      # and `--no-parallel` made the whole run serial and slow (24 min) while turning a dozen other
-      # timing tests red. Serializing the one offending suite is the surgical fix.
+      # ⚠️ VigilCoreTests runs on its own, not inside the full parallel batch. Its macOS-only event
+      # suite drives real ingest pumps — one task that `await`s a store write per alert — and inside a
+      # ~3000-test `swift test --parallel` those pumps starve: eventMonitorServiceCollapsesARepeated…
+      # timed out with its collapsed row short of 30. Linux never hits this because it runs each
+      # target separately (Scripts/test-linux.sh); macOS now does the same for the one target that
+      # needs it. Three blunter levers were tried and rejected — `--num-workers` is an XCTest-era knob
+      # swift-testing ignores, `--no-parallel` made the whole run serial (24 min) and turned a dozen
+      # other timing tests red, and `.serialized` on the suite spread its tests into the worst
+      # contention windows and failed fourteen. Isolating the target is the lever that works.
       - name: Test
-        run: swift test --parallel
+        run: |
+          swift test --parallel --skip VigilCoreTests
+          swift test --parallel --filter VigilCoreTests
 
       # Enforcing again, and now against measured numbers. This step ran `--enforce` from the day it
       # was written, against floors nobody could measure because nothing on macOS compiled; it was

@@ -75,17 +75,34 @@ else
     exit 2
 fi
 
+bin=$(swift build --show-bin-path) || exit 2
+prof="$bin/codecov/default.profdata"
+
 if [ "$run_tests" -eq 1 ]; then
     echo "== test (with coverage) =="
-    swift test --parallel --enable-code-coverage || {
-        echo "coverage.sh: the suite failed; coverage of a red tree is not worth reading." >&2
-        exit 1
+    # VigilCoreTests carries the macOS-only event suite, whose ingest pumps starve inside the full
+    # parallel batch (see .github/workflows/macos.yml). Run it on its own and everything else
+    # together — the same per-target isolation Linux gets for free — then merge the two coverage
+    # profiles so the export below still sees every target. A single `swift test --enable-code-
+    # coverage` overwrites default.profdata each run, so each run's profile is copied off first.
+    llvm_profdata=("${llvm_cov[@]/llvm-cov/llvm-profdata}")
+    parts=()
+    for selector in "--skip VigilCoreTests" "--filter VigilCoreTests"; do
+        # shellcheck disable=SC2086 -- selector is two words on purpose
+        swift test --parallel --enable-code-coverage $selector || {
+            echo "coverage.sh: the suite failed; coverage of a red tree is not worth reading." >&2
+            exit 1
+        }
+        part="$bin/codecov/part-${selector//[^A-Za-z]/_}.profdata"
+        cp "$prof" "$part"
+        parts+=("$part")
+    done
+    "${llvm_profdata[@]}" merge -sparse "${parts[@]}" -o "$prof" || {
+        echo "coverage.sh: could not merge the per-target coverage profiles." >&2
+        exit 2
     }
     echo
 fi
-
-bin=$(swift build --show-bin-path) || exit 2
-prof="$bin/codecov/default.profdata"
 [ -f "$prof" ] || {
     echo "coverage.sh: no profile at $prof — run without --no-test." >&2
     exit 2
