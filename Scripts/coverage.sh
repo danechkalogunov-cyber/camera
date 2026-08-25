@@ -77,7 +77,11 @@ fi
 
 if [ "$run_tests" -eq 1 ]; then
     echo "== test (with coverage) =="
-    swift test --parallel --enable-code-coverage || {
+    # `--no-parallel`, for the reason the macos workflow's Test step gives: swift-testing's
+    # concurrent execution starves EventMonitorService's ingest pump on a loaded runner, and this
+    # second, instrumented run of the whole suite would hit the same flake. Serial is slower but
+    # deterministic, and a red suite here fails the coverage gate anyway.
+    swift test --no-parallel --enable-code-coverage || {
         echo "coverage.sh: the suite failed; coverage of a red tree is not worth reading." >&2
         exit 1
     }
