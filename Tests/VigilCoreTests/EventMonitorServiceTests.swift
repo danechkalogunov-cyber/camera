@@ -98,7 +98,15 @@ private struct EventServiceHarness {
 
 // MARK: - Tests
 
-@Suite("EventMonitorService")
+/// ⚠️ `.serialized`. Every test here drives a real `EventMonitorService` ingest pump — a task that
+/// `await`s a store write per alert — and under `swift test --parallel` on a loaded CI runner all
+/// seventeen ran at once, each also spinning a polling `eventWaitUntil`. That saturated the
+/// cooperative pool and starved the pumps: `eventMonitorServiceCollapsesARepeatedWireAlarmIntoOneRow`
+/// timed out with its collapsed row short of 30 (seen at 1, 22, 11 across runs — starvation, not
+/// lost events, and green on Linux, which runs this target on its own). Serializing just this suite
+/// lets each pump finish without competing with its siblings; the rest of the suite still runs in
+/// parallel around it.
+@Suite("EventMonitorService", .serialized)
 struct EventMonitorServiceTests {
 
     /// The whole chain, from bytes to a row: real multipart framing, real XML, real decoding, real

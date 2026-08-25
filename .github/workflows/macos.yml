@@ -36,17 +36,14 @@ jobs:
 
       # 2798 of these had never run before 2026-08-04. See docs/BUILD-VERIFICATION.md.
       #
-      # ⚠️ `--no-parallel`, not `--parallel`. swift-testing runs every @Test concurrently, and on
-      # this runner that saturates the cooperative pool and starves `EventMonitorService`'s ingest
-      # pump — one task that `await`s the store write per alert.
-      # `eventMonitorServiceCollapsesARepeatedWireAlarmIntoOneRow` then times out with the collapsed
-      # row's count short of 30 (seen at 1, 22, 11 on successive runs — the varying-count signature
-      # of starvation, not lost events: the ingest path awaits every write, and the test passes on
-      # Linux). `--num-workers` is an XCTest-era knob swift-testing ignores, so bounding workers did
-      # nothing; running the suite serially is what gives the pump an idle pool. It costs wall time
-      # and buys determinism — there is no per-step timeout here to trip.
+      # Runs in parallel. The one suite that could not survive the resulting contention —
+      # `EventMonitorService`, whose tests each drive a real ingest pump — is marked `.serialized`
+      # at its declaration so its members do not starve one another; see the note there. Two blunter
+      # levers were tried and rejected: `--num-workers` is an XCTest-era knob swift-testing ignores,
+      # and `--no-parallel` made the whole run serial and slow (24 min) while turning a dozen other
+      # timing tests red. Serializing the one offending suite is the surgical fix.
       - name: Test
-        run: swift test --no-parallel
+        run: swift test --parallel
 
       # Enforcing again, and now against measured numbers. This step ran `--enforce` from the day it
       # was written, against floors nobody could measure because nothing on macOS compiled; it was
