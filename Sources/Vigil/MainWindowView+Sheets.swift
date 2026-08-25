@@ -35,65 +35,71 @@ extension MainWindowView {
     func sheetBody(_ sheet: MainWindowSheet) -> some View {
         switch sheet {
         case .cameraSettings:
-            CameraSettingsSheet(name: identity.name,
-                                groupID: groups.group(for: cameraID),
-                                showsOverlay: window.showsVideoOverlay,
-                                isEnabled: selectedCamera?.isEnabled ?? true,
-                                colorTag: selectedCamera?.colorTag ?? .none,
-                                transport: selectedCamera?.transport ?? .tcpInterleaved,
-                                host: identity.host,
-                                httpPort: selectedCamera?.httpPort ?? 80,
-                                model: deviceInfo.identity.model,
-                                groups: groups.groups,
-                                onSave: { name, group, overlay, enabled, colorTag, transport in
-                                    renameCamera(to: name)
-                                    updateCameraMetadata(isEnabled: enabled, colorTag: colorTag)
-                                    updateCameraTransport(transport)
-                                    groups.setGroup(group, for: cameraID)
-                                    window.showsVideoOverlay = overlay
-                                    session.rememberVideoOverlay(overlay)
-                                    window.sheet = nil
-                                },
-                                onCancel: { window.sheet = nil })
+            CameraSettingsSheet(
+                name: identity.name,
+                groupID: groups.group(for: cameraID),
+                showsOverlay: window.showsVideoOverlay,
+                isEnabled: selectedCamera?.isEnabled ?? true,
+                colorTag: selectedCamera?.colorTag ?? .none,
+                transport: selectedCamera?.transport ?? .tcpInterleaved,
+                host: identity.host,
+                httpPort: selectedCamera?.httpPort ?? 80,
+                model: deviceInfo.identity.model,
+                groups: groups.groups,
+                onSave: { name, group, overlay, enabled, colorTag, transport in
+                    renameCamera(to: name)
+                    updateCameraMetadata(isEnabled: enabled, colorTag: colorTag)
+                    updateCameraTransport(transport)
+                    groups.setGroup(group, for: cameraID)
+                    window.showsVideoOverlay = overlay
+                    session.rememberVideoOverlay(overlay)
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
         case .newGroup:
-            GroupNameSheet(isNew: true,
-                           onSave: { name in
-                               // The camera goes in as the group is created. A user who makes a
-                               // group while looking at a camera means that camera to be in it.
-                               groups.create(named: name, cameras: [cameraID])
-                               window.sheet = nil
-                           },
-                           onCancel: { window.sheet = nil })
+            GroupNameSheet(
+                isNew: true,
+                onSave: { name in
+                    // The camera goes in as the group is created. A user who makes a
+                    // group while looking at a camera means that camera to be in it.
+                    groups.create(named: name, cameras: [cameraID])
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
         case .renameGroup(let id):
-            GroupNameSheet(name: groups.groups.first { $0.id == id }?.name ?? "",
-                           isNew: false,
-                           onSave: { name in
-                               groups.rename(id, to: name)
-                               window.sheet = nil
-                           },
-                           onCancel: { window.sheet = nil })
+            GroupNameSheet(
+                name: groups.groups.first { $0.id == id }?.name ?? "",
+                isNew: false,
+                onSave: { name in
+                    groups.rename(id, to: name)
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
         case .newBookmark(let instant):
-            BookmarkSheet(instant: instant,
-                          isNew: true,
-                          onSave: { title, note in
-                              bookmarks.add(cameraID: cameraID,
-                                            instant: instant,
-                                            title: title,
-                                            note: note)
-                              window.sheet = nil
-                          },
-                          onCancel: { window.sheet = nil })
+            BookmarkSheet(
+                instant: instant,
+                isNew: true,
+                onSave: { title, note in
+                    bookmarks.add(
+                        cameraID: cameraID,
+                        instant: instant,
+                        title: title,
+                        note: note)
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
         case .editBookmark(let id):
             let record = bookmarks.bookmarks.first { $0.id == id }
-            BookmarkSheet(title: record?.title ?? "",
-                          note: record?.note ?? "",
-                          instant: record?.instant ?? Date(),
-                          isNew: false,
-                          onSave: { title, note in
-                              bookmarks.update(id, title: title, note: note)
-                              window.sheet = nil
-                          },
-                          onCancel: { window.sheet = nil })
+            BookmarkSheet(
+                title: record?.title ?? "",
+                note: record?.note ?? "",
+                instant: record?.instant ?? Date(),
+                isNew: false,
+                onSave: { title, note in
+                    bookmarks.update(id, title: title, note: note)
+                    window.sheet = nil
+                },
+                onCancel: { window.sheet = nil })
         case .shortcuts:
             VShortcutsSheet(sections: VShortcutReference.sections) { window.sheet = nil }
         case .csvImport:
@@ -126,9 +132,10 @@ extension MainWindowView {
         case .saveLayoutPreset:
             LayoutPresetNameSheet(
                 onSave: { name in
-                    window.layoutPresets.save(VLayoutPreset(
-                        name: name, layout: window.layout,
-                        cameraIDs: stageAssignment.visibleCameras.map { $0.rawValue.uuidString }))
+                    window.layoutPresets.save(
+                        VLayoutPreset(
+                            name: name, layout: window.layout,
+                            cameraIDs: stageAssignment.visibleCameras.map { $0.rawValue.uuidString }))
                     window.sheet = nil
                 },
                 onCancel: { window.sheet = nil })

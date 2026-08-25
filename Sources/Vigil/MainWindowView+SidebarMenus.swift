@@ -57,8 +57,9 @@ extension MainWindowView {
                 action: { window.sheet = .newBookmark(markableInstant) }),
             VSidebarMenuItem(
                 id: "camera.motionRecording",
-                title: Self.localized(isMotionRecordingArmed(camera.id)
-                    ? "Disarm Motion Recording" : "Arm Motion Recording"),
+                title: Self.localized(
+                    isMotionRecordingArmed(camera.id)
+                        ? "Disarm Motion Recording" : "Arm Motion Recording"),
                 symbol: .recording,
                 isOn: isMotionRecordingArmed(camera.id),
                 action: { toggleMotionRecordingArmed(camera.id) }),

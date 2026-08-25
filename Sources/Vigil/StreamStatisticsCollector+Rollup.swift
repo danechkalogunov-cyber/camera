@@ -251,9 +251,10 @@ extension StreamStatisticsRollup {
 
     /// Adopts the negotiated stream shape.
     mutating func adopt(_ format: StreamFormat) {
-        adopt(codec: format.videoCodec,
-              width: format.resolution?.width ?? 0,
-              height: format.resolution?.height ?? 0)
+        adopt(
+            codec: format.videoCodec,
+            width: format.resolution?.width ?? 0,
+            height: format.resolution?.height ?? 0)
     }
 
     /// Starts a new connect attempt, which invalidates every window.
@@ -358,9 +359,9 @@ extension StreamStatisticsRollup {
     /// Adds one sample's packet-counter deltas to the loss window in progress.
     private mutating func accumulateLoss(from sample: StreamStatistics) {
         guard let received = previousPacketsReceived,
-              let lost = previousPacketsLost,
-              sample.packetsReceived >= received,
-              sample.packetsLost >= lost
+            let lost = previousPacketsLost,
+            sample.packetsReceived >= received,
+            sample.packetsLost >= lost
         else {
             // The first sample, or counters that restarted with a new receiver. Re-baseline rather
             // than book a negative delta, which as `UInt64` arithmetic would be an enormous loss.
@@ -513,10 +514,11 @@ extension StreamStatisticsRollup {
     /// The tile's badge, or `nil` before the codec is known.
     private func tileStats(framesPerSecond: Double?) -> VTileStats? {
         guard let codecLabel else { return nil }
-        return VTileStats(codec: codecLabel,
-                          dimensions: dimensions,
-                          framesPerSecond: framesPerSecond,
-                          isHardwareDecode: isHardwareDecode)
+        return VTileStats(
+            codec: codecLabel,
+            dimensions: dimensions,
+            framesPerSecond: framesPerSecond,
+            isHardwareDecode: isHardwareDecode)
     }
 
     /// The RTP layer's throughput when it has one, otherwise the window measured here.
@@ -539,10 +541,11 @@ extension StreamStatisticsRollup {
     }
 
     /// The measured frame rate, or `nil` during the warm-up and during a stall.
-    private func resolvedFramesPerSecond(_ sample: StreamStatistics,
-                                         at now: MediaInstant) -> Double? {
+    private func resolvedFramesPerSecond(
+        _ sample: StreamStatistics,
+        at now: MediaInstant) -> Double? {
         guard let firstFrameAt,
-              now.seconds(since: firstFrameAt) >= Self.framesPerSecondWarmUpSeconds
+            now.seconds(since: firstFrameAt) >= Self.framesPerSecondWarmUpSeconds
         else { return nil }
         guard let lastFrameAt, now.seconds(since: lastFrameAt) <= Self.stallSeconds else {
             return nil

@@ -46,13 +46,15 @@ private struct SheetFrame<Content: View>: View {
 
     @ViewBuilder let content: () -> Content
 
-    init(title: LocalizedStringKey,
-         confirmTitle: LocalizedStringKey,
-         isConfirmEnabled: Bool,
-         allowsDefaultAction: Bool = true,
-         onConfirm: @escaping () -> Void,
-         onCancel: @escaping () -> Void,
-         @ViewBuilder content: @escaping () -> Content) {
+    init(
+        title: LocalizedStringKey,
+        confirmTitle: LocalizedStringKey,
+        isConfirmEnabled: Bool,
+        allowsDefaultAction: Bool = true,
+        onConfirm: @escaping () -> Void,
+        onCancel: @escaping () -> Void,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
         self.title = title
         self.confirmTitle = confirmTitle
         self.isConfirmEnabled = isConfirmEnabled
@@ -117,10 +119,12 @@ struct LayoutPresetNameSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        SheetFrame(title: "Save Layout Preset", confirmTitle: "Save",
-                   isConfirmEnabled: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                   onConfirm: { onSave(name.trimmingCharacters(in: .whitespacesAndNewlines)) },
-                   onCancel: onCancel) {
+        SheetFrame(
+            title: "Save Layout Preset", confirmTitle: "Save",
+            isConfirmEnabled: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            onConfirm: { onSave(name.trimmingCharacters(in: .whitespacesAndNewlines)) },
+            onCancel: onCancel
+        ) {
             TextField("Preset Name", text: $name)
         }
     }
@@ -131,30 +135,40 @@ struct LayoutPresetManagerSheet: View {
     let onSave: (VLayoutPresetCollection) -> Void
     let onCancel: () -> Void
 
-    init(collection: VLayoutPresetCollection,
-         onSave: @escaping (VLayoutPresetCollection) -> Void,
-         onCancel: @escaping () -> Void) {
+    init(
+        collection: VLayoutPresetCollection,
+        onSave: @escaping (VLayoutPresetCollection) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         _presets = State(initialValue: collection.presets)
         self.onSave = onSave
         self.onCancel = onCancel
     }
 
     var body: some View {
-        SheetFrame(title: "Manage Layout Presets", confirmTitle: "Done",
-                   isConfirmEnabled: true, onConfirm: commit, onCancel: onCancel) {
+        SheetFrame(
+            title: "Manage Layout Presets", confirmTitle: "Done",
+            isConfirmEnabled: true, onConfirm: commit, onCancel: onCancel
+        ) {
             VStack(spacing: VTheme.Space.sm) {
                 ForEach(Array(presets.indices), id: \.self) { index in
                     HStack(spacing: VTheme.Space.sm) {
                         TextField("Preset Name", text: $presets[index].name)
                         Text(verbatim: presets[index].layout.rawValue)
                             .foregroundStyle(VTheme.Color.Text.secondary)
-                        Button { reorderPreset(index, by: -1) } label: {
+                        Button {
+                            reorderPreset(index, by: -1)
+                        } label: {
                             Image(systemName: "chevron.up")
                         }.disabled(index == 0)
-                        Button { reorderPreset(index, by: 1) } label: {
+                        Button {
+                            reorderPreset(index, by: 1)
+                        } label: {
                             Image(systemName: "chevron.down")
                         }.disabled(index == presets.count - 1)
-                        Button(role: .destructive) { presets.remove(at: index) } label: {
+                        Button(role: .destructive) {
+                            presets.remove(at: index)
+                        } label: {
                             Image(systemName: "trash")
                         }
                     }
@@ -221,18 +235,20 @@ struct CameraSettingsSheet: View {
     let onCancel: () -> Void
 
     /// Creates the sheet over a camera's current values.
-    init(name: String,
-         groupID: GroupID?,
-         showsOverlay: Bool,
-         isEnabled: Bool,
-         colorTag: ColorTag,
-         transport: RTSPTransportKind,
-         host: String,
-         httpPort: Int,
-         model: String,
-         groups: [CameraGroupRecord],
-         onSave: @escaping (String, GroupID?, Bool, Bool, ColorTag, RTSPTransportKind) -> Void,
-         onCancel: @escaping () -> Void) {
+    init(
+        name: String,
+        groupID: GroupID?,
+        showsOverlay: Bool,
+        isEnabled: Bool,
+        colorTag: ColorTag,
+        transport: RTSPTransportKind,
+        host: String,
+        httpPort: Int,
+        model: String,
+        groups: [CameraGroupRecord],
+        onSave: @escaping (String, GroupID?, Bool, Bool, ColorTag, RTSPTransportKind) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         _name = State(initialValue: name)
         _groupID = State(initialValue: groupID)
         _showsOverlay = State(initialValue: showsOverlay)
@@ -248,16 +264,18 @@ struct CameraSettingsSheet: View {
     }
 
     var body: some View {
-        SheetFrame(title: "Camera Settings",
-                   confirmTitle: "Save",
-                   // An empty name is refused rather than stored, matching `Camera.validated()`,
-                   // which replaces one with "Camera <host>" — better to say so than to silently
-                   // rename the camera to something the user did not type.
-                   isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
-                   onConfirm: {
-                       onSave(name, groupID, showsOverlay, isEnabled, colorTag, transport)
-                   },
-                   onCancel: onCancel) {
+        SheetFrame(
+            title: "Camera Settings",
+            confirmTitle: "Save",
+            // An empty name is refused rather than stored, matching `Camera.validated()`,
+            // which replaces one with "Camera <host>" — better to say so than to silently
+            // rename the camera to something the user did not type.
+            isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
+            onConfirm: {
+                onSave(name, groupID, showsOverlay, isEnabled, colorTag, transport)
+            },
+            onCancel: onCancel
+        ) {
             VStack(alignment: .leading, spacing: VTheme.Space.md) {
                 field("Name") {
                     TextField("", text: $name)
@@ -298,13 +316,15 @@ struct CameraSettingsSheet: View {
                 }
                 Divider()
                 VInspectorToggleRow("Show overlay on video", isOn: $showsOverlay)
-                Text("""
+                Text(
+                    """
                     The camera's name, the connection chip and the statistics readout. \
                     Warnings about a stream that is failing are always shown.
-                    """, bundle: .vigilUI)
-                    .vType(VTheme.Typography.caption1)
-                    .foregroundStyle(VTheme.Color.Text.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    """, bundle: .vigilUI
+                )
+                .vType(VTheme.Typography.caption1)
+                .foregroundStyle(VTheme.Color.Text.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
                 Divider()
                 fact("Address", "\(host):\(httpPort)")
                 fact("Model", model.isEmpty ? "—" : model)
@@ -313,8 +333,9 @@ struct CameraSettingsSheet: View {
     }
 
     /// A caption over a control.
-    private func field<Control: View>(_ label: LocalizedStringKey,
-                                      @ViewBuilder control: () -> Control) -> some View {
+    private func field<Control: View>(
+        _ label: LocalizedStringKey,
+        @ViewBuilder control: () -> Control) -> some View {
         VStack(alignment: .leading, spacing: VTheme.Space.xxs) {
             Text(label, bundle: .vigilUI)
                 .vType(VTheme.Typography.callout)
@@ -385,10 +406,12 @@ struct GroupNameSheet: View {
     let onCancel: () -> Void
 
     /// Creates the sheet.
-    init(name: String = "",
-         isNew: Bool,
-         onSave: @escaping (String) -> Void,
-         onCancel: @escaping () -> Void) {
+    init(
+        name: String = "",
+        isNew: Bool,
+        onSave: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         _name = State(initialValue: name)
         self.isNew = isNew
         self.onSave = onSave
@@ -396,11 +419,13 @@ struct GroupNameSheet: View {
     }
 
     var body: some View {
-        SheetFrame(title: isNew ? "New Group" : "Rename Group",
-                   confirmTitle: isNew ? "Create" : "Rename",
-                   isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
-                   onConfirm: { onSave(name) },
-                   onCancel: onCancel) {
+        SheetFrame(
+            title: isNew ? "New Group" : "Rename Group",
+            confirmTitle: isNew ? "Create" : "Rename",
+            isConfirmEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty,
+            onConfirm: { onSave(name) },
+            onCancel: onCancel
+        ) {
             TextField("", text: $name)
                 .textFieldStyle(.roundedBorder)
         }
@@ -433,12 +458,14 @@ struct BookmarkSheet: View {
     let onCancel: () -> Void
 
     /// Creates the sheet.
-    init(title: String = "",
-         note: String = "",
-         instant: Date,
-         isNew: Bool,
-         onSave: @escaping (String, String) -> Void,
-         onCancel: @escaping () -> Void) {
+    init(
+        title: String = "",
+        note: String = "",
+        instant: Date,
+        isNew: Bool,
+        onSave: @escaping (String, String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         _title = State(initialValue: title)
         _note = State(initialValue: note)
         self.instant = instant
@@ -448,12 +475,14 @@ struct BookmarkSheet: View {
     }
 
     var body: some View {
-        SheetFrame(title: isNew ? "Bookmark This Moment" : "Edit Bookmark",
-                   confirmTitle: isNew ? "Add" : "Save",
-                   isConfirmEnabled: true,
-                   allowsDefaultAction: false,
-                   onConfirm: { onSave(title, note) },
-                   onCancel: onCancel) {
+        SheetFrame(
+            title: isNew ? "Bookmark This Moment" : "Edit Bookmark",
+            confirmTitle: isNew ? "Add" : "Save",
+            isConfirmEnabled: true,
+            allowsDefaultAction: false,
+            onConfirm: { onSave(title, note) },
+            onCancel: onCancel
+        ) {
             VStack(alignment: .leading, spacing: VTheme.Space.md) {
                 Text(verbatim: Self.stamp.string(from: instant))
                     .vType(VTheme.Typography.mono.numeric)

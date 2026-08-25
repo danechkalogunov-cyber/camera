@@ -202,12 +202,15 @@ extension MainWindowView {
         // explanation; one page is what the cells can actually hold.
         let count = stageOrder.count
         guard window.cycle.pageCount(cameraCount: count, layout: window.layout) > 1 else { return }
-        let nextPage = (window.cycle.page + 1)
+        let nextPage =
+            (window.cycle.page + 1)
             % window.cycle.pageCount(cameraCount: count, layout: window.layout)
-        window.cycle = window.cycle.selectingPage(nextPage,
-                                                   cameraCount: count,
-                                                   layout: window.layout)
-        let page = stagePageOrder
+        window.cycle = window.cycle.selectingPage(
+            nextPage,
+            cameraCount: count,
+            layout: window.layout)
+        let page =
+            stagePageOrder
             .compactMap { id in library.cameras.first { $0.id == id } }
         guard !page.isEmpty else { return }
         Task { await session.showOnStage(page) }
@@ -276,7 +279,8 @@ extension MainWindowView {
         actions.isMuted = session.cameras.stream(for: cameraID)?.isAudioMuted ?? true
         actions.audioLevel = session.cameras.stream(for: cameraID)?.audioLevel ?? 0
         actions.isFilled = window.fillsTile
-        actions.isTalking = session.twoWayAudio.activeCameraID == cameraID
+        actions.isTalking =
+            session.twoWayAudio.activeCameraID == cameraID
             && session.twoWayAudio.isTalking
         actions.beginTalk = { beginPushToTalk() }
         actions.endTalk = { session.twoWayAudio.end() }
@@ -323,9 +327,11 @@ extension MainWindowView {
         }
         let selectedID = selectedCamera?.id
         let selected = selectedID.flatMap { members.contains($0) ? $0 : nil }
-        let candidate = selected ?? members.first {
-            session.cameras.stream(for: $0)?.hasAudio == true
-        }
+        let candidate =
+            selected
+            ?? members.first {
+                session.cameras.stream(for: $0)?.hasAudio == true
+            }
         if let candidate { session.setAudioMuted(false, for: candidate) }
     }
 
