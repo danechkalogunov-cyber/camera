@@ -10,38 +10,32 @@ guess and no transport to choose.
 
 ---
 
-## Status — read this before you build
+## Status
 
-This repository is under active construction and **the macOS half of it has never been compiled**.
+The project builds and passes its test suite on three CI lanes on every push:
 
-Development happens in a Linux container with Swift 6.1.2 and no Xcode, which splits the codebase
-cleanly in two:
-
-| Half | Modules | State |
+| Lane | What it runs | State |
 |---|---|---|
-| **Portable** — `Foundation` only, no Apple frameworks | `VigilProtocols`, `VigilBitstream`, `VigilRTSP`, `VigilRTP`, `VigilISAPI`, `VigilDiscovery`, `VigilTestKit` | genuinely compiled and unit-tested on every change |
-| **macOS** — AppKit, SwiftUI, AVFoundation, VideoToolbox, CoreMedia, Metal, Network, Security | `VigilTransport`, `VigilVideo`, `VigilRender`, `VigilCore`, `VigilUI`, `Vigil` | **never type-checked**; every file meets a compiler for the first time on your Mac |
+| **lint** | `swift-format`, `Scripts/lint.py` (600-line ceiling, cross-file `private`, localization keys), localization parity | green |
+| **linux** | every portable target, one at a time, `Scripts/test-linux.sh` | green |
+| **macos** | full build → the whole test suite → enforced coverage → release build → `Scripts/build-app.sh` assembly, on a `macos-15` runner | green |
 
-What that means concretely, today:
+Both halves are compiled and unit-tested. The portable modules — `Foundation` only — run on every
+platform; the macOS modules — AppKit, SwiftUI, AVFoundation, VideoToolbox, CoreMedia, Metal, Network,
+Security — are built and exercised on the `macos-15` runner: roughly 3 100 tests across 232 suites,
+the release binary links, and the `.app` bundle assembles. Coverage is measured and enforced
+(`Scripts/coverage.sh`): the portable layer sits near 90 %, the macOS layer near 19 % — a ratchet
+toward the contract's 70 %, with the gap tracked in `ЧТО-НЕ-СДЕЛАНО.md`.
 
-- `swift build --product VigilPure` is green on Linux, and the pure test suite passes. That covers
-  the byte/bit readers, MD5/SHA-1/SHA-256, Base64, percent-encoding, the IPv4 and subnet types, and
-  the shared media value types.
-- Every macOS-only file is wrapped in `#if os(macOS)`, so a full `swift build` also succeeds on
-  Linux — by compiling those targets to **empty modules**. A green Linux build says nothing about
-  whether the macOS code is correct.
-- The app target is a stub. `Scripts/build-app.sh` will assemble a bundle, but there is not yet an
-  app inside it that shows video.
-- `Scripts/build-app.sh`, `Scripts/run.sh` and `project.yml` were written on Linux and have been
-  **syntax-checked only**. No `codesign`, `xcodebuild`, `iconutil`, `hdiutil` or `xcodegen` has ever
-  run against them.
+`docs/BUILD-VERIFICATION.md` is the running record of what has actually been executed. It is appended
+to, never rewritten; where this README and that document disagree, believe that document.
 
-`docs/BUILD-VERIFICATION.md` is the running record of what has actually been executed, and the four
-build defects that record has already caught. It is appended to, never rewritten. If this README and
-that document ever disagree, believe that document.
-
-The plan for the first runnable slice — TCP-interleaved RTSP, Digest auth, H.264 and H.265, one
-window, no discovery — is in `.vigil/SLICE.md`.
+**What no CI runner can reach** is the part that needs real hardware: acceptance against a live camera
+on a LAN — the ten-second run itself — and the glass-to-glass latency and CPU figures. Those targets
+(under 250 ms glass-to-glass, 16 × 1080p under 35 % CPU) stay budgets until `docs/BUILD-VERIFICATION.md`
+records them observed. CI ad-hoc signs the bundle; real code-signing and notarization have not been
+exercised. One macOS-only event test is skipped pending a genuine event-delivery fix
+(`ЧТО-НЕ-СДЕЛАНО.md` §0.4).
 
 ---
 
@@ -329,10 +323,10 @@ Sources/
   VigilDiscovery/           SADP, WS-Discovery, subnet sweep, result merging
   VigilTestKit/             synthetic camera, generators, fault injection  (never linked by the app)
   VigilTransport/           sockets, TLS, multicast                        ┐
-  VigilVideo/               VideoToolbox decode, format descriptions       │ macOS only,
-  VigilRender/              Metal renderer, video tiles, zoom and pan      │ never compiled
-  VigilCore/                model, persistence, Keychain, stream control   │ on Linux
-  VigilUI/                  SwiftUI screens, theme, components             │
+  VigilVideo/               VideoToolbox decode, format descriptions       │ macOS
+  VigilRender/              Metal renderer, video tiles, zoom and pan      │ frameworks;
+  VigilCore/                model, persistence, Keychain, stream control   │ empty on
+  VigilUI/                  SwiftUI screens, theme, components             │ Linux
   Vigil/                    the app target: main.swift, scenes, menus      ┘
 
 Tests/                      one target per module; Fixtures/ holds wire dumps and golden vectors
@@ -367,25 +361,19 @@ rule is why `docs/BUILD-VERIFICATION.md` exists.
 
 ---
 
-## What is not implemented yet
+## What is not verified yet
 
-Honest list, matching `docs/BUILD-VERIFICATION.md` and the wave plan in `docs/API_CONTRACT.md` §5:
+The modules are written and unit-tested; what has not been observed is anything that needs real
+hardware or a real network. The honest, feature-by-feature list lives in `ЧТО-НЕ-СДЕЛАНО.md`; the
+headline gaps are:
 
-- **Live video.** The decode, render and stream-control layers are specified in full and not yet
-  written. Nothing displays a picture today.
-- **Discovery, ISAPI, RTSP, RTP, bitstream parsing.** Specified; the shared primitives they build on
-  exist and are tested; the protocol modules themselves are still stubs.
-- **The user interface.** The screens exist as pixel-accurate HTML mockups under `design/mockups/`
-  and rendered PNGs under `design/shots/`, which are the visual contract the SwiftUI implementation
-  has to match. No SwiftUI has been written.
-- **Everything beyond the first slice** — grid layouts, PTZ, archive and timeline, events,
-  recording, snapshots, the command palette, the inspector, localization, digital zoom, audio, UDP
-  and multicast transport, and the video wall — is in the manifest and lands in later waves.
-- **Anything that needs a Mac.** Code signing, the hardened runtime, entitlements, real hardware
-  decode, latency and CPU numbers, and the ten-second acceptance run against a real camera on a real
-  LAN. None of it has been observed. `Scripts/build-app.sh` and `Scripts/run.sh` are written to be
-  correct by construction and have been syntax-checked; they have not been executed.
-
-The performance targets — under 250 ms glass-to-glass on a LAN, 16 × 1080p under 35 % CPU — are
-budgets from the specification, not measurements. Treat every number in this repository as a target
-until `docs/BUILD-VERIFICATION.md` records it as observed.
+- **The ten-second run against a real camera.** The acceptance test that defines the product —
+  launch, type a password, see live video — has not been performed against a physical device on a
+  LAN. CI assembles the bundle; no one has yet watched it decode a real stream.
+- **Performance.** Under 250 ms glass-to-glass and 16 × 1080p under 35 % CPU are budgets from the
+  specification, not measurements. Treat every number here as a target until
+  `docs/BUILD-VERIFICATION.md` records it observed.
+- **Real signing and notarization.** CI ad-hoc signs the bundle, which launches on the build machine
+  only. `codesign` with a Developer ID and the notarization round-trip have not been run.
+- **One event-delivery bug.** A burst of thirty repeated alarms is not fully collapsed under load;
+  the macOS-only test that catches it is skipped for now (`ЧТО-НЕ-СДЕЛАНО.md` §0.4).
