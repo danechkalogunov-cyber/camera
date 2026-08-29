@@ -106,9 +106,10 @@ package struct InspectorPTZVector: Sendable, Hashable {
     /// at the same speed setting, which reads as the control sticking.
     package static func pad(_ direction: InspectorPTZDirection, speed: Int) -> InspectorPTZVector {
         let magnitude = Self.wireSpeed(speed)
-        return InspectorPTZVector(pan: direction.pan * magnitude,
-                                  tilt: direction.tilt * magnitude,
-                                  zoom: 0)
+        return InspectorPTZVector(
+            pan: direction.pan * magnitude,
+            tilt: direction.tilt * magnitude,
+            zoom: 0)
     }
 
     /// The vector for a zoom rocker at a discrete speed.
@@ -207,8 +208,10 @@ package struct InspectorPTZHold: Sendable, Hashable {
     /// `PTZController.move` supersedes the previous keep-alive on its own, so no stop is emitted.
     ///
     /// Beginning a hold clears ``didExpire``, so a fresh press after a safety stop works normally.
-    package mutating func begin(_ vector: InspectorPTZVector, at instant: Date,
-                                direction: InspectorPTZDirection? = nil) -> InspectorPTZHoldAction {
+    package mutating func begin(
+        _ vector: InspectorPTZVector, at instant: Date,
+        direction: InspectorPTZDirection? = nil
+    ) -> InspectorPTZHoldAction {
         guard !vector.isStopped else { return end(at: instant) }
         // An identical vector re-sent for the same gesture is not a new hold — the deadline keeps
         // running from the original press, so holding a key whose auto-repeat fires cannot extend the
@@ -217,9 +220,15 @@ package struct InspectorPTZHold: Sendable, Hashable {
             self.direction = direction ?? self.direction
             return .none
         }
+        // Captured *before* the overwrite below. Testing `self.vector != vector` after the assignment
+        // is always false, so a redirect could never restart the clock: the deadline kept counting
+        // from the first press across a sector-to-sector drag and cut an active gesture short with a
+        // spurious safety stop. An identical re-send — a held key's auto-repeat — already returned
+        // above, so reaching here means a fresh press or a genuine redirect, and both restart it.
+        let isRedirect = self.vector != nil && self.vector != vector
         self.vector = vector
         self.direction = direction
-        if startedAt == nil || self.vector != vector {
+        if startedAt == nil || isRedirect {
             // A redirect restarts the clock, which is correct: the user is still actively driving, and
             // the deadline exists to catch a gesture nobody is driving at all.
             startedAt = instant
