@@ -102,8 +102,9 @@ if [ "$run_tests" -eq 1 ]; then
     # profiles so the export below still sees every target. A single `swift test --enable-code-
     # coverage` overwrites default.profdata each run, so each run's profile is copied off first.
     llvm_profdata=("${llvm_cov[@]/llvm-cov/llvm-profdata}")
-    # The `--skip` on the VigilCoreTests pass drops one test that stalls on a burst-delivery path;
-    # see the note in .github/workflows/macos.yml. Coverage of the rest of the target is unaffected.
+    # The two burst tests stalled on a test-clock artifact; the fixed versions live in
+    # EventMonitorBurstTests.swift (monitor on EventBlockingClock) and the originals are skipped here.
+    # See the note in .github/workflows/macos.yml. Coverage of the rest of the target is unaffected.
     #
     # ⚠️ Each pass's profile is copied OUTSIDE $bin/codecov. `swift test --enable-code-coverage` wipes
     # that directory at the start of every run, so a copy left inside it is gone before the merge —
@@ -113,7 +114,7 @@ if [ "$run_tests" -eq 1 ]; then
     pass=0
     for selector in \
         "--skip VigilCoreTests" \
-        "--filter VigilCoreTests --skip eventMonitorServiceCollapsesARepeatedWireAlarmIntoOneRow"; do
+        "--filter VigilCoreTests --skip eventMonitorServiceCollapsesARepeatedWireAlarmIntoOneRow --skip eventMonitorServiceDemultiplexesChannelsOnOneSubscription"; do
         # shellcheck disable=SC2086 -- selector is two words on purpose
         swift test --parallel --enable-code-coverage $selector || {
             echo "coverage.sh: the suite failed; coverage of a red tree is not worth reading." >&2
