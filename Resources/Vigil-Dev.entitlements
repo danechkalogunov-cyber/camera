@@ -54,5 +54,19 @@
     <key>com.apple.security.get-task-allow</key>
     <true/>
 
+    <!-- Keychain access group, dev-only. CredentialStore always sets kSecUseDataProtectionKeychain,
+         and that keychain needs an access group. A normally signed app derives it from its Team ID
+         (TeamID.bundleID); an ad-hoc signature (no CODESIGN_IDENTITY) has no Team ID, so the derive
+         fails and every SecItem call returns errSecMissingEntitlement — the "Vigil is not allowed to
+         use the keychain" card on the very first connect. Naming an explicit group here gives the
+         ad-hoc build a group to use, so credentials save and load locally. CredentialStore passes
+         accessGroup=nil and the keychain then uses the first group listed here. The shipping files
+         (Vigil.entitlements, Vigil-nomulticast.entitlements) deliberately omit this: a real identity
+         needs no explicit group. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>com.vigil.dev</string>
+    </array>
+
 </dict>
 </plist>
