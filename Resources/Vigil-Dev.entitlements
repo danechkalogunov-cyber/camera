@@ -54,19 +54,17 @@
     <key>com.apple.security.get-task-allow</key>
     <true/>
 
-    <!-- Keychain access group, dev-only. CredentialStore always sets kSecUseDataProtectionKeychain,
-         and that keychain needs an access group. A normally signed app derives it from its Team ID
-         (TeamID.bundleID); an ad-hoc signature (no CODESIGN_IDENTITY) has no Team ID, so the derive
-         fails and every SecItem call returns errSecMissingEntitlement — the "Vigil is not allowed to
-         use the keychain" card on the very first connect. Naming an explicit group here gives the
-         ad-hoc build a group to use, so credentials save and load locally. CredentialStore passes
-         accessGroup=nil and the keychain then uses the first group listed here. The shipping files
-         (Vigil.entitlements, Vigil-nomulticast.entitlements) deliberately omit this: a real identity
-         needs no explicit group. -->
-    <key>keychain-access-groups</key>
-    <array>
-        <string>com.vigil.dev</string>
-    </array>
+    <!-- ⚠️ Do NOT add a keychain-access-groups entitlement here. It looks like the fix for the
+         "Vigil is not allowed to use the keychain" card on the first connect: CredentialStore asks
+         for the data-protection keychain, that keychain needs a keychain access group, and an
+         ad-hoc signature (no CODESIGN_IDENTITY, hence no Team ID) has none, so every SecItem call
+         returns errSecMissingEntitlement. But keychain-access-groups is a restricted entitlement:
+         AMFI refuses to launch an ad-hoc-signed process that carries one without a matching
+         provisioning profile, and the app dies at spawn with "Launchd job spawn failed" (POSIX 163)
+         before any code runs. That is strictly worse than the keychain card. The dev build's
+         keychain problem is solved in code instead: CredentialStore falls back to the legacy file
+         keychain, which needs no access group, when VigilDevBuild is stamped into Info.plist. See
+         Sources/VigilCore/Security/CredentialStore.swift and Sources/Vigil/AppSessionModel.swift. -->
 
 </dict>
 </plist>

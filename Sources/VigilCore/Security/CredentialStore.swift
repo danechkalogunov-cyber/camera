@@ -100,6 +100,20 @@ public actor CredentialStore {
     private let logger: any LoggerProtocol
     private let accessGroup: String?
 
+    /// Whether to request the modern data-protection keychain (`kSecUseDataProtectionKeychain`).
+    ///
+    /// True in every shipping build, which is why `CredentialStore` never touches the legacy file
+    /// keychain there. It is `false` for one build only: the unsandboxed dev build, which is signed
+    /// ad-hoc and therefore has no Team ID. The data-protection keychain refuses every call
+    /// (`errSecMissingEntitlement`) from a process that has no keychain access group, and the group
+    /// is exactly what a Team ID would supply — so an ad-hoc build cannot use it at all, and adding
+    /// a `keychain-access-groups` entitlement does not help (AMFI then refuses to launch the process
+    /// outright). The legacy keychain needs no group and works under an ad-hoc signature, so a
+    /// developer on a laptop with no Apple grant can still save a camera password. A normally signed
+    /// build must never set this false: the data-protection keychain is the deliberate,
+    /// better-isolated store (spec-core §6.3).
+    private let useDataProtectionKeychain: Bool
+
     /// Read-through cache. A 16-camera reconnect after wake performs one Keychain read per camera,
     /// not one per RTSP round trip. Never written to disk, never in a diagnostics bundle.
     private var cache: [CredentialRef: Credential] = [:]
@@ -113,12 +127,17 @@ public actor CredentialStore {
     ///   - logger: structured log sink. Nothing logged here contains a secret.
     ///   - accessGroup: `kSecAttrAccessGroup`. `nil` for a normally signed app, which is what Vigil
     ///     ships; a value is only needed when items are shared with a helper.
+    ///   - useDataProtectionKeychain: `true` (the default, and the only value any shipping build
+    ///     uses) selects the modern data-protection keychain. The unsandboxed dev build passes
+    ///     `false`; see the `useDataProtectionKeychain` property for why it has to.
     public init(keychain: any KeychainProtocol,
                 logger: any LoggerProtocol = NullLogger(),
-                accessGroup: String? = nil) {
+                accessGroup: String? = nil,
+                useDataProtectionKeychain: Bool = true) {
         self.keychain = keychain
         self.logger = logger
         self.accessGroup = accessGroup
+        self.useDataProtectionKeychain = useDataProtectionKeychain
     }
 
     // MARK: Reads
@@ -298,8 +317,10 @@ public actor CredentialStore {
             kSecClass as String: kSecClassInternetPassword,
             kSecReturnAttributes as String: NSNumber(value: true),
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecUseDataProtectionKeychain as String: NSNumber(value: true),
         ]
+        if useDataProtectionKeychain {
+            query[kSecUseDataProtectionKeychain as String] = NSNumber(value: true)
+        }
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
 
         var item: CFTypeRef?
@@ -343,8 +364,10 @@ public actor CredentialStore {
         var query: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrPath as String: ref.keychainPath,
-            kSecUseDataProtectionKeychain as String: NSNumber(value: true),
         ]
+        if useDataProtectionKeychain {
+            query[kSecUseDataProtectionKeychain as String] = NSNumber(value: true)
+        }
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         return query
     }
@@ -371,8 +394,10 @@ public actor CredentialStore {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
             kSecAttrSynchronizable as String: NSNumber(value: false),
             kSecValueData as String: Data(credential.secret.utf8),
-            kSecUseDataProtectionKeychain as String: NSNumber(value: true),
         ]
+        if useDataProtectionKeychain {
+            attributes[kSecUseDataProtectionKeychain as String] = NSNumber(value: true)
+        }
         if let accessGroup { attributes[kSecAttrAccessGroup as String] = accessGroup }
         return attributes
     }

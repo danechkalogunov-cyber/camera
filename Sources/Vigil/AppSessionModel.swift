@@ -328,8 +328,15 @@ final class AppSessionModel {
     init(dependencies: CoreDependencies, defaults: UserDefaults = .standard) {
         self.dependencies = dependencies
         self.defaults = defaults
+        // The unsandboxed dev build (build-app.sh --sandbox off) is signed ad-hoc, so it has no
+        // Team ID and cannot use the data-protection keychain — every SecItem call would fail with
+        // errSecMissingEntitlement. That build stamps VigilDevBuild=true into Info.plist; when it is
+        // set, CredentialStore falls back to the legacy file keychain, which needs no access group.
+        // A shipping build has no such key, so it keeps the data-protection keychain.
+        let isDevBuild = Bundle.main.object(forInfoDictionaryKey: "VigilDevBuild") as? Bool ?? false
         self.credentials = CredentialStore(keychain: dependencies.keychain,
-                                           logger: dependencies.logger)
+                                           logger: dependencies.logger,
+                                           useDataProtectionKeychain: !isDevBuild)
         // The sink follows the handle for the life of the process, so a tile that SwiftUI rebuilds
         // mid-stream starts receiving again without the decode pipeline knowing anything happened.
         // The same attach notification carries the tile's render state up, so `liveState` can say
