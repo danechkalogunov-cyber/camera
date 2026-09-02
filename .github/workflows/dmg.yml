@@ -1,0 +1,76 @@
+name: dmg
+
+# Builds an UNSIGNED Vigil.app on GitHub's macOS runner, packages it as a DMG, and (on a tag)
+# attaches it to a prerelease for download. This is a convenience/test artifact ONLY:
+#
+#   • It is NOT signed with an Apple Developer ID and NOT notarised, so macOS Gatekeeper refuses it
+#     on first launch. The user clears the quarantine flag to open it (see the release notes).
+#   • It is the `--sandbox off` development variant (get-task-allow, no sandbox, legacy Keychain),
+#     which is the only unsigned build whose Keychain works: an ad-hoc "release" build has no Team
+#     ID and therefore cannot use the data-protection keychain at all.
+#
+# A clean, double-click, silent-Keychain DMG requires a real signing identity + notarisation, which
+# this environment does not have. When a certificate is available, sign in Scripts/build-app.sh via
+# --sign and drop --sandbox off here.
+#
+# Fire it by pushing a tag:   git tag dmg-0.1.0-1 && git push origin dmg-0.1.0-1
+# Or run it by hand from the Actions tab (workflow_dispatch) to get the DMG as a run artifact.
+
+on:
+  push:
+    tags: ["dmg-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-dmg:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Build the DMG (unsigned ad-hoc, --sandbox off dev variant)
+        run: Scripts/build-app.sh --sandbox off --dmg
+
+      - name: Show output
+        run: ls -lh dist
+
+      - name: Upload the DMG as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vigil-unsigned-dmg
+          path: dist/Vigil-*.dmg
+          if-no-files-found: error
+
+      - name: Publish the DMG to a prerelease
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dmg=$(ls dist/Vigil-*.dmg | head -1)
+          {
+            echo "Unsigned, ad-hoc test build of Vigil — for evaluation only, not for redistribution."
+            echo ""
+            echo "This build is NOT signed or notarised, so macOS Gatekeeper refuses it on first launch."
+            echo "To open it:"
+            echo "  1. Drag Vigil.app into /Applications."
+            echo "  2. In Terminal run:  xattr -dr com.apple.quarantine /Applications/Vigil.app"
+            echo "  3. Launch it normally."
+            echo ""
+            echo "It is the --sandbox off development variant, the only unsigned build whose Keychain"
+            echo "works without an Apple Team ID. A clean double-click DMG with a silent Keychain"
+            echo "requires signing with an Apple Developer ID and notarisation."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "$dmg" \
+            --prerelease \
+            --title "Vigil (unsigned test build) $GITHUB_REF_NAME" \
+            --notes-file notes.md
