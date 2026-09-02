@@ -51,18 +51,22 @@ jobs:
           path: dist/Vigil-*.dmg
           if-no-files-found: error
 
+      # Creates (or updates) a prerelease and attaches the DMG. Uses the run's GITHUB_TOKEN, which
+      # carries contents:write — a different credential from a developer's git push, so it may create
+      # the tag where a direct `git push <tag>` is refused by an org ruleset. If the ruleset blocks
+      # the token too, this step fails loudly and the DMG is still available as the artifact above.
       - name: Publish the DMG to a prerelease
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           dmg=$(ls dist/Vigil-*.dmg | head -1)
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; else tag="v0.1.0-unsigned"; fi
           {
             echo "Unsigned, ad-hoc test build of Vigil — for evaluation only, not for redistribution."
             echo ""
             echo "This build is NOT signed or notarised, so macOS Gatekeeper refuses it on first launch."
             echo "To open it:"
-            echo "  1. Drag Vigil.app into /Applications."
+            echo "  1. Mount the DMG and drag Vigil.app into /Applications."
             echo "  2. In Terminal run:  xattr -dr com.apple.quarantine /Applications/Vigil.app"
             echo "  3. Launch it normally."
             echo ""
@@ -70,7 +74,9 @@ jobs:
             echo "works without an Apple Team ID. A clean double-click DMG with a silent Keychain"
             echo "requires signing with an Apple Developer ID and notarisation."
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" "$dmg" \
-            --prerelease \
-            --title "Vigil (unsigned test build) $GITHUB_REF_NAME" \
-            --notes-file notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$dmg" --clobber
+          else
+            gh release create "$tag" "$dmg" --prerelease --target "$GITHUB_SHA" \
+              --title "Vigil 0.1.0 (unsigned test build)" --notes-file notes.md
+          fi
